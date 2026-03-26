@@ -44,4 +44,4 @@ jobs:
         run: |
           test -f dist/index.js
           test -f dist/cli/index.js
-          node dist/cli/index.js
+          node dist/cli/index.js --help
