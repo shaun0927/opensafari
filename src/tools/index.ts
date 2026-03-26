@@ -20,6 +20,9 @@ import { registerSelectOptionTool } from './select-option';
 import { registerDeviceListTool } from './device-list';
 import { registerDeviceRotateTool } from './device-rotate';
 import { registerAppearanceToggleTool } from './appearance-toggle';
+import { registerBatchNavigateTool } from './batch-navigate';
+import { registerBatchScreenshotTool } from './batch-screenshot';
+import { registerBatchExecuteTool } from './batch-execute';
 
 export function registerAllTools(server: MCPServer): void {
   // Tier 1: Core
@@ -46,4 +49,9 @@ export function registerAllTools(server: MCPServer): void {
   registerDeviceListTool(server);
   registerDeviceRotateTool(server);
   registerAppearanceToggleTool(server);
+
+  // Tier 3: Batch Operations
+  registerBatchNavigateTool(server);
+  registerBatchScreenshotTool(server);
+  registerBatchExecuteTool(server);
 }
