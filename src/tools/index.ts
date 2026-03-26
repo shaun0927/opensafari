@@ -26,6 +26,7 @@ import { registerBatchExecuteTool } from './batch-execute';
 import { registerOrchestrationTools } from './orchestration-tools';
 import { registerCrossViewportCompareTool } from './cross-viewport-compare';
 import { registerQADetectorTools } from './qa-detectors';
+import { registerQAAuditTools } from './qa-audit';
 
 export { setWorkflowEngine } from './orchestration-tools';
 export { setCrossViewportCapture } from './cross-viewport-compare';
@@ -69,4 +70,7 @@ export function registerAllTools(server: MCPServer): void {
 
   // Tier 3: QA Detectors
   registerQADetectorTools(server);
+
+  // Tier 3: QA Full Audit (Score + History)
+  registerQAAuditTools(server);
 }
