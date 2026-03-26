@@ -1,0 +1,26 @@
+# Source
+src/
+cli/
+tests/
+docs/
+scripts/
+spike/
+
+# Config
+tsconfig.json
+tsconfig.cli.json
+tsconfig.test.json
+jest.config.js
+jest.ci.config.js
+.eslintrc.js
+.prettierrc
+.editorconfig
+.nvmrc
+
+# CI
+.github/
+
+# Development
+coverage/
+.DS_Store
+*.log
