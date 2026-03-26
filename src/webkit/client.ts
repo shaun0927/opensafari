@@ -420,79 +420,334 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
     }
   }
 
-  async click(
-    _target: string | { x: number; y: number },
-  ): Promise<void> {
-    throw new Error('Not implemented — see Epic 1C');
+  async click(target: string | { x: number; y: number }): Promise<void> {
+    let x: number, y: number;
+
+    if (typeof target === 'string') {
+      const center = await this.getElementCenter(target);
+      if (!center) throw new Error(`Element not found: ${target}`);
+      x = center.x;
+      y = center.y;
+    } else {
+      x = target.x;
+      y = target.y;
+    }
+
+    // Dispatch touch tap: touchstart → touchend → click
+    // Uses document.createTouch for iOS Safari compatibility (new Touch() not supported)
+    await this.evaluate(`
+      (function(x, y) {
+        var el = document.elementFromPoint(x, y);
+        if (!el) return;
+        var touch = document.createTouch(window, el, 1, x, y, x, y);
+        var touchList = document.createTouchList(touch);
+        var emptyList = document.createTouchList();
+        el.dispatchEvent(new TouchEvent('touchstart', { touches: touchList, changedTouches: touchList, bubbles: true }));
+        el.dispatchEvent(new TouchEvent('touchend', { touches: emptyList, changedTouches: touchList, bubbles: true }));
+        el.click();
+      })(${x}, ${y})
+    `);
   }
 
-  async type(
-    _selector: string,
-    _text: string,
-    _options?: { delay?: number },
-  ): Promise<void> {
-    throw new Error('Not implemented — see Epic 1C');
+  async type(selector: string, text: string, options?: { delay?: number }): Promise<void> {
+    // Click to focus
+    await this.click(selector);
+
+    if (options?.delay) {
+      // Character-by-character mode with delay
+      for (const char of text) {
+        await this.evaluate(`
+          (function() {
+            var el = document.activeElement;
+            if (!el) return;
+            var ev = new KeyboardEvent('keydown', { key: ${JSON.stringify(char)}, bubbles: true });
+            el.dispatchEvent(ev);
+            el.dispatchEvent(new KeyboardEvent('keypress', { key: ${JSON.stringify(char)}, bubbles: true }));
+            // Append character
+            if (el.value !== undefined) {
+              el.value += ${JSON.stringify(char)};
+              el.dispatchEvent(new Event('input', { bubbles: true }));
+            }
+            el.dispatchEvent(new KeyboardEvent('keyup', { key: ${JSON.stringify(char)}, bubbles: true }));
+          })()
+        `);
+        await new Promise(r => setTimeout(r, options.delay));
+      }
+    } else {
+      // Fast mode: set value directly + dispatch events
+      await this.evaluate(`
+        (function() {
+          var el = document.activeElement;
+          if (!el) return;
+          // Use native setter for React/Vue compatibility
+          var nativeSetter = Object.getOwnPropertyDescriptor(
+            window.HTMLInputElement.prototype, 'value'
+          );
+          var textareaSetter = Object.getOwnPropertyDescriptor(
+            window.HTMLTextAreaElement.prototype, 'value'
+          );
+          var setter = (el.tagName === 'TEXTAREA' ? textareaSetter : nativeSetter);
+          if (setter && setter.set) {
+            setter.set.call(el, ${JSON.stringify(text)});
+          } else {
+            el.value = ${JSON.stringify(text)};
+          }
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+        })()
+      `);
+    }
   }
 
-  async scroll(
-    _direction: 'up' | 'down' | 'left' | 'right',
-    _amount: number,
-  ): Promise<void> {
-    throw new Error('Not implemented — see Epic 1C');
+  async scroll(direction: 'up' | 'down' | 'left' | 'right', amount: number): Promise<void> {
+    const scrollMap: Record<string, string> = {
+      up: `window.scrollBy(0, -${amount})`,
+      down: `window.scrollBy(0, ${amount})`,
+      left: `window.scrollBy(-${amount}, 0)`,
+      right: `window.scrollBy(${amount}, 0)`,
+    };
+    await this.evaluate(scrollMap[direction]);
   }
 
-  async longPress(
-    _selector: string,
-    _duration?: number,
-  ): Promise<void> {
-    throw new Error('Not implemented — see Epic 1C');
+  async longPress(selector: string, duration?: number): Promise<void> {
+    const center = await this.getElementCenter(selector);
+    if (!center) throw new Error(`Element not found: ${selector}`);
+    const dur = duration ?? 500;
+
+    // Async IIFE — need to await the promise
+    const result = await this.send<any>('Runtime.evaluate', {
+      expression: `
+        (async function(x, y, duration) {
+          var el = document.elementFromPoint(x, y);
+          if (!el) return;
+          var touch = document.createTouch(window, el, 1, x, y, x, y);
+          var touchList = document.createTouchList(touch);
+          el.dispatchEvent(new TouchEvent('touchstart', { touches: touchList, changedTouches: touchList, bubbles: true }));
+          await new Promise(function(r) { setTimeout(r, duration); });
+          var emptyList = document.createTouchList();
+          el.dispatchEvent(new TouchEvent('touchend', { touches: emptyList, changedTouches: touchList, bubbles: true }));
+        })(${center.x}, ${center.y}, ${dur})
+      `,
+      returnByValue: true,
+      emulateUserGesture: true,
+      awaitPromise: false,
+    });
+
+    // If result is a promise, await it
+    if (result.result?.type === 'object' && result.result?.subtype === 'promise' && result.result?.objectId) {
+      await this.send('Runtime.awaitPromise', {
+        promiseObjectId: result.result.objectId,
+        returnByValue: true,
+      });
+    }
   }
 
-  async swipe(
-    _direction: 'up' | 'down' | 'left' | 'right',
-    _speed?: number,
-  ): Promise<void> {
-    throw new Error('Not implemented — see Epic 1C');
+  async swipe(direction: 'up' | 'down' | 'left' | 'right', speed?: number): Promise<void> {
+    const viewport = await this.getViewportSize();
+    const cx = viewport.width / 2;
+    const cy = viewport.height / 2;
+    const distance = viewport.height * 0.4;
+    const steps = speed ?? 10;
+
+    const coords = {
+      up:    { sx: cx, sy: cy + distance / 2, ex: cx, ey: cy - distance / 2 },
+      down:  { sx: cx, sy: cy - distance / 2, ex: cx, ey: cy + distance / 2 },
+      left:  { sx: cx + distance / 2, sy: cy, ex: cx - distance / 2, ey: cy },
+      right: { sx: cx - distance / 2, sy: cy, ex: cx + distance / 2, ey: cy },
+    };
+    const { sx, sy, ex, ey } = coords[direction];
+
+    const result = await this.send<any>('Runtime.evaluate', {
+      expression: `
+        (async function(sx, sy, ex, ey, steps) {
+          var el = document.elementFromPoint(sx, sy);
+          if (!el) return;
+          var makeTouch = function(x, y) { return document.createTouch(window, el, 1, x, y, x, y); };
+          var startTouch = makeTouch(sx, sy);
+          var startList = document.createTouchList(startTouch);
+          el.dispatchEvent(new TouchEvent('touchstart', { touches: startList, changedTouches: startList, bubbles: true }));
+          for (var i = 1; i <= steps; i++) {
+            var x = sx + (ex - sx) * (i / steps);
+            var y = sy + (ey - sy) * (i / steps);
+            var moveTouch = makeTouch(x, y);
+            var moveList = document.createTouchList(moveTouch);
+            el.dispatchEvent(new TouchEvent('touchmove', { touches: moveList, changedTouches: moveList, bubbles: true }));
+            await new Promise(function(r) { setTimeout(r, 16); });
+          }
+          var endTouch = makeTouch(ex, ey);
+          var endList = document.createTouchList(endTouch);
+          var emptyList = document.createTouchList();
+          el.dispatchEvent(new TouchEvent('touchend', { touches: emptyList, changedTouches: endList, bubbles: true }));
+        })(${sx}, ${sy}, ${ex}, ${ey}, ${steps})
+      `,
+      returnByValue: true,
+      emulateUserGesture: true,
+      awaitPromise: false,
+    });
+
+    if (result.result?.type === 'object' && result.result?.subtype === 'promise' && result.result?.objectId) {
+      await this.send('Runtime.awaitPromise', {
+        promiseObjectId: result.result.objectId,
+        returnByValue: true,
+      });
+    }
   }
 
-  async press(_key: string): Promise<void> {
-    throw new Error('Not implemented — see Epic 1C');
+  async press(key: string): Promise<void> {
+    const keyMap: Record<string, { key: string; code: string; keyCode: number }> = {
+      'Enter': { key: 'Enter', code: 'Enter', keyCode: 13 },
+      'Tab': { key: 'Tab', code: 'Tab', keyCode: 9 },
+      'Escape': { key: 'Escape', code: 'Escape', keyCode: 27 },
+      'Backspace': { key: 'Backspace', code: 'Backspace', keyCode: 8 },
+      'ArrowUp': { key: 'ArrowUp', code: 'ArrowUp', keyCode: 38 },
+      'ArrowDown': { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40 },
+      'ArrowLeft': { key: 'ArrowLeft', code: 'ArrowLeft', keyCode: 37 },
+      'ArrowRight': { key: 'ArrowRight', code: 'ArrowRight', keyCode: 39 },
+      'Space': { key: ' ', code: 'Space', keyCode: 32 },
+    };
+
+    const mapped = keyMap[key] ?? { key, code: 'Key' + key.toUpperCase(), keyCode: key.charCodeAt(0) };
+    const keyJson = JSON.stringify(mapped.key);
+    const codeJson = JSON.stringify(mapped.code);
+
+    await this.evaluate(`
+      (function() {
+        var el = document.activeElement || document.body;
+        el.dispatchEvent(new KeyboardEvent('keydown', { key: ${keyJson}, code: ${codeJson}, keyCode: ${mapped.keyCode}, bubbles: true }));
+        el.dispatchEvent(new KeyboardEvent('keypress', { key: ${keyJson}, code: ${codeJson}, keyCode: ${mapped.keyCode}, bubbles: true }));
+        el.dispatchEvent(new KeyboardEvent('keyup', { key: ${keyJson}, code: ${codeJson}, keyCode: ${mapped.keyCode}, bubbles: true }));
+      })()
+    `);
   }
 
   async dismissKeyboard(): Promise<void> {
-    throw new Error('Not implemented — see Epic 1C');
+    await this.evaluate('document.activeElement && document.activeElement.blur()');
   }
 
-  async selectOption(
-    _selector: string,
-    _value: string,
-  ): Promise<void> {
-    throw new Error('Not implemented — see Epic 1C');
+  async selectOption(selector: string, value: string): Promise<void> {
+    await this.evaluate(`
+      (function() {
+        var el = document.querySelector(${JSON.stringify(selector)});
+        if (!el || el.tagName !== 'SELECT') return;
+        el.value = ${JSON.stringify(value)};
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+      })()
+    `);
   }
 
-  async querySelector(
-    _selector: string,
-  ): Promise<ElementInfo | null> {
-    throw new Error('Not implemented — see Epic 1C');
+  async querySelector(selector: string): Promise<ElementInfo | null> {
+    return this.evaluate<ElementInfo | null>(`
+      (function() {
+        var el = document.querySelector(${JSON.stringify(selector)});
+        if (!el) return null;
+        var rect = el.getBoundingClientRect();
+        var style = window.getComputedStyle(el);
+        return {
+          selector: ${JSON.stringify(selector)},
+          tag: el.tagName.toLowerCase(),
+          text: (el.textContent || '').trim().substring(0, 200),
+          attributes: Object.fromEntries(Array.from(el.attributes).map(function(a) { return [a.name, a.value]; })),
+          boundingBox: rect.width > 0 && rect.height > 0
+            ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
+            : null,
+          computedStyles: {
+            display: style.display,
+            visibility: style.visibility,
+            opacity: style.opacity,
+            fontSize: style.fontSize,
+            color: style.color,
+            backgroundColor: style.backgroundColor,
+            position: style.position,
+            zIndex: style.zIndex,
+            overflow: style.overflow
+          },
+          isVisible: rect.width > 0 && rect.height > 0
+            && style.display !== 'none'
+            && style.visibility !== 'hidden'
+            && parseFloat(style.opacity) > 0
+        };
+      })()
+    `);
   }
 
-  async querySelectorAll(
-    _selector: string,
-  ): Promise<ElementInfo[]> {
-    throw new Error('Not implemented — see Epic 1C');
+  async querySelectorAll(selector: string): Promise<ElementInfo[]> {
+    return this.evaluate<ElementInfo[]>(`
+      (function() {
+        var elements = document.querySelectorAll(${JSON.stringify(selector)});
+        return Array.from(elements).slice(0, 100).map(function(el) {
+          var rect = el.getBoundingClientRect();
+          var style = window.getComputedStyle(el);
+          return {
+            selector: ${JSON.stringify(selector)},
+            tag: el.tagName.toLowerCase(),
+            text: (el.textContent || '').trim().substring(0, 200),
+            attributes: Object.fromEntries(Array.from(el.attributes).map(function(a) { return [a.name, a.value]; })),
+            boundingBox: rect.width > 0 && rect.height > 0
+              ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
+              : null,
+            computedStyles: {
+              display: style.display, visibility: style.visibility, opacity: style.opacity,
+              fontSize: style.fontSize, position: style.position
+            },
+            isVisible: rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden' && parseFloat(style.opacity) > 0
+          };
+        });
+      })()
+    `);
   }
 
-  async inspect(
-    _selector: string,
-  ): Promise<Record<string, unknown>> {
-    throw new Error('Not implemented — see Epic 1C');
+  async inspect(selector: string): Promise<Record<string, unknown>> {
+    return this.evaluate<Record<string, unknown>>(`
+      (function() {
+        var el = document.querySelector(${JSON.stringify(selector)});
+        if (!el) return null;
+        var rect = el.getBoundingClientRect();
+        var style = window.getComputedStyle(el);
+        return {
+          tag: el.tagName.toLowerCase(),
+          id: el.id,
+          className: el.className,
+          text: (el.textContent || '').trim().substring(0, 500),
+          innerHTML: el.innerHTML.substring(0, 1000),
+          boundingBox: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+          styles: {
+            display: style.display, position: style.position,
+            width: style.width, height: style.height,
+            margin: style.margin, padding: style.padding,
+            fontSize: style.fontSize, fontWeight: style.fontWeight,
+            color: style.color, backgroundColor: style.backgroundColor,
+            border: style.border, borderRadius: style.borderRadius,
+            overflow: style.overflow, zIndex: style.zIndex,
+            opacity: style.opacity, visibility: style.visibility
+          },
+          accessibility: {
+            role: el.getAttribute('role'),
+            ariaLabel: el.getAttribute('aria-label'),
+            ariaHidden: el.getAttribute('aria-hidden'),
+            tabIndex: el.tabIndex
+          },
+          childCount: el.children.length,
+          children: Array.from(el.children).slice(0, 10).map(function(c) {
+            return { tag: c.tagName.toLowerCase(), text: (c.textContent || '').trim().substring(0, 50) };
+          })
+        };
+      })()
+    `);
   }
 
-  async waitFor(
-    _selector: string,
-    _options?: { visible?: boolean; timeout?: number },
-  ): Promise<void> {
-    throw new Error('Not implemented — see Epic 1C');
+  async waitFor(selector: string, options?: { visible?: boolean; timeout?: number }): Promise<void> {
+    const timeout = options?.timeout ?? 10000;
+    const interval = 200;
+    const start = Date.now();
+
+    while (Date.now() - start < timeout) {
+      const el = await this.querySelector(selector);
+      if (el && (!options?.visible || el.isVisible)) return;
+      await new Promise(r => setTimeout(r, interval));
+    }
+
+    throw new TimeoutError(`waitFor("${selector}") timed out after ${timeout}ms`);
   }
 
   // ========== Event Convenience Methods ==========
@@ -537,6 +792,21 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
   }
 
   // ========== Private Helpers ==========
+
+  private async getElementCenter(selector: string): Promise<{ x: number; y: number } | null> {
+    return this.evaluate<{ x: number; y: number } | null>(`
+      (function() {
+        const el = document.querySelector(${JSON.stringify(selector)});
+        if (!el) return null;
+        const rect = el.getBoundingClientRect();
+        return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+      })()
+    `);
+  }
+
+  private async getViewportSize(): Promise<{ width: number; height: number }> {
+    return this.evaluate<{ width: number; height: number }>('({width: window.innerWidth, height: window.innerHeight})');
+  }
 
   private async connectToTarget(wsUrl: string): Promise<void> {
     return new Promise<void>((resolve, reject) => {
