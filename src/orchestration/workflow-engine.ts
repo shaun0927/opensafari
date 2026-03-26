@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import { SimulatorPool, PooledSimulator } from '../simulator/pool';
+import { SimulatorPool } from '../simulator/pool';
 import { BatchExecutor } from '../simulator/batch';
 import { AuthManager } from '../auth/manager';
 import { DEVICE_PRESETS } from '../simulator/presets';

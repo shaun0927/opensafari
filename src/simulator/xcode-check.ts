@@ -30,7 +30,7 @@ export async function checkXcodeInstallation(): Promise<XcodeCheckResult> {
 
   // Check xcrun
   try {
-    const { stdout } = await execFileAsync('xcrun', ['--version']);
+    await execFileAsync('xcrun', ['--version']);
     result.installed = true;
   } catch {
     result.issues.push('xcrun not found — Xcode or Command Line Tools not installed');
