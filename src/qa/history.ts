@@ -1,7 +1,7 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
-import { AuditReport } from './audit.js';
+import { AuditReport } from './audit';
 
 export interface RegressionReport {
   currentScore: number;

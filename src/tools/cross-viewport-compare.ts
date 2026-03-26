@@ -1,5 +1,5 @@
-import { MCPServer } from '../mcp-server.js';
-import { formatForClaudeVision, MCPContent } from '../comparison/report.js';
+import { MCPServer } from '../mcp-server';
+import { formatForClaudeVision, MCPContent } from '../comparison/report';
 
 let capturer: any = null;
 export function setCrossViewportCapture(c: any): void { capturer = c; }

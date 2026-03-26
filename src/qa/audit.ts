@@ -1,19 +1,19 @@
-import { BrowserBackend } from '../types/browser-backend.js';
-import { DetectorResult, QAConfig, applyIgnoreRules } from './types.js';
-import { detectAutoZoom } from './detectors/auto-zoom.js';
-import { detectTouchTargets } from './detectors/touch-targets.js';
-import { detectHoverOnly } from './detectors/hover-only.js';
-import { detectInputType } from './detectors/input-type.js';
-import { detectSafeArea } from './detectors/safe-area.js';
-import { detectKeyboardOverlap } from './detectors/keyboard-overlap.js';
-import { detectHorizontalOverflow } from './detectors/horizontal-overflow.js';
-import { detect100vh } from './detectors/vh100.js';
-import { detectFixedStacking } from './detectors/fixed-stacking.js';
-import { detectScrollLock } from './detectors/scroll-lock.js';
-import { detectDarkMode } from './detectors/dark-mode.js';
-import { detectOrientation } from './detectors/orientation.js';
-import { detectPwaMeta } from './detectors/pwa-meta.js';
-import { SimulatorManager } from '../simulator/manager.js';
+import { BrowserBackend } from '../types/browser-backend';
+import { DetectorResult, QAConfig, applyIgnoreRules } from './types';
+import { detectAutoZoom } from './detectors/auto-zoom';
+import { detectTouchTargets } from './detectors/touch-targets';
+import { detectHoverOnly } from './detectors/hover-only';
+import { detectInputType } from './detectors/input-type';
+import { detectSafeArea } from './detectors/safe-area';
+import { detectKeyboardOverlap } from './detectors/keyboard-overlap';
+import { detectHorizontalOverflow } from './detectors/horizontal-overflow';
+import { detect100vh } from './detectors/vh100';
+import { detectFixedStacking } from './detectors/fixed-stacking';
+import { detectScrollLock } from './detectors/scroll-lock';
+import { detectDarkMode } from './detectors/dark-mode';
+import { detectOrientation } from './detectors/orientation';
+import { detectPwaMeta } from './detectors/pwa-meta';
+import { SimulatorManager } from '../simulator/manager';
 
 export interface AuditSummary {
   totalIssues: number;

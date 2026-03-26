@@ -1,4 +1,4 @@
-import { MCPServer, getWebKitClient } from '../mcp-server.js';
+import { MCPServer, getWebKitClient } from '../mcp-server';
 
 export function registerQAAuditTools(server: MCPServer): void {
   server.registerTool(
@@ -15,9 +15,9 @@ export function registerQAAuditTools(server: MCPServer): void {
     async (_sessionId: string, params: Record<string, unknown>) => {
       const client = getWebKitClient();
       if (!client) return { content: [{ type: 'text' as const, text: 'Error: Safari not connected' }], isError: true };
-      const { QAAudit } = await import('../qa/audit.js');
-      const { generateAuditMarkdown } = await import('../qa/report-markdown.js');
-      const { QAHistory } = await import('../qa/history.js');
+      const { QAAudit } = await import('../qa/audit');
+      const { generateAuditMarkdown } = await import('../qa/report-markdown');
+      const { QAHistory } = await import('../qa/history');
       const audit = new QAAudit(client);
       const report = await audit.runFullAudit(params.url as string | undefined);
       const markdown = generateAuditMarkdown(report);

@@ -1,4 +1,4 @@
-import { AuditReport } from './audit.js';
+import { AuditReport } from './audit';
 
 export function generateAuditMarkdown(report: AuditReport): string {
   const emoji = report.score >= 90 ? 'V' : report.score >= 70 ? '!' : 'X';
