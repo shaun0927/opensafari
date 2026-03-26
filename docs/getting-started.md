@@ -55,7 +55,7 @@ Add to `~/.claude.json`:
 ### 3. Use in Claude Code
 
 ```
-You: Check example.com for mobile issues on iPhone SE
+You: Check example.com for mobile issues on iPhone 17e
 
 Claude: [Uses navigate, screenshot, qa_full_audit tools]
         Found 3 issues: auto-zoom on search input, touch target too small...
@@ -69,9 +69,10 @@ opensafari devices
 
 | Preset | Device | Viewport |
 |--------|--------|----------|
-| iphone-se | iPhone SE (3rd gen) | 375x667 |
-| iphone-16 | iPhone 16 | 393x852 |
-| iphone-16-pro-max | iPhone 16 Pro Max | 440x956 |
+| iphone-17e | iPhone 17e | 375x667 |
+| iphone-17 | iPhone 17 | 393x852 |
+| iphone-17-pro | iPhone 17 Pro | 402x874 |
+| iphone-17-pro-max | iPhone 17 Pro Max | 440x956 |
 | ipad | iPad (10th gen) | 820x1180 |
 | ipad-pro | iPad Pro 13-inch | 1032x1376 |
 
