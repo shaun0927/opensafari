@@ -52,20 +52,6 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
   private lastUrl: string = '';
   private reconnecting = false;
 
-  // Target-multiplexed protocol state
-  private activeTargetId: string | null = null;
-  private innerMessageId = 0;
-  private innerPendingRequests: Map<
-    number,
-    {
-      resolve: (value: any) => void;
-      reject: (error: Error) => void;
-      timer: ReturnType<typeof setTimeout>;
-    }
-  > = new Map();
-  private targetReady: Promise<void> | null = null;
-  private targetReadyResolve: (() => void) | null = null;
-
   constructor(private options: WebKitClientOptions) {
     super();
   }
@@ -98,9 +84,6 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
     }
     this.connected = false;
     this.enabledDomains.clear();
-    this.activeTargetId = null;
-    this.targetReady = null;
-    this.targetReadyResolve = null;
   }
 
   isConnected(): boolean {
@@ -124,54 +107,20 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       throw new ConnectionError('WebSocket not connected');
     }
-    if (!this.activeTargetId) {
-      throw new ConnectionError(
-        'No active target. Is Safari open in the simulator?',
-      );
-    }
 
-    const innerId = ++this.innerMessageId;
-    const outerId = ++this.messageId;
+    const id = ++this.messageId;
     const timeout =
       this.options.sendTimeout ?? DEFAULT_WEBKIT_SEND_TIMEOUT_MS;
 
-    const innerPromise = new Promise<T>((resolve, reject) => {
+    return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
-        this.innerPendingRequests.delete(innerId);
+        this.pendingRequests.delete(id);
         reject(new TimeoutError(`${method} timed out after ${timeout}ms`));
       }, timeout);
-      this.innerPendingRequests.set(innerId, { resolve, reject, timer });
+
+      this.pendingRequests.set(id, { resolve, reject, timer });
+      this.ws!.send(JSON.stringify({ id, method, params }));
     });
-
-    // Track outer message for error propagation (e.g., invalid targetId)
-    const outerTimer = setTimeout(() => {
-      this.pendingRequests.delete(outerId);
-    }, timeout);
-    this.pendingRequests.set(outerId, {
-      resolve: () => { /* outer ack ignored — real response via dispatchMessageFromTarget */ },
-      reject: (err: Error) => {
-        // Outer error means inner will never resolve — reject inner too
-        const innerPending = this.innerPendingRequests.get(innerId);
-        if (innerPending) {
-          clearTimeout(innerPending.timer);
-          this.innerPendingRequests.delete(innerId);
-          innerPending.reject(err);
-        }
-      },
-      timer: outerTimer,
-    });
-
-    // Wrap in Target.sendMessageToTarget
-    const innerMessage = JSON.stringify({ id: innerId, method, params });
-    this.ws.send(
-      JSON.stringify({
-        id: outerId,
-        method: 'Target.sendMessageToTarget',
-        params: { targetId: this.activeTargetId, message: innerMessage },
-      }),
-    );
-
-    return innerPromise;
   }
 
   private handleMessage(data: string): void {
@@ -182,57 +131,12 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
       return;
     }
 
-    // Handle Target events (multiplexing protocol)
-    if (msg.method === 'Target.targetCreated') {
-      const info = msg.params?.targetInfo;
-      if (info?.type === 'page' && !this.activeTargetId) {
-        this.activeTargetId = info.targetId;
-        this.targetReadyResolve?.();
-      }
-      return;
-    }
-
-    if (msg.method === 'Target.targetDestroyed') {
-      if (msg.params?.targetId === this.activeTargetId) {
-        this.activeTargetId = null;
-      }
-      return;
-    }
-
-    if (msg.method === 'Target.dispatchMessageFromTarget') {
-      // This contains the REAL response to our domain commands
-      const innerMsg = JSON.parse(msg.params.message);
-      if (innerMsg.id !== undefined) {
-        const pending = this.innerPendingRequests.get(innerMsg.id);
-        if (pending) {
-          clearTimeout(pending.timer);
-          this.innerPendingRequests.delete(innerMsg.id);
-          if (innerMsg.error) {
-            pending.reject(
-              new ProtocolError(
-                innerMsg.error.message ?? JSON.stringify(innerMsg.error),
-                innerMsg.error.code,
-              ),
-            );
-          } else {
-            pending.resolve(innerMsg.result);
-          }
-        }
-      } else if (innerMsg.method) {
-        // Inner event (e.g., Page.loadEventFired, Runtime.consoleAPICalled)
-        this.emit(innerMsg.method, innerMsg.params);
-      }
-      return;
-    }
-
     if (msg.id !== undefined) {
-      // Outer ack response to Target.sendMessageToTarget — just clean up
+      // Response to a request
       const pending = this.pendingRequests.get(msg.id);
       if (pending) {
         clearTimeout(pending.timer);
         this.pendingRequests.delete(msg.id);
-        // Don't resolve/reject caller — real response comes via dispatchMessageFromTarget
-        // But if there's an outer error (e.g., invalid targetId), propagate it
         if (msg.error) {
           pending.reject(
             new ProtocolError(
@@ -240,10 +144,12 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
               msg.error.code,
             ),
           );
+        } else {
+          pending.resolve(msg.result);
         }
       }
     } else if (msg.method) {
-      // Other event notifications not handled above
+      // Event notification
       this.emit(msg.method, msg.params);
     }
   }
@@ -284,7 +190,6 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
     if (this.reconnecting) return;
     this.reconnecting = true;
     this.connected = false;
-    this.activeTargetId = null;
     this.stopHeartbeat();
 
     let attempt = 0;
@@ -904,13 +809,7 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
   }
 
   private async connectToTarget(wsUrl: string): Promise<void> {
-    // Set up target discovery promise before connecting
-    this.activeTargetId = null;
-    this.targetReady = new Promise<void>((resolve) => {
-      this.targetReadyResolve = resolve;
-    });
-
-    await new Promise<void>((resolve, reject) => {
+    return new Promise<void>((resolve, reject) => {
       const connectTimeout =
         this.options.connectTimeout ?? DEFAULT_WEBKIT_CONNECT_TIMEOUT_MS;
 
@@ -950,17 +849,6 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
         }
       });
     });
-
-    // Wait for first page target to be discovered
-    const connectTimeout =
-      this.options.connectTimeout ?? DEFAULT_WEBKIT_CONNECT_TIMEOUT_MS;
-    const targetTimeout = new Promise<void>((_, reject) => {
-      setTimeout(
-        () => reject(new ConnectionError('No page target discovered — is Safari open in the simulator?')),
-        connectTimeout,
-      );
-    });
-    await Promise.race([this.targetReady, targetTimeout]);
   }
 
   private clearPendingRequests(): void {
@@ -969,12 +857,6 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
       req.reject(new ConnectionError('Connection closed'));
     }
     this.pendingRequests.clear();
-
-    for (const [, req] of this.innerPendingRequests) {
-      clearTimeout(req.timer);
-      req.reject(new ConnectionError('Connection closed'));
-    }
-    this.innerPendingRequests.clear();
   }
 
   private httpGet(url: string): Promise<string> {
