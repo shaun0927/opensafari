@@ -19,8 +19,8 @@ export class WebInspectorProxy {
   private deviceListPort: number;
 
   constructor(options?: ProxyOptions) {
-    this.port = options?.port ?? 9222;
-    this.deviceListPort = options?.deviceListPort ?? 9221;
+    this.port = options?.port ?? 9322;
+    this.deviceListPort = options?.deviceListPort ?? 9321;
   }
 
   async findSocketPath(): Promise<string | null> {
@@ -45,8 +45,7 @@ export class WebInspectorProxy {
 
     const portInUse = await this.isPortInUse(this.port);
     if (portInUse) {
-      console.error(`[WebInspectorProxy] Port ${this.port} already in use — skipping proxy start`);
-      return;
+      throw new Error(`Port ${this.port} already in use. Specify a different port or stop the existing process.`);
     }
 
     try {
@@ -71,16 +70,31 @@ export class WebInspectorProxy {
       detached: false,
     });
 
+    this.process.on('error', (err) => {
+      console.error(`[WebInspectorProxy] Process error: ${err.message}`);
+      this.process = null;
+    });
+
     this.process.on('exit', () => { this.process = null; });
     await this.waitForReady();
   }
 
   async stop(): Promise<void> {
-    if (this.process) {
-      this.process.kill('SIGTERM');
-      this.process = null;
-      await new Promise(r => setTimeout(r, 500));
-    }
+    if (!this.process) return;
+    const proc = this.process;
+    return new Promise<void>((resolve) => {
+      const timeout = setTimeout(() => {
+        try { proc.kill('SIGKILL'); } catch {}
+        this.process = null;
+        resolve();
+      }, 3000);
+      proc.once('exit', () => {
+        clearTimeout(timeout);
+        this.process = null;
+        resolve();
+      });
+      proc.kill('SIGTERM');
+    });
   }
 
   isRunning(): boolean {
@@ -106,19 +120,22 @@ export class WebInspectorProxy {
   private isPortInUse(port: number): Promise<boolean> {
     return new Promise(resolve => {
       const server = net.createServer();
+      server.unref();
       server.once('error', () => resolve(true));
-      server.once('listening', () => { server.close(); resolve(false); });
+      server.once('listening', () => { server.close(() => resolve(false)); });
       server.listen(port);
     });
   }
 
   private httpGet(url: string): Promise<string> {
     return new Promise((resolve, reject) => {
-      http.get(url, res => {
+      const req = http.get(url, { timeout: 3000 }, res => {
         let data = '';
         res.on('data', chunk => { data += chunk; });
         res.on('end', () => resolve(data));
-      }).on('error', reject);
+      });
+      req.on('error', reject);
+      req.on('timeout', () => { req.destroy(); reject(new Error('HTTP request timed out')); });
     });
   }
 }
