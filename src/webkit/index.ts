@@ -1,2 +1,8 @@
-export { WebKitClient } from './client';
-export type { WebKitClientOptions } from './client';
+export {
+  WebKitClient,
+  ConnectionError,
+  TimeoutError,
+  ProtocolError,
+  EvaluationError,
+} from './client';
+export type { WebKitClientOptions, WebKitTarget } from './client';

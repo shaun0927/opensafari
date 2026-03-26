@@ -83,11 +83,12 @@ export interface BrowserBackend {
   inspect(selector: string): Promise<Record<string, unknown>>;
   waitFor(selector: string, options?: { visible?: boolean; timeout?: number }): Promise<void>;
 
-  // Events
-  on(event: 'console', handler: (msg: { type: string; text: string }) => void): void;
-  on(event: 'pageerror', handler: (error: Error) => void): void;
-  on(event: 'load', handler: () => void): void;
-  on(event: 'disconnect', handler: () => void): void;
-  off(event: string, handler: Function): void;
-  removeAllListeners(event?: string): void;
+  // Events — provided by EventEmitter (Node.js).
+  // Implementations should extend EventEmitter rather than manually
+  // implementing on/off/removeAllListeners.  Known event names:
+  //   'console'    — (msg: { type: string; text: string }) => void
+  //   'pageerror'  — (error: Error) => void
+  //   'load'       — () => void
+  //   'disconnect' — () => void
+  //   'reconnected' — () => void
 }
