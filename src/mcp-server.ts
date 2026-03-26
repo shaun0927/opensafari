@@ -1,0 +1,261 @@
+/**
+ * OpenSafari MCP Server
+ * Handles JSON-RPC 2.0 protocol, tool registration, and progressive disclosure.
+ * Safari-specific tools are registered externally via registerTool().
+ *
+ * Chrome/CDP references have been removed. Safari/WebKit/Simulator placeholders
+ * are in place; actual implementations land in Epic 1B/1C.
+ */
+
+import {
+  MCPRequest,
+  MCPResponse,
+  MCPResult,
+  MCPToolDefinition,
+  ToolHandler,
+  MCPErrorCodes,
+} from './types/mcp';
+import { createTransport, MCPTransport, TransportMode } from './transports';
+import { TOOL_TIERS, getToolTier } from './config/tool-tiers';
+import { BrowserBackend } from './types/browser-backend';
+
+// Re-export so callers can use canonical names without knowing the internal alias
+export type { MCPToolDefinition as ToolDefinition, ToolHandler };
+export { TOOL_TIERS, getToolTier };
+
+// ---------------------------------------------------------------------------
+// Global WebKit client accessor — populated during server initialization.
+// Safari tools (Epic 1B/1C) will call getWebKitClient() to obtain the active
+// BrowserBackend instance without creating circular dependencies.
+// ---------------------------------------------------------------------------
+
+let webkitClient: BrowserBackend | null = null;
+
+export function getWebKitClient(): BrowserBackend | null {
+  return webkitClient;
+}
+
+export function setWebKitClient(client: BrowserBackend | null): void {
+  webkitClient = client;
+}
+
+// ---------------------------------------------------------------------------
+// Internal registry entry
+// ---------------------------------------------------------------------------
+
+interface RegisteredTool {
+  definition: MCPToolDefinition;
+  handler: ToolHandler;
+  tier: number;
+}
+
+// ---------------------------------------------------------------------------
+// MCPServer
+// ---------------------------------------------------------------------------
+
+export interface MCPServerOptions {
+  /** Wire transport to use. Defaults to 'stdio'. */
+  transport?: TransportMode;
+  /** HTTP port — only relevant when transport === 'http'. */
+  port?: number;
+}
+
+export class MCPServer {
+  private tools: Map<string, RegisteredTool> = new Map();
+  private transport: MCPTransport | null = null;
+  private currentTier: number = 1;
+
+  // ------------------------------------------------------------------
+  // Tool registration
+  // ------------------------------------------------------------------
+
+  registerTool(definition: MCPToolDefinition, handler: ToolHandler): void {
+    const tier = getToolTier(definition.name);
+    this.tools.set(definition.name, { definition, handler, tier });
+  }
+
+  getToolHandler(name: string): ToolHandler | undefined {
+    return this.tools.get(name)?.handler;
+  }
+
+  getRegisteredTools(): string[] {
+    return Array.from(this.tools.keys());
+  }
+
+  // ------------------------------------------------------------------
+  // Lifecycle
+  // ------------------------------------------------------------------
+
+  start(options: MCPServerOptions = {}): void {
+    const mode: TransportMode = options.transport ?? 'stdio';
+    this.transport = createTransport(mode, { port: options.port });
+
+    this.transport.onMessage((msg) => this.handleMessage(msg));
+    this.transport.start();
+
+    console.error(`[OpenSafari] MCP server started (${mode})`);
+  }
+
+  async stop(): Promise<void> {
+    if (this.transport) {
+      await this.transport.close();
+      this.transport = null;
+    }
+    console.error('[OpenSafari] MCP server stopped');
+  }
+
+  // ------------------------------------------------------------------
+  // Progressive disclosure
+  // ------------------------------------------------------------------
+
+  setTier(tier: number): void {
+    this.currentTier = tier;
+  }
+
+  getTier(): number {
+    return this.currentTier;
+  }
+
+  // ------------------------------------------------------------------
+  // Message routing
+  // ------------------------------------------------------------------
+
+  private async handleMessage(
+    msg: Record<string, unknown>,
+  ): Promise<MCPResponse | null> {
+    // Notifications have no id — process but return null (no response)
+    const hasId = 'id' in msg && msg.id !== undefined;
+    const id = (msg.id as number | string) ?? 0;
+    const method = msg.method as string | undefined;
+
+    if (!method) {
+      if (!hasId) return null;
+      return {
+        jsonrpc: '2.0',
+        id,
+        error: {
+          code: MCPErrorCodes.INVALID_REQUEST,
+          message: 'Missing method field',
+        },
+      };
+    }
+
+    // Notifications (no id) — handle silently where needed, then drop
+    if (!hasId) {
+      // e.g. notifications/initialized — no response required
+      return null;
+    }
+
+    const request = msg as unknown as MCPRequest;
+
+    switch (method) {
+      case 'initialize':
+        return this.handleInitialize(request);
+
+      case 'tools/list':
+        return this.handleToolsList(request);
+
+      case 'tools/call':
+        return this.handleToolsCall(request);
+
+      default:
+        return {
+          jsonrpc: '2.0',
+          id,
+          error: {
+            code: MCPErrorCodes.METHOD_NOT_FOUND,
+            message: `Method not found: ${method}`,
+          },
+        };
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // Method handlers
+  // ------------------------------------------------------------------
+
+  private handleInitialize(request: MCPRequest): MCPResponse {
+    return {
+      jsonrpc: '2.0',
+      id: request.id,
+      result: {
+        protocolVersion: '2024-11-05',
+        capabilities: {
+          tools: {},
+        },
+        serverInfo: {
+          name: 'opensafari-mcp',
+          version: '0.0.1',
+        },
+      },
+    };
+  }
+
+  private handleToolsList(request: MCPRequest): MCPResponse {
+    const visibleTools = Array.from(this.tools.values())
+      .filter((t) => t.tier <= this.currentTier)
+      .map((t) => t.definition);
+
+    return {
+      jsonrpc: '2.0',
+      id: request.id,
+      result: { tools: visibleTools },
+    };
+  }
+
+  private async handleToolsCall(request: MCPRequest): Promise<MCPResponse> {
+    const params = request.params as
+      | { name?: string; arguments?: Record<string, unknown> }
+      | undefined;
+
+    const name = params?.name;
+    const args = params?.arguments ?? {};
+
+    if (!name) {
+      return {
+        jsonrpc: '2.0',
+        id: request.id,
+        error: {
+          code: MCPErrorCodes.INVALID_PARAMS,
+          message: 'tools/call requires params.name',
+        },
+      };
+    }
+
+    const tool = this.tools.get(name);
+    if (!tool) {
+      return {
+        jsonrpc: '2.0',
+        id: request.id,
+        error: {
+          code: MCPErrorCodes.INVALID_PARAMS,
+          message: `Unknown tool: ${name}`,
+        },
+      };
+    }
+
+    // Session ID: use Mcp-Session-Id from context if available; fall back to
+    // a stable placeholder until the HTTP transport propagates it here.
+    const sessionId = (request.params as Record<string, unknown> | undefined)
+      ?._sessionId as string | undefined ?? 'default';
+
+    try {
+      const result: MCPResult = await tool.handler(sessionId, args);
+      return {
+        jsonrpc: '2.0',
+        id: request.id,
+        result,
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        jsonrpc: '2.0',
+        id: request.id,
+        result: {
+          content: [{ type: 'text', text: `Error: ${message}` }],
+          isError: true,
+        },
+      };
+    }
+  }
+}
