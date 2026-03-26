@@ -23,6 +23,9 @@ import { registerAppearanceToggleTool } from './appearance-toggle';
 import { registerBatchNavigateTool } from './batch-navigate';
 import { registerBatchScreenshotTool } from './batch-screenshot';
 import { registerBatchExecuteTool } from './batch-execute';
+import { registerOrchestrationTools } from './orchestration-tools';
+
+export { setWorkflowEngine } from './orchestration-tools';
 
 export function registerAllTools(server: MCPServer): void {
   // Tier 1: Core
@@ -54,4 +57,7 @@ export function registerAllTools(server: MCPServer): void {
   registerBatchNavigateTool(server);
   registerBatchScreenshotTool(server);
   registerBatchExecuteTool(server);
+
+  // Tier 3: Orchestration (Workflow & Worker lifecycle)
+  registerOrchestrationTools(server);
 }

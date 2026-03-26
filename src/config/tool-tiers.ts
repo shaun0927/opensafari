@@ -37,6 +37,8 @@ export const TOOL_TIERS: Record<string, number> = {
   workflow_init: 3,
   workflow_status: 3,
   workflow_collect: 3,
+  workflow_collect_partial: 3,
+  workflow_cleanup: 3,
   worker_update: 3,
   worker_complete: 3,
   qa_full_audit: 3,
