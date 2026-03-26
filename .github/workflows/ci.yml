@@ -15,7 +15,7 @@ jobs:
         with:
           node-version: 18
           cache: 'npm'
-      - run: npm ci
+      - run: npm ci --force
       - run: npm run lint
 
   test:
@@ -38,7 +38,7 @@ jobs:
         with:
           node-version: 18
           cache: 'npm'
-      - run: npm ci
+      - run: npm ci --force
       - run: npm run build
       - name: Verify dist artifacts
         run: |
