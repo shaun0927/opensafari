@@ -1,0 +1,52 @@
+/**
+ * OpenSafari Default Constants
+ * Timeouts, thresholds, and limits
+ */
+
+// Simulator
+export const DEFAULT_SIMULATOR_BOOT_TIMEOUT_MS = 15000;
+export const DEFAULT_SIMULATOR_SHUTDOWN_TIMEOUT_MS = 10000;
+export const DEFAULT_IDLE_SHUTDOWN_TIMEOUT_MS = 300000;
+export const DEFAULT_MAX_SIMULATORS = 3;
+
+// WebKit Protocol
+export const DEFAULT_WEBKIT_CONNECT_TIMEOUT_MS = 10000;
+export const DEFAULT_WEBKIT_SEND_TIMEOUT_MS = 15000;
+export const DEFAULT_HEARTBEAT_INTERVAL_MS = 30000;
+export const DEFAULT_RECONNECT_MAX_ATTEMPTS = 10;
+export const DEFAULT_RECONNECT_BASE_DELAY_MS = 1000;
+export const DEFAULT_RECONNECT_MAX_DELAY_MS = 30000;
+
+// Navigation
+export const DEFAULT_NAVIGATION_TIMEOUT_MS = 30000;
+export const DEFAULT_NETWORKIDLE_WAIT_MS = 500;
+
+// Screenshot
+export const DEFAULT_SCREENSHOT_TIMEOUT_MS = 10000;
+
+// Evaluate
+export const DEFAULT_EVALUATE_TIMEOUT_MS = 15000;
+
+// QA Detectors
+export const DEFAULT_DETECTOR_TIMEOUT_MS = 5000;
+export const DEFAULT_TOUCH_TARGET_MIN_SIZE = 44;
+export const DEFAULT_INPUT_MIN_FONT_SIZE = 16;
+
+// Resource Monitoring
+export const DEFAULT_MEMORY_WARN_MB = 400;
+export const DEFAULT_MEMORY_KILL_MB = 600;
+export const DEFAULT_RESOURCE_CHECK_INTERVAL_MS = 30000;
+export const DEFAULT_IDLE_CHECK_INTERVAL_MS = 60000;
+
+// Health
+export const DEFAULT_HEALTH_PORT = 9090;
+
+// Disk
+export const DEFAULT_DISK_CHECK_INTERVAL_MS = 300000;
+export const DEFAULT_DISK_WARN_MB = 500;
+export const DEFAULT_REPORT_MAX_AGE_DAYS = 30;
+export const DEFAULT_SCREENSHOT_MAX_AGE_DAYS = 7;
+
+// Rate Limiting
+export const DEFAULT_RATE_LIMIT_REQUESTS = 100;
+export const DEFAULT_RATE_LIMIT_WINDOW_MS = 60000;
