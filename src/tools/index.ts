@@ -24,8 +24,10 @@ import { registerBatchNavigateTool } from './batch-navigate';
 import { registerBatchScreenshotTool } from './batch-screenshot';
 import { registerBatchExecuteTool } from './batch-execute';
 import { registerOrchestrationTools } from './orchestration-tools';
+import { registerCrossViewportCompareTool } from './cross-viewport-compare';
 
 export { setWorkflowEngine } from './orchestration-tools';
+export { setCrossViewportCapture } from './cross-viewport-compare';
 
 export function registerAllTools(server: MCPServer): void {
   // Tier 1: Core
@@ -60,4 +62,7 @@ export function registerAllTools(server: MCPServer): void {
 
   // Tier 3: Orchestration (Workflow & Worker lifecycle)
   registerOrchestrationTools(server);
+
+  // Tier 3: Cross-Viewport Comparison
+  registerCrossViewportCompareTool(server);
 }
