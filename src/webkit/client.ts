@@ -201,7 +201,12 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
 
     if (msg.method === 'Target.dispatchMessageFromTarget') {
       // This contains the REAL response to our domain commands
-      const innerMsg = JSON.parse(msg.params.message);
+      let innerMsg: any;
+      try {
+        innerMsg = JSON.parse(msg.params.message);
+      } catch {
+        return;
+      }
       if (innerMsg.id !== undefined) {
         const pending = this.innerPendingRequests.get(innerMsg.id);
         if (pending) {
@@ -284,7 +289,15 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
     if (this.reconnecting) return;
     this.reconnecting = true;
     this.connected = false;
+
+    // Clear stale inner requests before reconnect
+    for (const [, pending] of this.innerPendingRequests) {
+      clearTimeout(pending.timer);
+      pending.reject(new ConnectionError('Connection lost during reconnect'));
+    }
+    this.innerPendingRequests.clear();
     this.activeTargetId = null;
+
     this.stopHeartbeat();
 
     let attempt = 0;
@@ -609,32 +622,18 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
     if (!center) throw new Error(`Element not found: ${selector}`);
     const dur = duration ?? 500;
 
-    // Async IIFE — need to await the promise
-    const result = await this.send<any>('Runtime.evaluate', {
-      expression: `
-        (async function(x, y, duration) {
-          var el = document.elementFromPoint(x, y);
-          if (!el) return;
-          var touch = document.createTouch(window, el, 1, x, y, x, y);
-          var touchList = document.createTouchList(touch);
-          el.dispatchEvent(new TouchEvent('touchstart', { touches: touchList, changedTouches: touchList, bubbles: true }));
-          await new Promise(function(r) { setTimeout(r, duration); });
-          var emptyList = document.createTouchList();
-          el.dispatchEvent(new TouchEvent('touchend', { touches: emptyList, changedTouches: touchList, bubbles: true }));
-        })(${center.x}, ${center.y}, ${dur})
-      `,
-      returnByValue: true,
-      emulateUserGesture: true,
-      awaitPromise: false,
-    });
-
-    // If result is a promise, await it
-    if (result.result?.type === 'object' && result.result?.subtype === 'promise' && result.result?.objectId) {
-      await this.send('Runtime.awaitPromise', {
-        promiseObjectId: result.result.objectId,
-        returnByValue: true,
-      });
-    }
+    await this.evaluate(`
+      (async function(x, y, duration) {
+        var el = document.elementFromPoint(x, y);
+        if (!el) return;
+        var touch = document.createTouch(window, el, 1, x, y, x, y);
+        var touchList = document.createTouchList(touch);
+        el.dispatchEvent(new TouchEvent('touchstart', { touches: touchList, changedTouches: touchList, bubbles: true }));
+        await new Promise(function(r) { setTimeout(r, duration); });
+        var emptyList = document.createTouchList();
+        el.dispatchEvent(new TouchEvent('touchend', { touches: emptyList, changedTouches: touchList, bubbles: true }));
+      })(${center.x}, ${center.y}, ${dur})
+    `);
   }
 
   async swipe(direction: 'up' | 'down' | 'left' | 'right', speed?: number): Promise<void> {
@@ -652,40 +651,28 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
     };
     const { sx, sy, ex, ey } = coords[direction];
 
-    const result = await this.send<any>('Runtime.evaluate', {
-      expression: `
-        (async function(sx, sy, ex, ey, steps) {
-          var el = document.elementFromPoint(sx, sy);
-          if (!el) return;
-          var makeTouch = function(x, y) { return document.createTouch(window, el, 1, x, y, x, y); };
-          var startTouch = makeTouch(sx, sy);
-          var startList = document.createTouchList(startTouch);
-          el.dispatchEvent(new TouchEvent('touchstart', { touches: startList, changedTouches: startList, bubbles: true }));
-          for (var i = 1; i <= steps; i++) {
-            var x = sx + (ex - sx) * (i / steps);
-            var y = sy + (ey - sy) * (i / steps);
-            var moveTouch = makeTouch(x, y);
-            var moveList = document.createTouchList(moveTouch);
-            el.dispatchEvent(new TouchEvent('touchmove', { touches: moveList, changedTouches: moveList, bubbles: true }));
-            await new Promise(function(r) { setTimeout(r, 16); });
-          }
-          var endTouch = makeTouch(ex, ey);
-          var endList = document.createTouchList(endTouch);
-          var emptyList = document.createTouchList();
-          el.dispatchEvent(new TouchEvent('touchend', { touches: emptyList, changedTouches: endList, bubbles: true }));
-        })(${sx}, ${sy}, ${ex}, ${ey}, ${steps})
-      `,
-      returnByValue: true,
-      emulateUserGesture: true,
-      awaitPromise: false,
-    });
-
-    if (result.result?.type === 'object' && result.result?.subtype === 'promise' && result.result?.objectId) {
-      await this.send('Runtime.awaitPromise', {
-        promiseObjectId: result.result.objectId,
-        returnByValue: true,
-      });
-    }
+    await this.evaluate(`
+      (async function(sx, sy, ex, ey, steps) {
+        var el = document.elementFromPoint(sx, sy);
+        if (!el) return;
+        var makeTouch = function(x, y) { return document.createTouch(window, el, 1, x, y, x, y); };
+        var startTouch = makeTouch(sx, sy);
+        var startList = document.createTouchList(startTouch);
+        el.dispatchEvent(new TouchEvent('touchstart', { touches: startList, changedTouches: startList, bubbles: true }));
+        for (var i = 1; i <= steps; i++) {
+          var x = sx + (ex - sx) * (i / steps);
+          var y = sy + (ey - sy) * (i / steps);
+          var moveTouch = makeTouch(x, y);
+          var moveList = document.createTouchList(moveTouch);
+          el.dispatchEvent(new TouchEvent('touchmove', { touches: moveList, changedTouches: moveList, bubbles: true }));
+          await new Promise(function(r) { setTimeout(r, 16); });
+        }
+        var endTouch = makeTouch(ex, ey);
+        var endList = document.createTouchList(endTouch);
+        var emptyList = document.createTouchList();
+        el.dispatchEvent(new TouchEvent('touchend', { touches: emptyList, changedTouches: endList, bubbles: true }));
+      })(${sx}, ${sy}, ${ex}, ${ey}, ${steps})
+    `);
   }
 
   async press(key: string): Promise<void> {
@@ -954,13 +941,18 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
     // Wait for first page target to be discovered
     const connectTimeout =
       this.options.connectTimeout ?? DEFAULT_WEBKIT_CONNECT_TIMEOUT_MS;
-    const targetTimeout = new Promise<void>((_, reject) => {
-      setTimeout(
+    let targetTimer: ReturnType<typeof setTimeout>;
+    const targetTimeout = new Promise<never>((_, reject) => {
+      targetTimer = setTimeout(
         () => reject(new ConnectionError('No page target discovered — is Safari open in the simulator?')),
         connectTimeout,
       );
     });
-    await Promise.race([this.targetReady, targetTimeout]);
+    try {
+      await Promise.race([this.targetReady, targetTimeout]);
+    } finally {
+      clearTimeout(targetTimer!);
+    }
   }
 
   private clearPendingRequests(): void {
