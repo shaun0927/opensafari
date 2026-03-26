@@ -42,14 +42,12 @@ export interface TransportOptions {
 /**
  * Factory: create the appropriate transport based on mode.
  */
-export function createTransport(mode: TransportMode, options?: TransportOptions): MCPTransport {
+export async function createTransport(mode: TransportMode, options?: TransportOptions): Promise<MCPTransport> {
   if (mode === 'http') {
-    // Use require to avoid loading HTTP module when not needed
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { HTTPTransport } = require('./http');
+    // Use dynamic import to avoid loading HTTP module when not needed
+    const { HTTPTransport } = await import('./http');
     return new HTTPTransport(options?.port || 3100);
   }
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const { StdioTransport } = require('./stdio');
+  const { StdioTransport } = await import('./stdio');
   return new StdioTransport();
 }

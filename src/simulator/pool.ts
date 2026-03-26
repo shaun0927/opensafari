@@ -1,12 +1,11 @@
 import { EventEmitter } from 'events';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import { SimulatorManager, DeviceNotBootedError } from './manager';
-import { SimulatorDevice, DevicePreset } from './types';
+import { SimulatorManager } from './manager';
+import { SimulatorDevice } from './types';
 import { DEVICE_PRESETS } from './presets';
-import { WebKitClient, WebKitClientOptions } from '../webkit/client';
-import { BrowserBackend } from '../types/browser-backend';
-import { AuthManager, AuthProfile } from '../auth/manager';
+import { WebKitClient } from '../webkit/client';
+import { AuthManager } from '../auth/manager';
 import * as os from 'os';
 import {
   DEFAULT_IDLE_CHECK_INTERVAL_MS,

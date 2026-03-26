@@ -3,7 +3,7 @@
 import { Command } from 'commander';
 import { MCPServer, getWebKitClient } from '../src/mcp-server';
 import { registerAllTools } from '../src/tools';
-import { SimulatorManager, DEVICE_PRESETS, checkXcodeInstallation } from '../src/simulator';
+import { DEVICE_PRESETS, checkXcodeInstallation } from '../src/simulator';
 import { AuthManager } from '../src/auth';
 
 const program = new Command()

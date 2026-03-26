@@ -86,9 +86,9 @@ export class MCPServer {
   // Lifecycle
   // ------------------------------------------------------------------
 
-  start(options: MCPServerOptions = {}): void {
+  async start(options: MCPServerOptions = {}): Promise<void> {
     const mode: TransportMode = options.transport ?? 'stdio';
-    this.transport = createTransport(mode, { port: options.port });
+    this.transport = await createTransport(mode, { port: options.port });
 
     this.transport.onMessage((msg) => this.handleMessage(msg));
     this.transport.start();

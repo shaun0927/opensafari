@@ -2,6 +2,8 @@ import * as fs from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import { SimctlExecutor } from './simctl';
 import { SimulatorDevice, SimulatorRuntime } from './types';
 import { DEVICE_PRESETS } from './presets';
@@ -274,8 +276,6 @@ export class SimulatorManager {
 
     // Try AppleScript rotation via Simulator.app menu
     try {
-      const { execFile } = require('child_process');
-      const { promisify } = require('util');
       const execFileAsync = promisify(execFile);
       await execFileAsync('osascript', [
         '-e', 'tell application "Simulator" to activate',
