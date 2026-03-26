@@ -83,13 +83,5 @@ export async function checkXcodeInstallation(): Promise<XcodeCheckResult> {
     result.suggestions.push('Upgrade Node.js to v18 or later');
   }
 
-  // Check ios_webkit_debug_proxy
-  try {
-    await execFileAsync('which', ['ios_webkit_debug_proxy']);
-  } catch {
-    result.issues.push('ios_webkit_debug_proxy not found');
-    result.suggestions.push('Install with: brew install ios-webkit-debug-proxy');
-  }
-
   return result;
 }
