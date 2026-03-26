@@ -32,16 +32,16 @@
 
 ## What is OpenSafari?
 
-Imagine testing your e-commerce site on **iPhone SE, iPhone 16, iPhone 16 Pro Max, and iPad** — all at the same time, already logged in, with an AI agent that automatically finds iOS-specific bugs. That's OpenSafari.
+Imagine testing your e-commerce site on **iPhone 17e, iPhone 17, iPhone 17 Pro Max, and iPad** — all at the same time, already logged in, with an AI agent that automatically finds iOS-specific bugs. That's OpenSafari.
 
 ```
 You: Check our checkout flow for mobile issues across all iPhone sizes
 
 AI:  [4 parallel simulators, all devices simultaneously]
-     iPhone SE:    ⚠ Credit card input triggers iOS auto-zoom (font-size: 14px)
-     iPhone 16:    ✓ Layout OK
-     iPhone 16 PM: ⚠ "Place Order" button only 38×32px (below 44px touch target)
-     iPad:         ⚠ Shipping form hidden behind keyboard when focused
+     iPhone 17e:      ⚠ Credit card input triggers iOS auto-zoom (font-size: 14px)
+     iPhone 17:       ✓ Layout OK
+     iPhone 17 PM:    ⚠ "Place Order" button only 38×32px (below 44px touch target)
+     iPad:            ⚠ Shipping form hidden behind keyboard when focused
 
      Time: 8s | All screenshots captured and analyzed.
 ```
@@ -128,7 +128,7 @@ OpenSafari controls the **actual Safari.app** inside Xcode Simulator via WebKit 
 Test across multiple devices simultaneously with a single command:
 
 ```
-opensafari serve --devices "iphone-se,iphone-16,iphone-16-pro-max,ipad-pro"
+opensafari serve --devices "iphone-17e,iphone-17,iphone-17-pro-max,ipad-pro"
 
 # 4 simulators boot in parallel
 # Each gets its own Safari instance + WebKit Protocol connection
@@ -258,7 +258,7 @@ npm install -g opensafari-mcp
 opensafari serve
 
 # With specific devices
-opensafari serve --devices "iphone-se,iphone-16-pro-max"
+opensafari serve --devices "iphone-17e,iphone-17-pro-max"
 
 # With auth state
 opensafari serve --auth ~/.opensafari/auth/mysite.json

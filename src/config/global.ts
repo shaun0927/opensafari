@@ -33,7 +33,7 @@ export interface OpenSafariConfig {
 }
 
 const defaultConfig: OpenSafariConfig = {
-  defaultDevice: 'iphone-16',
+  defaultDevice: 'iphone-17-pro',
   maxSimulators: 3,
   bootTimeout: 15000,
   idleShutdownTimeout: 300000,

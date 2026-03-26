@@ -47,7 +47,7 @@ Get/set/clear Safari cookies (WebKit Page domain).
 
 #### device_boot
 Boot a simulator device.
-- **Input:** `{ device: string }` (preset key like 'iphone-16')
+- **Input:** `{ device: string }` (preset key like 'iphone-17')
 
 #### device_shutdown
 Shutdown a simulator.
