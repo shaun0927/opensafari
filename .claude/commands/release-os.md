@@ -152,7 +152,18 @@ Do NOT merge OTHER's PRs unless the user explicitly says to.
 ## STEP 7: Cleanup
 
 ```bash
-git branch --merged main | grep -v 'main' | xargs -r git branch -d
+# Delete merged local branches
+git branch --merged main | grep -v 'main\|develop' | xargs -r git branch -d
+
+# Delete stale remote branches (story/feature branches left after PR merge)
+git branch -r | grep -v "HEAD\|main\|develop" | sed 's|origin/||' | while read branch; do
+  git push origin --delete "$branch" 2>/dev/null
+done
+
+# Prune remote tracking refs
+git remote prune origin
+
+# Verify clean state
 git branch -a
 gh pr list --state open
 npm run build
