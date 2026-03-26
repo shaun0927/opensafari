@@ -1,0 +1,8 @@
+{
+  "active": true,
+  "started_at": "2026-03-26T06:19:40.922Z",
+  "original_prompt": "A: 롤백 + PR 재분해로 진행해줘. 어차피 아직 레포의 초기 단계야. develop에서 epic보다 하위 단계인 story별 pr이 필요해. ultrapilot으로 진행해줘.",
+  "session_id": "4c81cdf6-08b3-46c4-8a04-47347fe26163",
+  "reinforcement_count": 0,
+  "last_checked_at": "2026-03-26T06:19:40.922Z"
+}
