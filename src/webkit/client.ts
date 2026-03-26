@@ -187,6 +187,12 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
       const info = msg.params?.targetInfo;
       if (info?.type === 'page' && !this.activeTargetId) {
         this.activeTargetId = info.targetId;
+        // Re-enable domains on new target (e.g., after navigation destroys old target)
+        const domains = [...this.enabledDomains];
+        this.enabledDomains.clear();
+        for (const domain of domains) {
+          this.enableDomain(domain).catch(() => {});
+        }
         this.targetReadyResolve?.();
       }
       return;
@@ -355,29 +361,34 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
     await this.enableDomain('Page');
     await this.enableDomain('Network');
 
-    // Set up load event promise
-    const waitEvent = options.waitUntil === 'domcontentloaded'
-      ? 'Page.domContentEventFired'
-      : 'Page.loadEventFired';
+    // Try Page.navigate first; fall back to JS navigation if unsupported
+    try {
+      await this.send('Page.navigate', { url: options.url });
+    } catch (e) {
+      if (e instanceof ProtocolError && e.code === -32601) {
+        // Page.navigate not supported — use JS fallback
+        await this.evaluate(`window.location.href = ${JSON.stringify(options.url)}`);
+      } else {
+        throw e;
+      }
+    }
 
-    const loadPromise = new Promise<void>((resolve, reject) => {
-      const timeout = setTimeout(
-        () => reject(new TimeoutError(`Navigation timeout after ${options.timeout ?? 30000}ms`)),
-        options.timeout ?? 30000,
-      );
-      const handler = () => {
-        clearTimeout(timeout);
-        this.removeListener(waitEvent, handler);
-        resolve();
-      };
-      this.on(waitEvent, handler);
-    });
-
-    // Navigate
-    await this.send('Page.navigate', { url: options.url });
-
-    // Wait for load
-    await loadPromise;
+    // Poll document.readyState instead of relying on Page.loadEventFired
+    const waitUntil = options.waitUntil;
+    const waitStart = Date.now();
+    const navTimeout = options.timeout ?? 30000;
+    while (Date.now() - waitStart < navTimeout) {
+      await new Promise(r => setTimeout(r, 300));
+      try {
+        const readyState = await this.evaluate<string>('document.readyState');
+        if (waitUntil === 'domcontentloaded' && (readyState === 'interactive' || readyState === 'complete')) break;
+        if (waitUntil === 'load' && readyState === 'complete') break;
+        if (!waitUntil && readyState === 'complete') break;
+      } catch {
+        // Target may be transitioning during navigation, keep polling
+        continue;
+      }
+    }
 
     return {
       url: options.url,
@@ -432,18 +443,64 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
 
     // Handle Promise results — WebKit requires separate awaitPromise command
     if (result.result?.type === 'object' && result.result?.subtype === 'promise' && result.result?.objectId) {
-      const awaited = await this.send<{
-        result: { type: string; value?: unknown; description?: string };
+      // Try awaitPromise first
+      try {
+        const awaited = await this.send<{
+          result: { type: string; value?: unknown; description?: string };
+          wasThrown: boolean;
+        }>('Runtime.awaitPromise', {
+          promiseObjectId: result.result.objectId,
+          returnByValue: true,
+        });
+
+        if (awaited.wasThrown) {
+          throw new EvaluationError(awaited.result?.description ?? 'Promise rejected');
+        }
+        if (awaited.result?.value !== undefined) {
+          return awaited.result.value as T;
+        }
+      } catch (e) {
+        if (e instanceof EvaluationError) throw e;
+        // awaitPromise not supported or returned empty — fall through to fallback
+      }
+
+      // Fallback: re-evaluate with async wrapper that JSON-stringifies the result
+      const fallback = await this.send<{
+        result: { type: string; subtype?: string; value?: unknown; objectId?: string };
         wasThrown: boolean;
-      }>('Runtime.awaitPromise', {
-        promiseObjectId: result.result.objectId,
+      }>('Runtime.evaluate', {
+        expression: `(async () => JSON.stringify(await (${expression})))()`,
         returnByValue: true,
+        emulateUserGesture: true,
       });
 
-      if (awaited.wasThrown) {
-        throw new EvaluationError(awaited.result?.description ?? 'Promise rejected');
+      // The fallback itself might return a promise, so handle that
+      let fallbackValue = fallback.result?.value;
+      if (fallback.result?.type === 'object' && fallback.result?.subtype === 'promise' && fallback.result?.objectId) {
+        try {
+          const fallbackAwaited = await this.send<{
+            result: { type: string; value?: unknown };
+            wasThrown: boolean;
+          }>('Runtime.awaitPromise', {
+            promiseObjectId: fallback.result.objectId,
+            returnByValue: true,
+          });
+          fallbackValue = fallbackAwaited.result?.value;
+        } catch {
+          // If this also fails, return undefined
+        }
       }
-      return awaited.result?.value as T;
+
+      if (typeof fallbackValue === 'string') {
+        try {
+          return JSON.parse(fallbackValue) as T;
+        } catch {
+          return fallbackValue as T;
+        }
+      }
+      if (fallbackValue !== undefined) {
+        return fallbackValue as T;
+      }
     }
 
     return result.result?.value as T;
@@ -474,57 +531,88 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
   }
 
   async getCookies(domain?: string): Promise<Cookie[]> {
-    await this.enableDomain('Page');
-    const result = await this.send<{ cookies: Array<{
-      name: string; value: string; domain: string; path: string;
-      expires: number; httpOnly: boolean; secure: boolean; sameSite?: string;
-    }> }>('Page.getCookies');
+    try {
+      await this.enableDomain('Page');
+      const result = await this.send<{ cookies: Array<{
+        name: string; value: string; domain: string; path: string;
+        expires: number; httpOnly: boolean; secure: boolean; sameSite?: string;
+      }> }>('Page.getCookies');
 
-    let cookies = result.cookies.map(c => ({
-      name: c.name,
-      value: c.value,
-      domain: c.domain,
-      path: c.path,
-      expires: c.expires,
-      httpOnly: c.httpOnly,
-      secure: c.secure,
-      sameSite: c.sameSite as Cookie['sameSite'],
-    }));
+      let cookies = result.cookies.map(c => ({
+        name: c.name,
+        value: c.value,
+        domain: c.domain,
+        path: c.path,
+        expires: c.expires,
+        httpOnly: c.httpOnly,
+        secure: c.secure,
+        sameSite: c.sameSite as Cookie['sameSite'],
+      }));
 
-    if (domain) {
-      cookies = cookies.filter(c =>
-        c.domain === domain || c.domain === '.' + domain
-      );
+      if (domain) {
+        cookies = cookies.filter(c =>
+          c.domain === domain || c.domain === '.' + domain
+        );
+      }
+
+      return cookies;
+    } catch {
+      // Fallback: parse document.cookie via evaluate
+      const raw = await this.evaluate<string>('document.cookie');
+      if (!raw) return [];
+      return raw.split(';').map(pair => {
+        const [name, ...rest] = pair.trim().split('=');
+        return {
+          name: name.trim(),
+          value: rest.join('='),
+          domain: domain ?? '',
+          path: '/',
+          expires: -1,
+          httpOnly: false,
+          secure: false,
+        };
+      }).filter(c => c.name);
     }
-
-    return cookies;
   }
 
   async setCookies(cookies: Cookie[]): Promise<void> {
     await this.enableDomain('Page');
     for (const cookie of cookies) {
-      await this.send('Page.setCookie', {
-        cookie: {
-          name: cookie.name,
-          value: cookie.value,
-          domain: cookie.domain,
-          path: cookie.path,
-          expires: cookie.expires,
-          httpOnly: cookie.httpOnly,
-          secure: cookie.secure,
-          sameSite: cookie.sameSite,
-        },
-      });
+      try {
+        await this.send('Page.setCookie', {
+          cookie: {
+            name: cookie.name,
+            value: cookie.value,
+            domain: cookie.domain,
+            path: cookie.path,
+            expires: cookie.expires,
+            httpOnly: cookie.httpOnly,
+            secure: cookie.secure,
+            sameSite: cookie.sameSite,
+          },
+        });
+      } catch {
+        // Fallback: set cookie via document.cookie
+        const parts = [`${cookie.name}=${cookie.value}`];
+        if (cookie.path) parts.push(`path=${cookie.path}`);
+        if (cookie.domain) parts.push(`domain=${cookie.domain}`);
+        if (cookie.secure) parts.push('secure');
+        await this.evaluate(`document.cookie = ${JSON.stringify(parts.join('; '))}`);
+      }
     }
   }
 
   async clearCookies(): Promise<void> {
-    const cookies = await this.getCookies();
-    for (const cookie of cookies) {
-      await this.send('Page.deleteCookie', {
-        cookieName: cookie.name,
-        url: `${cookie.secure ? 'https' : 'http'}://${cookie.domain}${cookie.path}`,
-      });
+    try {
+      await this.send('Page.deleteAllCookies');
+    } catch {
+      // Fallback: expire all cookies via JS
+      await this.evaluate(`
+        document.cookie.split(';').forEach(c => {
+          const name = c.trim().split('=')[0];
+          document.cookie = name + '=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/';
+        });
+      `);
     }
   }
 
