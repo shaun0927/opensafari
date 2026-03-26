@@ -185,15 +185,22 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
     // Handle Target events (multiplexing protocol)
     if (msg.method === 'Target.targetCreated') {
       const info = msg.params?.targetInfo;
-      if (info?.type === 'page' && !this.activeTargetId) {
+      if (info?.type === 'page') {
+        // Always track the latest page target
+        // If old target still exists, it will be destroyed shortly
         this.activeTargetId = info.targetId;
         // Re-enable domains on new target (e.g., after navigation destroys old target)
         const domains = [...this.enabledDomains];
         this.enabledDomains.clear();
-        for (const domain of domains) {
-          this.enableDomain(domain).catch(() => {});
-        }
-        this.targetReadyResolve?.();
+        // Re-enable domains then signal target readiness
+        Promise.all(
+          domains.map(domain => this.enableDomain(domain).catch(err => {
+            console.error(`[WebKitClient] Failed to re-enable ${domain} on new target: ${(err as Error).message}`);
+          }))
+        ).then(() => {
+          this.targetReadyResolve?.();
+        });
+        return;  // Don't call targetReadyResolve here, wait for domains
       }
       return;
     }
@@ -381,18 +388,42 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
       await new Promise(r => setTimeout(r, 300));
       try {
         const readyState = await this.evaluate<string>('document.readyState');
-        if (waitUntil === 'domcontentloaded' && (readyState === 'interactive' || readyState === 'complete')) break;
-        if (waitUntil === 'load' && readyState === 'complete') break;
-        if (!waitUntil && readyState === 'complete') break;
+        if (waitUntil === 'networkidle') {
+          // networkidle not directly detectable via polling
+          // Fall back to 'complete' readyState + extra delay
+          if (readyState === 'complete') {
+            await new Promise(r => setTimeout(r, 500)); // extra settle time
+            break;
+          }
+        } else if (waitUntil === 'domcontentloaded') {
+          if (readyState === 'interactive' || readyState === 'complete') break;
+        } else if (waitUntil === 'load') {
+          if (readyState === 'complete') break;
+        } else {
+          if (readyState === 'complete') break;
+        }
       } catch {
         // Target may be transitioning during navigation, keep polling
         continue;
       }
     }
 
+    // P0-1: Check if we actually broke out or timed out
+    const finalReadyState = await this.evaluate<string>('document.readyState').catch(() => '');
+    const expectedState = waitUntil === 'domcontentloaded' ? 'interactive' : 'complete';
+    if (finalReadyState !== 'complete' && finalReadyState !== expectedState) {
+      throw new TimeoutError(`Navigation timeout after ${navTimeout}ms (readyState: ${finalReadyState})`);
+    }
+
+    // P0-2: Try to get real HTTP status from Performance API
+    const currentUrl = await this.evaluate<string>('document.URL').catch(() => options.url);
+    const status = await this.evaluate<number>(
+      `(function() { try { var e = performance.getEntriesByType('navigation')[0]; return e ? e.responseStatus || 200 : 200; } catch(ex) { return 200; } })()`
+    ).catch(() => 200);
+
     return {
-      url: options.url,
-      status: 200,
+      url: currentUrl,
+      status,
       loadTime: Date.now() - startTime,
     };
   }
@@ -465,6 +496,9 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
       }
 
       // Fallback: re-evaluate with async wrapper that JSON-stringifies the result
+      // NOTE: This fallback re-evaluates the expression. Expressions with side effects
+      // (network requests, mutations) will execute twice. This is a known limitation
+      // of the WebKit Inspector Protocol's incomplete Runtime.awaitPromise support.
       const fallback = await this.send<{
         result: { type: string; subtype?: string; value?: unknown; objectId?: string };
         wasThrown: boolean;
@@ -558,6 +592,8 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
       return cookies;
     } catch {
       // Fallback: parse document.cookie via evaluate
+      // Fallback: document.cookie cannot access httpOnly cookies.
+      // Results will be incomplete for httpOnly cookies.
       const raw = await this.evaluate<string>('document.cookie');
       if (!raw) return [];
       return raw.split(';').map(pair => {
