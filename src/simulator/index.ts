@@ -8,3 +8,5 @@ export { SimulatorPool, InsufficientResourcesError } from './pool';
 export type { PooledSimulator, SimulatorPoolOptions } from './pool';
 export { BatchExecutor } from './batch';
 export type { BatchResult } from './batch';
+export { WebInspectorProxy } from './proxy';
+export type { ProxyOptions } from './proxy';
