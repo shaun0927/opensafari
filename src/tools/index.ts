@@ -1,0 +1,49 @@
+import { MCPServer } from '../mcp-server';
+import { registerNavigateTool } from './navigate';
+import { registerScreenshotTool } from './screenshot';
+import { registerJavascriptTool } from './javascript';
+import { registerReadPageTool } from './read-page';
+import { registerClickTool } from './click';
+import { registerTypeTool } from './type';
+import { registerScrollTool } from './scroll';
+import { registerQueryDomTool } from './query-dom';
+import { registerCookiesTool } from './cookies';
+import { registerDeviceBootTool } from './device-boot';
+import { registerDeviceShutdownTool } from './device-shutdown';
+import { registerInspectTool } from './inspect';
+import { registerWaitForTool } from './wait-for';
+import { registerLongPressTool } from './long-press';
+import { registerSwipeTool } from './swipe';
+import { registerPressTool } from './press';
+import { registerDismissKeyboardTool } from './dismiss-keyboard';
+import { registerSelectOptionTool } from './select-option';
+import { registerDeviceListTool } from './device-list';
+import { registerDeviceRotateTool } from './device-rotate';
+import { registerAppearanceToggleTool } from './appearance-toggle';
+
+export function registerAllTools(server: MCPServer): void {
+  // Tier 1: Core
+  registerNavigateTool(server);
+  registerScreenshotTool(server);
+  registerJavascriptTool(server);
+  registerReadPageTool(server);
+  registerClickTool(server);
+  registerTypeTool(server);
+  registerScrollTool(server);
+  registerQueryDomTool(server);
+  registerCookiesTool(server);
+  registerDeviceBootTool(server);
+  registerDeviceShutdownTool(server);
+
+  // Tier 2: Advanced
+  registerInspectTool(server);
+  registerWaitForTool(server);
+  registerLongPressTool(server);
+  registerSwipeTool(server);
+  registerPressTool(server);
+  registerDismissKeyboardTool(server);
+  registerSelectOptionTool(server);
+  registerDeviceListTool(server);
+  registerDeviceRotateTool(server);
+  registerAppearanceToggleTool(server);
+}
