@@ -463,7 +463,7 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
     // WebKit serializes Promises as {} when returnByValue:true, losing the objectId
     // needed for Runtime.awaitPromise.
     const result = await this.send<{
-      result: { type: string; subtype?: string; value?: unknown; objectId?: string; description?: string };
+      result: { type: string; subtype?: string; className?: string; value?: unknown; objectId?: string; description?: string };
       wasThrown: boolean;
     }>('Runtime.evaluate', {
       expression,
@@ -478,8 +478,10 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
     // Step 2: If result is a Promise, use awaitPromise to get the resolved value
     // WebKit Inspector may use subtype:'promise' OR className:'Promise' depending on version
     const isPromise = result.result?.type === 'object' && result.result?.objectId &&
-      (result.result?.subtype === 'promise' || (result.result as any)?.className === 'Promise');
+      (result.result?.subtype === 'promise' || result.result?.className === 'Promise');
     if (isPromise) {
+      // Note: awaitPromise blocks until the Promise settles. Never-resolving Promises
+      // will block for the full send() timeout (DEFAULT_WEBKIT_SEND_TIMEOUT_MS, typically 15s).
       const awaited = await this.send<{
         result: { type: string; value?: unknown; objectId?: string; description?: string };
         wasThrown: boolean;
@@ -494,15 +496,16 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
       return awaited.result?.value as T;
     }
 
-    // Step 3: For non-Promise results, re-evaluate with returnByValue:true to get the value
+    // Step 3: For non-Promise object results, use callFunctionOn to serialize the value
+    // without re-executing the expression (avoids double side effects)
     if (result.result?.objectId && result.result?.value === undefined) {
       const valued = await this.send<{
         result: { type: string; value?: unknown; description?: string };
         wasThrown: boolean;
-      }>('Runtime.evaluate', {
-        expression,
+      }>('Runtime.callFunctionOn', {
+        objectId: result.result.objectId,
+        functionDeclaration: 'function() { return this; }',
         returnByValue: true,
-        emulateUserGesture: true,
       });
       return valued.result?.value as T;
     }
