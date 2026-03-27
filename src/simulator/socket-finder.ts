@@ -131,10 +131,37 @@ async function findViaMtime(): Promise<string | null> {
   // Sort by mtime descending — newest first
   candidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
 
-  // Probe each candidate until one is alive
+  // Probe each candidate until one is alive; collect stale paths for cleanup
+  const stalePaths: string[] = [];
   for (const { socketPath } of candidates) {
-    if (await probeSocket(socketPath)) return socketPath;
+    if (await probeSocket(socketPath)) {
+      // Best-effort cleanup of confirmed-stale sockets (non-blocking)
+      if (stalePaths.length > 0) cleanupStaleSockets(stalePaths);
+      return socketPath;
+    }
+    stalePaths.push(socketPath);
   }
 
+  // All sockets are stale — clean them all
+  if (stalePaths.length > 0) cleanupStaleSockets(stalePaths);
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// Stale socket cleanup
+// ---------------------------------------------------------------------------
+
+/**
+ * Remove directories containing confirmed-stale sockets. Non-fatal: failures
+ * are logged but never block proxy startup. Only called after `probeSocket()`
+ * has confirmed the socket is dead (ECONNREFUSED).
+ */
+function cleanupStaleSockets(socketPaths: string[]): void {
+  for (const socketPath of socketPaths) {
+    const dir = path.dirname(socketPath);
+    fs.rm(dir, { recursive: true, force: true }).catch(err => {
+      console.error(`[socket-finder] Failed to clean stale socket dir ${dir}: ${err.message}`);
+    });
+  }
+  console.error(`[socket-finder] Cleaned ${socketPaths.length} stale socket(s)`);
 }
