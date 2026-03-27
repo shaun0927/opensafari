@@ -197,8 +197,6 @@ git rebase "origin/$BASE_BRANCH"
 git push --force-with-lease origin <branch>
 
 # 5. Wait for CI to pass after rebase
-echo "Waiting for CI on rebased branch..."
-sleep 10
 gh pr checks <N> --watch --fail-fast
 
 # 6. Re-verify mergeable status
@@ -211,11 +209,13 @@ echo "PR #<N> after rebase: $MERGE_STATUS"
 ### 6c. Merge the PR
 
 ```bash
+# Resolve base branch BEFORE merge (gh pr view works; after merge the PR is closed)
+BASE_BRANCH=$(gh pr view <N> --json baseRefName --jq '.baseRefName')
+
 # Merge into the base branch (usually develop)
 gh pr merge <N> --merge --delete-branch
 
 # Sync the base branch locally after merge
-BASE_BRANCH=$(gh pr view <N> --json baseRefName --jq '.baseRefName' 2>/dev/null || echo "develop")
 git checkout "$BASE_BRANCH" && git pull origin "$BASE_BRANCH"
 
 # Verify build/tests pass on the updated base branch
