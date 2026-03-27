@@ -1,13 +1,22 @@
 import { execFile } from 'child_process';
 import { promisify } from 'util';
+import * as fs from 'fs/promises';
+import * as path from 'path';
+import * as http from 'http';
 
 const execFileAsync = promisify(execFile);
+
+const SOCKET_NAME = 'com.apple.webinspectord_sim.socket';
+const SOCKET_SEARCH_DIRS = ['/private/var/tmp', '/private/tmp'];
+const PROXY_PORTS = [9222, 9322];
 
 export interface XcodeCheckResult {
   installed: boolean;
   version?: string;
   simulatorAvailable: boolean;
   iosRuntimes: string[];
+  webInspectorSocket?: string;
+  proxyReachable: boolean;
   issues: string[];
   suggestions: string[];
 }
@@ -17,6 +26,7 @@ export async function checkXcodeInstallation(): Promise<XcodeCheckResult> {
     installed: false,
     simulatorAvailable: false,
     iosRuntimes: [],
+    proxyReachable: false,
     issues: [],
     suggestions: [],
   };
@@ -91,5 +101,66 @@ export async function checkXcodeInstallation(): Promise<XcodeCheckResult> {
     result.suggestions.push('Install with: brew install ios-webkit-debug-proxy');
   }
 
+  // Check Web Inspector socket path
+  result.webInspectorSocket = await findWebInspectorSocket();
+  if (!result.webInspectorSocket) {
+    result.issues.push('Web Inspector socket not found — is a simulator booted?');
+  }
+
+  // Check proxy connectivity
+  result.proxyReachable = await checkProxyReachable();
+  if (!result.proxyReachable) {
+    result.suggestions.push('Start proxy with: ios_webkit_debug_proxy or use opensafari device_boot');
+  }
+
   return result;
+}
+
+/**
+ * Scan known directories for the WebKit Inspector simulator socket.
+ * Duplicates the logic from proxy connection code to avoid circular imports.
+ */
+async function findWebInspectorSocket(): Promise<string | undefined> {
+  for (const base of SOCKET_SEARCH_DIRS) {
+    let dirs: string[];
+    try { dirs = await fs.readdir(base); } catch { continue; }
+    for (const dir of dirs) {
+      if (!dir.startsWith('com.apple.launchd.')) continue;
+      const socketPath = path.join(base, dir, SOCKET_NAME);
+      try {
+        await fs.access(socketPath);
+        return socketPath;
+      } catch { continue; }
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Try to reach ios_webkit_debug_proxy on common ports.
+ * Returns true if any port responds with the expected device listing page.
+ */
+function checkProxyReachable(): Promise<boolean> {
+  const checks = PROXY_PORTS.map(
+    (port) =>
+      new Promise<boolean>((resolve) => {
+        const req = http.get(`http://localhost:${port}`, { timeout: 2000 }, (res) => {
+          let body = '';
+          res.on('data', (chunk: Buffer) => {
+            body += chunk.toString();
+          });
+          res.on('end', () => {
+            resolve(body.includes('iOS Devices'));
+          });
+          res.on('error', () => resolve(false));
+        });
+        req.on('error', () => resolve(false));
+        req.on('timeout', () => {
+          req.destroy();
+          resolve(false);
+        });
+      }),
+  );
+
+  return Promise.all(checks).then((results) => results.some(Boolean));
 }
