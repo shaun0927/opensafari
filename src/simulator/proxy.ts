@@ -9,17 +9,36 @@ import * as net from 'net';
 const execFileAsync = promisify(execFile);
 
 export interface ProxyOptions {
+  /**
+   * WebKit Inspector proxy port for device connections.
+   * Defaults to 9322 (chosen to avoid conflict with openchrome on 9222).
+   * Can also be set via the OPENSAFARI_PROXY_PORT environment variable.
+   */
   port?: number;
   deviceListPort?: number;
 }
 
+/**
+ * Manages an ios_webkit_debug_proxy process for WebKit remote debugging.
+ *
+ * The default device-connection port is **9322**, deliberately offset from the
+ * Chrome DevTools default (9222) so OpenSafari and openchrome can coexist.
+ *
+ * Port resolution order:
+ *  1. Explicit `port` option passed to the constructor
+ *  2. `OPENSAFARI_PROXY_PORT` environment variable
+ *  3. Default 9322
+ */
 export class WebInspectorProxy {
   private process: ChildProcess | null = null;
   private port: number;
   private deviceListPort: number;
 
   constructor(options?: ProxyOptions) {
-    this.port = options?.port ?? 9322;
+    const envPort = process.env.OPENSAFARI_PROXY_PORT
+      ? parseInt(process.env.OPENSAFARI_PROXY_PORT, 10)
+      : undefined;
+    this.port = options?.port ?? envPort ?? 9322;
     this.deviceListPort = options?.deviceListPort ?? 9321;
   }
 
@@ -43,9 +62,23 @@ export class WebInspectorProxy {
   async start(): Promise<void> {
     if (this.process) return;
 
+    // Check if another ios_webkit_debug_proxy is already running
+    const existingProxy = await this.isProxyAlreadyRunning();
+    if (existingProxy) {
+      throw new Error(
+        `Another ios_webkit_debug_proxy process is already running. ` +
+        `Stop it first (pkill ios_webkit_debug_proxy) or use a different port ` +
+        `(e.g. port ${this.port + 100}) via the OPENSAFARI_PROXY_PORT env var.`
+      );
+    }
+
     const portInUse = await this.isPortInUse(this.port);
     if (portInUse) {
-      throw new Error(`Port ${this.port} already in use. Specify a different port or stop the existing process.`);
+      throw new Error(
+        `Port ${this.port} already in use. ` +
+        `Use a different port (e.g. port ${this.port + 100}) via the OPENSAFARI_PROXY_PORT env var ` +
+        `or stop the existing process.`
+      );
     }
 
     try {
@@ -119,12 +152,32 @@ export class WebInspectorProxy {
 
   private isPortInUse(port: number): Promise<boolean> {
     return new Promise(resolve => {
-      const server = net.createServer();
-      server.unref();
-      server.once('error', () => resolve(true));
-      server.once('listening', () => { server.close(() => resolve(false)); });
-      server.listen(port);
+      const socket = net.connect({ port, host: '127.0.0.1' });
+      socket.once('connect', () => {
+        socket.destroy();
+        resolve(true);
+      });
+      socket.once('error', () => {
+        socket.destroy();
+        resolve(false);
+      });
     });
+  }
+
+  /**
+   * Checks whether another ios_webkit_debug_proxy process is already running.
+   * This catches conflicts that port-checking alone would miss, because
+   * ios_webkit_debug_proxy only binds device ports on-demand when a device connects.
+   */
+  private async isProxyAlreadyRunning(): Promise<boolean> {
+    try {
+      await execFileAsync('pgrep', ['-x', 'ios_webkit_debug_proxy']);
+      // pgrep exits 0 when at least one matching process is found
+      return true;
+    } catch {
+      // pgrep exits non-zero when no matching process is found
+      return false;
+    }
   }
 
   private httpGet(url: string): Promise<string> {
