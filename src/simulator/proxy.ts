@@ -14,6 +14,12 @@ export interface ProxyOptions {
    * Can also be set via the OPENSAFARI_PROXY_PORT environment variable.
    */
   port?: number;
+  /**
+   * Port on which ios_webkit_debug_proxy serves the device list.
+   * When not specified, derived as `port - 1` (e.g. 9321 for the default port 9322).
+   * Can also be set via the OPENSAFARI_PROXY_DEVICE_LIST_PORT environment variable.
+   * Explicit constructor option takes highest precedence.
+   */
   deviceListPort?: number;
   /** Additional CLI flags for ios_webkit_debug_proxy */
   extraArgs?: string[];
@@ -29,6 +35,15 @@ export interface ProxyOptions {
  *  1. Explicit `port` option passed to the constructor
  *  2. `OPENSAFARI_PROXY_PORT` environment variable
  *  3. Default 9322
+ *
+ * Device-list port resolution order:
+ *  1. Explicit `deviceListPort` option passed to the constructor
+ *  2. `OPENSAFARI_PROXY_DEVICE_LIST_PORT` environment variable
+ *  3. Derived as `port - 1` (default: 9321 for port 9322)
+ *
+ * This derivation ensures that multiple proxy instances on different ports
+ * (e.g. port=9500 → deviceListPort=9499) can coexist without sharing the
+ * same device-list port and causing false "reuse" detection.
  */
 export class WebInspectorProxy {
   private process: ChildProcess | null = null;
@@ -41,8 +56,11 @@ export class WebInspectorProxy {
     const envPort = process.env.OPENSAFARI_PROXY_PORT
       ? parseInt(process.env.OPENSAFARI_PROXY_PORT, 10)
       : undefined;
+    const envDeviceListPort = process.env.OPENSAFARI_PROXY_DEVICE_LIST_PORT
+      ? parseInt(process.env.OPENSAFARI_PROXY_DEVICE_LIST_PORT, 10)
+      : undefined;
     this._port = options.port ?? envPort ?? 9322;
-    this._deviceListPort = options.deviceListPort ?? 9321;
+    this._deviceListPort = options.deviceListPort ?? envDeviceListPort ?? (this._port - 1);
   }
 
   async findSocketPath(): Promise<string | null> {
