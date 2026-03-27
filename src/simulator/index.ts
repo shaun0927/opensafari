@@ -10,3 +10,5 @@ export { BatchExecutor } from './batch';
 export type { BatchResult } from './batch';
 export { WebInspectorProxy, getSharedProxy } from './proxy';
 export type { ProxyOptions } from './proxy';
+export { findSocketPath, probeSocket } from './socket-finder';
+export type { FindSocketOptions } from './socket-finder';

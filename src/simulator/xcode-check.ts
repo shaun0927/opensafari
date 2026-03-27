@@ -1,13 +1,9 @@
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import * as fs from 'fs/promises';
-import * as path from 'path';
 import * as http from 'http';
+import { findSocketPath } from './socket-finder';
 
 const execFileAsync = promisify(execFile);
-
-const SOCKET_NAME = 'com.apple.webinspectord_sim.socket';
-const SOCKET_SEARCH_DIRS = ['/private/var/tmp', '/private/tmp'];
 // Device-list ports serve the "iOS Devices" HTML listing.
 // 9321 = opensafari default, 9221 = traditional ios_webkit_debug_proxy default.
 const PROXY_DEVICE_LIST_PORTS = [9321, 9221];
@@ -140,24 +136,8 @@ export async function checkXcodeInstallation(): Promise<XcodeCheckResult> {
   return result;
 }
 
-/**
- * Scan known directories for the WebKit Inspector simulator socket.
- * Duplicates the logic from proxy connection code to avoid circular imports.
- */
 async function findWebInspectorSocket(): Promise<string | undefined> {
-  for (const base of SOCKET_SEARCH_DIRS) {
-    let dirs: string[];
-    try { dirs = await fs.readdir(base); } catch { continue; }
-    for (const dir of dirs) {
-      if (!dir.startsWith('com.apple.launchd.')) continue;
-      const socketPath = path.join(base, dir, SOCKET_NAME);
-      try {
-        await fs.access(socketPath);
-        return socketPath;
-      } catch { continue; }
-    }
-  }
-  return undefined;
+  return (await findSocketPath()) ?? undefined;
 }
 
 /**
