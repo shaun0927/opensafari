@@ -274,6 +274,40 @@ opensafari doctor
 - **macOS** (Xcode Simulator is macOS only)
 - **Xcode** with iOS Simulator runtime installed
 - **Node.js** >= 18
+- **ios-webkit-debug-proxy** — `brew install ios-webkit-debug-proxy`
+
+---
+
+## WebInspector Proxy Configuration
+
+OpenSafari uses `ios_webkit_debug_proxy` to bridge WebKit Remote Debugging from Xcode Simulator. The proxy is **auto-started** by the `device_boot` tool — no manual setup is needed in most cases.
+
+### Default Ports
+
+| Port | Purpose |
+|------|---------|
+| **9321** | Device list (HTML) — serves the proxy's device listing page |
+| **9322** | Device connection (JSON) — WebKit debugging targets for connected simulators |
+
+Port 9322 is deliberately offset from Chrome DevTools (9222) so OpenSafari and [OpenChrome](https://github.com/shaun0927/openchrome) can run simultaneously.
+
+### Custom Port
+
+Set the `OPENSAFARI_PROXY_PORT` environment variable to use a different device port:
+
+```bash
+# Use port 9500 instead of the default 9322
+OPENSAFARI_PROXY_PORT=9500 opensafari serve
+```
+
+Port resolution order:
+1. Explicit `port` option (programmatic use)
+2. `OPENSAFARI_PROXY_PORT` environment variable
+3. Default: **9322**
+
+### Multi-Session Usage
+
+Multiple Claude Code sessions can share the same proxy. When a session detects a healthy proxy already running on its target port, it reuses it instead of starting a new one. When the owning session exits, only its own proxy is terminated — other sessions' proxies remain unaffected.
 
 ---
 
