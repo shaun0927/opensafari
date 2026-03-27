@@ -1,6 +1,7 @@
-import { MCPServer } from '../mcp-server';
+import { MCPServer, setWebKitClient } from '../mcp-server';
 import { SimulatorManager } from '../simulator';
 import { getSharedProxy } from '../simulator/proxy';
+import { WebKitClient } from '../webkit/client';
 
 export function registerDeviceBootTool(server: MCPServer): void {
   server.registerTool(
@@ -25,6 +26,18 @@ export function registerDeviceBootTool(server: MCPServer): void {
         const proxy = getSharedProxy();
         await proxy.start();
         proxyStatus = { running: proxy.running, pid: proxy.pid };
+
+        // Open Safari so it registers with WebInspector, then connect WebKitClient
+        try {
+          await manager.openUrl(device.udid, 'about:blank');
+          // Wait for Safari to register with WebInspector
+          await new Promise(r => setTimeout(r, 2000));
+          const client = new WebKitClient({ host: 'localhost', port: proxy.port });
+          await client.connect();
+          setWebKitClient(client);
+        } catch (err) {
+          console.error(`[device_boot] WebKit connection failed (proxy running, tools may not work): ${err}`);
+        }
       } catch (err) {
         console.error(`[device_boot] Failed to start WebInspector proxy: ${err}`);
       }
