@@ -612,24 +612,35 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
   }
 
   async type(selector: string, text: string, options?: { delay?: number }): Promise<void> {
-    // Click to focus
-    await this.click(selector);
+    // Focus the element explicitly — touch-based click() doesn't reliably trigger focus
+    await this.evaluate(`
+      (function() {
+        var el = document.querySelector(${JSON.stringify(selector)});
+        if (el && typeof el.focus === 'function') el.focus();
+      })()
+    `);
 
     if (options?.delay) {
       // Character-by-character mode with delay
       for (const char of text) {
         await this.evaluate(`
           (function() {
-            var el = document.activeElement;
+            var el = document.querySelector(${JSON.stringify(selector)});
             if (!el) return;
             var ev = new KeyboardEvent('keydown', { key: ${JSON.stringify(char)}, bubbles: true });
             el.dispatchEvent(ev);
             el.dispatchEvent(new KeyboardEvent('keypress', { key: ${JSON.stringify(char)}, bubbles: true }));
-            // Append character
-            if (el.value !== undefined) {
+            // Use native setter to avoid cross-context TypeError
+            var proto = el.tagName === 'TEXTAREA'
+              ? window.HTMLTextAreaElement.prototype
+              : window.HTMLInputElement.prototype;
+            var desc = Object.getOwnPropertyDescriptor(proto, 'value');
+            if (desc && desc.set) {
+              desc.set.call(el, el.value + ${JSON.stringify(char)});
+            } else {
               el.value += ${JSON.stringify(char)};
-              el.dispatchEvent(new Event('input', { bubbles: true }));
             }
+            el.dispatchEvent(new Event('input', { bubbles: true }));
             el.dispatchEvent(new KeyboardEvent('keyup', { key: ${JSON.stringify(char)}, bubbles: true }));
           })()
         `);
@@ -639,7 +650,7 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
       // Fast mode: set value directly + dispatch events
       await this.evaluate(`
         (function() {
-          var el = document.activeElement;
+          var el = document.querySelector(${JSON.stringify(selector)});
           if (!el) return;
           // Use native setter for React/Vue compatibility
           var nativeSetter = Object.getOwnPropertyDescriptor(
