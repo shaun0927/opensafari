@@ -8,7 +8,9 @@ const execFileAsync = promisify(execFile);
 
 const SOCKET_NAME = 'com.apple.webinspectord_sim.socket';
 const SOCKET_SEARCH_DIRS = ['/private/var/tmp', '/private/tmp'];
-const PROXY_PORTS = [9222, 9322];
+// Device-list ports serve the "iOS Devices" HTML listing.
+// 9321 = opensafari default, 9221 = traditional ios_webkit_debug_proxy default.
+const PROXY_DEVICE_LIST_PORTS = [9321, 9221];
 
 export interface XcodeCheckResult {
   installed: boolean;
@@ -17,6 +19,7 @@ export interface XcodeCheckResult {
   iosRuntimes: string[];
   webInspectorSocket?: string;
   proxyReachable: boolean;
+  proxyPort?: number;
   issues: string[];
   suggestions: string[];
 }
@@ -108,7 +111,9 @@ export async function checkXcodeInstallation(): Promise<XcodeCheckResult> {
   }
 
   // Check proxy connectivity
-  result.proxyReachable = await checkProxyReachable();
+  const proxyCheck = await checkProxyReachable();
+  result.proxyReachable = proxyCheck.reachable;
+  result.proxyPort = proxyCheck.port;
   if (!result.proxyReachable) {
     result.suggestions.push('Start proxy with: ios_webkit_debug_proxy or use opensafari device_boot');
   }
@@ -137,30 +142,27 @@ async function findWebInspectorSocket(): Promise<string | undefined> {
 }
 
 /**
- * Try to reach ios_webkit_debug_proxy on common ports.
- * Returns true if any port responds with the expected device listing page.
+ * Try to reach ios_webkit_debug_proxy on known device-list and device ports.
+ * Device-list ports serve an HTML page containing "iOS Devices".
+ * Device ports serve JSON target lists when a device is connected.
  */
-function checkProxyReachable(): Promise<boolean> {
-  const checks = PROXY_PORTS.map(
-    (port) =>
-      new Promise<boolean>((resolve) => {
-        const req = http.get(`http://localhost:${port}`, { timeout: 2000 }, (res) => {
-          let body = '';
-          res.on('data', (chunk: Buffer) => {
-            body += chunk.toString();
-          });
-          res.on('end', () => {
-            resolve(body.includes('iOS Devices'));
-          });
-          res.on('error', () => resolve(false));
-        });
-        req.on('error', () => resolve(false));
-        req.on('timeout', () => {
-          req.destroy();
-          resolve(false);
-        });
-      }),
-  );
+async function checkProxyReachable(): Promise<{ reachable: boolean; port?: number }> {
+  for (const port of PROXY_DEVICE_LIST_PORTS) {
+    const ok = await httpProbe(port, 'iOS Devices');
+    if (ok) return { reachable: true, port };
+  }
+  return { reachable: false };
+}
 
-  return Promise.all(checks).then((results) => results.some(Boolean));
+function httpProbe(port: number, expectedBody: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const req = http.get(`http://localhost:${port}`, { timeout: 2000 }, (res) => {
+      let body = '';
+      res.on('data', (chunk: Buffer) => { body += chunk.toString(); });
+      res.on('end', () => { resolve(body.includes(expectedBody)); });
+      res.on('error', () => resolve(false));
+    });
+    req.on('error', () => resolve(false));
+    req.on('timeout', () => { req.destroy(); resolve(false); });
+  });
 }
