@@ -4,10 +4,10 @@
  */
 
 import { SimulatorPool, PooledSimulator, InsufficientResourcesError } from '../../src/simulator/pool';
-import { BatchExecutor, BatchResult } from '../../src/simulator/batch';
+import { BatchExecutor } from '../../src/simulator/batch';
 import { SimulatorWorkflowEngine } from '../../src/orchestration/workflow-engine';
 import { CrossViewportCapture } from '../../src/comparison/cross-viewport';
-import { formatForClaudeVision, generateMarkdownReport } from '../../src/comparison/report';
+import { formatForClaudeVision } from '../../src/comparison/report';
 import { AuthManager } from '../../src/auth/manager';
 import { DEVICE_PRESETS } from '../../src/simulator/presets';
 import {
@@ -77,6 +77,7 @@ describe('1. Multi-Simulator Boot', () => {
     jest.spyOn(pool as any, 'checkResources').mockResolvedValue(undefined);
 
     // Mock the WebKitClient import so bootAll doesn't create real WS connections
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const WebKitClientModule = require('../../src/webkit/client');
     const origClient = WebKitClientModule.WebKitClient;
     WebKitClientModule.WebKitClient = jest.fn().mockImplementation(() => ({
@@ -110,6 +111,7 @@ describe('1. Multi-Simulator Boot', () => {
 
   test('checkResources throws InsufficientResourcesError on low RAM', async () => {
     // Mock os.freemem to return very low value
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const os = require('os');
     const origFreemem = os.freemem;
     os.freemem = () => 500 * 1024 * 1024; // 500MB - not enough for 2 sims (need 4096MB)
@@ -175,8 +177,11 @@ describe('2. Shared Auth Injection', () => {
   });
 
   test('AuthManager.save creates a profile and loadProfile reads it back', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const fs = require('fs/promises');
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const path = require('path');
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const os = require('os');
     const tmpDir = path.join(os.tmpdir(), `opensafari-test-auth-${Date.now()}`);
 
@@ -691,6 +696,7 @@ describe('7. Cross-Viewport Comparison', () => {
 
 describe('8. MCP Tool Registration', () => {
   test('orchestration-tools registers all 7 required tools', () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { registerOrchestrationTools } = require('../../src/tools/orchestration-tools');
     const registeredTools: string[] = [];
     const mockServer = {
@@ -710,6 +716,7 @@ describe('8. MCP Tool Registration', () => {
   });
 
   test('cross_viewport_compare tool is registered', () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { registerCrossViewportCompareTool } = require('../../src/tools/cross-viewport-compare');
     const registeredTools: string[] = [];
     const mockServer = {

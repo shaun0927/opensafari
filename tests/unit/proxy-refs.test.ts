@@ -79,6 +79,7 @@ describe('WebInspectorProxy ref tracking', () => {
     // Simulate two processes registered: this process (us) plus a second live process
     // standing in for another session. We use async spawn so the child stays alive while
     // we run the assertion — spawnSync would wait for exit, leaving a dead PID.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { spawn } = require('child_process');
     const child = spawn(process.execPath, ['-e', 'setTimeout(()=>{},10000)'], {
       detached: true,

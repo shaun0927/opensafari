@@ -31,6 +31,11 @@ export async function findSocketPath(options?: FindSocketOptions): Promise<strin
   const lsofResult = await findViaLsof(options?.targetUdid);
   if (lsofResult) return lsofResult;
 
+  // When targetUdid is specified, only lsof can map sockets to simulator UDIDs.
+  // The mtime fallback cannot distinguish which simulator owns which socket,
+  // so skip it to avoid returning the wrong simulator's socket.
+  if (options?.targetUdid) return null;
+
   // Tier 2: mtime-sorted fallback with liveness probe
   return findViaMtime();
 }
