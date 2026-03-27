@@ -217,6 +217,37 @@ echo "npm:    $(npm view opensafari-mcp version)"
 
 **Gate**: All versions must match. After verification, restart Claude Code.
 
+## STEP 9: Local Development Sync (always run)
+
+After merging PRs (even without publishing to npm), sync the local environment:
+
+```bash
+# 1. Switch to develop and pull latest
+cd /Users/jh0927/opensafari
+git checkout develop
+git pull origin develop
+
+# 2. Install dependencies (in case package.json changed)
+npm install
+
+# 3. Build from source
+npm run build
+
+# 4. Link locally (creates global symlink to local dist/)
+npm link
+
+# 5. Verify local CLI works
+node dist/cli/index.js --version
+node dist/cli/index.js doctor
+
+# 6. Verify the symlink points to this repo
+ls -la $(npm prefix -g)/lib/node_modules/opensafari-mcp
+```
+
+**Note**: `npm link` creates a symlink — subsequent `npm run build` updates are reflected immediately without re-linking. No session restart needed.
+
+**Gate**: `node dist/cli/index.js --version` outputs correct version. `doctor` runs without errors.
+
 ---
 
 ## Completion Checklist
@@ -232,6 +263,7 @@ echo "npm:    $(npm view opensafari-mcp version)"
 - [ ] `npm run lint` passes — no errors
 - [ ] No unnecessary branches remain
 - [ ] Working tree is clean
+- [ ] Local: `npm link` completed, `doctor` runs clean
 - [ ] (If published) CI green on main before publish
 - [ ] (If published) Global npm package matches published version
 - [ ] (If published) npx cache cleared
