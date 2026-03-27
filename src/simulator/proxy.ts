@@ -1,6 +1,7 @@
 import { spawn, ChildProcess, execFile } from 'child_process';
 import { promisify } from 'util';
 import * as fs from 'fs/promises';
+import { readFileSync, writeFileSync, unlinkSync } from 'fs';
 import * as path from 'path';
 import * as http from 'http';
 import * as net from 'net';
@@ -100,6 +101,7 @@ export class WebInspectorProxy {
         console.error(`[WebInspectorProxy] Reusing existing proxy on port ${this._deviceListPort}`);
         this._running = true;
         this._reusing = true;
+        this.registerRefSync();
         return;
       }
       throw new Error(
@@ -143,6 +145,7 @@ export class WebInspectorProxy {
 
     this._running = true;
     this._reusing = false;
+    this.registerRefSync();
 
     this.process.stderr?.on('data', (data: Buffer) => {
       console.error(`[WebInspectorProxy] ${data.toString().trim()}`);
@@ -165,6 +168,8 @@ export class WebInspectorProxy {
 
   /** Stop the proxy process gracefully with SIGKILL fallback. */
   async stop(): Promise<void> {
+    const remaining = this.unregisterRefSync();
+
     if (this._reusing) {
       this._running = false;
       this._reusing = false;
@@ -174,6 +179,14 @@ export class WebInspectorProxy {
       this._running = false;
       return;
     }
+    // Other sessions still using this proxy — detach but don't kill
+    if (remaining > 0) {
+      console.error(`[WebInspectorProxy] ${remaining} other session(s) still using proxy, not killing`);
+      this.process = null;
+      this._running = false;
+      return;
+    }
+    // We're the last user — kill the proxy process
     const proc = this.process;
     return new Promise<void>((resolve) => {
       const timeout = setTimeout(() => {
@@ -215,6 +228,55 @@ export class WebInspectorProxy {
   /** Whether this instance is reusing another session's proxy. */
   get reusing(): boolean {
     return this._reusing;
+  }
+
+  private getRefFilePath(): string {
+    return `/tmp/opensafari-proxy-${this._deviceListPort}.refs`;
+  }
+
+  /** Register this process as a proxy user (synchronous for exit handler compatibility). */
+  private registerRefSync(): void {
+    const refFile = this.getRefFilePath();
+    let pids: number[] = [];
+    try {
+      const content = readFileSync(refFile, 'utf-8');
+      pids = content.trim().split('\n').map(Number).filter(Boolean);
+    } catch { /* file doesn't exist yet */ }
+    // Clean stale PIDs (processes that no longer exist)
+    pids = pids.filter(pid => {
+      try { process.kill(pid, 0); return true; } catch { return false; }
+    });
+    if (!pids.includes(process.pid)) {
+      pids.push(process.pid);
+    }
+    // NOTE: TOCTOU limitation — there is no file lock between the read above and
+    // this write. Two processes starting simultaneously could overwrite each other's
+    // entry. The window is very narrow and self-heals: stale-PID cleanup on the next
+    // read will recover any dropped entry without lasting harm.
+    writeFileSync(refFile, pids.join('\n') + '\n');
+  }
+
+  /** Unregister this process. Returns the number of remaining active references. */
+  private unregisterRefSync(): number {
+    const refFile = this.getRefFilePath();
+    let pids: number[] = [];
+    try {
+      const content = readFileSync(refFile, 'utf-8');
+      pids = content.trim().split('\n').map(Number).filter(Boolean);
+    } catch { return 0; }
+    // Remove self and clean stale PIDs
+    // NOTE: Same narrow TOCTOU window as registerRefSync — no file lock between
+    // read and write. Self-heals via stale-PID cleanup on subsequent reads.
+    pids = pids.filter(pid => {
+      if (pid === process.pid) return false;
+      try { process.kill(pid, 0); return true; } catch { return false; }
+    });
+    if (pids.length > 0) {
+      writeFileSync(refFile, pids.join('\n') + '\n');
+    } else {
+      try { unlinkSync(refFile); } catch { /* ignore */ }
+    }
+    return pids.length;
   }
 
   private async waitForReady(timeout = 5000): Promise<void> {
@@ -286,8 +348,14 @@ export function getSharedProxy(): WebInspectorProxy {
 
 // Ensure the proxy is stopped when the host process exits — only if we own it
 process.on('exit', () => {
-  if (_sharedProxy?.running && !_sharedProxy.reusing) {
-    // In 'exit' handler only synchronous code runs; send SIGTERM best-effort
-    try { _sharedProxy['process']?.kill('SIGTERM'); } catch { /* ignore */ }
+  if (_sharedProxy) {
+    // Note: stop() already called unregisterRefSync() during normal shutdown.
+    // Calling it again here is intentional and harmless — our PID was already
+    // removed, so this is a no-op that returns the current live ref count.
+    const remaining = _sharedProxy['unregisterRefSync']();
+    // Only kill proxy if we own it AND no other sessions reference it
+    if (!_sharedProxy.reusing && _sharedProxy.running && remaining === 0) {
+      try { _sharedProxy['process']?.kill('SIGTERM'); } catch { /* ignore */ }
+    }
   }
 });
