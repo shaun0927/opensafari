@@ -1,5 +1,6 @@
-import { MCPServer } from '../mcp-server';
+import { MCPServer, setWebKitClient } from '../mcp-server';
 import { SimulatorManager } from '../simulator';
+import { getSharedProxy } from '../simulator/proxy';
 
 export function registerDeviceShutdownTool(server: MCPServer): void {
   server.registerTool(
@@ -21,8 +22,29 @@ export function registerDeviceShutdownTool(server: MCPServer): void {
       if (!deviceId) {
         return { content: [{ type: 'text' as const, text: 'Error: no booted device found' }], isError: true };
       }
+
+      // Stop the WebInspector proxy if we own it
+      const proxy = getSharedProxy();
+      let proxyStopped = false;
+      if (proxy.running) {
+        try {
+          await proxy.stop();
+          proxyStopped = true;
+        } catch (err) {
+          console.error(`[device_shutdown] Failed to stop proxy: ${err}`);
+        }
+      }
+
+      // Clear the WebKit client reference
+      setWebKitClient(null);
+
       await manager.shutdown(deviceId);
-      return { content: [{ type: 'text' as const, text: JSON.stringify({ shutdown: true, deviceId }) }] };
+      return {
+        content: [{
+          type: 'text' as const,
+          text: JSON.stringify({ shutdown: true, deviceId, proxyStopped }),
+        }],
+      };
     },
   );
 }
