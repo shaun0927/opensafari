@@ -35,6 +35,7 @@ export class WebInspectorProxy {
   private _port: number;
   private _deviceListPort: number;
   private _running = false;
+  private _reusing = false;
 
   constructor(private options: ProxyOptions = {}) {
     const envPort = process.env.OPENSAFARI_PROXY_PORT
@@ -65,12 +66,20 @@ export class WebInspectorProxy {
   async start(): Promise<void> {
     if (this._running) return;
 
-    const existingProxy = await this.isProxyAlreadyRunning();
-    if (existingProxy) {
+    // Check if our device-list port already has a healthy proxy (from another session)
+    const deviceListInUse = await this.isPortInUse(this._deviceListPort);
+    if (deviceListInUse) {
+      const healthy = await this.isProxyHealthy();
+      if (healthy) {
+        console.error(`[WebInspectorProxy] Reusing existing proxy on port ${this._deviceListPort}`);
+        this._running = true;
+        this._reusing = true;
+        return;
+      }
       throw new Error(
-        `Another ios_webkit_debug_proxy process is already running. ` +
-        `Stop it first (pkill ios_webkit_debug_proxy) or use a different port ` +
-        `(e.g. port ${this._port + 100}) via the OPENSAFARI_PROXY_PORT env var.`
+        `Port ${this._deviceListPort} already in use by a non-proxy process. ` +
+        `Use a different port (e.g. OPENSAFARI_PROXY_PORT=${this._port + 100}) ` +
+        `or stop the existing process.`
       );
     }
 
@@ -78,7 +87,7 @@ export class WebInspectorProxy {
     if (portInUse) {
       throw new Error(
         `Port ${this._port} already in use. ` +
-        `Use a different port (e.g. port ${this._port + 100}) via the OPENSAFARI_PROXY_PORT env var ` +
+        `Use a different port (e.g. OPENSAFARI_PROXY_PORT=${this._port + 100}) ` +
         `or stop the existing process.`
       );
     }
@@ -107,6 +116,7 @@ export class WebInspectorProxy {
     });
 
     this._running = true;
+    this._reusing = false;
 
     this.process.stderr?.on('data', (data: Buffer) => {
       console.error(`[WebInspectorProxy] ${data.toString().trim()}`);
@@ -129,6 +139,11 @@ export class WebInspectorProxy {
 
   /** Stop the proxy process gracefully with SIGKILL fallback. */
   async stop(): Promise<void> {
+    if (this._reusing) {
+      this._running = false;
+      this._reusing = false;
+      return;
+    }
     if (!this.process) {
       this._running = false;
       return;
@@ -171,6 +186,11 @@ export class WebInspectorProxy {
     return this.process?.pid ?? null;
   }
 
+  /** Whether this instance is reusing another session's proxy. */
+  get reusing(): boolean {
+    return this._reusing;
+  }
+
   private async waitForReady(timeout = 5000): Promise<void> {
     const start = Date.now();
     while (Date.now() - start < timeout) {
@@ -202,10 +222,10 @@ export class WebInspectorProxy {
     });
   }
 
-  private async isProxyAlreadyRunning(): Promise<boolean> {
+  private async isProxyHealthy(): Promise<boolean> {
     try {
-      await execFileAsync('pgrep', ['-x', 'ios_webkit_debug_proxy']);
-      return true;
+      const body = await this.httpGet(`http://localhost:${this._deviceListPort}`);
+      return body.includes('iOS Devices');
     } catch {
       return false;
     }
@@ -238,9 +258,9 @@ export function getSharedProxy(): WebInspectorProxy {
   return _sharedProxy;
 }
 
-// Ensure the proxy is stopped when the host process exits
+// Ensure the proxy is stopped when the host process exits — only if we own it
 process.on('exit', () => {
-  if (_sharedProxy?.running) {
+  if (_sharedProxy?.running && !_sharedProxy.reusing) {
     // In 'exit' handler only synchronous code runs; send SIGTERM best-effort
     try { _sharedProxy['process']?.kill('SIGTERM'); } catch { /* ignore */ }
   }
