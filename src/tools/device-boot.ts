@@ -1,4 +1,4 @@
-import { MCPServer, setWebKitClient } from '../mcp-server';
+import { MCPServer, getWebKitClient, setWebKitClient } from '../mcp-server';
 import { SimulatorManager } from '../simulator';
 import { getSharedProxy } from '../simulator/proxy';
 import { WebKitClient } from '../webkit/client';
@@ -29,6 +29,12 @@ export function registerDeviceBootTool(server: MCPServer): void {
 
         // Open Safari so it registers with WebInspector, then connect WebKitClient
         try {
+          // Disconnect any existing client to avoid leaking WebSocket connections on re-boot
+          const existingClient = getWebKitClient();
+          if (existingClient) {
+            try { await existingClient.disconnect(); } catch { /* best-effort */ }
+          }
+
           await manager.openUrl(device.udid, 'about:blank');
           // Wait for Safari to register with WebInspector
           await new Promise(r => setTimeout(r, 2000));
