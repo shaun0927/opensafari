@@ -103,9 +103,7 @@ export async function checkXcodeInstallation(): Promise<XcodeCheckResult> {
 
   // Check Web Inspector socket path
   result.webInspectorSocket = await findWebInspectorSocket();
-  if (result.webInspectorSocket) {
-    console.error(`[doctor] Web Inspector socket found: ${result.webInspectorSocket}`);
-  } else {
+  if (!result.webInspectorSocket) {
     result.issues.push('Web Inspector socket not found — is a simulator booted?');
   }
 
@@ -123,15 +121,16 @@ export async function checkXcodeInstallation(): Promise<XcodeCheckResult> {
  * Duplicates the logic from proxy connection code to avoid circular imports.
  */
 async function findWebInspectorSocket(): Promise<string | undefined> {
-  for (const dir of SOCKET_SEARCH_DIRS) {
-    const socketPath = path.join(dir, SOCKET_NAME);
-    try {
-      const stat = await fs.stat(socketPath);
-      if (stat.isSocket()) {
+  for (const base of SOCKET_SEARCH_DIRS) {
+    let dirs: string[];
+    try { dirs = await fs.readdir(base); } catch { continue; }
+    for (const dir of dirs) {
+      if (!dir.startsWith('com.apple.launchd.')) continue;
+      const socketPath = path.join(base, dir, SOCKET_NAME);
+      try {
+        await fs.access(socketPath);
         return socketPath;
-      }
-    } catch {
-      // Socket does not exist in this directory — continue
+      } catch { continue; }
     }
   }
   return undefined;
