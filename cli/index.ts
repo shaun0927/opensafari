@@ -89,6 +89,8 @@ program
       { name: 'Simulator', ok: result.simulatorAvailable },
       { name: 'iOS Runtimes', ok: result.iosRuntimes.length > 0, detail: result.iosRuntimes.join(', ') },
       { name: 'Node.js >= 18', ok: parseInt(process.version.slice(1)) >= 18, detail: process.version },
+      { name: 'WebInspector Socket', ok: !!result.webInspectorSocket, detail: result.webInspectorSocket },
+      { name: 'Proxy Reachable', ok: result.proxyReachable },
     ];
 
     for (const check of checks) {
