@@ -47,6 +47,7 @@ export class WebInspectorProxy {
 
   async findSocketPath(): Promise<string | null> {
     const searchPaths = ['/private/var/tmp', '/private/tmp'];
+    const candidates: { socketPath: string; mtimeMs: number }[] = [];
     for (const base of searchPaths) {
       let dirs: string[];
       try { dirs = await fs.readdir(base); } catch { continue; }
@@ -54,12 +55,15 @@ export class WebInspectorProxy {
         if (!dir.startsWith('com.apple.launchd.')) continue;
         const socketPath = path.join(base, dir, 'com.apple.webinspectord_sim.socket');
         try {
-          await fs.access(socketPath);
-          return socketPath;
+          const stat = await fs.stat(socketPath);
+          candidates.push({ socketPath, mtimeMs: stat.mtimeMs });
         } catch { continue; }
       }
     }
-    return null;
+    if (candidates.length === 0) return null;
+    // Return the most recently modified socket to avoid stale entries
+    candidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
+    return candidates[0].socketPath;
   }
 
   /** Start the proxy process. Resolves once the proxy is ready. */
