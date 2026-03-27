@@ -223,6 +223,10 @@ export class WebInspectorProxy {
     if (!pids.includes(process.pid)) {
       pids.push(process.pid);
     }
+    // NOTE: TOCTOU limitation — there is no file lock between the read above and
+    // this write. Two processes starting simultaneously could overwrite each other's
+    // entry. The window is very narrow and self-heals: stale-PID cleanup on the next
+    // read will recover any dropped entry without lasting harm.
     writeFileSync(refFile, pids.join('\n') + '\n');
   }
 
@@ -235,6 +239,8 @@ export class WebInspectorProxy {
       pids = content.trim().split('\n').map(Number).filter(Boolean);
     } catch { return 0; }
     // Remove self and clean stale PIDs
+    // NOTE: Same narrow TOCTOU window as registerRefSync — no file lock between
+    // read and write. Self-heals via stale-PID cleanup on subsequent reads.
     pids = pids.filter(pid => {
       if (pid === process.pid) return false;
       try { process.kill(pid, 0); return true; } catch { return false; }
@@ -317,6 +323,9 @@ export function getSharedProxy(): WebInspectorProxy {
 // Ensure the proxy is stopped when the host process exits — only if we own it
 process.on('exit', () => {
   if (_sharedProxy) {
+    // Note: stop() already called unregisterRefSync() during normal shutdown.
+    // Calling it again here is intentional and harmless — our PID was already
+    // removed, so this is a no-op that returns the current live ref count.
     const remaining = _sharedProxy['unregisterRefSync']();
     // Only kill proxy if we own it AND no other sessions reference it
     if (!_sharedProxy.reusing && _sharedProxy.running && remaining === 0) {
