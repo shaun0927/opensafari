@@ -35,11 +35,33 @@ export function registerDeviceBootTool(server: MCPServer): void {
             try { await existingClient.disconnect(); } catch { /* best-effort */ }
           }
 
-          await manager.openUrl(device.udid, 'about:blank');
-          // Wait for Safari to register with WebInspector
-          await new Promise(r => setTimeout(r, 2000));
+          // Retry openUrl — the simulator may report "Booted" before app
+          // launch services are fully ready (LSApplicationWorkspaceErrorDomain 115).
+          let openRetries = 5;
+          while (openRetries > 0) {
+            try {
+              await manager.openUrl(device.udid, 'https://example.com');
+              break;
+            } catch (openErr) {
+              openRetries--;
+              if (openRetries === 0) throw openErr;
+              await new Promise(r => setTimeout(r, 2000));
+            }
+          }
+          // Retry WebKit connection — Safari may need time to register with WebInspector
           const client = new WebKitClient({ host: 'localhost', port: proxy.port });
-          await client.connect();
+          let connectRetries = 5;
+          while (connectRetries > 0) {
+            await new Promise(r => setTimeout(r, 2000));
+            try {
+              await client.connect();
+              break;
+            } catch (connErr) {
+              connectRetries--;
+              if (connectRetries === 0) throw connErr;
+              console.error(`[device_boot] WebKit connect attempt failed, retrying (${connectRetries} left)...`);
+            }
+          }
           setWebKitClient(client);
         } catch (err) {
           console.error(`[device_boot] WebKit connection failed (proxy running, tools may not work): ${err}`);
