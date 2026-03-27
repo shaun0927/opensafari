@@ -31,6 +31,7 @@ jest.mock('net', () => ({
 const execFileMock = childProcess.execFile as unknown as jest.Mock;
 const readdirMock = fsPromises.readdir as jest.Mock;
 const statMock = fsPromises.stat as jest.Mock;
+const rmMock = fsPromises.rm as jest.Mock;
 
 // Helper: stub execFile to invoke the callback (promisified pattern)
 function stubExecFile(results: Record<string, { stdout?: string; error?: Error }>) {
@@ -69,6 +70,7 @@ function stubFilesystem(sockets: { dir: string; mtimeMs: number }[]) {
 beforeEach(() => {
   jest.clearAllMocks();
   probeResults = {};
+  rmMock.mockResolvedValue(undefined);
 });
 
 describe('findSocketPath', () => {
@@ -236,5 +238,69 @@ describe('probeSocket', () => {
   it('returns false for dead socket', async () => {
     probeResults['/tmp/dead.sock'] = false;
     expect(await probeSocket('/tmp/dead.sock')).toBe(false);
+  });
+});
+
+describe('stale socket cleanup', () => {
+  it('cleans stale sockets found before the active one in mtime fallback', async () => {
+    const stale = '/private/var/tmp/com.apple.launchd.NEWEST/com.apple.webinspectord_sim.socket';
+    const active = '/private/var/tmp/com.apple.launchd.MIDDLE/com.apple.webinspectord_sim.socket';
+    probeResults[stale] = false;
+    probeResults[active] = true;
+
+    stubExecFile({ 'lsof -U': { error: new Error('fail') } });
+    stubFilesystem([
+      { dir: 'com.apple.launchd.OLDEST', mtimeMs: 1000 },
+      { dir: 'com.apple.launchd.NEWEST', mtimeMs: 9000 },
+      { dir: 'com.apple.launchd.MIDDLE', mtimeMs: 5000 },
+    ]);
+
+    await findSocketPath();
+
+    // Should have attempted to remove the stale socket's parent directory
+    expect(rmMock).toHaveBeenCalledWith(
+      '/private/var/tmp/com.apple.launchd.NEWEST',
+      { recursive: true, force: true },
+    );
+  });
+
+  it('cleans all sockets when none are alive', async () => {
+    stubExecFile({ 'lsof -U': { error: new Error('fail') } });
+    stubFilesystem([
+      { dir: 'com.apple.launchd.A', mtimeMs: 9000 },
+      { dir: 'com.apple.launchd.B', mtimeMs: 5000 },
+    ]);
+
+    await findSocketPath();
+
+    expect(rmMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('cleanup failure does not throw', async () => {
+    rmMock.mockRejectedValue(new Error('EPERM'));
+
+    stubExecFile({ 'lsof -U': { error: new Error('fail') } });
+    stubFilesystem([
+      { dir: 'com.apple.launchd.FAIL', mtimeMs: 9000 },
+    ]);
+
+    // Should not throw even when rm fails
+    await expect(findSocketPath()).resolves.toBeNull();
+  });
+
+  it('does not clean sockets found via lsof tier', async () => {
+    const lsofSocket = '/private/var/tmp/com.apple.launchd.LSOF/com.apple.webinspectord_sim.socket';
+    probeResults[lsofSocket] = true;
+
+    stubExecFile({
+      'lsof -U': {
+        stdout: `launchd_s 999 user  8u  unix 0xa  0t0  ${lsofSocket}\n`,
+      },
+    });
+
+    await findSocketPath();
+
+    // Cleanup only runs in mtime tier, not lsof tier
+    expect(rmMock).not.toHaveBeenCalled();
   });
 });
