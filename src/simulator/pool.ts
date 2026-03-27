@@ -50,7 +50,7 @@ export class SimulatorPool extends EventEmitter {
     this.manager = new SimulatorManager();
     this.maxSimulators = options?.max ?? 5;
     this.concurrencyLimit = options?.concurrency ?? 3;
-    this.webkitBasePort = options?.webkitBasePort ?? 9222;
+    this.webkitBasePort = options?.webkitBasePort ?? 9322;
     this.nextPort = this.webkitBasePort;
     this.idleTimeout = DEFAULT_IDLE_SHUTDOWN_TIMEOUT_MS;
     this.memoryWarnMB = DEFAULT_MEMORY_WARN_MB;

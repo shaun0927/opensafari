@@ -37,7 +37,7 @@ const defaultConfig: OpenSafariConfig = {
   maxSimulators: 3,
   bootTimeout: 15000,
   idleShutdownTimeout: 300000,
-  webkitDebugPort: 9222,
+  webkitDebugPort: 9322,
   navigationTimeout: 30000,
   screenshotTimeout: 10000,
   evaluateTimeout: 15000,
