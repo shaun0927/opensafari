@@ -153,9 +153,14 @@ export class WebInspectorProxy {
   private isPortInUse(port: number): Promise<boolean> {
     return new Promise(resolve => {
       const socket = net.connect({ port, host: '127.0.0.1' });
+      socket.setTimeout(2000);
       socket.once('connect', () => {
         socket.destroy();
         resolve(true);
+      });
+      socket.once('timeout', () => {
+        socket.destroy();
+        resolve(false);
       });
       socket.once('error', () => {
         socket.destroy();
