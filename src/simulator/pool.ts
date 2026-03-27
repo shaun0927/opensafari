@@ -85,7 +85,7 @@ export class SimulatorPool extends EventEmitter {
       const batchResults = await Promise.all(
         batch.map(async (preset) => {
           const device = await this.manager.boot(preset);
-          await this.manager.openUrl(device.udid, 'about:blank');
+          await this.manager.openUrl(device.udid, 'https://example.com');
 
           const port = this.getPortForDevice(device.udid);
           const client = new WebKitClient({ host: 'localhost', port });
