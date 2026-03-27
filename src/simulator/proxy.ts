@@ -1,5 +1,4 @@
-import { spawn, ChildProcess } from 'child_process';
-import { execFile } from 'child_process';
+import { spawn, ChildProcess, execFile } from 'child_process';
 import { promisify } from 'util';
 import * as fs from 'fs/promises';
 import * as path from 'path';
@@ -16,6 +15,8 @@ export interface ProxyOptions {
    */
   port?: number;
   deviceListPort?: number;
+  /** Additional CLI flags for ios_webkit_debug_proxy */
+  extraArgs?: string[];
 }
 
 /**
@@ -31,15 +32,16 @@ export interface ProxyOptions {
  */
 export class WebInspectorProxy {
   private process: ChildProcess | null = null;
-  private port: number;
-  private deviceListPort: number;
+  private _port: number;
+  private _deviceListPort: number;
+  private _running = false;
 
-  constructor(options?: ProxyOptions) {
+  constructor(private options: ProxyOptions = {}) {
     const envPort = process.env.OPENSAFARI_PROXY_PORT
       ? parseInt(process.env.OPENSAFARI_PROXY_PORT, 10)
       : undefined;
-    this.port = options?.port ?? envPort ?? 9322;
-    this.deviceListPort = options?.deviceListPort ?? 9321;
+    this._port = options.port ?? envPort ?? 9322;
+    this._deviceListPort = options.deviceListPort ?? 9321;
   }
 
   async findSocketPath(): Promise<string | null> {
@@ -59,24 +61,24 @@ export class WebInspectorProxy {
     return null;
   }
 
+  /** Start the proxy process. Resolves once the proxy is ready. */
   async start(): Promise<void> {
-    if (this.process) return;
+    if (this._running) return;
 
-    // Check if another ios_webkit_debug_proxy is already running
     const existingProxy = await this.isProxyAlreadyRunning();
     if (existingProxy) {
       throw new Error(
         `Another ios_webkit_debug_proxy process is already running. ` +
         `Stop it first (pkill ios_webkit_debug_proxy) or use a different port ` +
-        `(e.g. port ${this.port + 100}) via the OPENSAFARI_PROXY_PORT env var.`
+        `(e.g. port ${this._port + 100}) via the OPENSAFARI_PROXY_PORT env var.`
       );
     }
 
-    const portInUse = await this.isPortInUse(this.port);
+    const portInUse = await this.isPortInUse(this._port);
     if (portInUse) {
       throw new Error(
-        `Port ${this.port} already in use. ` +
-        `Use a different port (e.g. port ${this.port + 100}) via the OPENSAFARI_PROXY_PORT env var ` +
+        `Port ${this._port} already in use. ` +
+        `Use a different port (e.g. port ${this._port + 100}) via the OPENSAFARI_PROXY_PORT env var ` +
         `or stop the existing process.`
       );
     }
@@ -94,55 +96,86 @@ export class WebInspectorProxy {
 
     const args = [
       '-s', `unix:${socketPath}`,
-      '-c', `null:${this.deviceListPort},:${this.port}-${this.port + 100}`,
+      '-c', `null:${this._deviceListPort},:${this._port}-${this._port + 100}`,
       '-F',
+      ...(this.options.extraArgs ?? []),
     ];
 
     this.process = spawn('ios_webkit_debug_proxy', args, {
-      stdio: 'ignore',
+      stdio: ['ignore', 'pipe', 'pipe'],
       detached: false,
     });
 
+    this._running = true;
+
+    this.process.stderr?.on('data', (data: Buffer) => {
+      console.error(`[WebInspectorProxy] ${data.toString().trim()}`);
+    });
+
     this.process.on('error', (err) => {
-      console.error(`[WebInspectorProxy] Process error: ${err.message}`);
+      console.error(`[WebInspectorProxy] process error: ${err.message}`);
+      this._running = false;
       this.process = null;
     });
 
-    this.process.on('exit', () => { this.process = null; });
+    this.process.on('exit', (code) => {
+      console.error(`[WebInspectorProxy] exited with code ${code}`);
+      this._running = false;
+      this.process = null;
+    });
+
     await this.waitForReady();
   }
 
+  /** Stop the proxy process gracefully with SIGKILL fallback. */
   async stop(): Promise<void> {
-    if (!this.process) return;
+    if (!this.process) {
+      this._running = false;
+      return;
+    }
     const proc = this.process;
     return new Promise<void>((resolve) => {
       const timeout = setTimeout(() => {
-        try { proc.kill('SIGKILL'); } catch {}
+        try { proc.kill('SIGKILL'); } catch { /* already dead */ }
         this.process = null;
+        this._running = false;
         resolve();
       }, 3000);
       proc.once('exit', () => {
         clearTimeout(timeout);
         this.process = null;
+        this._running = false;
         resolve();
       });
       proc.kill('SIGTERM');
     });
   }
 
-  isRunning(): boolean {
-    return this.process !== null;
+  /** Whether the proxy process is currently running. */
+  get running(): boolean {
+    return this._running;
   }
 
-  getPort(): number {
-    return this.port;
+  /** The port the proxy is configured to listen on. */
+  get port(): number {
+    return this._port;
+  }
+
+  /** The device list port. */
+  get deviceListPort(): number {
+    return this._deviceListPort;
+  }
+
+  /** The PID of the proxy process, or null if not running. */
+  get pid(): number | null {
+    return this.process?.pid ?? null;
   }
 
   private async waitForReady(timeout = 5000): Promise<void> {
     const start = Date.now();
     while (Date.now() - start < timeout) {
       try {
-        const body = await this.httpGet(`http://localhost:${this.deviceListPort}`);
+        const body = await this.httpGet(`http://localhost:${this._deviceListPort}`);
         if (body.includes('iOS Devices')) return;
       } catch { /* retry */ }
       await new Promise(r => setTimeout(r, 500));
@@ -169,18 +202,11 @@ export class WebInspectorProxy {
     });
   }
 
-  /**
-   * Checks whether another ios_webkit_debug_proxy process is already running.
-   * This catches conflicts that port-checking alone would miss, because
-   * ios_webkit_debug_proxy only binds device ports on-demand when a device connects.
-   */
   private async isProxyAlreadyRunning(): Promise<boolean> {
     try {
       await execFileAsync('pgrep', ['-x', 'ios_webkit_debug_proxy']);
-      // pgrep exits 0 when at least one matching process is found
       return true;
     } catch {
-      // pgrep exits non-zero when no matching process is found
       return false;
     }
   }
@@ -197,3 +223,25 @@ export class WebInspectorProxy {
     });
   }
 }
+
+// ---------------------------------------------------------------------------
+// Module-level singleton so the proxy can be shared across tool calls
+// and stopped cleanly on process exit.
+// ---------------------------------------------------------------------------
+
+let _sharedProxy: WebInspectorProxy | null = null;
+
+export function getSharedProxy(): WebInspectorProxy {
+  if (!_sharedProxy) {
+    _sharedProxy = new WebInspectorProxy();
+  }
+  return _sharedProxy;
+}
+
+// Ensure the proxy is stopped when the host process exits
+process.on('exit', () => {
+  if (_sharedProxy?.running) {
+    // In 'exit' handler only synchronous code runs; send SIGTERM best-effort
+    try { _sharedProxy['process']?.kill('SIGTERM'); } catch { /* ignore */ }
+  }
+});
