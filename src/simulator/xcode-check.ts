@@ -11,6 +11,9 @@ const SOCKET_SEARCH_DIRS = ['/private/var/tmp', '/private/tmp'];
 // Device-list ports serve the "iOS Devices" HTML listing.
 // 9321 = opensafari default, 9221 = traditional ios_webkit_debug_proxy default.
 const PROXY_DEVICE_LIST_PORTS = [9321, 9221];
+// Device ports serve JSON target lists when a simulator device is connected.
+// 9322 = opensafari default, 9222 = traditional ios_webkit_debug_proxy default.
+const PROXY_DEVICE_PORTS = [9322, 9222];
 
 export interface XcodeCheckResult {
   installed: boolean;
@@ -20,6 +23,8 @@ export interface XcodeCheckResult {
   webInspectorSocket?: string;
   proxyReachable: boolean;
   proxyPort?: number;
+  devicePortReachable: boolean;
+  devicePort?: number;
   issues: string[];
   suggestions: string[];
 }
@@ -30,6 +35,7 @@ export async function checkXcodeInstallation(): Promise<XcodeCheckResult> {
     simulatorAvailable: false,
     iosRuntimes: [],
     proxyReachable: false,
+    devicePortReachable: false,
     issues: [],
     suggestions: [],
   };
@@ -118,6 +124,19 @@ export async function checkXcodeInstallation(): Promise<XcodeCheckResult> {
     result.suggestions.push('Start proxy with: ios_webkit_debug_proxy or use opensafari device_boot');
   }
 
+  // Check device port connectivity (JSON target list)
+  if (result.proxyReachable) {
+    const devicePortCheck = await checkDevicePortReachable();
+    result.devicePortReachable = devicePortCheck.reachable;
+    result.devicePort = devicePortCheck.port;
+    if (!result.devicePortReachable) {
+      result.suggestions.push(
+        'Proxy device-list is reachable but device port is not responding. ' +
+        'A simulator device may not be connected, or the device port range may be misconfigured.'
+      );
+    }
+  }
+
   return result;
 }
 
@@ -149,6 +168,18 @@ async function findWebInspectorSocket(): Promise<string | undefined> {
 async function checkProxyReachable(): Promise<{ reachable: boolean; port?: number }> {
   for (const port of PROXY_DEVICE_LIST_PORTS) {
     const ok = await httpProbe(port, 'iOS Devices');
+    if (ok) return { reachable: true, port };
+  }
+  return { reachable: false };
+}
+
+/**
+ * Try to reach the proxy's device port. A connected device returns a JSON array
+ * of WebKit debugging targets. An empty array `[]` is also valid (no open tabs).
+ */
+async function checkDevicePortReachable(): Promise<{ reachable: boolean; port?: number }> {
+  for (const port of PROXY_DEVICE_PORTS) {
+    const ok = await httpProbe(port, '[');
     if (ok) return { reachable: true, port };
   }
   return { reachable: false };
