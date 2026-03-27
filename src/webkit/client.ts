@@ -52,6 +52,20 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
   private lastUrl: string = '';
   private reconnecting = false;
 
+  // Target-multiplexed protocol state
+  private activeTargetId: string | null = null;
+  private innerMessageId = 0;
+  private innerPendingRequests: Map<
+    number,
+    {
+      resolve: (value: any) => void;
+      reject: (error: Error) => void;
+      timer: ReturnType<typeof setTimeout>;
+    }
+  > = new Map();
+  private targetReady: Promise<void> | null = null;
+  private targetReadyResolve: (() => void) | null = null;
+
   constructor(private options: WebKitClientOptions) {
     super();
   }
@@ -84,6 +98,9 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
     }
     this.connected = false;
     this.enabledDomains.clear();
+    this.activeTargetId = null;
+    this.targetReady = null;
+    this.targetReadyResolve = null;
   }
 
   isConnected(): boolean {
@@ -107,20 +124,54 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       throw new ConnectionError('WebSocket not connected');
     }
+    if (!this.activeTargetId) {
+      throw new ConnectionError(
+        'No active target. Is Safari open in the simulator?',
+      );
+    }
 
-    const id = ++this.messageId;
+    const innerId = ++this.innerMessageId;
+    const outerId = ++this.messageId;
     const timeout =
       this.options.sendTimeout ?? DEFAULT_WEBKIT_SEND_TIMEOUT_MS;
 
-    return new Promise<T>((resolve, reject) => {
+    const innerPromise = new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
-        this.pendingRequests.delete(id);
+        this.innerPendingRequests.delete(innerId);
         reject(new TimeoutError(`${method} timed out after ${timeout}ms`));
       }, timeout);
-
-      this.pendingRequests.set(id, { resolve, reject, timer });
-      this.ws!.send(JSON.stringify({ id, method, params }));
+      this.innerPendingRequests.set(innerId, { resolve, reject, timer });
     });
+
+    // Track outer message for error propagation (e.g., invalid targetId)
+    const outerTimer = setTimeout(() => {
+      this.pendingRequests.delete(outerId);
+    }, timeout);
+    this.pendingRequests.set(outerId, {
+      resolve: () => { /* outer ack ignored — real response via dispatchMessageFromTarget */ },
+      reject: (err: Error) => {
+        // Outer error means inner will never resolve — reject inner too
+        const innerPending = this.innerPendingRequests.get(innerId);
+        if (innerPending) {
+          clearTimeout(innerPending.timer);
+          this.innerPendingRequests.delete(innerId);
+          innerPending.reject(err);
+        }
+      },
+      timer: outerTimer,
+    });
+
+    // Wrap in Target.sendMessageToTarget
+    const innerMessage = JSON.stringify({ id: innerId, method, params });
+    this.ws.send(
+      JSON.stringify({
+        id: outerId,
+        method: 'Target.sendMessageToTarget',
+        params: { targetId: this.activeTargetId, message: innerMessage },
+      }),
+    );
+
+    return innerPromise;
   }
 
   private handleMessage(data: string): void {
@@ -131,12 +182,75 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
       return;
     }
 
+    // Handle Target events (multiplexing protocol)
+    if (msg.method === 'Target.targetCreated') {
+      const info = msg.params?.targetInfo;
+      if (info?.type === 'page') {
+        // Always track the latest page target
+        // If old target still exists, it will be destroyed shortly
+        this.activeTargetId = info.targetId;
+        // Re-enable domains on new target (e.g., after navigation destroys old target)
+        const domains = [...this.enabledDomains];
+        this.enabledDomains.clear();
+        // Re-enable domains then signal target readiness
+        Promise.all(
+          domains.map(domain => this.enableDomain(domain).catch(err => {
+            console.error(`[WebKitClient] Failed to re-enable ${domain} on new target: ${(err as Error).message}`);
+          }))
+        ).then(() => {
+          this.targetReadyResolve?.();
+        });
+        return;  // Don't call targetReadyResolve here, wait for domains
+      }
+      return;
+    }
+
+    if (msg.method === 'Target.targetDestroyed') {
+      if (msg.params?.targetId === this.activeTargetId) {
+        this.activeTargetId = null;
+      }
+      return;
+    }
+
+    if (msg.method === 'Target.dispatchMessageFromTarget') {
+      // This contains the REAL response to our domain commands
+      let innerMsg: any;
+      try {
+        innerMsg = JSON.parse(msg.params.message);
+      } catch {
+        return;
+      }
+      if (innerMsg.id !== undefined) {
+        const pending = this.innerPendingRequests.get(innerMsg.id);
+        if (pending) {
+          clearTimeout(pending.timer);
+          this.innerPendingRequests.delete(innerMsg.id);
+          if (innerMsg.error) {
+            pending.reject(
+              new ProtocolError(
+                innerMsg.error.message ?? JSON.stringify(innerMsg.error),
+                innerMsg.error.code,
+              ),
+            );
+          } else {
+            pending.resolve(innerMsg.result);
+          }
+        }
+      } else if (innerMsg.method) {
+        // Inner event (e.g., Page.loadEventFired, Runtime.consoleAPICalled)
+        this.emit(innerMsg.method, innerMsg.params);
+      }
+      return;
+    }
+
     if (msg.id !== undefined) {
-      // Response to a request
+      // Outer ack response to Target.sendMessageToTarget — just clean up
       const pending = this.pendingRequests.get(msg.id);
       if (pending) {
         clearTimeout(pending.timer);
         this.pendingRequests.delete(msg.id);
+        // Don't resolve/reject caller — real response comes via dispatchMessageFromTarget
+        // But if there's an outer error (e.g., invalid targetId), propagate it
         if (msg.error) {
           pending.reject(
             new ProtocolError(
@@ -144,12 +258,10 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
               msg.error.code,
             ),
           );
-        } else {
-          pending.resolve(msg.result);
         }
       }
     } else if (msg.method) {
-      // Event notification
+      // Other event notifications not handled above
       this.emit(msg.method, msg.params);
     }
   }
@@ -190,6 +302,15 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
     if (this.reconnecting) return;
     this.reconnecting = true;
     this.connected = false;
+
+    // Clear stale inner requests before reconnect
+    for (const [, pending] of this.innerPendingRequests) {
+      clearTimeout(pending.timer);
+      pending.reject(new ConnectionError('Connection lost during reconnect'));
+    }
+    this.innerPendingRequests.clear();
+    this.activeTargetId = null;
+
     this.stopHeartbeat();
 
     let attempt = 0;
@@ -247,33 +368,62 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
     await this.enableDomain('Page');
     await this.enableDomain('Network');
 
-    // Set up load event promise
-    const waitEvent = options.waitUntil === 'domcontentloaded'
-      ? 'Page.domContentEventFired'
-      : 'Page.loadEventFired';
+    // Try Page.navigate first; fall back to JS navigation if unsupported
+    try {
+      await this.send('Page.navigate', { url: options.url });
+    } catch (e) {
+      if (e instanceof ProtocolError && e.code === -32601) {
+        // Page.navigate not supported — use JS fallback
+        await this.evaluate(`window.location.href = ${JSON.stringify(options.url)}`);
+      } else {
+        throw e;
+      }
+    }
 
-    const loadPromise = new Promise<void>((resolve, reject) => {
-      const timeout = setTimeout(
-        () => reject(new TimeoutError(`Navigation timeout after ${options.timeout ?? 30000}ms`)),
-        options.timeout ?? 30000,
-      );
-      const handler = () => {
-        clearTimeout(timeout);
-        this.removeListener(waitEvent, handler);
-        resolve();
-      };
-      this.on(waitEvent, handler);
-    });
+    // Poll document.readyState instead of relying on Page.loadEventFired
+    const waitUntil = options.waitUntil;
+    const waitStart = Date.now();
+    const navTimeout = options.timeout ?? 30000;
+    while (Date.now() - waitStart < navTimeout) {
+      await new Promise(r => setTimeout(r, 300));
+      try {
+        const readyState = await this.evaluate<string>('document.readyState');
+        if (waitUntil === 'networkidle') {
+          // networkidle not directly detectable via polling
+          // Fall back to 'complete' readyState + extra delay
+          if (readyState === 'complete') {
+            await new Promise(r => setTimeout(r, 500)); // extra settle time
+            break;
+          }
+        } else if (waitUntil === 'domcontentloaded') {
+          if (readyState === 'interactive' || readyState === 'complete') break;
+        } else if (waitUntil === 'load') {
+          if (readyState === 'complete') break;
+        } else {
+          if (readyState === 'complete') break;
+        }
+      } catch {
+        // Target may be transitioning during navigation, keep polling
+        continue;
+      }
+    }
 
-    // Navigate
-    await this.send('Page.navigate', { url: options.url });
+    // P0-1: Check if we actually broke out or timed out
+    const finalReadyState = await this.evaluate<string>('document.readyState').catch(() => '');
+    const expectedState = waitUntil === 'domcontentloaded' ? 'interactive' : 'complete';
+    if (finalReadyState !== 'complete' && finalReadyState !== expectedState) {
+      throw new TimeoutError(`Navigation timeout after ${navTimeout}ms (readyState: ${finalReadyState})`);
+    }
 
-    // Wait for load
-    await loadPromise;
+    // P0-2: Try to get real HTTP status from Performance API
+    const currentUrl = await this.evaluate<string>('document.URL').catch(() => options.url);
+    const status = await this.evaluate<number>(
+      `(function() { try { var e = performance.getEntriesByType('navigation')[0]; return e ? e.responseStatus || 200 : 200; } catch(ex) { return 200; } })()`
+    ).catch(() => 200);
 
     return {
-      url: options.url,
-      status: 200,
+      url: currentUrl,
+      status,
       loadTime: Date.now() - startTime,
     };
   }
@@ -309,12 +459,15 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
   }
 
   async evaluate<T = unknown>(expression: string): Promise<T> {
+    // Step 1: Evaluate with returnByValue:false to preserve objectId for Promises.
+    // WebKit serializes Promises as {} when returnByValue:true, losing the objectId
+    // needed for Runtime.awaitPromise.
     const result = await this.send<{
-      result: { type: string; subtype?: string; value?: unknown; objectId?: string; description?: string };
+      result: { type: string; subtype?: string; className?: string; value?: unknown; objectId?: string; description?: string };
       wasThrown: boolean;
     }>('Runtime.evaluate', {
       expression,
-      returnByValue: true,
+      returnByValue: false,
       emulateUserGesture: true,
     });
 
@@ -322,10 +475,15 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
       throw new EvaluationError(result.result?.description ?? 'Evaluation failed');
     }
 
-    // Handle Promise results — WebKit requires separate awaitPromise command
-    if (result.result?.type === 'object' && result.result?.subtype === 'promise' && result.result?.objectId) {
+    // Step 2: If result is a Promise, use awaitPromise to get the resolved value
+    // WebKit Inspector may use subtype:'promise' OR className:'Promise' depending on version
+    const isPromise = result.result?.type === 'object' && result.result?.objectId &&
+      (result.result?.subtype === 'promise' || result.result?.className === 'Promise');
+    if (isPromise) {
+      // Note: awaitPromise blocks until the Promise settles. Never-resolving Promises
+      // will block for the full send() timeout (DEFAULT_WEBKIT_SEND_TIMEOUT_MS, typically 15s).
       const awaited = await this.send<{
-        result: { type: string; value?: unknown; description?: string };
+        result: { type: string; value?: unknown; objectId?: string; description?: string };
         wasThrown: boolean;
       }>('Runtime.awaitPromise', {
         promiseObjectId: result.result.objectId,
@@ -336,6 +494,20 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
         throw new EvaluationError(awaited.result?.description ?? 'Promise rejected');
       }
       return awaited.result?.value as T;
+    }
+
+    // Step 3: For non-Promise object results, use callFunctionOn to serialize the value
+    // without re-executing the expression (avoids double side effects)
+    if (result.result?.objectId && result.result?.value === undefined) {
+      const valued = await this.send<{
+        result: { type: string; value?: unknown; description?: string };
+        wasThrown: boolean;
+      }>('Runtime.callFunctionOn', {
+        objectId: result.result.objectId,
+        functionDeclaration: 'function() { return this; }',
+        returnByValue: true,
+      });
+      return valued.result?.value as T;
     }
 
     return result.result?.value as T;
@@ -366,58 +538,48 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
   }
 
   async getCookies(domain?: string): Promise<Cookie[]> {
-    await this.enableDomain('Page');
-    const result = await this.send<{ cookies: Array<{
-      name: string; value: string; domain: string; path: string;
-      expires: number; httpOnly: boolean; secure: boolean; sameSite?: string;
-    }> }>('Page.getCookies');
-
-    let cookies = result.cookies.map(c => ({
-      name: c.name,
-      value: c.value,
-      domain: c.domain,
-      path: c.path,
-      expires: c.expires,
-      httpOnly: c.httpOnly,
-      secure: c.secure,
-      sameSite: c.sameSite as Cookie['sameSite'],
-    }));
-
-    if (domain) {
-      cookies = cookies.filter(c =>
-        c.domain === domain || c.domain === '.' + domain
-      );
-    }
-
-    return cookies;
+    // Use document.cookie directly — Page.getCookies crashes the ios-webkit-debug-proxy
+    // connection. Note: httpOnly cookies are not visible via document.cookie.
+    const raw = await this.evaluate<string>('document.cookie');
+    if (!raw) return [];
+    return raw.split(';').map(pair => {
+      const [name, ...rest] = pair.trim().split('=');
+      return {
+        name: name.trim(),
+        value: rest.join('='),
+        domain: domain ?? '',
+        path: '/',
+        expires: -1,
+        httpOnly: false,
+        secure: false,
+      };
+    }).filter(c => c.name);
   }
 
   async setCookies(cookies: Cookie[]): Promise<void> {
-    await this.enableDomain('Page');
+    // Use document.cookie directly — Page.setCookie crashes the ios-webkit-debug-proxy
+    // connection. httpOnly and sameSite attributes cannot be set via this approach.
     for (const cookie of cookies) {
-      await this.send('Page.setCookie', {
-        cookie: {
-          name: cookie.name,
-          value: cookie.value,
-          domain: cookie.domain,
-          path: cookie.path,
-          expires: cookie.expires,
-          httpOnly: cookie.httpOnly,
-          secure: cookie.secure,
-          sameSite: cookie.sameSite,
-        },
-      });
+      const parts = [`${cookie.name}=${cookie.value}`];
+      if (cookie.path) parts.push(`path=${cookie.path}`);
+      if (cookie.domain) parts.push(`domain=${cookie.domain}`);
+      if (cookie.secure) parts.push('secure');
+      if (cookie.expires && cookie.expires > 0) {
+        parts.push(`expires=${new Date(cookie.expires * 1000).toUTCString()}`);
+      }
+      await this.evaluate(`document.cookie = ${JSON.stringify(parts.join('; '))}`);
     }
   }
 
   async clearCookies(): Promise<void> {
-    const cookies = await this.getCookies();
-    for (const cookie of cookies) {
-      await this.send('Page.deleteCookie', {
-        cookieName: cookie.name,
-        url: `${cookie.secure ? 'https' : 'http'}://${cookie.domain}${cookie.path}`,
+    // Use JS directly — Page.deleteAllCookies crashes ios-webkit-debug-proxy.
+    // Note: httpOnly cookies cannot be cleared via this approach.
+    await this.evaluate(`
+      document.cookie.split(';').forEach(function(c) {
+        var name = c.trim().split('=')[0];
+        document.cookie = name + '=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/';
       });
-    }
+    `);
   }
 
   async click(target: string | { x: number; y: number }): Promise<void> {
@@ -514,32 +676,18 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
     if (!center) throw new Error(`Element not found: ${selector}`);
     const dur = duration ?? 500;
 
-    // Async IIFE — need to await the promise
-    const result = await this.send<any>('Runtime.evaluate', {
-      expression: `
-        (async function(x, y, duration) {
-          var el = document.elementFromPoint(x, y);
-          if (!el) return;
-          var touch = document.createTouch(window, el, 1, x, y, x, y);
-          var touchList = document.createTouchList(touch);
-          el.dispatchEvent(new TouchEvent('touchstart', { touches: touchList, changedTouches: touchList, bubbles: true }));
-          await new Promise(function(r) { setTimeout(r, duration); });
-          var emptyList = document.createTouchList();
-          el.dispatchEvent(new TouchEvent('touchend', { touches: emptyList, changedTouches: touchList, bubbles: true }));
-        })(${center.x}, ${center.y}, ${dur})
-      `,
-      returnByValue: true,
-      emulateUserGesture: true,
-      awaitPromise: false,
-    });
-
-    // If result is a promise, await it
-    if (result.result?.type === 'object' && result.result?.subtype === 'promise' && result.result?.objectId) {
-      await this.send('Runtime.awaitPromise', {
-        promiseObjectId: result.result.objectId,
-        returnByValue: true,
-      });
-    }
+    await this.evaluate(`
+      (async function(x, y, duration) {
+        var el = document.elementFromPoint(x, y);
+        if (!el) return;
+        var touch = document.createTouch(window, el, 1, x, y, x, y);
+        var touchList = document.createTouchList(touch);
+        el.dispatchEvent(new TouchEvent('touchstart', { touches: touchList, changedTouches: touchList, bubbles: true }));
+        await new Promise(function(r) { setTimeout(r, duration); });
+        var emptyList = document.createTouchList();
+        el.dispatchEvent(new TouchEvent('touchend', { touches: emptyList, changedTouches: touchList, bubbles: true }));
+      })(${center.x}, ${center.y}, ${dur})
+    `);
   }
 
   async swipe(direction: 'up' | 'down' | 'left' | 'right', speed?: number): Promise<void> {
@@ -557,40 +705,28 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
     };
     const { sx, sy, ex, ey } = coords[direction];
 
-    const result = await this.send<any>('Runtime.evaluate', {
-      expression: `
-        (async function(sx, sy, ex, ey, steps) {
-          var el = document.elementFromPoint(sx, sy);
-          if (!el) return;
-          var makeTouch = function(x, y) { return document.createTouch(window, el, 1, x, y, x, y); };
-          var startTouch = makeTouch(sx, sy);
-          var startList = document.createTouchList(startTouch);
-          el.dispatchEvent(new TouchEvent('touchstart', { touches: startList, changedTouches: startList, bubbles: true }));
-          for (var i = 1; i <= steps; i++) {
-            var x = sx + (ex - sx) * (i / steps);
-            var y = sy + (ey - sy) * (i / steps);
-            var moveTouch = makeTouch(x, y);
-            var moveList = document.createTouchList(moveTouch);
-            el.dispatchEvent(new TouchEvent('touchmove', { touches: moveList, changedTouches: moveList, bubbles: true }));
-            await new Promise(function(r) { setTimeout(r, 16); });
-          }
-          var endTouch = makeTouch(ex, ey);
-          var endList = document.createTouchList(endTouch);
-          var emptyList = document.createTouchList();
-          el.dispatchEvent(new TouchEvent('touchend', { touches: emptyList, changedTouches: endList, bubbles: true }));
-        })(${sx}, ${sy}, ${ex}, ${ey}, ${steps})
-      `,
-      returnByValue: true,
-      emulateUserGesture: true,
-      awaitPromise: false,
-    });
-
-    if (result.result?.type === 'object' && result.result?.subtype === 'promise' && result.result?.objectId) {
-      await this.send('Runtime.awaitPromise', {
-        promiseObjectId: result.result.objectId,
-        returnByValue: true,
-      });
-    }
+    await this.evaluate(`
+      (async function(sx, sy, ex, ey, steps) {
+        var el = document.elementFromPoint(sx, sy);
+        if (!el) return;
+        var makeTouch = function(x, y) { return document.createTouch(window, el, 1, x, y, x, y); };
+        var startTouch = makeTouch(sx, sy);
+        var startList = document.createTouchList(startTouch);
+        el.dispatchEvent(new TouchEvent('touchstart', { touches: startList, changedTouches: startList, bubbles: true }));
+        for (var i = 1; i <= steps; i++) {
+          var x = sx + (ex - sx) * (i / steps);
+          var y = sy + (ey - sy) * (i / steps);
+          var moveTouch = makeTouch(x, y);
+          var moveList = document.createTouchList(moveTouch);
+          el.dispatchEvent(new TouchEvent('touchmove', { touches: moveList, changedTouches: moveList, bubbles: true }));
+          await new Promise(function(r) { setTimeout(r, 16); });
+        }
+        var endTouch = makeTouch(ex, ey);
+        var endList = document.createTouchList(endTouch);
+        var emptyList = document.createTouchList();
+        el.dispatchEvent(new TouchEvent('touchend', { touches: emptyList, changedTouches: endList, bubbles: true }));
+      })(${sx}, ${sy}, ${ex}, ${ey}, ${steps})
+    `);
   }
 
   async press(key: string): Promise<void> {
@@ -809,7 +945,13 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
   }
 
   private async connectToTarget(wsUrl: string): Promise<void> {
-    return new Promise<void>((resolve, reject) => {
+    // Set up target discovery promise before connecting
+    this.activeTargetId = null;
+    this.targetReady = new Promise<void>((resolve) => {
+      this.targetReadyResolve = resolve;
+    });
+
+    await new Promise<void>((resolve, reject) => {
       const connectTimeout =
         this.options.connectTimeout ?? DEFAULT_WEBKIT_CONNECT_TIMEOUT_MS;
 
@@ -849,6 +991,22 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
         }
       });
     });
+
+    // Wait for first page target to be discovered
+    const connectTimeout =
+      this.options.connectTimeout ?? DEFAULT_WEBKIT_CONNECT_TIMEOUT_MS;
+    let targetTimer: ReturnType<typeof setTimeout>;
+    const targetTimeout = new Promise<never>((_, reject) => {
+      targetTimer = setTimeout(
+        () => reject(new ConnectionError('No page target discovered — is Safari open in the simulator?')),
+        connectTimeout,
+      );
+    });
+    try {
+      await Promise.race([this.targetReady, targetTimeout]);
+    } finally {
+      clearTimeout(targetTimer!);
+    }
   }
 
   private clearPendingRequests(): void {
@@ -857,6 +1015,12 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
       req.reject(new ConnectionError('Connection closed'));
     }
     this.pendingRequests.clear();
+
+    for (const [, req] of this.innerPendingRequests) {
+      clearTimeout(req.timer);
+      req.reject(new ConnectionError('Connection closed'));
+    }
+    this.innerPendingRequests.clear();
   }
 
   private httpGet(url: string): Promise<string> {

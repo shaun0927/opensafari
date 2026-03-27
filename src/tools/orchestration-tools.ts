@@ -24,7 +24,7 @@ export function registerOrchestrationTools(server: MCPServer): void {
       inputSchema: {
         type: 'object' as const,
         properties: {
-          devices: { type: 'array', items: { type: 'string' }, description: 'Device preset names (e.g. ["iphone-se","ipad-pro"])' },
+          devices: { type: 'array', items: { type: 'string' }, description: 'Device preset names (e.g. ["iphone-17","ipad-pro"])' },
           url: { type: 'string', description: 'URL to navigate all devices to' },
           authProfile: { type: 'string', description: 'Auth profile name to inject' },
           taskDescription: { type: 'string', description: 'Task description for worker prompts' },

@@ -1,6 +1,5 @@
 import { SimulatorPool } from '../simulator/pool';
-import { BatchExecutor, BatchResult } from '../simulator/batch';
-import { ScreenshotOptions } from '../types/browser-backend';
+import { BatchExecutor } from '../simulator/batch';
 
 export interface ViewportCapture {
   device: string;

@@ -18,7 +18,7 @@ export class StdioTransport implements MCPTransport {
 
   send(response: MCPResponse): void {
     // stdout is the MCP JSON-RPC channel in stdio mode
-    console.log(JSON.stringify(response));
+    process.stdout.write(JSON.stringify(response) + '\n');
   }
 
   start(): void {

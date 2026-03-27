@@ -1,12 +1,11 @@
 import { EventEmitter } from 'events';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import { SimulatorManager, DeviceNotBootedError } from './manager';
-import { SimulatorDevice, DevicePreset } from './types';
+import { SimulatorManager } from './manager';
+import { SimulatorDevice } from './types';
 import { DEVICE_PRESETS } from './presets';
-import { WebKitClient, WebKitClientOptions } from '../webkit/client';
-import { BrowserBackend } from '../types/browser-backend';
-import { AuthManager, AuthProfile } from '../auth/manager';
+import { WebKitClient } from '../webkit/client';
+import { AuthManager } from '../auth/manager';
 import * as os from 'os';
 import {
   DEFAULT_IDLE_CHECK_INTERVAL_MS,
@@ -51,7 +50,7 @@ export class SimulatorPool extends EventEmitter {
     this.manager = new SimulatorManager();
     this.maxSimulators = options?.max ?? 5;
     this.concurrencyLimit = options?.concurrency ?? 3;
-    this.webkitBasePort = options?.webkitBasePort ?? 9222;
+    this.webkitBasePort = options?.webkitBasePort ?? 9322;
     this.nextPort = this.webkitBasePort;
     this.idleTimeout = DEFAULT_IDLE_SHUTDOWN_TIMEOUT_MS;
     this.memoryWarnMB = DEFAULT_MEMORY_WARN_MB;
@@ -86,7 +85,7 @@ export class SimulatorPool extends EventEmitter {
       const batchResults = await Promise.all(
         batch.map(async (preset) => {
           const device = await this.manager.boot(preset);
-          await this.manager.openUrl(device.udid, 'about:blank');
+          await this.manager.openUrl(device.udid, 'https://example.com');
 
           const port = this.getPortForDevice(device.udid);
           const client = new WebKitClient({ host: 'localhost', port });

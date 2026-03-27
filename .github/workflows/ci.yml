@@ -13,9 +13,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: 20
           cache: 'npm'
-      - run: npm ci
+      - run: npm ci --force
       - run: npm run lint
 
   test:
@@ -24,7 +24,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: 20
           cache: 'npm'
       - run: npm ci
       - run: npm run test:ci
@@ -36,12 +36,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: 20
           cache: 'npm'
-      - run: npm ci
+      - run: npm ci --force
       - run: npm run build
       - name: Verify dist artifacts
         run: |
           test -f dist/index.js
           test -f dist/cli/index.js
-          node dist/cli/index.js
+          node dist/cli/index.js --help

@@ -3,7 +3,7 @@
 import { Command } from 'commander';
 import { MCPServer, getWebKitClient } from '../src/mcp-server';
 import { registerAllTools } from '../src/tools';
-import { SimulatorManager, DEVICE_PRESETS, checkXcodeInstallation } from '../src/simulator';
+import { DEVICE_PRESETS, checkXcodeInstallation } from '../src/simulator';
 import { AuthManager } from '../src/auth';
 
 const program = new Command()
@@ -89,6 +89,9 @@ program
       { name: 'Simulator', ok: result.simulatorAvailable },
       { name: 'iOS Runtimes', ok: result.iosRuntimes.length > 0, detail: result.iosRuntimes.join(', ') },
       { name: 'Node.js >= 18', ok: parseInt(process.version.slice(1)) >= 18, detail: process.version },
+      { name: 'WebInspector Socket', ok: !!result.webInspectorSocket, detail: result.webInspectorSocket },
+      { name: 'Proxy Reachable', ok: result.proxyReachable },
+      ...(result.proxyReachable ? [{ name: 'Device Port', ok: result.devicePortReachable, detail: result.devicePort ? `port ${result.devicePort}` : undefined }] : []),
     ];
 
     for (const check of checks) {
