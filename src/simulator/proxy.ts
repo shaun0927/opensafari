@@ -1,10 +1,9 @@
 import { spawn, ChildProcess, execFile } from 'child_process';
 import { promisify } from 'util';
-import * as fs from 'fs/promises';
 import { readFileSync, writeFileSync, unlinkSync } from 'fs';
-import * as path from 'path';
 import * as http from 'http';
 import * as net from 'net';
+import { findSocketPath } from './socket-finder';
 
 const execFileAsync = promisify(execFile);
 
@@ -69,24 +68,7 @@ export class WebInspectorProxy {
   }
 
   async findSocketPath(): Promise<string | null> {
-    const searchPaths = ['/private/var/tmp', '/private/tmp'];
-    const candidates: { socketPath: string; mtimeMs: number }[] = [];
-    for (const base of searchPaths) {
-      let dirs: string[];
-      try { dirs = await fs.readdir(base); } catch { continue; }
-      for (const dir of dirs) {
-        if (!dir.startsWith('com.apple.launchd.')) continue;
-        const socketPath = path.join(base, dir, 'com.apple.webinspectord_sim.socket');
-        try {
-          const stat = await fs.stat(socketPath);
-          candidates.push({ socketPath, mtimeMs: stat.mtimeMs });
-        } catch { continue; }
-      }
-    }
-    if (candidates.length === 0) return null;
-    // Return the most recently modified socket to avoid stale entries
-    candidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
-    return candidates[0].socketPath;
+    return findSocketPath();
   }
 
   /** Start the proxy process. Resolves once the proxy is ready. */
