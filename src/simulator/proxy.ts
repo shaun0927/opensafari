@@ -53,11 +53,15 @@ export class WebInspectorProxy {
   private _reusing = false;
 
   constructor(private options: ProxyOptions = {}) {
-    const envPort = process.env.OPENSAFARI_PROXY_PORT
+    const rawPort = process.env.OPENSAFARI_PROXY_PORT
       ? parseInt(process.env.OPENSAFARI_PROXY_PORT, 10)
       : undefined;
-    const envDeviceListPort = process.env.OPENSAFARI_PROXY_DEVICE_LIST_PORT
+    const envPort = rawPort !== undefined && !Number.isNaN(rawPort) ? rawPort : undefined;
+    const rawDeviceListPort = process.env.OPENSAFARI_PROXY_DEVICE_LIST_PORT
       ? parseInt(process.env.OPENSAFARI_PROXY_DEVICE_LIST_PORT, 10)
+      : undefined;
+    const envDeviceListPort = rawDeviceListPort !== undefined && !Number.isNaN(rawDeviceListPort)
+      ? rawDeviceListPort
       : undefined;
     this._port = options.port ?? envPort ?? 9322;
     this._deviceListPort = options.deviceListPort ?? envDeviceListPort ?? (this._port - 1);

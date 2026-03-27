@@ -58,4 +58,19 @@ describe('WebInspectorProxy port derivation', () => {
     expect(proxy.port).toBe(9500);
     expect(proxy.deviceListPort).toBe(9200);
   });
+
+  it('non-numeric OPENSAFARI_PROXY_PORT falls back to default 9322', () => {
+    process.env.OPENSAFARI_PROXY_PORT = 'abc';
+    const proxy = new WebInspectorProxy();
+    expect(proxy.port).toBe(9322);
+    expect(proxy.deviceListPort).toBe(9321);
+  });
+
+  it('non-numeric OPENSAFARI_PROXY_DEVICE_LIST_PORT falls back to derived port - 1', () => {
+    process.env.OPENSAFARI_PROXY_PORT = '9600';
+    process.env.OPENSAFARI_PROXY_DEVICE_LIST_PORT = 'abc';
+    const proxy = new WebInspectorProxy();
+    expect(proxy.port).toBe(9600);
+    expect(proxy.deviceListPort).toBe(9599);
+  });
 });
