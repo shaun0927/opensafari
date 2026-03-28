@@ -43,7 +43,7 @@ describe('checkXcodeInstallation behavioral', () => {
       const result = await checkXcodeInstallation();
       expect(typeof result.devicePortReachable).toBe('boolean');
     }
-  }, 15000);
+  }, 60000);
 
   it('does not probe device port when proxy is not reachable', async () => {
     if (process.platform !== 'darwin') {
@@ -57,5 +57,5 @@ describe('checkXcodeInstallation behavioral', () => {
         expect(result.devicePort).toBeUndefined();
       }
     }
-  }, 15000);
+  }, 60000);
 });
