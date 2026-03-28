@@ -24,12 +24,15 @@ export function registerAuthTools(server: MCPServer): void {
       try {
         const site = params.site as string;
         const cookies = await client.getCookies();
-        const domainCookies = cookies.filter((c: Cookie) => c.domain === site || c.domain === '.' + site || c.domain.endsWith('.' + site));
+        const domainCookies = cookies.filter((c: Cookie) => {
+          const cd = c.domain.startsWith('.') ? c.domain.slice(1) : c.domain;
+          return cd === site || site.endsWith('.' + cd);
+        });
         if (domainCookies.length === 0) {
           return { content: [{ type: 'text' as const, text: `Error: No cookies found for domain "${site}"` }], isError: true };
         }
-        const filePath = await authManager.save(site, client);
-        return { content: [{ type: 'text' as const, text: JSON.stringify({ saved: true, site, filePath }) }] };
+        const filePath = await authManager.save(site, client, domainCookies);
+        return { content: [{ type: 'text' as const, text: JSON.stringify({ saved: true, site, cookieCount: domainCookies.length, filePath }) }] };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         return { content: [{ type: 'text' as const, text: `Error: ${message}` }], isError: true };
