@@ -91,15 +91,14 @@ describe('WebKit Connection Integration', () => {
     expect(text).toContain('Example Domain');
   });
 
-  test('screenshot returns valid base64 PNG', async () => {
+  test('screenshot returns valid PNG buffer', async () => {
     const data = await client.screenshot();
     expect(data.length).toBeGreaterThan(100);
-    // Verify PNG magic bytes in decoded base64
-    const buf = Buffer.from(data, 'base64');
-    expect(buf[0]).toBe(0x89); // PNG signature
-    expect(buf[1]).toBe(0x50); // 'P'
-    expect(buf[2]).toBe(0x4E); // 'N'
-    expect(buf[3]).toBe(0x47); // 'G'
+    // Verify PNG magic bytes
+    expect(data[0]).toBe(0x89); // PNG signature
+    expect(data[1]).toBe(0x50); // 'P'
+    expect(data[2]).toBe(0x4E); // 'N'
+    expect(data[3]).toBe(0x47); // 'G'
   }, 15_000);
 
   test('querySelector returns element info', async () => {

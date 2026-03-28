@@ -21,7 +21,7 @@
     "start": "node dist/index.js",
     "test": "jest --config jest.config.js",
     "test:unit": "jest --config jest.config.js",
-    "test:integration": "jest --roots tests/integration --testTimeout 120000",
+    "test:integration": "jest --roots tests/integration --testPathIgnorePatterns '/node_modules/' --testTimeout 120000",
     "test:ci": "jest --config jest.ci.config.js",
     "test:coverage": "jest --coverage",
     "lint": "eslint 'src/**/*.ts' 'cli/**/*.ts' 'tests/**/*.ts'",
