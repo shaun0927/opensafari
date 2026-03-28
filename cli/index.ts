@@ -16,6 +16,12 @@ import { BatchExecutor } from '../src/simulator/batch';
 import { SimulatorWorkflowEngine } from '../src/orchestration/workflow-engine';
 import { CrossViewportCapture } from '../src/comparison/cross-viewport';
 import { setupGracefulShutdown } from '../src/reliability/graceful-shutdown';
+import { SimulatorCrashWatcher } from '../src/reliability/crash-watcher';
+import { cleanupZombieProcesses } from '../src/reliability/zombie-cleanup';
+import { setBlockedDomains } from '../src/security/domain-guard';
+import { logAuditEntry } from '../src/security/audit-logger';
+import { EventLoopMonitor, setGlobalEventLoopMonitor } from '../src/watchdog/event-loop-monitor';
+import { SimulatorMonitor } from '../src/watchdog/simulator-monitor';
 import { AuthManager } from '../src/auth';
 
 const program = new Command()
@@ -56,6 +62,52 @@ program
 
     // Wire graceful shutdown
     setupGracefulShutdown(pool);
+
+    // Wire crash watcher
+    const crashWatcher = new SimulatorCrashWatcher(pool);
+    crashWatcher.on('crash', ({ deviceId }: { deviceId: string }) => {
+      console.error(`[OpenSafari] Crash detected on device ${deviceId}`);
+    });
+    crashWatcher.on('recovered', ({ deviceId }: { deviceId: string }) => {
+      console.error(`[OpenSafari] Device ${deviceId} recovered from crash`);
+    });
+    crashWatcher.on('recovery-failed', ({ deviceId, error }: { deviceId: string; error: string }) => {
+      console.error(`[OpenSafari] Device ${deviceId} recovery failed: ${error}`);
+    });
+    crashWatcher.start();
+
+    // Cleanup zombie processes from previous sessions
+    cleanupZombieProcesses().then(count => {
+      if (count > 0) console.error(`[OpenSafari] Found ${count} orphaned simulator process(es)`);
+    }).catch(() => {});
+
+    // Wire domain guard
+    if (options.blockedDomains) {
+      setBlockedDomains(options.blockedDomains.split(',').map((d: string) => d.trim()));
+      console.error(`[OpenSafari] Domain guard active: ${options.blockedDomains}`);
+    }
+
+    // Wire audit logging
+    if (options.auditLog) {
+      console.error('[OpenSafari] Audit logging enabled');
+    }
+
+    // Wire watchdog monitors
+    const eventLoopMonitor = new EventLoopMonitor();
+    setGlobalEventLoopMonitor(eventLoopMonitor);
+    eventLoopMonitor.on('warn', ({ driftMs }: { driftMs: number }) => {
+      console.error(`[OpenSafari] Event loop drift warning: ${driftMs}ms`);
+    });
+    eventLoopMonitor.start();
+
+    const simMonitor = new SimulatorMonitor();
+    simMonitor.on('warn', ({ pid, rssMB }: { pid: number; rssMB: number }) => {
+      console.error(`[OpenSafari] Simulator memory warning: PID ${pid} using ${rssMB}MB`);
+    });
+    simMonitor.on('critical', ({ pid, rssMB }: { pid: number; rssMB: number }) => {
+      console.error(`[OpenSafari] Simulator memory critical: PID ${pid} using ${rssMB}MB`);
+    });
+    simMonitor.start();
 
     const transport = options.http ? 'http' as const : 'stdio' as const;
     const port = typeof options.http === 'string' ? parseInt(options.http, 10) : 3100;
