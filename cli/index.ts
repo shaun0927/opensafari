@@ -88,6 +88,7 @@ program
 
     // Wire audit logging
     if (options.auditLog) {
+      server.enableAuditLog();
       console.error('[OpenSafari] Audit logging enabled');
     }
 

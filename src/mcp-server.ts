@@ -18,6 +18,7 @@ import {
 import { createTransport, MCPTransport, TransportMode } from './transports';
 import { TOOL_TIERS, getToolTier } from './config/tool-tiers';
 import { BrowserBackend } from './types/browser-backend';
+import { logAuditEntry } from './security/audit-logger';
 
 // Re-export so callers can use canonical names without knowing the internal alias
 export type { MCPToolDefinition as ToolDefinition, ToolHandler };
@@ -64,6 +65,7 @@ export class MCPServer {
   private tools: Map<string, RegisteredTool> = new Map();
   private transport: MCPTransport | null = null;
   private currentTier: number = 1;
+  private auditLogEnabled = false;
 
   // ------------------------------------------------------------------
   // Tool registration
@@ -114,6 +116,10 @@ export class MCPServer {
 
   getTier(): number {
     return this.currentTier;
+  }
+
+  enableAuditLog(): void {
+    this.auditLogEnabled = true;
   }
 
   // ------------------------------------------------------------------
@@ -241,12 +247,18 @@ export class MCPServer {
 
     try {
       const result: MCPResult = await tool.handler(sessionId, args);
+      if (this.auditLogEnabled) {
+        logAuditEntry(name, sessionId, args);
+      }
       return {
         jsonrpc: '2.0',
         id: request.id,
         result,
       };
     } catch (err) {
+      if (this.auditLogEnabled) {
+        logAuditEntry(name, sessionId, args);
+      }
       const message = err instanceof Error ? err.message : String(err);
       return {
         jsonrpc: '2.0',
