@@ -19,7 +19,6 @@ import { setupGracefulShutdown } from '../src/reliability/graceful-shutdown';
 import { SimulatorCrashWatcher } from '../src/reliability/crash-watcher';
 import { cleanupZombieProcesses } from '../src/reliability/zombie-cleanup';
 import { setBlockedDomains } from '../src/security/domain-guard';
-import { logAuditEntry } from '../src/security/audit-logger';
 import { EventLoopMonitor, setGlobalEventLoopMonitor } from '../src/watchdog/event-loop-monitor';
 import { SimulatorMonitor } from '../src/watchdog/simulator-monitor';
 import { AuthManager } from '../src/auth';
