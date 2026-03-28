@@ -84,6 +84,7 @@ export class WebInspectorProxy {
         this._running = true;
         this._reusing = true;
         this.registerRefSync();
+        await this.waitForForwarding();
         return;
       }
       throw new Error(
@@ -146,6 +147,7 @@ export class WebInspectorProxy {
     });
 
     await this.waitForReady();
+    await this.waitForForwarding();
   }
 
   /** Stop the proxy process gracefully with SIGKILL fallback. */
@@ -271,6 +273,24 @@ export class WebInspectorProxy {
       await new Promise(r => setTimeout(r, 500));
     }
     throw new Error(`WebInspectorProxy did not become ready within ${timeout}ms`);
+  }
+
+  /**
+   * Poll the first device forwarding port until it returns a valid JSON target list.
+   * ios_webkit_debug_proxy requires ~10s initialization before page forwarding is available.
+   * If the timeout expires we log a warning instead of throwing — Safari may not be open yet.
+   */
+  private async waitForForwarding(timeout = 15000): Promise<void> {
+    const start = Date.now();
+    while (Date.now() - start < timeout) {
+      try {
+        const body = await this.httpGet(`http://localhost:${this._port}/json`);
+        if (body.startsWith('[')) return; // Valid JSON array = targets available
+      } catch { /* retry */ }
+      await new Promise(r => setTimeout(r, 1000));
+    }
+    // Don't throw — forwarding may not be available if no Safari is open yet
+    console.error('[WebInspectorProxy] Forwarding port not ready within timeout — Safari may not be open');
   }
 
   private isPortInUse(port: number): Promise<boolean> {

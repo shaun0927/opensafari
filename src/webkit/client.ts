@@ -72,18 +72,34 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
 
   // ========== Lifecycle ==========
 
-  async connect(): Promise<void> {
-    const targets = await this.listTargets();
-    const targetIndex = this.options.targetIndex ?? 0;
+  async connect(options?: { retries?: number; retryDelay?: number }): Promise<void> {
+    const maxRetries = options?.retries ?? 0;
+    const delay = options?.retryDelay ?? 2000;
 
-    if (targets.length === 0) {
-      throw new ConnectionError(
-        'No Safari targets found. Is Safari open in the simulator?',
-      );
+    let lastError: Error | null = null;
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        const targets = await this.listTargets();
+        const targetIndex = this.options.targetIndex ?? 0;
+
+        if (targets.length === 0) {
+          throw new ConnectionError(
+            'No Safari targets found. Is Safari open in the simulator?',
+          );
+        }
+
+        const target = targets[Math.min(targetIndex, targets.length - 1)];
+        await this.connectToTarget(target.webSocketDebuggerUrl);
+        return;
+      } catch (err) {
+        lastError = err as Error;
+        if (attempt < maxRetries) {
+          console.error(`[WebKitClient] Connect attempt ${attempt + 1} failed, retrying in ${delay}ms...`);
+          await new Promise(r => setTimeout(r, delay));
+        }
+      }
     }
-
-    const target = targets[Math.min(targetIndex, targets.length - 1)];
-    await this.connectToTarget(target.webSocketDebuggerUrl);
+    throw lastError ?? new Error('WebKit connection failed');
   }
 
   async disconnect(): Promise<void> {
