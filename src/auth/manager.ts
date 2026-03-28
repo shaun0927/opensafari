@@ -28,8 +28,8 @@ export class AuthManager {
     this.authDir = authDir ?? path.join(os.homedir(), '.opensafari', 'auth');
   }
 
-  async save(site: string, client: BrowserBackend): Promise<string> {
-    const cookies = await client.getCookies();
+  async save(site: string, client: BrowserBackend, filteredCookies?: Cookie[]): Promise<string> {
+    const cookies = filteredCookies ?? await client.getCookies();
 
     const localStorage = await client.evaluate<Record<string, string>>(`
       (function() {
@@ -125,8 +125,8 @@ export class AuthManager {
     const data = JSON.parse(await fs.readFile(filePath, 'utf-8')) as AuthProfile;
 
     const now = Date.now() / 1000;
-    const expiring = data.cookies.filter(c => c.expires > 0 && c.expires - now < 300);
     const expired = data.cookies.filter(c => c.expires > 0 && c.expires < now);
+    const expiring = data.cookies.filter(c => c.expires > 0 && c.expires >= now && c.expires - now < 300);
 
     return {
       totalCookies: data.cookies.length,
