@@ -179,8 +179,15 @@ describe('Resilience: SimulatorMonitor lifecycle', () => {
 
 describe('Resilience: Graceful shutdown', () => {
   test('setupGracefulShutdown registers handlers without throwing', () => {
-    const pool = new SimulatorPool({ max: 1 });
-    expect(() => setupGracefulShutdown(pool)).not.toThrow();
+    const spy = jest.spyOn(process, 'on').mockImplementation(() => process);
+    try {
+      const pool = new SimulatorPool({ max: 1 });
+      expect(() => setupGracefulShutdown(pool)).not.toThrow();
+      expect(spy).toHaveBeenCalledWith('SIGTERM', expect.any(Function));
+      expect(spy).toHaveBeenCalledWith('SIGINT', expect.any(Function));
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 

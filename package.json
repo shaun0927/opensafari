@@ -37,8 +37,11 @@
   "bugs": {
     "url": "https://github.com/shaun0927/opensafari/issues"
   },
+  "types": "dist/index.d.ts",
   "files": [
     "dist/",
+    "!dist/src/",
+    "!dist/node_modules/",
     "README.md",
     "LICENSE"
   ],

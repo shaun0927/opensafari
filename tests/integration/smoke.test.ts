@@ -180,10 +180,13 @@ describe('Smoke: WebInspectorProxy defaults', () => {
 
 describe('Smoke: Graceful shutdown registration', () => {
   test('setupGracefulShutdown does not throw', () => {
-    // Import dynamically to avoid side effects on process listeners
-    const { setupGracefulShutdown } = require('../../src/reliability/graceful-shutdown');
-    const pool = new SimulatorPool({ max: 1 });
-
-    expect(() => setupGracefulShutdown(pool)).not.toThrow();
+    const spy = jest.spyOn(process, 'on').mockImplementation(() => process);
+    try {
+      const { setupGracefulShutdown } = require('../../src/reliability/graceful-shutdown');
+      const pool = new SimulatorPool({ max: 1 });
+      expect(() => setupGracefulShutdown(pool)).not.toThrow();
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
