@@ -1,7 +1,7 @@
 {
   "name": "opensafari-mcp",
-  "version": "0.0.3",
-  "description": "iOS Safari automation MCP server via Xcode Simulator",
+  "version": "0.1.0",
+  "description": "iOS Safari automation MCP server via Xcode Simulator + WebKit Remote Debugging Protocol",
   "main": "dist/index.js",
   "bin": {
     "opensafari": "./dist/cli/index.js"
@@ -27,11 +27,15 @@
     "lint": "eslint 'src/**/*.ts' 'cli/**/*.ts' 'tests/**/*.ts'",
     "lint:fix": "eslint --fix 'src/**/*.ts' 'cli/**/*.ts' 'tests/**/*.ts'",
     "prepare": "npm run build",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build && npm test"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/shaun0927/opensafari.git"
+    "url": "git+https://github.com/shaun0927/opensafari.git"
+  },
+  "homepage": "https://github.com/shaun0927/opensafari#readme",
+  "bugs": {
+    "url": "https://github.com/shaun0927/opensafari/issues"
   },
   "files": [
     "dist/",
@@ -42,12 +46,14 @@
   "keywords": [
     "safari",
     "ios",
+    "simulator",
     "mcp",
+    "webkit",
     "automation",
     "testing",
     "xcode",
-    "simulator",
-    "webkit"
+    "mobile",
+    "qa"
   ],
   "dependencies": {
     "commander": "^12.0.0",
