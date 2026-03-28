@@ -1,0 +1,171 @@
+import http from 'http';
+import { MCPServer } from '../../src/mcp-server';
+
+// Helper: send a JSON-RPC request to the MCP HTTP server
+function mcpPost(port: number, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+  return new Promise((resolve, reject) => {
+    const data = JSON.stringify(body);
+    const req = http.request(
+      { hostname: 'localhost', port, path: '/mcp', method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': data.length } },
+      (res) => {
+        let buf = '';
+        res.on('data', (chunk) => (buf += chunk));
+        res.on('end', () => {
+          try { resolve(JSON.parse(buf)); } catch { resolve({ raw: buf, status: res.statusCode }); }
+        });
+      },
+    );
+    req.on('error', reject);
+    req.write(data);
+    req.end();
+  });
+}
+
+describe('MCPServer — JSON-RPC protocol', () => {
+  let server: MCPServer;
+  const PORT = 19321; // unlikely to collide
+
+  beforeAll(async () => {
+    server = new MCPServer();
+    // Register a simple echo tool for testing
+    server.registerTool(
+      { name: 'echo', description: 'Echo input', inputSchema: { type: 'object' as const, properties: { msg: { type: 'string' } }, required: ['msg'] } },
+      async (_sid: string, params: Record<string, unknown>) => ({
+        content: [{ type: 'text' as const, text: String(params.msg) }],
+      }),
+    );
+    // Register a tool that throws
+    server.registerTool(
+      { name: 'fail', description: 'Always fails', inputSchema: { type: 'object' as const, properties: {}, required: [] } },
+      async () => { throw new Error('intentional failure'); },
+    );
+    server.setTier(3);
+    await server.start({ transport: 'http', port: PORT });
+  });
+
+  afterAll(async () => {
+    await server.stop();
+  });
+
+  // ── initialize ──
+
+  test('initialize returns protocol version and server info', async () => {
+    const res = await mcpPost(PORT, { jsonrpc: '2.0', id: 1, method: 'initialize', params: {} });
+    expect(res).toHaveProperty('result');
+    const result = res.result as Record<string, unknown>;
+    expect(result.protocolVersion).toBe('2024-11-05');
+    expect((result.serverInfo as Record<string, unknown>).name).toBe('opensafari-mcp');
+  });
+
+  // ── tools/list ──
+
+  test('tools/list returns registered tools', async () => {
+    const res = await mcpPost(PORT, { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} });
+    const result = res.result as Record<string, unknown>;
+    const tools = result.tools as Array<Record<string, unknown>>;
+    const names = tools.map((t) => t.name);
+    expect(names).toContain('echo');
+    expect(names).toContain('fail');
+  });
+
+  test('tools/list respects tier filtering', async () => {
+    // Unrecognized tool names default to tier 2; setting tier to 0 should hide all
+    server.setTier(0);
+    const res = await mcpPost(PORT, { jsonrpc: '2.0', id: 3, method: 'tools/list', params: {} });
+    const result = res.result as Record<string, unknown>;
+    const tools = result.tools as Array<Record<string, unknown>>;
+    expect(tools.length).toBe(0);
+    server.setTier(3); // restore
+  });
+
+  // ── tools/call ──
+
+  test('tools/call routes to correct handler and returns result', async () => {
+    const res = await mcpPost(PORT, {
+      jsonrpc: '2.0', id: 4, method: 'tools/call',
+      params: { name: 'echo', arguments: { msg: 'hello' } },
+    });
+    const result = res.result as Record<string, unknown>;
+    const content = result.content as Array<Record<string, unknown>>;
+    expect(content[0].text).toBe('hello');
+  });
+
+  test('tools/call with unknown tool returns INVALID_PARAMS', async () => {
+    const res = await mcpPost(PORT, {
+      jsonrpc: '2.0', id: 5, method: 'tools/call',
+      params: { name: 'nonexistent', arguments: {} },
+    });
+    expect(res).toHaveProperty('error');
+    const error = res.error as Record<string, unknown>;
+    expect(error.message).toContain('Unknown tool');
+  });
+
+  test('tools/call without name returns INVALID_PARAMS', async () => {
+    const res = await mcpPost(PORT, {
+      jsonrpc: '2.0', id: 6, method: 'tools/call',
+      params: { arguments: {} },
+    });
+    expect(res).toHaveProperty('error');
+    const error = res.error as Record<string, unknown>;
+    expect(error.message).toContain('requires params.name');
+  });
+
+  test('tools/call handler exception returns error result', async () => {
+    const res = await mcpPost(PORT, {
+      jsonrpc: '2.0', id: 7, method: 'tools/call',
+      params: { name: 'fail', arguments: {} },
+    });
+    const result = res.result as Record<string, unknown>;
+    expect(result.isError).toBe(true);
+    const content = result.content as Array<Record<string, unknown>>;
+    expect(content[0].text).toContain('intentional failure');
+  });
+
+  // ── error cases ──
+
+  test('unknown method returns METHOD_NOT_FOUND', async () => {
+    const res = await mcpPost(PORT, { jsonrpc: '2.0', id: 8, method: 'unknown/method', params: {} });
+    expect(res).toHaveProperty('error');
+    const error = res.error as Record<string, unknown>;
+    expect(error.message).toContain('Method not found');
+  });
+
+  test('missing method with id returns INVALID_REQUEST', async () => {
+    const res = await mcpPost(PORT, { jsonrpc: '2.0', id: 9 });
+    expect(res).toHaveProperty('error');
+    const error = res.error as Record<string, unknown>;
+    expect(error.message).toContain('Missing method');
+  });
+
+  test('notification (no id) returns 202 with no body', async () => {
+    const res: Record<string, unknown> = await new Promise((resolve, reject) => {
+      const data = JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' });
+      const req = http.request(
+        { hostname: 'localhost', port: PORT, path: '/mcp', method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': data.length } },
+        (r) => {
+          let buf = '';
+          r.on('data', (c) => (buf += c));
+          r.on('end', () => resolve({ status: r.statusCode, body: buf }));
+        },
+      );
+      req.on('error', reject);
+      req.write(data);
+      req.end();
+    });
+    expect(res.status).toBe(202);
+  });
+
+  // ── health endpoint ──
+
+  test('GET /health returns ok status', async () => {
+    const res: Record<string, unknown> = await new Promise((resolve, reject) => {
+      http.get(`http://localhost:${PORT}/health`, (r) => {
+        let buf = '';
+        r.on('data', (c) => (buf += c));
+        r.on('end', () => { try { resolve(JSON.parse(buf)); } catch { resolve({ raw: buf }); } });
+      }).on('error', reject);
+    });
+    expect(res.status).toBe('ok');
+    expect(res.transport).toBe('http');
+  });
+});
