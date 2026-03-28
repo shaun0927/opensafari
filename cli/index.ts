@@ -38,6 +38,7 @@ program
   .option('--all-tools', 'Expose all tool tiers immediately')
   .option('--blocked-domains <domains>', 'Block navigation to these domains')
   .option('--audit-log', 'Enable tool call audit logging')
+  .option('--no-zombie-cleanup', 'Disable periodic zombie simulator cleanup')
   .action(async (options) => {
     const server = new MCPServer();
     registerAllTools(server);
@@ -81,11 +82,13 @@ program
     }).catch(() => {});
 
     // Periodic zombie cleanup: compare booted simulators against pool
-    startPeriodicCleanup(() => {
-      const ids = new Set<string>();
-      for (const sim of pool.getAll()) ids.add(sim.device.udid);
-      return ids;
-    });
+    if (options.zombieCleanup !== false) {
+      startPeriodicCleanup(() => {
+        const ids = new Set<string>();
+        for (const sim of pool.getAll()) ids.add(sim.device.udid);
+        return ids;
+      });
+    }
 
     // Wire domain guard
     if (options.blockedDomains) {
