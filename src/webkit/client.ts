@@ -630,11 +630,14 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
             var ev = new KeyboardEvent('keydown', { key: ${JSON.stringify(char)}, bubbles: true });
             el.dispatchEvent(ev);
             el.dispatchEvent(new KeyboardEvent('keypress', { key: ${JSON.stringify(char)}, bubbles: true }));
-            // Use native setter to avoid cross-context TypeError
-            var proto = el.tagName === 'TEXTAREA'
-              ? window.HTMLTextAreaElement.prototype
-              : window.HTMLInputElement.prototype;
-            var desc = Object.getOwnPropertyDescriptor(proto, 'value');
+            // Walk the element's own prototype chain to find the value setter.
+            // Using window.HTMLInputElement.prototype would resolve to the
+            // inspector realm's prototype, causing a cross-realm TypeError.
+            var p = Object.getPrototypeOf(el);
+            while (p && !Object.getOwnPropertyDescriptor(p, 'value')) {
+              p = Object.getPrototypeOf(p);
+            }
+            var desc = p ? Object.getOwnPropertyDescriptor(p, 'value') : null;
             if (desc && desc.set) {
               desc.set.call(el, el.value + ${JSON.stringify(char)});
             } else {
@@ -652,16 +655,16 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
         (function() {
           var el = document.querySelector(${JSON.stringify(selector)});
           if (!el) return;
-          // Use native setter for React/Vue compatibility
-          var nativeSetter = Object.getOwnPropertyDescriptor(
-            window.HTMLInputElement.prototype, 'value'
-          );
-          var textareaSetter = Object.getOwnPropertyDescriptor(
-            window.HTMLTextAreaElement.prototype, 'value'
-          );
-          var setter = (el.tagName === 'TEXTAREA' ? textareaSetter : nativeSetter);
-          if (setter && setter.set) {
-            setter.set.call(el, ${JSON.stringify(text)});
+          // Walk the element's own prototype chain to find the value setter.
+          // Using window.HTMLInputElement.prototype would resolve to the
+          // inspector realm's prototype, causing a cross-realm TypeError.
+          var p = Object.getPrototypeOf(el);
+          while (p && !Object.getOwnPropertyDescriptor(p, 'value')) {
+            p = Object.getPrototypeOf(p);
+          }
+          var desc = p ? Object.getOwnPropertyDescriptor(p, 'value') : null;
+          if (desc && desc.set) {
+            desc.set.call(el, ${JSON.stringify(text)});
           } else {
             el.value = ${JSON.stringify(text)};
           }
@@ -776,7 +779,18 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
       (function() {
         var el = document.querySelector(${JSON.stringify(selector)});
         if (!el || el.tagName !== 'SELECT') return;
-        el.value = ${JSON.stringify(value)};
+        // Walk the element's own prototype chain to find the value setter,
+        // avoiding cross-realm TypeError with window.HTMLSelectElement.prototype.
+        var p = Object.getPrototypeOf(el);
+        while (p && !Object.getOwnPropertyDescriptor(p, 'value')) {
+          p = Object.getPrototypeOf(p);
+        }
+        var desc = p ? Object.getOwnPropertyDescriptor(p, 'value') : null;
+        if (desc && desc.set) {
+          desc.set.call(el, ${JSON.stringify(value)});
+        } else {
+          el.value = ${JSON.stringify(value)};
+        }
         el.dispatchEvent(new Event('input', { bubbles: true }));
         el.dispatchEvent(new Event('change', { bubbles: true }));
       })()
