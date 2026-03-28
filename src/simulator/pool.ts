@@ -14,8 +14,12 @@ import {
   DEFAULT_MEMORY_KILL_MB,
   DEFAULT_RESOURCE_CHECK_INTERVAL_MS,
 } from '../config/defaults';
+import { registerManagedDevices, unregisterManagedDevices } from '../reliability/zombie-cleanup';
 
 const execFileAsync = promisify(execFile);
+
+/** Ensures the process exit handler is registered only once across all pool instances. */
+let exitHandlerRegistered = false;
 
 export interface PooledSimulator {
   device: SimulatorDevice;
@@ -55,6 +59,14 @@ export class SimulatorPool extends EventEmitter {
     this.idleTimeout = DEFAULT_IDLE_SHUTDOWN_TIMEOUT_MS;
     this.memoryWarnMB = DEFAULT_MEMORY_WARN_MB;
     this.memoryKillMB = DEFAULT_MEMORY_KILL_MB;
+
+    // Ensure the shared device registry is cleaned up when the process exits
+    if (!exitHandlerRegistered) {
+      exitHandlerRegistered = true;
+      process.on('exit', () => {
+        unregisterManagedDevices();
+      });
+    }
   }
 
   async checkResources(count: number): Promise<void> {
@@ -113,6 +125,10 @@ export class SimulatorPool extends EventEmitter {
       results.push(...batchResults);
     }
 
+    // Register all booted devices in the shared cross-process registry
+    const udids = results.map(r => r.device.udid);
+    registerManagedDevices(udids);
+
     return results;
   }
 
@@ -153,6 +169,9 @@ export class SimulatorPool extends EventEmitter {
     );
     this.devicePorts.clear();
     this.nextPort = this.webkitBasePort;
+
+    // Remove all devices from the shared cross-process registry
+    unregisterManagedDevices();
   }
 
   async shutdownOne(deviceId: string): Promise<void> {
@@ -162,6 +181,14 @@ export class SimulatorPool extends EventEmitter {
     try { await this.manager.shutdown(deviceId); } catch { /* */ }
     this.pool.delete(deviceId);
     this.devicePorts.delete(deviceId);
+
+    // Update the shared registry with remaining devices
+    const remainingUdids = Array.from(this.pool.keys());
+    if (remainingUdids.length > 0) {
+      registerManagedDevices(remainingUdids);
+    } else {
+      unregisterManagedDevices();
+    }
   }
 
   startIdleMonitor(): void {
