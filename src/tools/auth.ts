@@ -1,5 +1,6 @@
 import { MCPServer, getWebKitClient } from '../mcp-server';
 import { AuthManager } from '../auth/manager';
+import { Cookie } from '../types/browser-backend';
 
 export function registerAuthTools(server: MCPServer): void {
   const authManager = new AuthManager();
@@ -21,8 +22,14 @@ export function registerAuthTools(server: MCPServer): void {
       if (!client)
         return { content: [{ type: 'text' as const, text: 'Error: Safari not connected' }], isError: true };
       try {
-        const filePath = await authManager.save(params.site as string, client);
-        return { content: [{ type: 'text' as const, text: JSON.stringify({ saved: true, site: params.site, filePath }) }] };
+        const site = params.site as string;
+        const cookies = await client.getCookies();
+        const domainCookies = cookies.filter((c: Cookie) => c.domain === site || c.domain === '.' + site || c.domain.endsWith('.' + site));
+        if (domainCookies.length === 0) {
+          return { content: [{ type: 'text' as const, text: `Error: No cookies found for domain "${site}"` }], isError: true };
+        }
+        const filePath = await authManager.save(site, client);
+        return { content: [{ type: 'text' as const, text: JSON.stringify({ saved: true, site, filePath }) }] };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         return { content: [{ type: 'text' as const, text: `Error: ${message}` }], isError: true };
@@ -47,8 +54,23 @@ export function registerAuthTools(server: MCPServer): void {
       if (!client)
         return { content: [{ type: 'text' as const, text: 'Error: Safari not connected' }], isError: true };
       try {
-        await authManager.restore(params.site as string, client);
-        return { content: [{ type: 'text' as const, text: JSON.stringify({ restored: true, site: params.site }) }] };
+        const site = params.site as string;
+        // Check expiry before restoring
+        let expiryWarning: string | undefined;
+        try {
+          const expiry = await authManager.checkExpiry(site);
+          if (expiry.isExpired) {
+            expiryWarning = `Warning: ${expiry.expiredCount} of ${expiry.totalCookies} cookies have expired`;
+          } else if (expiry.isExpiring) {
+            expiryWarning = `Warning: ${expiry.expiringCount} of ${expiry.totalCookies} cookies are expiring soon`;
+          }
+        } catch {
+          // Profile doesn't exist — restore will throw its own error
+        }
+        await authManager.restore(site, client);
+        const result: Record<string, unknown> = { restored: true, site };
+        if (expiryWarning) result.warning = expiryWarning;
+        return { content: [{ type: 'text' as const, text: JSON.stringify(result) }] };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         return { content: [{ type: 'text' as const, text: `Error: ${message}` }], isError: true };
