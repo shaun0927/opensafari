@@ -48,20 +48,9 @@ export function registerDeviceBootTool(server: MCPServer): void {
               await new Promise(r => setTimeout(r, 2000));
             }
           }
-          // Retry WebKit connection — Safari may need time to register with WebInspector
+          // Connect to WebKit with retries — Safari may need time to register with WebInspector
           const client = new WebKitClient({ host: 'localhost', port: proxy.port });
-          let connectRetries = 5;
-          while (connectRetries > 0) {
-            await new Promise(r => setTimeout(r, 2000));
-            try {
-              await client.connect();
-              break;
-            } catch (connErr) {
-              connectRetries--;
-              if (connectRetries === 0) throw connErr;
-              console.error(`[device_boot] WebKit connect attempt failed, retrying (${connectRetries} left)...`);
-            }
-          }
+          await client.connect({ retries: 5, retryDelay: 2000 });
           setWebKitClient(client);
         } catch (err) {
           console.error(`[device_boot] WebKit connection failed (proxy running, tools may not work): ${err}`);
