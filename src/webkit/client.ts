@@ -538,8 +538,27 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
   }
 
   async getCookies(domain?: string): Promise<Cookie[]> {
-    // Use document.cookie directly — Page.getCookies crashes the ios-webkit-debug-proxy
-    // connection. Note: httpOnly cookies are not visible via document.cookie.
+    // Try Page.getCookies first (returns full metadata including httpOnly).
+    // Falls back to document.cookie if the proxy doesn't support the command.
+    try {
+      const result = await this.send<{ cookies: Array<Record<string, unknown>> }>('Page.getCookies');
+      if (result?.cookies) {
+        return result.cookies
+          .filter(c => !domain || (c.domain as string || '').includes(domain))
+          .map(c => ({
+            name: (c.name as string) || '',
+            value: (c.value as string) || '',
+            domain: (c.domain as string) || '',
+            path: (c.path as string) || '/',
+            expires: typeof c.expires === 'number' ? c.expires : -1,
+            httpOnly: !!(c.httpOnly),
+            secure: !!(c.secure),
+            ...(c.sameSite ? { sameSite: c.sameSite as Cookie['sameSite'] } : {}),
+          }));
+      }
+    } catch {
+      // Page.getCookies not supported or proxy crashed — fall back to document.cookie
+    }
     const raw = await this.evaluate<string>('document.cookie');
     if (!raw) return [];
     return raw.split(';').map(pair => {
@@ -557,23 +576,49 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
   }
 
   async setCookies(cookies: Cookie[]): Promise<void> {
-    // Use document.cookie directly — Page.setCookie crashes the ios-webkit-debug-proxy
-    // connection. httpOnly and sameSite attributes cannot be set via this approach.
+    // Try Page.setCookie first (supports httpOnly, sameSite).
+    // Falls back to document.cookie if the proxy doesn't support the command.
     for (const cookie of cookies) {
-      const parts = [`${cookie.name}=${cookie.value}`];
-      if (cookie.path) parts.push(`path=${cookie.path}`);
-      if (cookie.domain) parts.push(`domain=${cookie.domain}`);
-      if (cookie.secure) parts.push('secure');
-      if (cookie.expires && cookie.expires > 0) {
-        parts.push(`expires=${new Date(cookie.expires * 1000).toUTCString()}`);
+      try {
+        await this.send('Page.setCookie', {
+          name: cookie.name,
+          value: cookie.value,
+          domain: cookie.domain || undefined,
+          path: cookie.path || '/',
+          expires: cookie.expires > 0 ? cookie.expires : undefined,
+          httpOnly: cookie.httpOnly || undefined,
+          secure: cookie.secure || undefined,
+          sameSite: cookie.sameSite || undefined,
+        });
+      } catch {
+        // Page.setCookie not supported — fall back to document.cookie
+        const parts = [`${cookie.name}=${cookie.value}`];
+        if (cookie.path) parts.push(`path=${cookie.path}`);
+        if (cookie.domain) parts.push(`domain=${cookie.domain}`);
+        if (cookie.secure) parts.push('secure');
+        if (cookie.expires && cookie.expires > 0) {
+          parts.push(`expires=${new Date(cookie.expires * 1000).toUTCString()}`);
+        }
+        await this.evaluate(`document.cookie = ${JSON.stringify(parts.join('; '))}`);
       }
-      await this.evaluate(`document.cookie = ${JSON.stringify(parts.join('; '))}`);
     }
   }
 
   async clearCookies(): Promise<void> {
-    // Use JS directly — Page.deleteAllCookies crashes ios-webkit-debug-proxy.
-    // Note: httpOnly cookies cannot be cleared via this approach.
+    // Try Page.deleteCookie for each cookie (handles httpOnly).
+    // Falls back to document.cookie clearing if not supported.
+    try {
+      const cookies = await this.getCookies();
+      for (const cookie of cookies) {
+        await this.send('Page.deleteCookie', {
+          cookieName: cookie.name,
+          url: `https://${cookie.domain}${cookie.path}`,
+        });
+      }
+      return;
+    } catch {
+      // Page.deleteCookie not supported — fall back
+    }
     await this.evaluate(`
       document.cookie.split(';').forEach(function(c) {
         var name = c.trim().split('=')[0];
