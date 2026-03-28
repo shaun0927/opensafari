@@ -31,6 +31,9 @@ import { registerAuthTools } from './auth';
 
 export { setWorkflowEngine } from './orchestration-tools';
 export { setCrossViewportCapture } from './cross-viewport-compare';
+export { setBatchExecutor as setBatchNavigateExecutor } from './batch-navigate';
+export { setBatchExecutor as setBatchScreenshotExecutor } from './batch-screenshot';
+export { setBatchExecutor as setBatchExecuteExecutor } from './batch-execute';
 
 export function registerAllTools(server: MCPServer): void {
   // Tier 1: Core

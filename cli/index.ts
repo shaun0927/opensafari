@@ -2,8 +2,20 @@
 
 import { Command } from 'commander';
 import { MCPServer, getWebKitClient } from '../src/mcp-server';
-import { registerAllTools } from '../src/tools';
+import {
+  registerAllTools,
+  setWorkflowEngine,
+  setCrossViewportCapture,
+  setBatchNavigateExecutor,
+  setBatchScreenshotExecutor,
+  setBatchExecuteExecutor,
+} from '../src/tools';
 import { DEVICE_PRESETS, checkXcodeInstallation } from '../src/simulator';
+import { SimulatorPool } from '../src/simulator/pool';
+import { BatchExecutor } from '../src/simulator/batch';
+import { SimulatorWorkflowEngine } from '../src/orchestration/workflow-engine';
+import { CrossViewportCapture } from '../src/comparison/cross-viewport';
+import { setupGracefulShutdown } from '../src/reliability/graceful-shutdown';
 import { AuthManager } from '../src/auth';
 
 const program = new Command()
@@ -28,6 +40,22 @@ program
     if (options.allTools) {
       server.setTier(3);
     }
+
+    // Wire orchestration subsystems
+    const pool = new SimulatorPool({ max: 5 });
+    const batch = new BatchExecutor(pool);
+    const authManager = new AuthManager();
+    const engine = new SimulatorWorkflowEngine(pool, authManager);
+    const capture = new CrossViewportCapture(pool, batch);
+
+    setWorkflowEngine(engine);
+    setCrossViewportCapture(capture);
+    setBatchNavigateExecutor(batch);
+    setBatchScreenshotExecutor(batch);
+    setBatchExecuteExecutor(batch);
+
+    // Wire graceful shutdown
+    setupGracefulShutdown(pool);
 
     const transport = options.http ? 'http' as const : 'stdio' as const;
     const port = typeof options.http === 'string' ? parseInt(options.http, 10) : 3100;
