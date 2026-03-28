@@ -1,4 +1,5 @@
 import { MCPServer, getWebKitClient } from '../mcp-server';
+import { assertDomainAllowed } from '../security/domain-guard';
 
 export function registerNavigateTool(server: MCPServer): void {
   server.registerTool(
@@ -19,10 +20,12 @@ export function registerNavigateTool(server: MCPServer): void {
       },
     },
     async (_sessionId: string, params: Record<string, unknown>) => {
+      const url = params.url as string;
+      assertDomainAllowed(url);
       const client = getWebKitClient();
       if (!client)
         return { content: [{ type: 'text' as const, text: 'Error: Safari not connected' }], isError: true };
-      const result = await client.navigate({ url: params.url as string, waitUntil: params.waitUntil as any });
+      const result = await client.navigate({ url, waitUntil: params.waitUntil as any });
       return { content: [{ type: 'text' as const, text: JSON.stringify(result) }] };
     },
   );
