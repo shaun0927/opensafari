@@ -4,6 +4,8 @@ module.exports = {
   testEnvironment: 'node',
   roots: ['<rootDir>/tests'],
   testMatch: ['**/*.test.ts'],
+  // Exclude integration tests from default run (require macOS + Xcode + Simulator)
+  testPathIgnorePatterns: ['/node_modules/', '/tests/integration/'],
   collectCoverageFrom: ['src/**/*.ts', '!src/**/*.d.ts'],
   coverageDirectory: 'coverage',
   coverageThreshold: {
