@@ -17,7 +17,7 @@ import { SimulatorWorkflowEngine } from '../src/orchestration/workflow-engine';
 import { CrossViewportCapture } from '../src/comparison/cross-viewport';
 import { setupGracefulShutdown } from '../src/reliability/graceful-shutdown';
 import { SimulatorCrashWatcher } from '../src/reliability/crash-watcher';
-import { cleanupZombieProcesses } from '../src/reliability/zombie-cleanup';
+import { cleanupZombieProcesses, startPeriodicCleanup } from '../src/reliability/zombie-cleanup';
 import { setBlockedDomains } from '../src/security/domain-guard';
 import { EventLoopMonitor, setGlobalEventLoopMonitor } from '../src/watchdog/event-loop-monitor';
 import { SimulatorMonitor } from '../src/watchdog/simulator-monitor';
@@ -79,6 +79,13 @@ program
     cleanupZombieProcesses().then(count => {
       if (count > 0) console.error(`[OpenSafari] Found ${count} orphaned simulator process(es)`);
     }).catch(() => {});
+
+    // Periodic zombie cleanup: compare booted simulators against pool
+    startPeriodicCleanup(() => {
+      const ids = new Set<string>();
+      for (const sim of pool.getAll()) ids.add(sim.device.udid);
+      return ids;
+    });
 
     // Wire domain guard
     if (options.blockedDomains) {
