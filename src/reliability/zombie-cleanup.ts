@@ -7,6 +7,63 @@ const execFileAsync = promisify(execFile);
 
 /** Path to the shared device registry used for cross-process coordination. */
 const REGISTRY_PATH = '/tmp/opensafari-managed-devices.json';
+const LOCK_PATH = REGISTRY_PATH + '.lock';
+const LOCK_STALE_MS = 10000;
+const LOCK_RETRY_MS = 50;
+const LOCK_TIMEOUT_MS = 5000;
+
+function acquireLock(): boolean {
+  const deadline = Date.now() + LOCK_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    try {
+      fs.mkdirSync(LOCK_PATH);
+      fs.writeFileSync(path.join(LOCK_PATH, 'info'), JSON.stringify({
+        pid: process.pid,
+        timestamp: Date.now(),
+      }));
+      return true;
+    } catch (err: unknown) {
+      if (err && typeof err === 'object' && 'code' in err && (err as NodeJS.ErrnoException).code === 'EEXIST') {
+        try {
+          const info = JSON.parse(fs.readFileSync(path.join(LOCK_PATH, 'info'), 'utf-8'));
+          if (Date.now() - info.timestamp > LOCK_STALE_MS) {
+            releaseLock();
+            continue;
+          }
+        } catch {
+          releaseLock();
+          continue;
+        }
+        const waitUntil = Date.now() + LOCK_RETRY_MS;
+        while (Date.now() < waitUntil) { /* spin */ }
+        continue;
+      }
+      return false;
+    }
+  }
+  console.error('[DeviceRegistry] Lock acquisition timed out');
+  return false;
+}
+
+function releaseLock(): void {
+  try {
+    try { fs.unlinkSync(path.join(LOCK_PATH, 'info')); } catch { /* ignore */ }
+    fs.rmdirSync(LOCK_PATH);
+  } catch { /* ignore */ }
+}
+
+function withRegistryLock<T>(fn: () => T): T {
+  if (!acquireLock()) {
+    console.error('[DeviceRegistry] Proceeding without lock (timeout)');
+    return fn();
+  }
+  try {
+    return fn();
+  } finally {
+    releaseLock();
+  }
+}
+
 
 /**
  * Shape of the shared device registry file.
@@ -29,12 +86,14 @@ export interface DeviceRegistry {
  */
 export function registerManagedDevices(udids: string[]): void {
   try {
-    const registry = readRegistry();
-    registry[String(process.pid)] = {
-      udids,
-      startedAt: new Date().toISOString(),
-    };
-    writeRegistry(registry);
+    withRegistryLock(() => {
+      const registry = readRegistry();
+      registry[String(process.pid)] = {
+        udids,
+        startedAt: new Date().toISOString(),
+      };
+      writeRegistry(registry);
+    });
     console.error(`[DeviceRegistry] Registered ${udids.length} device(s) for PID ${process.pid}`);
   } catch (err) {
     console.error(`[DeviceRegistry] Failed to register devices: ${err}`);
@@ -49,19 +108,21 @@ export function registerManagedDevices(udids: string[]): void {
  */
 export function addManagedDevice(udid: string): void {
   try {
-    const registry = readRegistry();
-    const entry = registry[String(process.pid)];
-    if (entry) {
-      if (!entry.udids.includes(udid)) {
-        entry.udids.push(udid);
+    withRegistryLock(() => {
+      const registry = readRegistry();
+      const entry = registry[String(process.pid)];
+      if (entry) {
+        if (!entry.udids.includes(udid)) {
+          entry.udids.push(udid);
+        }
+      } else {
+        registry[String(process.pid)] = {
+          udids: [udid],
+          startedAt: new Date().toISOString(),
+        };
       }
-    } else {
-      registry[String(process.pid)] = {
-        udids: [udid],
-        startedAt: new Date().toISOString(),
-      };
-    }
-    writeRegistry(registry);
+      writeRegistry(registry);
+    });
     console.error(`[DeviceRegistry] Added device ${udid} for PID ${process.pid}`);
   } catch (err) {
     console.error(`[DeviceRegistry] Failed to add device: ${err}`);
@@ -73,9 +134,11 @@ export function addManagedDevice(udid: string): void {
  */
 export function unregisterManagedDevices(): void {
   try {
-    const registry = readRegistry();
-    delete registry[String(process.pid)];
-    writeRegistry(registry);
+    withRegistryLock(() => {
+      const registry = readRegistry();
+      delete registry[String(process.pid)];
+      writeRegistry(registry);
+    });
     console.error(`[DeviceRegistry] Unregistered PID ${process.pid}`);
   } catch (err) {
     console.error(`[DeviceRegistry] Failed to unregister devices: ${err}`);
@@ -87,31 +150,33 @@ export function unregisterManagedDevices(): void {
  * Stale entries (dead PIDs) are pruned automatically.
  */
 export function getAllManagedDeviceIds(): Set<string> {
-  const registry = readRegistry();
-  const managed = new Set<string>();
-  const stalePids: string[] = [];
+  return withRegistryLock(() => {
+    const registry = readRegistry();
+    const managed = new Set<string>();
+    const stalePids: string[] = [];
 
-  for (const pidStr of Object.keys(registry)) {
-    const pid = Number(pidStr);
-    if (isProcessAlive(pid)) {
-      for (const udid of registry[pidStr].udids) {
-        managed.add(udid);
+    for (const pidStr of Object.keys(registry)) {
+      const pid = Number(pidStr);
+      if (isProcessAlive(pid)) {
+        for (const udid of registry[pidStr].udids) {
+          managed.add(udid);
+        }
+      } else {
+        stalePids.push(pidStr);
       }
-    } else {
-      stalePids.push(pidStr);
     }
-  }
 
-  // Prune stale entries
-  if (stalePids.length > 0) {
-    for (const pid of stalePids) {
-      delete registry[pid];
+    // Prune stale entries
+    if (stalePids.length > 0) {
+      for (const pid of stalePids) {
+        delete registry[pid];
+      }
+      writeRegistry(registry);
+      console.error(`[DeviceRegistry] Pruned ${stalePids.length} stale PID(s)`);
     }
-    writeRegistry(registry);
-    console.error(`[DeviceRegistry] Pruned ${stalePids.length} stale PID(s)`);
-  }
 
-  return managed;
+    return managed;
+  });
 }
 
 function readRegistry(): DeviceRegistry {
