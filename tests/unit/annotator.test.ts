@@ -1,5 +1,5 @@
 import { PNG } from 'pngjs';
-import { annotateScreenshot, detectorResultToAnnotations, formatLegend, AnnotationIssue } from '../../src/comparison/annotator';
+import { annotateScreenshot, detectorResultToAnnotations, formatLegend } from '../../src/comparison/annotator';
 
 function createTestPNG(w: number, h: number, color = { r: 200, g: 200, b: 200, a: 255 }): string {
   const png = new PNG({ width: w, height: h });
