@@ -1,4 +1,5 @@
 import { MCPServer, getWebKitClient } from '../mcp-server';
+import { BrowserBackend } from '../types/browser-backend';
 import {
   OBSERVER_SETUP_SCRIPT,
   COLLECT_METRICS_SCRIPT,
@@ -89,12 +90,12 @@ export function registerPerformanceAuditTool(server: MCPServer): void {
 }
 
 async function collectSingleRun(
-  client: { evaluate: <T>(expr: string) => Promise<T>; navigate: (opts: { url: string }) => Promise<unknown> },
+  client: BrowserBackend,
   url: string,
   waitAfterLoad: number,
 ): Promise<SingleRunResult> {
   await client.evaluate(OBSERVER_SETUP_SCRIPT);
-  await client.navigate({ url });
+  await client.navigate({ url, waitUntil: 'load' });
   await new Promise(resolve => setTimeout(resolve, waitAfterLoad));
 
   const raw = await client.evaluate<{
