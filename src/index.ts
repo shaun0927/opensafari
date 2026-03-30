@@ -9,7 +9,7 @@ export { MCPServer, getWebKitClient, setWebKitClient } from './mcp-server';
 export type { MCPServerOptions } from './mcp-server';
 
 // Tool registration
-export { registerAllTools, setWorkflowEngine, setCrossViewportCapture } from './tools';
+export { registerAllTools, setWorkflowEngine, setCrossViewportCapture, setScenarioRunner } from './tools';
 
 // WebKit client
 export { WebKitClient } from './webkit/client';
@@ -29,6 +29,7 @@ export type { AuthProfile, ExpiryInfo } from './auth';
 
 // Orchestration
 export { SimulatorWorkflowEngine } from './orchestration/workflow-engine';
+export { ScenarioRunner } from './orchestration/scenario-runner';
 export { CrossViewportCapture } from './comparison/cross-viewport';
 
 // Configuration
