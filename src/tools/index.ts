@@ -34,8 +34,10 @@ import { registerErrorLogTool } from './error-log';
 import { registerConsoleLogTool } from './console-log';
 import { registerNetworkLogTool } from './network-log';
 import { registerScenarioTools } from './scenario-tools';
+import { registerBarrierTools } from './barrier-tools';
 
 export { setWorkflowEngine } from './orchestration-tools';
+export { setBarrier } from './barrier-tools';
 export { setCrossViewportCapture } from './cross-viewport-compare';
 export { setBatchExecutor as setBatchNavigateExecutor } from './batch-navigate';
 export { setBatchExecutor as setBatchScreenshotExecutor } from './batch-screenshot';
@@ -101,4 +103,6 @@ export function registerAllTools(server: MCPServer): void {
   registerNetworkThrottleTool(server);
   // Tier 3: Scenario Runner
   registerScenarioTools(server);
+  // Tier 3: Step Synchronization Barriers
+  registerBarrierTools(server);
 }

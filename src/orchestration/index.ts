@@ -15,3 +15,10 @@ export type {
   WorkflowStatus,
   WorkflowResults,
 } from './workflow-engine';
+
+export { StepBarrier } from './step-barrier';
+export type {
+  BarrierOptions,
+  BarrierResult,
+  BarrierStatus,
+} from './step-barrier';
