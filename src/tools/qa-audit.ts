@@ -11,8 +11,8 @@ export function registerQAAuditTools(server: MCPServer): void {
           url: { type: 'string', description: 'URL to audit (optional — uses current page if not set)' },
           format: {
             type: 'string',
-            enum: ['markdown', 'json', 'html'],
-            description: 'Report format (default: markdown)',
+            enum: ['markdown', 'junit', 'json', 'html'],
+            description: 'Report format: markdown (default), junit (JUnit XML for CI), json (structured JSON), or html (self-contained HTML)',
           },
         },
       },
@@ -35,20 +35,18 @@ export function registerQAAuditTools(server: MCPServer): void {
         return { content: [{ type: 'text' as const, text: `HTML report saved to: ${filePath}` }] };
       }
 
+      if (format === 'junit') {
+        const { generateAuditJUnit } = await import('../qa/report-junit');
+        return { content: [{ type: 'text' as const, text: generateAuditJUnit(report) }] };
+      }
+
       if (format === 'json') {
-        return { content: [{ type: 'text' as const, text: JSON.stringify(report, null, 2) }] };
+        const { generateAuditJSON } = await import('../qa/report-json');
+        return { content: [{ type: 'text' as const, text: JSON.stringify(generateAuditJSON(report), null, 2) }] };
       }
 
       const { generateAuditMarkdown } = await import('../qa/report-markdown');
-      const markdown = generateAuditMarkdown(report);
-      return {
-        content: [
-          {
-            type: 'text' as const,
-            text: markdown + '\n\n---\n\nJSON Report:\n```json\n' + JSON.stringify(report, null, 2) + '\n```',
-          },
-        ],
-      };
+      return { content: [{ type: 'text' as const, text: generateAuditMarkdown(report) }] };
     },
   );
 }
