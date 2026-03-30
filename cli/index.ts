@@ -238,7 +238,7 @@ program
 
     let client: InstanceType<typeof WebKitClient> | undefined;
     try {
-      client = new WebKitClient();
+      client = new WebKitClient({ host: 'localhost', port: 9322 });
       await client.connect();
     } catch {
       console.error('Error: Could not connect to Safari. Ensure a simulator is booted and ios-webkit-debug-proxy is running.');
