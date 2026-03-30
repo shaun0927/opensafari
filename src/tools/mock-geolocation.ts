@@ -72,17 +72,24 @@ export function registerMockGeolocationTool(server: MCPServer): void {
     timestamp: Date.now()
   };
 
+  var nextWatchId = 1;
+
   navigator.geolocation.getCurrentPosition = function(success) {
     if (typeof success === 'function') {
-      success(Object.assign({}, mockPosition, { timestamp: Date.now() }));
+      setTimeout(function() {
+        success(Object.assign({}, mockPosition, { timestamp: Date.now() }));
+      }, 0);
     }
   };
 
   navigator.geolocation.watchPosition = function(success) {
+    var watchId = nextWatchId++;
     if (typeof success === 'function') {
-      success(Object.assign({}, mockPosition, { timestamp: Date.now() }));
+      setTimeout(function() {
+        success(Object.assign({}, mockPosition, { timestamp: Date.now() }));
+      }, 0);
     }
-    return 1;
+    return watchId;
   };
 
   navigator.geolocation.clearWatch = function() {};
@@ -91,6 +98,7 @@ export function registerMockGeolocationTool(server: MCPServer): void {
       await client.evaluate(script);
 
       try {
+        // BrowserBackend doesn't expose send() directly; cast needed for WebKit-specific API
         await (client as any).send('Page.addScriptToEvaluateOnLoad', {
           scriptSource: script,
         });
