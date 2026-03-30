@@ -5,6 +5,7 @@ export {
   startPeriodicCleanup,
   stopPeriodicCleanup,
   registerManagedDevices,
+  addManagedDevice,
   unregisterManagedDevices,
   getAllManagedDeviceIds,
 } from './zombie-cleanup';

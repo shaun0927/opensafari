@@ -42,6 +42,33 @@ export function registerManagedDevices(udids: string[]): void {
 }
 
 /**
+ * Add a single device UDID to the current process's registry entry.
+ * Unlike registerManagedDevices() which replaces the entire list, this
+ * appends without overwriting devices already registered by the same process
+ * (e.g. devices managed by SimulatorPool).
+ */
+export function addManagedDevice(udid: string): void {
+  try {
+    const registry = readRegistry();
+    const entry = registry[String(process.pid)];
+    if (entry) {
+      if (!entry.udids.includes(udid)) {
+        entry.udids.push(udid);
+      }
+    } else {
+      registry[String(process.pid)] = {
+        udids: [udid],
+        startedAt: new Date().toISOString(),
+      };
+    }
+    writeRegistry(registry);
+    console.error(`[DeviceRegistry] Added device ${udid} for PID ${process.pid}`);
+  } catch (err) {
+    console.error(`[DeviceRegistry] Failed to add device: ${err}`);
+  }
+}
+
+/**
  * Remove the current process from the shared registry (e.g. on shutdown).
  */
 export function unregisterManagedDevices(): void {
@@ -106,7 +133,12 @@ function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
-  } catch {
+  } catch (err: unknown) {
+    // EPERM means the process exists but we lack permission to signal it —
+    // treat it as alive. Only ESRCH ("no such process") means truly dead.
+    if (err && typeof err === 'object' && 'code' in err && (err as NodeJS.ErrnoException).code === 'EPERM') {
+      return true;
+    }
     return false;
   }
 }
