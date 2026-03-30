@@ -35,7 +35,7 @@ export function registerScenarioTools(server: MCPServer): void {
                 },
                 target: { type: 'string', description: 'CSS selector' },
                 value: { type: 'string', description: 'Input value, URL, or scroll direction' },
-                assertion: { type: 'string', description: 'JS expression for assert steps' },
+                assertion: { type: 'string', description: 'JS expression evaluated in the page context (same as javascript tool). Returns boolean.' },
                 devices: {
                   type: 'array',
                   items: { type: 'string' },
@@ -53,6 +53,9 @@ export function registerScenarioTools(server: MCPServer): void {
     },
     async (_sessionId: string, params: Record<string, unknown>) => {
       if (!runner) return errorResult('Scenario runner not initialized — boot a simulator pool first');
+      if (!Array.isArray(params.steps)) {
+        return { content: [{ type: 'text', text: JSON.stringify({ error: 'steps must be an array' }) }], isError: true };
+      }
       const scenario: TestScenario = {
         name: params.name as string,
         steps: params.steps as TestScenario['steps'],

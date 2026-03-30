@@ -129,6 +129,14 @@ export class ScenarioRunner {
           result = `screenshot:${buf.length}bytes`;
           break;
         }
+        default:
+          return {
+            device: sim.preset,
+            deviceId: sim.device.udid,
+            passed: false,
+            error: `Unknown action: ${step.action}`,
+            timing: Date.now() - start,
+          };
       }
       return {
         device: sim.preset,
