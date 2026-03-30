@@ -1,4 +1,5 @@
 import { BrowserBackend } from '../types/browser-backend';
+import { annotateScreenshot, detectorResultToAnnotations, formatLegend, AnnotationIssue } from '../comparison/annotator';
 import { DetectorResult, QAConfig, applyIgnoreRules } from './types';
 import { detectAutoZoom } from './detectors/auto-zoom';
 import { detectTouchTargets } from './detectors/touch-targets';
@@ -13,6 +14,7 @@ import { detectScrollLock } from './detectors/scroll-lock';
 import { detectDarkMode } from './detectors/dark-mode';
 import { detectOrientation } from './detectors/orientation';
 import { detectPwaMeta } from './detectors/pwa-meta';
+import { detectAccessibility } from './detectors/accessibility';
 import { SimulatorManager } from '../simulator/manager';
 
 export interface AuditSummary {
@@ -24,6 +26,11 @@ export interface AuditSummary {
   passed: number;
   failed: number;
   errors: number;
+}
+
+export interface AnnotatedAuditReport extends AuditReport {
+  annotatedScreenshot: string;
+  legend: string;
 }
 
 export interface AuditReport {
@@ -59,7 +66,7 @@ export class QAAudit {
     const currentUrl = await this.client.evaluate<string>('window.location.href');
     const startTime = Date.now();
 
-    // Parallel: stateless detectors (10)
+    // Parallel: stateless detectors (11)
     const parallelResults = await Promise.allSettled([
       detectAutoZoom(this.client),
       detectTouchTargets(this.client),
@@ -71,6 +78,7 @@ export class QAAudit {
       detectFixedStacking(this.client),
       detectScrollLock(this.client),
       detectPwaMeta(this.client),
+      detectAccessibility(this.client),
     ]);
 
     // Sequential: stateful detectors (3)
@@ -120,6 +128,27 @@ export class QAAudit {
       score,
       summary,
       detectors: allResults,
+    };
+  }
+
+  async annotateReport(report: AuditReport, screenshotBase64: string, safeArea?: { top: number; bottom: number; left: number; right: number }): Promise<AnnotatedAuditReport> {
+    const annotations: AnnotationIssue[] = [];
+    for (const result of report.detectors) {
+      if (result.passed || result.severity === 'pass' || result.severity === 'error') continue;
+      const severity = result.severity as 'critical' | 'high' | 'medium' | 'low';
+      const converted = detectorResultToAnnotations(result.detector, severity, result.issues);
+      annotations.push(...converted);
+    }
+
+    const annotationResult = annotateScreenshot(screenshotBase64, annotations, {
+      safeArea,
+      showLabels: true,
+    });
+
+    return {
+      ...report,
+      annotatedScreenshot: annotationResult.annotatedImage,
+      legend: formatLegend(annotationResult.legend),
     };
   }
 
