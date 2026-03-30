@@ -1,5 +1,4 @@
 import { BrowserBackend } from '../types/browser-backend';
-import { annotateScreenshot, detectorResultToAnnotations, formatLegend, AnnotationIssue } from '../comparison/annotator';
 import { annotateScreenshot, detectorResultToAnnotations, formatLegend } from '../comparison/annotator';
 import type { AnnotationIssue, AnnotationResult } from '../comparison/annotator';
 import { DetectorResult, QAConfig, applyIgnoreRules } from './types';
@@ -152,7 +151,6 @@ export class QAAudit {
       annotatedScreenshot: annotationResult.annotatedImage,
       legend: formatLegend(annotationResult.legend),
     };
-    const annotationResult: AnnotationResult = annotateScreenshot(screenshotBase64, annotations, { safeArea, showLabels: true });
     return { ...report, annotatedScreenshot: annotationResult.annotatedImage, legend: formatLegend(annotationResult.legend) };
   }
 

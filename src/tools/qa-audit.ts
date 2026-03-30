@@ -59,7 +59,7 @@ export function registerQAAuditTools(server: MCPServer): void {
             { type: 'text' as const, text: annotated.legend },
             { type: 'image' as const, data: annotated.annotatedScreenshot, mimeType: 'image/png' },
           );
-        } catch (_e) {
+        } catch {
           // Annotation is best-effort; continue with unannotated report
         }
       }
