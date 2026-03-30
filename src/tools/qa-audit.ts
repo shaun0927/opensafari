@@ -14,6 +14,7 @@ export function registerQAAuditTools(server: MCPServer): void {
             enum: ['markdown', 'junit', 'json', 'html'],
             description: 'Report format: markdown (default), junit (JUnit XML for CI), json (structured JSON), or html (self-contained HTML)',
           },
+          annotate: { type: 'boolean', description: 'Annotate screenshot with detected issue bounding boxes (default: false)' },
         },
       },
     },
@@ -46,7 +47,24 @@ export function registerQAAuditTools(server: MCPServer): void {
       }
 
       const { generateAuditMarkdown } = await import('../qa/report-markdown');
-      return { content: [{ type: 'text' as const, text: generateAuditMarkdown(report) }] };
+      const content: Array<{ type: 'text' | 'image'; text?: string; data?: string; mimeType?: string }> = [
+        { type: 'text' as const, text: generateAuditMarkdown(report) },
+      ];
+
+      if (params.annotate === true) {
+        try {
+          const screenshot = await client.screenshot({});
+          const annotated = await audit.annotateReport(report, screenshot.toString('base64'));
+          content.push(
+            { type: 'text' as const, text: annotated.legend },
+            { type: 'image' as const, data: annotated.annotatedScreenshot, mimeType: 'image/png' },
+          );
+        } catch {
+          // Annotation is best-effort; continue with unannotated report
+        }
+      }
+
+      return { content };
     },
   );
 }
