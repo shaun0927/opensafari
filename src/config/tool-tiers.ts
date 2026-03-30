@@ -34,6 +34,9 @@ export const TOOL_TIERS: Record<string, number> = {
   error_log: 2,
   console_log: 2,
   network_log: 2,
+  mock_permission: 2,
+  network_intercept: 2,
+  network_offline: 2,
 
   // Tier 3: Auth & orchestration
   auth_save: 3,
