@@ -6,6 +6,12 @@ module.exports = {
   testMatch: ['**/*.test.ts'],
   // Exclude integration tests from default run (require macOS + Xcode + Simulator)
   testPathIgnorePatterns: ['/node_modules/', '/tests/integration/'],
+  // Transform ESM-only dependencies (pixelmatch is pure ESM)
+  transformIgnorePatterns: ['/node_modules/(?!pixelmatch)'],
+  transform: {
+    '^.+\\.tsx?$': 'ts-jest',
+    '^.+\\.jsx?$': ['ts-jest', { tsconfig: { allowJs: true } }],
+  },
   collectCoverageFrom: ['src/**/*.ts', '!src/**/*.d.ts'],
   coverageDirectory: 'coverage',
   coverageThreshold: {
