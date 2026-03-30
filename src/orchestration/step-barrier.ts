@@ -125,6 +125,11 @@ export class StepBarrier {
     const entry = this.barriers.get(stepName);
     if (entry) {
       if (entry.timeoutId !== undefined) clearTimeout(entry.timeoutId);
+      const result = this.buildResult(entry, Date.now(), false);
+      for (const [, resolve] of entry.resolvers) {
+        resolve(result);
+      }
+      entry.resolvers.clear();
       this.barriers.delete(stepName);
     }
   }
@@ -135,6 +140,11 @@ export class StepBarrier {
   clearAll(): void {
     for (const entry of this.barriers.values()) {
       if (entry.timeoutId !== undefined) clearTimeout(entry.timeoutId);
+      const result = this.buildResult(entry, Date.now(), false);
+      for (const [, resolve] of entry.resolvers) {
+        resolve(result);
+      }
+      entry.resolvers.clear();
     }
     this.barriers.clear();
   }
