@@ -15,6 +15,7 @@ import {
   DEFAULT_RESOURCE_CHECK_INTERVAL_MS,
 } from '../config/defaults';
 import { registerManagedDevices, unregisterManagedDevices } from '../reliability/zombie-cleanup';
+import { CircuitBreakerRegistry } from '../reliability/circuit-breaker';
 
 const execFileAsync = promisify(execFile);
 
@@ -48,6 +49,8 @@ export class SimulatorPool extends EventEmitter {
   private idleTimeout: number;
   private memoryWarnMB: number;
   private memoryKillMB: number;
+  private circuitBreakers: CircuitBreakerRegistry | null = null;
+  private memoryCriticalHandlerRegistered = false;
 
   constructor(options?: SimulatorPoolOptions) {
     super();
@@ -67,6 +70,34 @@ export class SimulatorPool extends EventEmitter {
         unregisterManagedDevices();
       });
     }
+  }
+
+  setCircuitBreakers(registry: CircuitBreakerRegistry): void {
+    this.circuitBreakers = registry;
+  }
+
+  private setupMemoryCriticalHandler(): void {
+    if (this.memoryCriticalHandlerRegistered) return;
+    this.memoryCriticalHandlerRegistered = true;
+
+    this.on('simulator:memory-critical', async (event: { deviceId: string; preset: string; memMB: number; threshold: number }) => {
+      console.error(
+        `[SimulatorPool] Memory critical for ${event.preset}: ${event.memMB}MB exceeds ${event.threshold}MB threshold`
+      );
+
+      // Trip circuit breaker to exclude device from batch operations
+      if (this.circuitBreakers) {
+        this.circuitBreakers.get(event.deviceId).trip();
+      }
+
+      // Gracefully shutdown the offending device
+      try {
+        await this.shutdownOne(event.deviceId);
+        console.error(`[SimulatorPool] Shut down memory-critical device: ${event.preset}`);
+      } catch (err) {
+        console.error(`[SimulatorPool] Failed to shut down memory-critical device ${event.preset}: ${err}`);
+      }
+    });
   }
 
   async checkResources(count: number): Promise<void> {
@@ -214,6 +245,7 @@ export class SimulatorPool extends EventEmitter {
 
   startResourceMonitor(): void {
     if (this.resourceCheckInterval) return;
+    this.setupMemoryCriticalHandler();
     this.resourceCheckInterval = setInterval(async () => {
       for (const [deviceId, sim] of this.pool) {
         try {

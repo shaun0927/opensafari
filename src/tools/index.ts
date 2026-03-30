@@ -38,6 +38,7 @@ import { registerScenarioTools } from './scenario-tools';
 import { registerBarrierTools } from './barrier-tools';
 import { registerAssertAllDevicesTool } from './assert-all-devices';
 import { registerPerformanceAuditTool } from './performance-audit';
+import { registerNetworkHarTool } from './network-har';
 
 export { setWorkflowEngine } from './orchestration-tools';
 export { setBarrier } from './barrier-tools';
@@ -117,4 +118,6 @@ export function registerAllTools(server: MCPServer): void {
   registerAssertAllDevicesTool(server);
   // Tier 3: Performance Audit
   registerPerformanceAuditTool(server);
+  // Tier 3: Network HAR Export
+  registerNetworkHarTool(server);
 }
