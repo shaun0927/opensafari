@@ -16,6 +16,7 @@ interface NetworkLogState {
   entries: NetworkLogEntry[];
   maxEntries: number;
   pendingRequests: Map<string, { url: string; method: string; timestamp: number }>;
+  listeners?: { onRequest: Function; onResponse: Function } | null;
 }
 
 const state: NetworkLogState = {
@@ -84,7 +85,7 @@ export function registerNetworkLogTool(server: MCPServer): void {
           // Enable Network domain and attach listeners
           await (client as any).enableDomain('Network');
 
-          (client as any).on('Network.requestWillBeSent', (p: any) => {
+          const onRequest = (p: any) => {
             if (!state.enabled) return;
             const reqId = p.requestId ?? String(Date.now());
             state.pendingRequests.set(reqId, {
@@ -92,9 +93,9 @@ export function registerNetworkLogTool(server: MCPServer): void {
               method: p.request?.method ?? 'GET',
               timestamp: Date.now(),
             });
-          });
+          };
 
-          (client as any).on('Network.responseReceived', async (p: any) => {
+          const onResponse = async (p: any) => {
             if (!state.enabled) return;
             const reqId = p.requestId ?? '';
             const pending = state.pendingRequests.get(reqId);
@@ -126,7 +127,11 @@ export function registerNetworkLogTool(server: MCPServer): void {
             if (state.entries.length > state.maxEntries) {
               state.entries.shift();
             }
-          });
+          };
+
+          state.listeners = { onRequest, onResponse };
+          (client as any).on('Network.requestWillBeSent', onRequest);
+          (client as any).on('Network.responseReceived', onResponse);
 
           return { content: [{ type: 'text' as const, text: 'Network logging started' + (state.captureBody ? ' (with body capture)' : '') }] };
         }
@@ -134,6 +139,11 @@ export function registerNetworkLogTool(server: MCPServer): void {
         case 'stop': {
           const count = state.entries.length;
           state.enabled = false;
+          if (state.listeners) {
+            (client as any).removeListener('Network.requestWillBeSent', state.listeners.onRequest);
+            (client as any).removeListener('Network.responseReceived', state.listeners.onResponse);
+            state.listeners = null;
+          }
           return { content: [{ type: 'text' as const, text: 'Network logging stopped. ' + count + ' entries captured.' }] };
         }
 
