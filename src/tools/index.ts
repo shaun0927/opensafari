@@ -30,6 +30,7 @@ import { registerQAAuditTools } from './qa-audit';
 import { registerAuthTools } from './auth';
 import { registerMockGeolocationTool } from './mock-geolocation';
 import { registerNetworkThrottleTool } from './network-throttle';
+import { registerErrorLogTool } from './error-log';
 
 export { setWorkflowEngine } from './orchestration-tools';
 export { setCrossViewportCapture } from './cross-viewport-compare';
@@ -65,6 +66,9 @@ export function registerAllTools(server: MCPServer): void {
 
   // Tier 2: Device Mocking
   registerMockGeolocationTool(server);
+
+  // Tier 2: Event Monitoring
+  registerErrorLogTool(server);
 
   // Tier 3: Batch Operations
   registerBatchNavigateTool(server);

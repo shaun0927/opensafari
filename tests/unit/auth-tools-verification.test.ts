@@ -118,6 +118,10 @@ function createMockBackend(cookies: Cookie[] = MOCK_COOKIES, localStorage: Recor
     querySelectorAll: async (): Promise<ElementInfo[]> => [],
     inspect: async () => ({}),
     waitFor: async () => {},
+
+    onConsole: () => {},
+    onRequest: () => {},
+    onResponse: () => {},
   };
 }
 
