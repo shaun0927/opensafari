@@ -29,6 +29,7 @@ export const TOOL_TIERS: Record<string, number> = {
   device_rotate: 2,
   appearance_toggle: 2,
   device_snapshot: 2,
+  network_log: 2,
 
   // Tier 3: Auth & orchestration
   auth_save: 3,
