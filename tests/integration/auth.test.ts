@@ -12,9 +12,13 @@ import * as os from 'os';
 
 /**
  * Minimal mock BrowserBackend that returns controlled data
- * for auth save operations.
+ * for auth save operations. Tracks injected storage for verification.
  */
-function createMockClient(): BrowserBackend {
+let injectedSessionStorage: Record<string, string> = {};
+
+function createMockClient(sessionStorageData: Record<string, string> = {}): BrowserBackend {
+  injectedSessionStorage = {};
+
   return {
     getCookies: async () => [
       {
@@ -31,10 +35,18 @@ function createMockClient(): BrowserBackend {
     deleteCookies: async () => {},
     evaluate: async <T>(expr: string): Promise<T> => {
       if (expr.includes('localStorage')) {
+        if (expr.includes('setItem')) return undefined as T;
         return { testKey: 'testValue' } as T;
       }
       if (expr.includes('sessionStorage')) {
-        return {} as T;
+        if (expr.includes('setItem')) {
+          const match = expr.match(/\((\{.*\})\)/s);
+          if (match) {
+            try { injectedSessionStorage = JSON.parse(match[1]); } catch { /* ignore */ }
+          }
+          return undefined as T;
+        }
+        return sessionStorageData as T;
       }
       if (expr.includes('location.href')) {
         return 'https://example.com/dashboard' as T;
@@ -152,5 +164,43 @@ describe('AuthManager: save/list/delete lifecycle', () => {
     expect(expiry.totalCookies).toBe(1);
     expect(expiry.isExpired).toBe(false);
     expect(expiry.expiredCount).toBe(0);
+  });
+
+  describe('sessionStorage save/restore', () => {
+    test('restore() injects saved sessionStorage data', async () => {
+      const sessionData = { authToken: 'tok_abc123', userId: '42' };
+      const clientWithSession = createMockClient(sessionData);
+      await authManager.save(TEST_SITE, clientWithSession);
+
+      const profile = await authManager.loadProfile(TEST_SITE);
+      expect(profile.sessionStorage).toEqual(sessionData);
+
+      const restoreClient = createMockClient();
+      await authManager.restore(TEST_SITE, restoreClient);
+      expect(injectedSessionStorage).toEqual(sessionData);
+    });
+
+    test('restore() handles special characters in sessionStorage values', async () => {
+      const sessionData = {
+        'key-with-quotes': 'value with "quotes" and \'apostrophes\'',
+        'key-with-newlines': 'line1\nline2',
+        'key-with-unicode': '\u00e9\u00e0\u00fc\u00f1',
+      };
+      const clientWithSession = createMockClient(sessionData);
+      await authManager.save(TEST_SITE, clientWithSession);
+
+      const restoreClient = createMockClient();
+      await authManager.restore(TEST_SITE, restoreClient);
+      expect(injectedSessionStorage).toEqual(sessionData);
+    });
+
+    test('restore() skips sessionStorage when profile has none', async () => {
+      const clientNoSession = createMockClient({});
+      await authManager.save(TEST_SITE, clientNoSession);
+
+      const restoreClient = createMockClient();
+      await authManager.restore(TEST_SITE, restoreClient);
+      expect(injectedSessionStorage).toEqual({});
+    });
   });
 });
