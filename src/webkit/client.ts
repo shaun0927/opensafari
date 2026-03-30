@@ -334,10 +334,12 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
 
     while (attempt < maxAttempts) {
       attempt++;
-      const delay = Math.min(
+      const baseDelay = Math.min(
         DEFAULT_RECONNECT_BASE_DELAY_MS * Math.pow(2, attempt - 1),
         DEFAULT_RECONNECT_MAX_DELAY_MS,
       );
+      const jitter = baseDelay * 0.2 * (2 * Math.random() - 1);
+      const delay = Math.max(0, Math.round(baseDelay + jitter));
 
       console.error(
         `[WebKitClient] Reconnection attempt ${attempt}/${maxAttempts} in ${delay}ms`,
