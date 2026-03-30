@@ -31,6 +31,7 @@ import { registerAuthTools } from './auth';
 import { registerMockGeolocationTool } from './mock-geolocation';
 import { registerNetworkThrottleTool } from './network-throttle';
 import { registerErrorLogTool } from './error-log';
+import { registerConsoleLogTool } from './console-log';
 
 export { setWorkflowEngine } from './orchestration-tools';
 export { setCrossViewportCapture } from './cross-viewport-compare';
@@ -69,6 +70,7 @@ export function registerAllTools(server: MCPServer): void {
 
   // Tier 2: Event Monitoring
   registerErrorLogTool(server);
+  registerConsoleLogTool(server);
 
   // Tier 3: Batch Operations
   registerBatchNavigateTool(server);
