@@ -6,8 +6,8 @@
 </p>
 
 <p align="center">
+  <a href="https://www.npmjs.com/package/opensafari-mcp"><img src="https://img.shields.io/npm/v/opensafari-mcp.svg" alt="npm"></a>
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="MIT"></a>
-  <a href="https://github.com/shaun0927/opensafari"><img src="https://img.shields.io/badge/status-in--development-orange" alt="Status"></a>
   <a href="https://github.com/shaun0927/openchrome"><img src="https://img.shields.io/badge/sibling-OpenChrome-blue" alt="OpenChrome"></a>
 </p>
 
@@ -170,12 +170,12 @@ Built-in QA checks that run on real Safari — no approximation:
 Works with any MCP client — Claude Code, Cursor, VS Code, or custom agents:
 
 ```jsonc
-// ~/.claude.json
+// .mcp.json
 {
   "mcpServers": {
     "opensafari": {
-      "command": "opensafari",
-      "args": ["serve"]
+      "command": "npx",
+      "args": ["-y", "opensafari-mcp", "serve"]
     }
   }
 }
@@ -198,33 +198,42 @@ OpenSafari shares battle-tested infrastructure with [OpenChrome](https://github.
 
 ---
 
-## Tools (Planned)
+## Tools
 
-### Core Tools (Phase 1)
+### Core Tools (Tier 1)
 
 | Tool | Description |
 |------|-------------|
 | `navigate` | Open URL in real Safari |
-| `computer` | Touch, scroll, type — coordinate-based interaction |
-| `screenshot` | Capture real Safari screen via WebKit Protocol or simctl |
+| `click` | Tap element by CSS selector or coordinates |
+| `type` | Type text into form elements |
+| `scroll` | Scroll page in any direction |
+| `screenshot` | Capture real Safari screen via WebKit Protocol |
 | `read_page` | Extract visible text content |
 | `query_dom` | CSS selector queries with element details |
 | `javascript` | Execute JavaScript in page context via `Runtime.evaluate` |
 | `inspect` | Element CSS, accessibility, and layout inspection |
 | `cookies` | Get/set/clear real Safari cookies via `Network` domain |
 
-### Device Management (Phase 1)
+### Device Management (Tier 1)
 
 | Tool | Description |
 |------|-------------|
 | `device_list` | List available simulator device types |
 | `device_boot` | Boot a specific device (iPhone SE, 16, iPad, etc.) |
 | `device_shutdown` | Shutdown simulator |
-| `device_snapshot` | Save/restore simulator state (including login) |
 | `device_rotate` | Toggle portrait/landscape |
 | `appearance_toggle` | Switch light/dark mode via `simctl ui` |
 
-### Parallel & Orchestration (Phase 2)
+### Auth Tools (Tier 3)
+
+| Tool | Description |
+|------|-------------|
+| `auth_save` | Capture cookies + localStorage from current session |
+| `auth_restore` | Restore saved auth state into a simulator |
+| `auth_list` | List saved auth profiles |
+
+### Parallel & Orchestration (Tier 2)
 
 | Tool | Description |
 |------|-------------|
@@ -233,7 +242,7 @@ OpenSafari shares battle-tested infrastructure with [OpenChrome](https://github.
 | `batch_navigate` | Open same URL on all devices simultaneously |
 | `cross_viewport_compare` | Side-by-side visual comparison across devices |
 
-### iOS QA Engine (Phase 3)
+### iOS QA Engine (Tier 3)
 
 | Tool | Description |
 |------|-------------|
@@ -246,25 +255,134 @@ OpenSafari shares battle-tested infrastructure with [OpenChrome](https://github.
 
 ---
 
-## Quick Start (Coming Soon)
+## Quick Start
 
 ```bash
-# Prerequisites: macOS + Xcode (with iOS Simulator)
-
 # Install
 npm install -g opensafari-mcp
 
-# Run
+# Run (stdio mode — for MCP clients like Claude Code)
 opensafari serve
 
-# With specific devices
+# HTTP mode
+opensafari serve --http 3100
+
+# With all tool tiers exposed
+opensafari serve --all-tools
+
+# With specific devices auto-booted
 opensafari serve --devices "iphone-17e,iphone-17-pro-max"
 
 # With auth state
 opensafari serve --auth ~/.opensafari/auth/mysite.json
+```
 
-# Health check
-opensafari doctor
+### MCP Client Configuration
+
+```jsonc
+// Claude Code: .mcp.json
+{
+  "mcpServers": {
+    "opensafari": {
+      "command": "npx",
+      "args": ["-y", "opensafari-mcp", "serve"]
+    }
+  }
+}
+```
+
+```jsonc
+// Claude Desktop: claude_desktop_config.json
+{
+  "mcpServers": {
+    "opensafari": {
+      "command": "npx",
+      "args": ["-y", "opensafari-mcp", "serve", "--all-tools"]
+    }
+  }
+}
+```
+
+### Tool Tiers
+
+Tools are organized into 3 tiers for progressive disclosure:
+
+| Tier | Tools | Access |
+|------|-------|--------|
+| **Tier 1** | navigate, screenshot, click, type, scroll, read_page, query_dom, javascript, cookies, device_boot, device_shutdown, device_list | Default |
+| **Tier 2** | inspect, wait_for, press, swipe, long_press, batch_navigate, batch_screenshot, cross_viewport_compare | `setTier(2)` |
+| **Tier 3** | auth_save, auth_restore, auth_list, qa_audit, qa_* detectors, workflow_init, appearance_toggle | `--all-tools` |
+
+---
+
+## Programmatic API
+
+```typescript
+import { createServer } from 'opensafari-mcp';
+
+// Create and start the MCP server
+const server = createServer({
+  tier: 3,          // expose all tool tiers
+  auditLog: true,   // enable tool call logging
+});
+
+// Start with stdio transport (default)
+await server.start();
+
+// Or start with HTTP transport
+await server.start({ transport: 'http', port: 3100 });
+```
+
+### WebKitClient
+
+Direct WebKit protocol access for custom automation:
+
+```typescript
+import { WebKitClient } from 'opensafari-mcp';
+
+const client = new WebKitClient({ host: 'localhost', port: 9322 });
+await client.connect({ retries: 5, retryDelay: 2000 });
+
+// Navigate and evaluate
+await client.navigate({ url: 'https://example.com', waitUntil: 'load' });
+const title = await client.evaluate<string>('document.title');
+
+// Screenshot (returns PNG buffer)
+const png = await client.screenshot();
+
+// Cookies
+const cookies = await client.getCookies();
+await client.setCookies([{ name: 'key', value: 'val', domain: '.example.com',
+  path: '/', expires: -1, httpOnly: false, secure: false }]);
+
+// DOM interaction
+await client.click('#submit-btn');
+await client.type('#email-input', 'user@example.com');
+
+await client.disconnect();
+```
+
+### SimulatorManager
+
+Programmatic simulator lifecycle control:
+
+```typescript
+import { SimulatorManager } from 'opensafari-mcp';
+
+const manager = new SimulatorManager();
+
+// Boot a device
+const device = await manager.boot('iPhone 17 Pro');
+console.log(device.udid, device.state); // "XXXX-..." "Booted"
+
+// Open Safari
+await manager.openUrl(device.udid, 'https://example.com');
+
+// List booted devices
+const booted = await manager.listBooted();
+
+// Shutdown
+await manager.shutdown(device.udid);
 ```
 
 ---
