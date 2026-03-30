@@ -1015,6 +1015,22 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
     });
   }
 
+
+  onError(handler: (error: { message: string; stack?: string; source?: string; line?: number; column?: number }) => void): void {
+    this.enableDomain('Runtime').then(() => {
+      this.on('Runtime.exceptionThrown', (params: any) => {
+        const exception = params.exceptionDetails ?? {};
+        const exObj = exception.exception ?? {};
+        handler({
+          message: exObj.description ?? exception.text ?? 'Unknown error',
+          stack: exObj.description ?? undefined,
+          source: exception.url ?? undefined,
+          line: exception.lineNumber ?? undefined,
+          column: exception.columnNumber ?? undefined,
+        });
+      });
+    });
+  }
   // ========== Private Helpers ==========
 
   private async getElementCenter(selector: string): Promise<{ x: number; y: number } | null> {
