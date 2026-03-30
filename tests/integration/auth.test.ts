@@ -5,7 +5,6 @@
  */
 
 import { AuthManager } from '../../src/auth';
-import type { AuthProfile } from '../../src/auth';
 import type { BrowserBackend } from '../../src/types/browser-backend';
 import * as fs from 'fs/promises';
 import * as path from 'path';
