@@ -27,6 +27,6 @@ jobs:
           test -f dist/index.js
           test -f dist/cli/index.js
           node dist/cli/index.js --help
-      - run: npm publish --provenance
+      - run: npm publish --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
