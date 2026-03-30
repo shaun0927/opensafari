@@ -35,6 +35,7 @@ import { registerConsoleLogTool } from './console-log';
 import { registerNetworkLogTool } from './network-log';
 import { registerScenarioTools } from './scenario-tools';
 import { registerBarrierTools } from './barrier-tools';
+import { registerAssertAllDevicesTool } from './assert-all-devices';
 
 export { setWorkflowEngine } from './orchestration-tools';
 export { setBarrier } from './barrier-tools';
@@ -43,6 +44,7 @@ export { setBatchExecutor as setBatchNavigateExecutor } from './batch-navigate';
 export { setBatchExecutor as setBatchScreenshotExecutor } from './batch-screenshot';
 export { setBatchExecutor as setBatchExecuteExecutor } from './batch-execute';
 export { setScenarioRunner } from './scenario-tools';
+export { setCrossDeviceAssert } from './assert-all-devices';
 
 export function registerAllTools(server: MCPServer): void {
   // Tier 1: Core
@@ -105,4 +107,6 @@ export function registerAllTools(server: MCPServer): void {
   registerScenarioTools(server);
   // Tier 3: Step Synchronization Barriers
   registerBarrierTools(server);
+  // Tier 3: Cross-Device Assertions
+  registerAssertAllDevicesTool(server);
 }

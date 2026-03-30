@@ -55,6 +55,7 @@ export const TOOL_TIERS: Record<string, number> = {
   barrier_wait: 3,
   barrier_status: 3,
   barrier_clear: 3,
+  assert_all_devices: 3,
 };
 
 export function getToolTier(toolName: string): number {

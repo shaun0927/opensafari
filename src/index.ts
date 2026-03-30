@@ -9,7 +9,7 @@ export { MCPServer, getWebKitClient, setWebKitClient } from './mcp-server';
 export type { MCPServerOptions } from './mcp-server';
 
 // Tool registration
-export { registerAllTools, setWorkflowEngine, setCrossViewportCapture, setScenarioRunner, setBarrier } from './tools';
+export { registerAllTools, setWorkflowEngine, setCrossViewportCapture, setScenarioRunner, setBarrier, setCrossDeviceAssert } from './tools';
 
 // WebKit client
 export { WebKitClient } from './webkit/client';
