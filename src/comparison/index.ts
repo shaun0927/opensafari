@@ -12,6 +12,7 @@ export type {
   AnnotationResult,
   LegendEntry,
 } from './annotator';
+export type { ReportOptions, MCPContent } from './report';
 export { VisualDiffEngine } from './visual-diff';
 export type { VisualDiffResult, VisualDiffOptions, BoundingBox, PairwiseComparisonMatrix } from './visual-diff';
 export { DOMDiffEngine, DOM_SNAPSHOT_SCRIPT } from './dom-diff';
