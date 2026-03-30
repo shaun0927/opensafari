@@ -99,6 +99,17 @@ export class AuthManager {
       `);
     }
 
+
+    // Inject sessionStorage (must happen before reload)
+    if (data.sessionStorage && Object.keys(data.sessionStorage).length > 0) {
+      await client.evaluate(`
+        (function(data) {
+          Object.entries(data).forEach(function(entry) {
+            window.sessionStorage.setItem(entry[0], entry[1]);
+          });
+        })(${JSON.stringify(data.sessionStorage)})
+      `);
+    }
     // Reload to apply
     await client.navigate({ url: data.currentUrl ?? 'https://' + site, waitUntil: 'load' });
   }

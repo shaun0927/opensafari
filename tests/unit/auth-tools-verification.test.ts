@@ -71,10 +71,13 @@ const MOCK_LOCAL_STORAGE: Record<string, string> = { theme: 'dark', lang: 'en' }
 let injectedCookies: Cookie[] = [];
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 let injectedLocalStorage: Record<string, string> = {};
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+let injectedSessionStorage: Record<string, string> = {};
 
-function createMockBackend(cookies: Cookie[] = MOCK_COOKIES, localStorage: Record<string, string> = MOCK_LOCAL_STORAGE): BrowserBackend {
+function createMockBackend(cookies: Cookie[] = MOCK_COOKIES, localStorage: Record<string, string> = MOCK_LOCAL_STORAGE, sessionStorage: Record<string, string> = {}): BrowserBackend {
   injectedCookies = [];
   injectedLocalStorage = {};
+  injectedSessionStorage = {};
 
   return {
     connect: async () => {},
@@ -95,7 +98,16 @@ function createMockBackend(cookies: Cookie[] = MOCK_COOKIES, localStorage: Recor
         }
         return localStorage as T;
       }
-      if (expression.includes('sessionStorage')) return {} as T;
+      if (expression.includes('sessionStorage')) {
+        if (expression.includes('setItem')) {
+          const match = expression.match(/\((\{.*\})\)/s);
+          if (match) {
+            try { injectedSessionStorage = JSON.parse(match[1]); } catch { /* ignore */ }
+          }
+          return undefined as T;
+        }
+        return sessionStorage as T;
+      }
       if (expression.includes('location.href')) return 'https://example.com/dashboard' as T;
       return undefined as T;
     },
