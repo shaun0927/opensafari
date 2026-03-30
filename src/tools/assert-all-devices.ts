@@ -44,16 +44,23 @@ export function registerAssertAllDevicesTool(server: MCPServer): void {
         };
       }
 
-      const result = await crossDeviceAssert.assertAll({
-        check: params.check as AssertionCheck,
-        selector: params.selector as string | undefined,
-        assertion: params.assertion as string | undefined,
-        expected: params.expected as string | undefined,
-      });
+      try {
+        const result = await crossDeviceAssert.assertAll({
+          check: params.check as AssertionCheck,
+          selector: params.selector as string | undefined,
+          assertion: params.assertion as string | undefined,
+          expected: params.expected as string | undefined,
+        });
 
-      return {
-        content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
-      };
+        return {
+          content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
+        };
+      } catch (err) {
+        return {
+          content: [{ type: 'text' as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }],
+          isError: true,
+        };
+      }
     },
   );
 }

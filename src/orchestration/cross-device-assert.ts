@@ -67,7 +67,7 @@ export class CrossDeviceAssert {
           return { ...base, passed: false, error: 'selector is required for visible check' };
         }
         const safeSelector = JSON.stringify(options.selector);
-        const expression = `(() => { const el = document.querySelector(${safeSelector}); return el ? (el.offsetParent !== null || getComputedStyle(el).display !== 'none') : false; })()`;
+        const expression = `(() => { const el = document.querySelector(${safeSelector}); if (!el) return false; const s = getComputedStyle(el); if (s.display === 'none' || s.visibility === 'hidden') return false; return el.offsetParent !== null || s.position === 'fixed' || s.position === 'sticky'; })()`;
         const actual = await sim.client.evaluate<boolean>(expression);
         return { ...base, passed: !!actual, actual };
       }
