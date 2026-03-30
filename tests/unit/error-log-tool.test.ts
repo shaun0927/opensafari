@@ -1,4 +1,8 @@
 import { EventEmitter } from 'events';
+import { MCPServer, setWebKitClient } from '../../src/mcp-server';
+import { registerErrorLogTool } from '../../src/tools/error-log';
+import { BrowserBackend } from '../../src/types/browser-backend';
+
 class MockClient extends EventEmitter {
   onConsole(): void {}
   onRequest(): void {}
@@ -8,17 +12,11 @@ class MockClient extends EventEmitter {
   }
   isConnected() { return true; }
 }
-beforeEach(() => { jest.resetModules(); });
-function load() {
-  const { MCPServer, setWebKitClient } = require('../../src/mcp-server');
-  const { registerErrorLogTool } = require('../../src/tools/error-log');
-  return { MCPServer, setWebKitClient, registerErrorLogTool };
-}
+
 describe('error_log tool', () => {
   test('start/capture/stop/clear', async () => {
-    const { MCPServer, setWebKitClient, registerErrorLogTool } = load();
     const s = new MCPServer(), mc = new MockClient();
-    setWebKitClient(mc); registerErrorLogTool(s);
+    setWebKitClient(mc as unknown as BrowserBackend); registerErrorLogTool(s);
     const h = s.getToolHandler('error_log')!;
     let r = JSON.parse((await h('s', { action: 'start' })).content![0].text!);
     expect(r.status).toBe('capturing');
@@ -39,7 +37,6 @@ describe('error_log tool', () => {
     setWebKitClient(null);
   });
   test('error when no client', async () => {
-    const { MCPServer, setWebKitClient, registerErrorLogTool } = load();
     const s = new MCPServer(); setWebKitClient(null); registerErrorLogTool(s);
     const r = await s.getToolHandler('error_log')!('s', { action: 'start' });
     expect(r.isError).toBe(true);
