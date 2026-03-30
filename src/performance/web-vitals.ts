@@ -352,10 +352,10 @@ export const COLLECT_METRICS_SCRIPT = `
 
   return {
     webVitals: {
-      lcp: perf.lcp || null,
-      cls: perf.cls || null,
-      inp: perf.inp || null,
-      fcp: perf.fcp || null,
+      lcp: perf.lcp != null ? perf.lcp : null,
+      cls: perf.cls != null ? perf.cls : null,
+      inp: perf.inp != null ? perf.inp : null,
+      fcp: perf.fcp != null ? perf.fcp : null,
       ttfb: ttfb
     },
     resources: resources,
