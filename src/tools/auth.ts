@@ -13,6 +13,15 @@ export function registerAuthTools(server: MCPServer): void {
         type: 'object' as const,
         properties: {
           site: { type: 'string', description: 'Site domain to save auth for (e.g. "github.com")' },
+          additionalDomains: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Additional domains to capture cookies for (e.g. SSO/OAuth providers like "auth0.com")',
+          },
+          captureAll: {
+            type: 'boolean',
+            description: 'Capture all cookies regardless of domain (recommended for complex SSO/OAuth flows)',
+          },
         },
         required: ['site'],
       },
@@ -23,16 +32,32 @@ export function registerAuthTools(server: MCPServer): void {
         return { content: [{ type: 'text' as const, text: 'Error: Safari not connected' }], isError: true };
       try {
         const site = params.site as string;
-        const cookies = await client.getCookies();
-        const domainCookies = cookies.filter((c: Cookie) => {
-          const cd = c.domain.startsWith('.') ? c.domain.slice(1) : c.domain;
-          return cd === site || site.endsWith('.' + cd);
-        });
-        if (domainCookies.length === 0) {
+        const additionalDomains = params.additionalDomains as string[] | undefined;
+        const captureAll = params.captureAll as boolean | undefined;
+
+        const allCookies = await client.getCookies();
+
+        let selectedCookies: Cookie[];
+        if (captureAll) {
+          selectedCookies = allCookies;
+        } else {
+          const domains = [site, ...(additionalDomains ?? [])];
+          selectedCookies = allCookies.filter((c: Cookie) => {
+            const cd = c.domain.startsWith('.') ? c.domain.slice(1) : c.domain;
+            return domains.some(d => cd === d || d.endsWith('.' + cd));
+          });
+        }
+
+        if (selectedCookies.length === 0) {
           return { content: [{ type: 'text' as const, text: `Error: No cookies found for domain "${site}"` }], isError: true };
         }
-        const filePath = await authManager.save(site, client, domainCookies);
-        return { content: [{ type: 'text' as const, text: JSON.stringify({ saved: true, site, cookieCount: domainCookies.length, filePath }) }] };
+
+        const filePath = await authManager.save(site, client, selectedCookies);
+        const cookieDomains = [...new Set(selectedCookies.map(c => {
+          const d = c.domain.startsWith('.') ? c.domain.slice(1) : c.domain;
+          return d;
+        }))];
+        return { content: [{ type: 'text' as const, text: JSON.stringify({ saved: true, site, cookieCount: selectedCookies.length, domains: cookieDomains, filePath }) }] };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         return { content: [{ type: 'text' as const, text: `Error: ${message}` }], isError: true };
