@@ -4,16 +4,14 @@ export type ThrottleProfile = 'slow-3g' | 'fast-3g' | '4g' | 'wifi' | 'none';
 
 export interface ThrottleConfig {
   latencyMs: number;
-  downloadKbps: number;
-  uploadKbps: number;
 }
 
 export const THROTTLE_PROFILES: Record<ThrottleProfile, ThrottleConfig> = {
-  'slow-3g': { latencyMs: 2000, downloadKbps: 50, uploadKbps: 25 },
-  'fast-3g': { latencyMs: 560, downloadKbps: 150, uploadKbps: 75 },
-  '4g': { latencyMs: 170, downloadKbps: 400, uploadKbps: 150 },
-  'wifi': { latencyMs: 40, downloadKbps: 3000, uploadKbps: 1500 },
-  'none': { latencyMs: 0, downloadKbps: 0, uploadKbps: 0 },
+  'slow-3g': { latencyMs: 2000 },
+  'fast-3g': { latencyMs: 560 },
+  '4g': { latencyMs: 170 },
+  'wifi': { latencyMs: 40 },
+  'none': { latencyMs: 0 },
 };
 
 let activeProfile: ThrottleProfile = 'none';
@@ -37,15 +35,16 @@ export function registerNetworkThrottleTool(server: MCPServer): void {
     {
       name: 'network_throttle',
       description:
-        'Simulate network speed conditions. Adds latency to all fetch/XHR requests. ' +
-        'Profiles: slow-3g (2s latency), fast-3g (560ms), 4g (170ms), wifi (40ms), none (disable).',
+        'Simulate network latency conditions. Adds latency to all fetch/XHR requests. ' +
+        'Profiles: slow-3g (2s latency), fast-3g (560ms), 4g (170ms), wifi (40ms), none (disable). ' +
+        'Note: throttling is lost on page navigation. Re-apply after navigating.',
       inputSchema: {
         type: 'object' as const,
         properties: {
           profile: {
             type: 'string',
             enum: ['slow-3g', 'fast-3g', '4g', 'wifi', 'none'],
-            description: 'Network speed profile to simulate',
+            description: 'Network latency profile to simulate',
           },
         },
         required: ['profile'],
@@ -62,7 +61,15 @@ export function registerNetworkThrottleTool(server: MCPServer): void {
         return { content: [{ type: 'text' as const, text: 'Error: unknown profile "' + profile + '"' }], isError: true };
       }
 
-      await client.evaluate(buildThrottleScript(config));
+      try {
+        await client.evaluate(buildThrottleScript(config));
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return {
+          content: [{ type: 'text' as const, text: 'Failed to inject throttle script: ' + message }],
+          isError: true,
+        };
+      }
       activeProfile = profile;
 
       if (profile === 'none') {
@@ -71,7 +78,7 @@ export function registerNetworkThrottleTool(server: MCPServer): void {
       return {
         content: [{
           type: 'text' as const,
-          text: 'Network throttled to ' + profile + ' (latency: ' + config.latencyMs + 'ms, download: ' + config.downloadKbps + ' kbps)',
+          text: 'Network throttled to ' + profile + ' (latency: ' + config.latencyMs + 'ms)',
         }],
       };
     },

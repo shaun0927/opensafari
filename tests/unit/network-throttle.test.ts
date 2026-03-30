@@ -17,16 +17,12 @@ describe('network-throttle', () => {
 
     it('none profile has zero latency', () => {
       expect(THROTTLE_PROFILES['none'].latencyMs).toBe(0);
-      expect(THROTTLE_PROFILES['none'].downloadKbps).toBe(0);
-      expect(THROTTLE_PROFILES['none'].uploadKbps).toBe(0);
     });
 
-    it('all profiles have positive download > upload (except none)', () => {
+    it('all non-none profiles have positive latency', () => {
       (['slow-3g', 'fast-3g', '4g', 'wifi'] as ThrottleProfile[]).forEach((p) => {
         const config = THROTTLE_PROFILES[p];
-        expect(config.downloadKbps).toBeGreaterThan(0);
-        expect(config.uploadKbps).toBeGreaterThan(0);
-        expect(config.downloadKbps).toBeGreaterThan(config.uploadKbps);
+        expect(config.latencyMs).toBeGreaterThan(0);
       });
     });
 
