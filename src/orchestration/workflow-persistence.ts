@@ -34,16 +34,19 @@ export class WorkflowPersistence {
     }
   }
 
-  loadAll(): WorkflowState[] {
+  loadAll(limit = 100): WorkflowState[] {
     ensureDir();
     const files = fs.readdirSync(WORKFLOWS_DIR).filter(f => f.endsWith('.json'));
+    if (files.length > limit) {
+      console.error(`WorkflowPersistence: ${files.length} workflow files found, loading only ${limit} most recent`);
+    }
     const states: WorkflowState[] = [];
-    for (const file of files) {
+    for (const file of files.slice(0, limit)) {
       try {
         const raw = fs.readFileSync(path.join(WORKFLOWS_DIR, file), 'utf-8');
         states.push(JSON.parse(raw) as WorkflowState);
       } catch {
-        // Skip corrupt files
+        console.error(`WorkflowPersistence: skipping corrupt file ${file}`);
       }
     }
     return states;

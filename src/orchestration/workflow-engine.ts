@@ -118,16 +118,16 @@ export class SimulatorWorkflowEngine extends EventEmitter {
         }
         this.workflows.set(state.id, state);
       }
-    } catch {
-      // Ignore restore errors — start fresh
+    } catch (err) {
+      console.error('Failed to restore persisted workflows:', err);
     }
   }
 
   private persistWorkflow(state: WorkflowState): void {
     try {
       this.persistence.save(state);
-    } catch {
-      // Persistence failure should not break workflow execution
+    } catch (err) {
+      console.error('Failed to persist workflow:', err);
     }
   }
 
