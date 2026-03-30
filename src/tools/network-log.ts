@@ -26,13 +26,6 @@ const state: NetworkLogState = {
   pendingRequests: new Map(),
 };
 
-function resetState(): void {
-  state.enabled = false;
-  state.captureBody = false;
-  state.entries = [];
-  state.pendingRequests.clear();
-}
-
 const CAPTURABLE_MIME_PREFIXES = ['text/', 'application/json'];
 
 function shouldCaptureBody(mimeType: string): boolean {
