@@ -3,11 +3,17 @@ import * as path from 'path';
 import * as os from 'os';
 import { BrowserBackend, Cookie } from '../types/browser-backend';
 
+export interface DomainGroup {
+  domain: string;
+  cookies: Cookie[];
+}
+
 export interface AuthProfile {
   site: string;
   savedAt: string;
   currentUrl: string;
-  cookies: Cookie[];
+  cookies: Cookie[];           // flat list for backward compat
+  domainGroups?: DomainGroup[]; // cookies organized by domain
   localStorage: Record<string, string>;
   sessionStorage: Record<string, string>;
 }
@@ -60,6 +66,7 @@ export class AuthManager {
       savedAt: new Date().toISOString(),
       currentUrl,
       cookies,
+      domainGroups: this.groupCookiesByDomain(cookies),
       localStorage: localStorage ?? {},
       sessionStorage: sessionStorage ?? {},
     };
@@ -96,7 +103,7 @@ export class AuthManager {
     await client.navigate({ url: data.currentUrl ?? 'https://' + site, waitUntil: 'load' });
   }
 
-  async list(): Promise<Array<{ site: string; savedAt: string; cookieCount: number }>> {
+  async list(): Promise<Array<{ site: string; savedAt: string; cookieCount: number; domains: string[] }>> {
     try {
       const files = await fs.readdir(this.authDir);
       const profiles = [];
@@ -104,7 +111,10 @@ export class AuthManager {
         if (!f.endsWith('.json')) continue;
         try {
           const data = JSON.parse(await fs.readFile(path.join(this.authDir, f), 'utf-8')) as AuthProfile;
-          profiles.push({ site: data.site, savedAt: data.savedAt, cookieCount: data.cookies.length });
+          const domains = data.domainGroups
+            ? data.domainGroups.map(g => g.domain)
+            : [...new Set(data.cookies.map(c => c.domain.startsWith('.') ? c.domain.slice(1) : c.domain))];
+          profiles.push({ site: data.site, savedAt: data.savedAt, cookieCount: data.cookies.length, domains });
         } catch {
           // Skip corrupted files
         }
@@ -143,6 +153,16 @@ export class AuthManager {
   async loadProfile(site: string): Promise<AuthProfile> {
     const filePath = path.join(this.authDir, this.sanitizeSite(site) + '.json');
     return JSON.parse(await fs.readFile(filePath, 'utf-8')) as AuthProfile;
+  }
+
+  private groupCookiesByDomain(cookies: Cookie[]): DomainGroup[] {
+    const groups = new Map<string, Cookie[]>();
+    for (const cookie of cookies) {
+      const domain = cookie.domain.startsWith('.') ? cookie.domain.slice(1) : cookie.domain;
+      if (!groups.has(domain)) groups.set(domain, []);
+      groups.get(domain)!.push(cookie);
+    }
+    return Array.from(groups.entries()).map(([domain, cookies]) => ({ domain, cookies }));
   }
 
   private sanitizeSite(site: string): string {

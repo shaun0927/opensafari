@@ -145,6 +145,54 @@ describe('AuthManager: save/list/delete lifecycle', () => {
     expect(sites).toContain('gamma.com');
   });
 
+  test('saved profile includes domainGroups', async () => {
+    await authManager.save(TEST_SITE, mockClient);
+    const profile = await authManager.loadProfile(TEST_SITE);
+
+    expect(profile.domainGroups).toBeDefined();
+    expect(Array.isArray(profile.domainGroups)).toBe(true);
+    expect(profile.domainGroups!.length).toBeGreaterThan(0);
+    expect(profile.domainGroups![0]).toHaveProperty('domain');
+    expect(profile.domainGroups![0]).toHaveProperty('cookies');
+  });
+
+  test('domainGroups correctly groups cookies by domain', async () => {
+    // Create a mock client that returns cookies from multiple domains
+    const multiDomainClient = {
+      ...createMockClient(),
+      getCookies: async () => [
+        { name: 'session', value: 'abc', domain: '.example.com', path: '/', expires: Date.now() / 1000 + 3600, httpOnly: true, secure: true },
+        { name: 'token', value: 'xyz', domain: '.auth0.com', path: '/', expires: Date.now() / 1000 + 3600, httpOnly: true, secure: true },
+        { name: 'pref', value: 'dark', domain: '.example.com', path: '/', expires: Date.now() / 1000 + 3600, httpOnly: false, secure: false },
+      ],
+    } as unknown as BrowserBackend;
+
+    await authManager.save('multi-domain-test.com', multiDomainClient);
+    const profile = await authManager.loadProfile('multi-domain-test.com');
+
+    expect(profile.domainGroups).toBeDefined();
+    expect(profile.domainGroups!.length).toBe(2);
+
+    const exampleGroup = profile.domainGroups!.find(g => g.domain === 'example.com');
+    const auth0Group = profile.domainGroups!.find(g => g.domain === 'auth0.com');
+
+    expect(exampleGroup).toBeDefined();
+    expect(exampleGroup!.cookies.length).toBe(2);
+    expect(auth0Group).toBeDefined();
+    expect(auth0Group!.cookies.length).toBe(1);
+  });
+
+  test('list() returns domains for each profile', async () => {
+    await authManager.save(TEST_SITE, mockClient);
+    const profiles = await authManager.list();
+
+    const profile = profiles.find(p => p.site === TEST_SITE);
+    expect(profile).toBeDefined();
+    expect(profile!.domains).toBeDefined();
+    expect(Array.isArray(profile!.domains)).toBe(true);
+    expect(profile!.domains.length).toBeGreaterThan(0);
+  });
+
   test('checkExpiry detects non-expired cookies', async () => {
     await authManager.save(TEST_SITE, mockClient);
     const expiry = await authManager.checkExpiry(TEST_SITE);
