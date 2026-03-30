@@ -59,11 +59,19 @@ export function registerNetworkLogTool(server: MCPServer): void {
         collector.stop();
         return { content: [{ type: 'text' as const, text: JSON.stringify({ status: 'stopped', buffered: collector.size }) }] };
       }
-      let entries = collector.get();
-      const urlFilter = params.urlFilter as string | undefined;
-      if (urlFilter) { const re = new RegExp(urlFilter); entries = entries.filter((e) => re.test(e.url)); }
-      if (params.clear) collector.clear();
-      return { content: [{ type: 'text' as const, text: JSON.stringify({ count: entries.length, entries }) }] };
+      if (action === 'get') {
+        let entries = collector.get();
+        const urlFilter = params.urlFilter as string | undefined;
+        if (urlFilter) {
+          let re: RegExp;
+          try { re = new RegExp(urlFilter); }
+          catch { return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'Invalid regex filter' }) }], isError: true }; }
+          entries = entries.filter((e) => re.test(e.url));
+        }
+        if (params.clear) collector.clear();
+        return { content: [{ type: 'text' as const, text: JSON.stringify({ count: entries.length, entries }) }] };
+      }
+      return { content: [{ type: 'text' as const, text: JSON.stringify({ error: `Unknown action: ${action}` }) }], isError: true };
     },
   );
 }
