@@ -5,5 +5,7 @@ export type { AuditReport, AuditSummary } from './audit';
 export { generateAuditMarkdown } from './report-markdown';
 export { generateAuditJUnit } from './report-junit';
 export type { JUnitOptions } from './report-junit';
+export { generateAuditJSON } from './report-json';
+export type { QAReport, QAReportDetector, QAReportDevice, QAReportIssue } from './report-json';
 export { QAHistory } from './history';
 export type { RegressionReport } from './history';
