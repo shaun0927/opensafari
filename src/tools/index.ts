@@ -39,6 +39,9 @@ import { registerBarrierTools } from './barrier-tools';
 import { registerAssertAllDevicesTool } from './assert-all-devices';
 import { registerPerformanceAuditTool } from './performance-audit';
 import { registerNetworkHarTool } from './network-har';
+import { registerMockPermissionTool } from './mock-permission';
+import { registerNetworkInterceptTool } from './network-intercept';
+import { registerNetworkOfflineTool } from './network-offline';
 
 export { setWorkflowEngine } from './orchestration-tools';
 export { setBarrier } from './barrier-tools';
@@ -84,6 +87,7 @@ export function registerAllTools(server: MCPServer): void {
   registerConsoleLogTool(server);
   // Tier 2: Event Monitoring
   registerNetworkLogTool(server);
+  registerMockPermissionTool(server);
 
   // Tier 3: Batch Operations
   registerBatchNavigateTool(server);
@@ -120,4 +124,7 @@ export function registerAllTools(server: MCPServer): void {
   registerPerformanceAuditTool(server);
   // Tier 3: Network HAR Export
   registerNetworkHarTool(server);
+  // Tier 2: Network Interception
+  registerNetworkInterceptTool(server);
+  registerNetworkOfflineTool(server);
 }
