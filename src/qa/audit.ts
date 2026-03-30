@@ -1,5 +1,7 @@
 import { BrowserBackend } from '../types/browser-backend';
 import { annotateScreenshot, detectorResultToAnnotations, formatLegend, AnnotationIssue } from '../comparison/annotator';
+import { annotateScreenshot, detectorResultToAnnotations, formatLegend } from '../comparison/annotator';
+import type { AnnotationIssue, AnnotationResult } from '../comparison/annotator';
 import { DetectorResult, QAConfig, applyIgnoreRules } from './types';
 import { detectAutoZoom } from './detectors/auto-zoom';
 import { detectTouchTargets } from './detectors/touch-targets';
@@ -150,6 +152,8 @@ export class QAAudit {
       annotatedScreenshot: annotationResult.annotatedImage,
       legend: formatLegend(annotationResult.legend),
     };
+    const annotationResult: AnnotationResult = annotateScreenshot(screenshotBase64, annotations, { safeArea, showLabels: true });
+    return { ...report, annotatedScreenshot: annotationResult.annotatedImage, legend: formatLegend(annotationResult.legend) };
   }
 
   private calculateScore(results: DetectorResult[]): number {

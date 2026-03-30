@@ -116,5 +116,52 @@ describe('QA audit annotation integration', () => {
     expect(result.legend[1].severity).toBe('high');
     expect(result.legend[2].severity).toBe('medium');
     expect(result.legend[3].severity).toBe('low');
+      { detector: 'touch_targets', severity: 'high', issues: [
+        { selector: '#btn', problem: '32x28px', fix: 'Increase', boundingBox: { x: 100, y: 200, width: 32, height: 28 } },
+        { selector: '#link', problem: '38x20px', fix: 'Increase', boundingBox: { x: 50, y: 400, width: 38, height: 20 } },
+      ], passed: false, totalScanned: 10, issueCount: 2 },
+      { detector: 'safe_area', severity: 'high', issues: [
+        { selector: '.footer', problem: 'Missing inset', fix: 'Add padding', rect: { x: 0, y: 800, width: 390, height: 44 } },
+      ], passed: false, totalScanned: 5, issueCount: 1 },
+      { detector: 'hover_only', severity: 'medium', issues: [
+        { selector: '.tooltip', problem: 'Hover only', fix: 'Add touch' },
+      ], passed: false, totalScanned: 3, issueCount: 1 },
+      { detector: 'pwa_meta', severity: 'pass', issues: [], passed: true, totalScanned: 8, issueCount: 0 },
+    ];
+    const annotations: AnnotationIssue[] = [];
+    for (const r of detectorResults) {
+      if (r.passed || r.severity === 'pass' || r.severity === 'error') continue;
+      annotations.push(...detectorResultToAnnotations(r.detector, r.severity as 'critical'|'high'|'medium'|'low', r.issues));
+    }
+    expect(annotations).toHaveLength(3);
+    const result = annotateScreenshot(screenshot, annotations, { safeArea: { top: 47, bottom: 34, left: 0, right: 0 } });
+    expect(result.width).toBe(390);
+    expect(result.height).toBe(844);
+    expect(result.legend).toHaveLength(3);
+    const decoded = PNG.sync.read(Buffer.from(result.annotatedImage, 'base64'));
+    expect(decoded.width).toBe(390);
+  });
+
+  it('handles audit with no issues', () => {
+    const passing: DetectorResult[] = [
+      { detector: 'touch_targets', severity: 'pass', issues: [], passed: true, totalScanned: 10, issueCount: 0 },
+    ];
+    const annotations: AnnotationIssue[] = [];
+    for (const r of passing) { if (r.passed) continue; annotations.push(...detectorResultToAnnotations(r.detector, r.severity as any, r.issues)); }
+    expect(annotations).toHaveLength(0);
+    const result = annotateScreenshot(screenshot, annotations);
+    expect(result.legend).toHaveLength(0);
+  });
+
+  it('handles mixed severity annotations', () => {
+    const annotations: AnnotationIssue[] = [
+      { boundingBox: { x: 10, y: 50, width: 100, height: 40 }, severity: 'critical', label: 'keyboard_overlap' },
+      { boundingBox: { x: 200, y: 300, width: 30, height: 25 }, severity: 'high', label: 'touch_targets' },
+      { boundingBox: { x: 0, y: 780, width: 390, height: 64 }, severity: 'medium', label: 'safe_area' },
+      { boundingBox: { x: 150, y: 500, width: 80, height: 15 }, severity: 'low', label: 'auto_zoom' },
+    ];
+    const result = annotateScreenshot(screenshot, annotations);
+    expect(result.legend).toHaveLength(4);
+    expect(result.legend.map(l => l.severity)).toEqual(['critical', 'high', 'medium', 'low']);
   });
 });
