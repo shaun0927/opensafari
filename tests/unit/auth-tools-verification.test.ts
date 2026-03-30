@@ -59,6 +59,13 @@ const MOCK_COOKIES: Cookie[] = [
   { name: 'pref', value: 'dark', domain: '.example.com', path: '/', expires: Math.floor(Date.now() / 1000) + 86400, httpOnly: false, secure: false },
 ];
 
+const MULTI_DOMAIN_COOKIES: Cookie[] = [
+  { name: 'session', value: 'abc123', domain: '.example.com', path: '/', expires: Math.floor(Date.now() / 1000) + 86400, httpOnly: true, secure: true, sameSite: 'Lax' },
+  { name: 'pref', value: 'dark', domain: '.example.com', path: '/', expires: Math.floor(Date.now() / 1000) + 86400, httpOnly: false, secure: false },
+  { name: 'auth_token', value: 'sso_token_123', domain: '.auth0.com', path: '/', expires: Math.floor(Date.now() / 1000) + 86400, httpOnly: true, secure: true, sameSite: 'None' },
+  { name: 'goog_session', value: 'goog_abc', domain: '.accounts.google.com', path: '/', expires: Math.floor(Date.now() / 1000) + 86400, httpOnly: true, secure: true, sameSite: 'Lax' },
+];
+
 const MOCK_LOCAL_STORAGE: Record<string, string> = { theme: 'dark', lang: 'en' };
 
 let injectedCookies: Cookie[] = [];
@@ -134,7 +141,7 @@ describe('Auth Tools Verification — Issue #168', () => {
     try { await fs.rm(authDir, { recursive: true }); } catch { /* ok */ }
     // Clean up default auth dir profiles created during test
     const defaultDir = path.join(os.homedir(), '.opensafari', 'auth');
-    for (const f of ['example.com.json']) {
+    for (const f of ['example.com.json', 'multi-sso.com.json']) {
       try { await fs.unlink(path.join(defaultDir, f)); } catch { /* ok */ }
     }
   });
@@ -304,6 +311,61 @@ describe('Auth Tools Verification — Issue #168', () => {
       expect(example.savedAt).toBeDefined();
       // Verify savedAt is a valid ISO date
       expect(new Date(example.savedAt).toISOString()).toBe(example.savedAt);
+    });
+  });
+
+  // ====================================================================
+  // auth_save — multi-domain support (Issue #208)
+  // ====================================================================
+
+  describe('auth_save — multi-domain support', () => {
+    afterAll(async () => {
+      // Clean up multi-domain test profiles
+      const defaultDir = path.join(os.homedir(), '.opensafari', 'auth');
+      for (const f of ['multi-sso.com.json']) {
+        try { await fs.unlink(path.join(defaultDir, f)); } catch { /* ok */ }
+      }
+    });
+
+    test('captureAll=true saves cookies from all domains', async () => {
+      setWebKitClient(createMockBackend(MULTI_DOMAIN_COOKIES));
+      const res = await callTool('auth_save', { site: 'multi-sso.com', captureAll: true });
+      expect(isError(res)).toBe(false);
+      const data = JSON.parse(getResultText(res));
+      expect(data.saved).toBe(true);
+      expect(data.cookieCount).toBe(4);
+      expect(data.domains).toBeDefined();
+      expect(data.domains.length).toBe(3); // example.com, auth0.com, accounts.google.com
+    });
+
+    test('additionalDomains captures cookies from specified extra domains', async () => {
+      setWebKitClient(createMockBackend(MULTI_DOMAIN_COOKIES));
+      const res = await callTool('auth_save', {
+        site: 'example.com',
+        additionalDomains: ['auth0.com'],
+      });
+      expect(isError(res)).toBe(false);
+      const data = JSON.parse(getResultText(res));
+      expect(data.saved).toBe(true);
+      expect(data.cookieCount).toBe(3); // 2 example.com + 1 auth0.com
+      expect(data.domains).toContain('example.com');
+      expect(data.domains).toContain('auth0.com');
+      expect(data.domains).not.toContain('accounts.google.com');
+    });
+
+    test('without new params, backward compatible single-domain behavior', async () => {
+      setWebKitClient(createMockBackend(MULTI_DOMAIN_COOKIES));
+      const res = await callTool('auth_save', { site: 'example.com' });
+      expect(isError(res)).toBe(false);
+      const data = JSON.parse(getResultText(res));
+      expect(data.cookieCount).toBe(2); // only example.com cookies
+    });
+
+    test('captureAll with no cookies still returns error', async () => {
+      setWebKitClient(createMockBackend([]));
+      const res = await callTool('auth_save', { site: 'empty.com', captureAll: true });
+      expect(isError(res)).toBe(true);
+      expect(getResultText(res)).toContain('No cookies found');
     });
   });
 
