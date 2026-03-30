@@ -1,4 +1,5 @@
 import { EventEmitter } from 'events';
+import type { BrowserBackend } from '../../src/types/browser-backend';
 class MockClient extends EventEmitter {
   onConsole(): void {}
   onRequest(h: (r: { url: string; method: string }) => void): void { this.on('request', h); }
@@ -6,16 +7,16 @@ class MockClient extends EventEmitter {
   isConnected() { return true; }
 }
 beforeEach(() => { jest.resetModules(); });
-function load() {
-  const { MCPServer, setWebKitClient } = require('../../src/mcp-server');
-  const { registerNetworkLogTool } = require('../../src/tools/network-log');
+async function load() {
+  const { MCPServer, setWebKitClient } = await import('../../src/mcp-server');
+  const { registerNetworkLogTool } = await import('../../src/tools/network-log');
   return { MCPServer, setWebKitClient, registerNetworkLogTool };
 }
 describe('network_log tool', () => {
   test('start/capture/filter/stop/clear', async () => {
-    const { MCPServer, setWebKitClient, registerNetworkLogTool } = load();
+    const { MCPServer, setWebKitClient, registerNetworkLogTool } = await load();
     const s = new MCPServer(), mc = new MockClient();
-    setWebKitClient(mc); registerNetworkLogTool(s);
+    setWebKitClient(mc as unknown as BrowserBackend); registerNetworkLogTool(s);
     const h = s.getToolHandler('network_log')!;
     let r = JSON.parse((await h('s', { action: 'start' })).content![0].text!);
     expect(r.status).toBe('monitoring');
@@ -39,7 +40,7 @@ describe('network_log tool', () => {
     setWebKitClient(null);
   });
   test('error when no client', async () => {
-    const { MCPServer, setWebKitClient, registerNetworkLogTool } = load();
+    const { MCPServer, setWebKitClient, registerNetworkLogTool } = await load();
     const s = new MCPServer(); setWebKitClient(null); registerNetworkLogTool(s);
     const r = await s.getToolHandler('network_log')!('s', { action: 'start' });
     expect(r.isError).toBe(true);
