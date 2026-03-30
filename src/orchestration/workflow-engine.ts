@@ -3,6 +3,7 @@ import { SimulatorPool } from '../simulator/pool';
 import { BatchExecutor } from '../simulator/batch';
 import { AuthManager } from '../auth/manager';
 import { DEVICE_PRESETS } from '../simulator/presets';
+import { WorkflowPersistence } from './workflow-persistence';
 
 export interface WorkflowInitOptions {
   devices: string[];
@@ -98,12 +99,36 @@ class PromiseMutex {
 export class SimulatorWorkflowEngine extends EventEmitter {
   private workflows: Map<string, WorkflowState> = new Map();
   private completionLock = new PromiseMutex();
+  private persistence = new WorkflowPersistence();
 
   constructor(
     private pool: SimulatorPool,
     private authManager: AuthManager,
   ) {
     super();
+    this.restorePersistedWorkflows();
+  }
+
+  private restorePersistedWorkflows(): void {
+    try {
+      const states = this.persistence.loadAll();
+      for (const state of states) {
+        if (state.status === 'running') {
+          state.status = 'partial';
+        }
+        this.workflows.set(state.id, state);
+      }
+    } catch (err) {
+      console.error('Failed to restore persisted workflows:', err);
+    }
+  }
+
+  private persistWorkflow(state: WorkflowState): void {
+    try {
+      this.persistence.save(state);
+    } catch (err) {
+      console.error('Failed to persist workflow:', err);
+    }
   }
 
   async initWorkflow(options: WorkflowInitOptions): Promise<WorkflowInitResult> {
@@ -141,6 +166,7 @@ export class SimulatorWorkflowEngine extends EventEmitter {
       options,
     };
     this.workflows.set(workflowId, state);
+    this.persistWorkflow(state);
 
     // Generate prompts
     const prompts = workers.map(w => ({
@@ -160,6 +186,7 @@ export class SimulatorWorkflowEngine extends EventEmitter {
     worker.status = 'active';
     worker.lastUpdate = update;
     worker.lastUpdateAt = Date.now();
+    this.persistWorkflow(state);
   }
 
   async completeWorker(workflowId: string, workerName: string, results: unknown): Promise<void> {
@@ -175,6 +202,7 @@ export class SimulatorWorkflowEngine extends EventEmitter {
       worker.completedAt = Date.now();
 
       this.checkWorkflowCompletion(state);
+      this.persistWorkflow(state);
     } finally {
       this.completionLock.release();
     }
@@ -193,6 +221,7 @@ export class SimulatorWorkflowEngine extends EventEmitter {
       worker.completedAt = Date.now();
 
       this.checkWorkflowCompletion(state);
+      this.persistWorkflow(state);
     } finally {
       this.completionLock.release();
     }
@@ -249,6 +278,7 @@ export class SimulatorWorkflowEngine extends EventEmitter {
   }
 
   async cleanupWorkflow(workflowId: string): Promise<void> {
+    this.persistence.remove(workflowId);
     this.workflows.delete(workflowId);
     await this.pool.shutdownAll();
   }
