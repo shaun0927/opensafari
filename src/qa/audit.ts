@@ -13,6 +13,7 @@ import { detectScrollLock } from './detectors/scroll-lock';
 import { detectDarkMode } from './detectors/dark-mode';
 import { detectOrientation } from './detectors/orientation';
 import { detectPwaMeta } from './detectors/pwa-meta';
+import { detectAccessibility } from './detectors/accessibility';
 import { SimulatorManager } from '../simulator/manager';
 
 export interface AuditSummary {
@@ -59,7 +60,7 @@ export class QAAudit {
     const currentUrl = await this.client.evaluate<string>('window.location.href');
     const startTime = Date.now();
 
-    // Parallel: stateless detectors (10)
+    // Parallel: stateless detectors (11)
     const parallelResults = await Promise.allSettled([
       detectAutoZoom(this.client),
       detectTouchTargets(this.client),
@@ -71,6 +72,7 @@ export class QAAudit {
       detectFixedStacking(this.client),
       detectScrollLock(this.client),
       detectPwaMeta(this.client),
+      detectAccessibility(this.client),
     ]);
 
     // Sequential: stateful detectors (3)

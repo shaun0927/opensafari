@@ -11,3 +11,4 @@ export { detectScrollLock } from './scroll-lock';
 export { detectDarkMode } from './dark-mode';
 export { detectOrientation } from './orientation';
 export { detectPwaMeta } from './pwa-meta';
+export { detectAccessibility } from './accessibility';

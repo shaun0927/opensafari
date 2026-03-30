@@ -425,7 +425,7 @@ describe('3. State & Behavior Detectors', () => {
 // ── 4. Full Audit (Story #64) ────────────────────────────────────────
 
 describe('4. Full Audit', () => {
-  test('qa_full_audit runs all 13 detectors', async () => {
+  test('qa_full_audit runs all 14 detectors', async () => {
     const client = createMockClient();
     // evaluate calls: window.location.href + 10 stateless + stateful setup calls
     (client.evaluate as jest.Mock)
@@ -436,7 +436,7 @@ describe('4. Full Audit', () => {
     const audit = new QAAudit(client, {});
     const report = await audit.runFullAudit();
 
-    expect(report.detectors).toHaveLength(13);
+    expect(report.detectors).toHaveLength(14);
     expect(report.url).toBe('https://example.com');
     expect(report).toHaveProperty('score');
     expect(report).toHaveProperty('summary');
@@ -444,7 +444,7 @@ describe('4. Full Audit', () => {
     expect(report).toHaveProperty('timestamp');
   });
 
-  test('10 stateless detectors run in parallel, 3 stateful run sequentially', async () => {
+  test('11 stateless detectors run in parallel, 3 stateful run sequentially', async () => {
     const client = createMockClient();
     const callOrder: string[] = [];
 
@@ -460,13 +460,13 @@ describe('4. Full Audit', () => {
     const audit = new QAAudit(client, {});
     const report = await audit.runFullAudit();
 
-    // All 13 detectors ran: 10 parallel + 3 sequential
-    expect(report.detectors).toHaveLength(13);
+    // All 14 detectors ran: 11 parallel + 3 sequential
+    expect(report.detectors).toHaveLength(14);
 
     // Stateful detectors (keyboard_overlap, dark_mode, orientation) are the last 3
     // The last 3 should be the stateful ones (keyboard_overlap, dark_mode, orientation)
     // They run after the 10 parallel ones
-    expect(report.detectors.length).toBe(13);
+    expect(report.detectors.length).toBe(14);
   });
 
   test('score calculation: max(0, 100 - sum(weight * count)) — critical=10, high=5, medium=2, low=1', async () => {
