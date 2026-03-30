@@ -2,6 +2,7 @@ import { MCPServer, getWebKitClient, setWebKitClient } from '../mcp-server';
 import { SimulatorManager } from '../simulator';
 import { getSharedProxy } from '../simulator/proxy';
 import { WebKitClient } from '../webkit/client';
+import { addManagedDevice } from '../reliability/zombie-cleanup';
 
 export function registerDeviceBootTool(server: MCPServer): void {
   server.registerTool(
@@ -19,6 +20,10 @@ export function registerDeviceBootTool(server: MCPServer): void {
     async (_sessionId: string, params: Record<string, unknown>) => {
       const manager = new SimulatorManager();
       const device = await manager.boot(params.device as string);
+
+      // Register the booted device in the shared zombie cleanup registry so
+      // other MCP sessions' periodic cleanup won't shut it down as an orphan.
+      addManagedDevice(device.udid);
 
       // Auto-start the WebInspector proxy so WebKit debugging is available
       let proxyStatus: { running: boolean; pid: number | null } = { running: false, pid: null };
