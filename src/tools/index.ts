@@ -25,6 +25,7 @@ import { registerBatchScreenshotTool } from './batch-screenshot';
 import { registerBatchExecuteTool } from './batch-execute';
 import { registerOrchestrationTools } from './orchestration-tools';
 import { registerCrossViewportCompareTool } from './cross-viewport-compare';
+import { registerCompareDevicesTool } from './compare-devices';
 import { registerQADetectorTools } from './qa-detectors';
 import { registerQAAuditTools } from './qa-audit';
 import { registerAuthTools } from './auth';
@@ -41,6 +42,7 @@ import { registerPerformanceAuditTool } from './performance-audit';
 export { setWorkflowEngine } from './orchestration-tools';
 export { setBarrier } from './barrier-tools';
 export { setCrossViewportCapture } from './cross-viewport-compare';
+export { setCompareDevicesCapture, setCompareDevicesBatchExecutor } from './compare-devices';
 export { setBatchExecutor as setBatchNavigateExecutor } from './batch-navigate';
 export { setBatchExecutor as setBatchScreenshotExecutor } from './batch-screenshot';
 export { setBatchExecutor as setBatchExecuteExecutor } from './batch-execute';
@@ -92,6 +94,9 @@ export function registerAllTools(server: MCPServer): void {
 
   // Tier 3: Cross-Viewport Comparison
   registerCrossViewportCompareTool(server);
+
+  // Tier 3: Cross-Device Visual + DOM Comparison
+  registerCompareDevicesTool(server);
 
   // Tier 3: QA Detectors
   registerQADetectorTools(server);

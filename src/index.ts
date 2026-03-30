@@ -9,7 +9,7 @@ export { MCPServer, getWebKitClient, setWebKitClient } from './mcp-server';
 export type { MCPServerOptions } from './mcp-server';
 
 // Tool registration
-export { registerAllTools, setWorkflowEngine, setCrossViewportCapture, setScenarioRunner, setBarrier, setCrossDeviceAssert } from './tools';
+export { registerAllTools, setWorkflowEngine, setCrossViewportCapture, setScenarioRunner, setBarrier, setCrossDeviceAssert, setCompareDevicesCapture, setCompareDevicesBatchExecutor } from './tools';
 
 // WebKit client
 export { WebKitClient } from './webkit/client';
@@ -31,6 +31,12 @@ export type { AuthProfile, ExpiryInfo } from './auth';
 export { SimulatorWorkflowEngine } from './orchestration/workflow-engine';
 export { ScenarioRunner } from './orchestration/scenario-runner';
 export { CrossViewportCapture } from './comparison/cross-viewport';
+
+// Comparison Engines
+export { VisualDiffEngine } from './comparison/visual-diff';
+export type { VisualDiffOptions, VisualDiffResult, PairwiseComparisonMatrix, BoundingBox } from './comparison/visual-diff';
+export { DOMDiffEngine, DOM_SNAPSHOT_SCRIPT } from './comparison/dom-diff';
+export type { DOMDiffOptions, DOMDiffResult, DOMDifference, DOMSnapshot, DOMElementSnapshot } from './comparison/dom-diff';
 
 // Configuration
 export { getGlobalConfig, setGlobalConfig, resetGlobalConfig } from './config/global';
