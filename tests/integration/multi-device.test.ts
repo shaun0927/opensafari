@@ -16,10 +16,6 @@ import { SimulatorWorkflowEngine } from '../../src/orchestration/workflow-engine
 import { CrossViewportCapture } from '../../src/comparison/cross-viewport';
 import { AuthManager } from '../../src/auth';
 import * as os from 'os';
-import { execFile } from 'child_process';
-import { promisify } from 'util';
-
-const execFileAsync = promisify(execFile);
 
 describe('Multi-device: SimulatorPool instantiation', () => {
   test('SimulatorPool can be instantiated with default options', () => {

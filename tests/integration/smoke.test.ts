@@ -88,7 +88,7 @@ describe('Smoke: Tool tier mapping', () => {
   });
 
   test('all TOOL_TIERS entries are between 1 and 3', () => {
-    for (const [name, tier] of Object.entries(TOOL_TIERS)) {
+    for (const [, tier] of Object.entries(TOOL_TIERS)) {
       expect(tier).toBeGreaterThanOrEqual(1);
       expect(tier).toBeLessThanOrEqual(3);
     }
@@ -179,10 +179,10 @@ describe('Smoke: WebInspectorProxy defaults', () => {
 });
 
 describe('Smoke: Graceful shutdown registration', () => {
-  test('setupGracefulShutdown does not throw', () => {
+  test('setupGracefulShutdown does not throw', async () => {
     const spy = jest.spyOn(process, 'on').mockImplementation(() => process);
     try {
-      const { setupGracefulShutdown } = require('../../src/reliability/graceful-shutdown');
+      const { setupGracefulShutdown } = await import('../../src/reliability/graceful-shutdown');
       const pool = new SimulatorPool({ max: 1 });
       expect(() => setupGracefulShutdown(pool)).not.toThrow();
     } finally {
