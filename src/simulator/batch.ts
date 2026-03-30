@@ -1,5 +1,6 @@
 import { SimulatorPool, PooledSimulator } from './pool';
 import { NavigateResult, ScreenshotOptions } from '../types/browser-backend';
+import { CircuitBreakerRegistry } from '../reliability/circuit-breaker';
 
 export interface BatchResult<T> {
   device: string;
@@ -8,22 +9,69 @@ export interface BatchResult<T> {
   result?: T;
   error?: string;
   timing: number;
+  skipped?: boolean;
 }
 
 export class BatchExecutor {
-  constructor(private pool: SimulatorPool) {}
+  private readonly circuitBreakers: CircuitBreakerRegistry;
+
+  constructor(
+    private pool: SimulatorPool,
+    circuitBreakers?: CircuitBreakerRegistry,
+  ) {
+    this.circuitBreakers = circuitBreakers ?? new CircuitBreakerRegistry();
+  }
+
+  getCircuitBreakers(): CircuitBreakerRegistry {
+    return this.circuitBreakers;
+  }
 
   private async executeOnAll<T>(
     operation: (sim: PooledSimulator) => Promise<T>
   ): Promise<BatchResult<T>[]> {
     const simulators = this.pool.getAll();
+    const results: BatchResult<T>[] = [];
+
+    // Pre-check: filter out devices with open circuits
+    const available: PooledSimulator[] = [];
+    for (const sim of simulators) {
+      const cb = this.circuitBreakers.get(sim.device.udid);
+      if (!cb.isAvailable()) {
+        results.push({
+          device: sim.preset,
+          deviceId: sim.device.udid,
+          viewport: { w: (sim.device as any).viewport?.width ?? 390, h: (sim.device as any).viewport?.height ?? 844 },
+          error: 'Circuit breaker open — device excluded from batch',
+          timing: 0,
+          skipped: true,
+        });
+        continue;
+      }
+
+      // Health pre-check: verify WebKit connection is alive
+      if (!sim.client.isConnected()) {
+        this.circuitBreakers.get(sim.device.udid).recordFailure(new Error('WebKit not connected'));
+        results.push({
+          device: sim.preset,
+          deviceId: sim.device.udid,
+          viewport: { w: (sim.device as any).viewport?.width ?? 390, h: (sim.device as any).viewport?.height ?? 844 },
+          error: 'WebKit connection not available',
+          timing: 0,
+          skipped: true,
+        });
+        continue;
+      }
+
+      available.push(sim);
+    }
 
     const settled = await Promise.allSettled(
-      simulators.map(async (sim): Promise<BatchResult<T>> => {
+      available.map(async (sim): Promise<BatchResult<T>> => {
         const start = Date.now();
         this.pool.markActivity(sim.device.udid);
         try {
           const result = await operation(sim);
+          this.circuitBreakers.get(sim.device.udid).recordSuccess();
           return {
             device: sim.preset,
             deviceId: sim.device.udid,
@@ -32,6 +80,9 @@ export class BatchExecutor {
             timing: Date.now() - start,
           };
         } catch (err) {
+          this.circuitBreakers.get(sim.device.udid).recordFailure(
+            err instanceof Error ? err : new Error(String(err))
+          );
           return {
             device: sim.preset,
             deviceId: sim.device.udid,
@@ -43,13 +94,17 @@ export class BatchExecutor {
       })
     );
 
-    return settled.map(r => r.status === 'fulfilled' ? r.value : {
-      device: 'unknown',
-      deviceId: 'unknown',
-      viewport: { w: 0, h: 0 },
-      error: 'Promise rejected',
-      timing: 0,
-    });
+    for (const r of settled) {
+      results.push(r.status === 'fulfilled' ? r.value : {
+        device: 'unknown',
+        deviceId: 'unknown',
+        viewport: { w: 0, h: 0 },
+        error: 'Promise rejected',
+        timing: 0,
+      });
+    }
+
+    return results;
   }
 
   async batchNavigate(url: string, waitUntil?: 'load' | 'domcontentloaded' | 'networkidle'): Promise<BatchResult<NavigateResult>[]> {
