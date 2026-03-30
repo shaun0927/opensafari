@@ -28,6 +28,7 @@ import { registerCrossViewportCompareTool } from './cross-viewport-compare';
 import { registerQADetectorTools } from './qa-detectors';
 import { registerQAAuditTools } from './qa-audit';
 import { registerAuthTools } from './auth';
+import { registerMockGeolocationTool } from './mock-geolocation';
 
 export { setWorkflowEngine } from './orchestration-tools';
 export { setCrossViewportCapture } from './cross-viewport-compare';
@@ -60,6 +61,9 @@ export function registerAllTools(server: MCPServer): void {
   registerDeviceListTool(server);
   registerDeviceRotateTool(server);
   registerAppearanceToggleTool(server);
+
+  // Tier 2: Device Mocking
+  registerMockGeolocationTool(server);
 
   // Tier 3: Batch Operations
   registerBatchNavigateTool(server);
