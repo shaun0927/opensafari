@@ -219,4 +219,65 @@ program
     }
   });
 
+// --- audit ---
+program
+  .command('audit')
+  .description('Run QA audit and export results in CI-friendly formats')
+  .requiredOption('--url <url>', 'URL to audit')
+  .option('--format <format>', 'Output format: markdown, junit, json', 'markdown')
+  .option('--output <path>', 'Write report to file instead of stdout')
+  .option('--fail-on-high', 'Exit with code 1 if high-severity issues found')
+  .option('--min-score <score>', 'Exit with code 1 if score below threshold', parseInt)
+  .action(async (options) => {
+    const { QAAudit } = await import('../src/qa/audit');
+    const { QAHistory } = await import('../src/qa/history');
+    const { generateAuditMarkdown } = await import('../src/qa/report-markdown');
+    const { generateAuditJUnit } = await import('../src/qa/report-junit');
+    const { generateAuditJSON } = await import('../src/qa/report-json');
+    const { WebKitClient } = await import('../src/webkit/client');
+
+    let client: InstanceType<typeof WebKitClient> | undefined;
+    try {
+      client = new WebKitClient({ host: 'localhost', port: 9322 });
+      await client.connect();
+    } catch {
+      console.error('Error: Could not connect to Safari. Ensure a simulator is booted and ios-webkit-debug-proxy is running.');
+      process.exit(1);
+    }
+
+    const audit = new QAAudit(client);
+    const report = await audit.runFullAudit(options.url);
+    const history = new QAHistory();
+    await history.save(report);
+
+    let output: string;
+    switch (options.format) {
+      case 'junit':
+        output = generateAuditJUnit(report);
+        break;
+      case 'json':
+        output = JSON.stringify(generateAuditJSON(report), null, 2);
+        break;
+      default:
+        output = generateAuditMarkdown(report);
+    }
+
+    if (options.output) {
+      const fs = await import('fs/promises');
+      await fs.writeFile(options.output, output, 'utf-8');
+      console.error(`Report written to ${options.output}`);
+    } else {
+      console.log(output);
+    }
+
+    const exitCode = history.getExitCode(report, {
+      failOnCritical: true,
+      failOnHigh: !!options.failOnHigh,
+      minScore: options.minScore,
+    });
+
+    await client.disconnect();
+    process.exit(exitCode);
+  });
+
 program.parse();
