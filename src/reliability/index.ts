@@ -1,3 +1,5 @@
+export { CircuitBreaker, CircuitBreakerRegistry } from './circuit-breaker';
+export type { CircuitBreakerOptions } from './circuit-breaker';
 export { SimulatorCrashWatcher } from './crash-watcher';
 export { setupGracefulShutdown } from './graceful-shutdown';
 export {

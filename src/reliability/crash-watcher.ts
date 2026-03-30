@@ -1,5 +1,6 @@
 import { EventEmitter } from 'events';
 import { SimulatorPool } from '../simulator/pool';
+import { CircuitBreakerRegistry } from './circuit-breaker';
 
 export class SimulatorCrashWatcher extends EventEmitter {
   private interval: ReturnType<typeof setInterval> | null = null;
@@ -8,6 +9,7 @@ export class SimulatorCrashWatcher extends EventEmitter {
   constructor(
     private pool: SimulatorPool,
     private authProfile?: string,
+    private circuitBreakers?: CircuitBreakerRegistry,
   ) {
     super();
   }
@@ -38,6 +40,7 @@ export class SimulatorCrashWatcher extends EventEmitter {
         if (!device || device.state !== 'Booted') {
           if (previousState === 'Booted') {
             console.error(`[CrashWatcher] Simulator ${deviceId} crashed (was Booted, now ${device?.state ?? 'gone'})`);
+            this.circuitBreakers?.get(deviceId).trip();
             this.emit('crash', { deviceId });
             await this.recover(deviceId);
           }
@@ -77,6 +80,7 @@ export class SimulatorCrashWatcher extends EventEmitter {
       }
 
       this.knownStates.set(deviceId, 'Booted');
+      this.circuitBreakers?.get(deviceId).reset();
       const duration = Date.now() - startTime;
       console.error(`[CrashWatcher] Recovered ${sim.preset} in ${duration}ms`);
       this.emit('recovered', { deviceId, duration });
