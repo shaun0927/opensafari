@@ -36,6 +36,7 @@ import { registerNetworkLogTool } from './network-log';
 import { registerScenarioTools } from './scenario-tools';
 import { registerBarrierTools } from './barrier-tools';
 import { registerAssertAllDevicesTool } from './assert-all-devices';
+import { registerPerformanceAuditTool } from './performance-audit';
 
 export { setWorkflowEngine } from './orchestration-tools';
 export { setBarrier } from './barrier-tools';
@@ -109,4 +110,6 @@ export function registerAllTools(server: MCPServer): void {
   registerBarrierTools(server);
   // Tier 3: Cross-Device Assertions
   registerAssertAllDevicesTool(server);
+  // Tier 3: Performance Audit
+  registerPerformanceAuditTool(server);
 }
