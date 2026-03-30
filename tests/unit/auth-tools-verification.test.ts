@@ -71,6 +71,7 @@ const MOCK_LOCAL_STORAGE: Record<string, string> = { theme: 'dark', lang: 'en' }
 let injectedCookies: Cookie[] = [];
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 let injectedLocalStorage: Record<string, string> = {};
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 let injectedSessionStorage: Record<string, string> = {};
 
 function createMockBackend(cookies: Cookie[] = MOCK_COOKIES, localStorage: Record<string, string> = MOCK_LOCAL_STORAGE, sessionStorage: Record<string, string> = {}): BrowserBackend {
