@@ -33,12 +33,14 @@ import { registerNetworkThrottleTool } from './network-throttle';
 import { registerErrorLogTool } from './error-log';
 import { registerConsoleLogTool } from './console-log';
 import { registerNetworkLogTool } from './network-log';
+import { registerScenarioTools } from './scenario-tools';
 
 export { setWorkflowEngine } from './orchestration-tools';
 export { setCrossViewportCapture } from './cross-viewport-compare';
 export { setBatchExecutor as setBatchNavigateExecutor } from './batch-navigate';
 export { setBatchExecutor as setBatchScreenshotExecutor } from './batch-screenshot';
 export { setBatchExecutor as setBatchExecuteExecutor } from './batch-execute';
+export { setScenarioRunner } from './scenario-tools';
 
 export function registerAllTools(server: MCPServer): void {
   // Tier 1: Core
@@ -97,4 +99,6 @@ export function registerAllTools(server: MCPServer): void {
 
   // Tier 2: Network Throttle
   registerNetworkThrottleTool(server);
+  // Tier 3: Scenario Runner
+  registerScenarioTools(server);
 }

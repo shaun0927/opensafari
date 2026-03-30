@@ -51,6 +51,7 @@ export const TOOL_TIERS: Record<string, number> = {
   batch_navigate: 3,
   batch_execute: 3,
   cross_viewport_compare: 3,
+  run_scenario: 3,
 };
 
 export function getToolTier(toolName: string): number {
