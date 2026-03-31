@@ -31,6 +31,8 @@ export type { AuthProfile, ExpiryInfo } from './auth';
 export { SimulatorWorkflowEngine } from './orchestration/workflow-engine';
 export { ScenarioRunner } from './orchestration/scenario-runner';
 export { CrossViewportCapture } from './comparison/cross-viewport';
+export { generateMarkdownReport, formatForClaudeVision } from './comparison/report';
+export type { ReportOptions, MCPContent } from './comparison/report';
 
 // Comparison Engines
 export { VisualDiffEngine } from './comparison/visual-diff';
