@@ -11,7 +11,6 @@ import {
 } from '../../src/orchestration/hybrid-qa';
 import { SimulatorPool } from '../../src/simulator/pool';
 import { BrowserBackend } from '../../src/types/browser-backend';
-import { getSessionManager } from '../../src/session-manager';
 
 // ── Mocks ──
 
@@ -206,8 +205,6 @@ describe('HybridQAEngine', () => {
 
   describe('Severity threshold logic', () => {
     // Test the severity ordering used in the engine
-    const severities = ['pass', 'low', 'medium', 'high', 'critical'];
-
     it('should order severities correctly', () => {
       const order: Record<string, number> = {
         critical: 5, high: 4, medium: 3, low: 2, pass: 1, error: 0,
@@ -239,13 +236,13 @@ describe('HybridQAEngine', () => {
 });
 
 describe('Hybrid QA Tools registration', () => {
-  it('should export setHybridQAEngine', () => {
-    const { setHybridQAEngine } = require('../../src/tools/hybrid-qa-tools');
-    expect(typeof setHybridQAEngine).toBe('function');
+  it('should export setHybridQAEngine', async () => {
+    const mod = await import('../../src/tools/hybrid-qa-tools');
+    expect(typeof mod.setHybridQAEngine).toBe('function');
   });
 
-  it('should export registerHybridQATools', () => {
-    const { registerHybridQATools } = require('../../src/tools/hybrid-qa-tools');
-    expect(typeof registerHybridQATools).toBe('function');
+  it('should export registerHybridQATools', async () => {
+    const mod = await import('../../src/tools/hybrid-qa-tools');
+    expect(typeof mod.registerHybridQATools).toBe('function');
   });
 });

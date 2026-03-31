@@ -13,9 +13,8 @@
  */
 
 import { EventEmitter } from 'events';
-import { SimulatorPool, PooledSimulator } from '../simulator/pool';
+import { SimulatorPool } from '../simulator/pool';
 import { TabPool } from '../simulator/tab-pool';
-import { TabClient } from '../simulator/tab-client';
 import { WebKitClient } from '../webkit/client';
 import { BrowserBackend } from '../types/browser-backend';
 import { DetectorResult } from '../qa/types';
