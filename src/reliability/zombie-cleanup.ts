@@ -179,6 +179,39 @@ export function getAllManagedDeviceIds(): Set<string> {
   });
 }
 
+/**
+ * Return device UDIDs that were registered by now-dead processes.
+ * These are the only devices eligible for orphan cleanup — devices
+ * never registered by opensafari are left untouched.
+ */
+export function getOrphanedRegisteredDeviceIds(): Set<string> {
+  return withRegistryLock(() => {
+    const registry = readRegistry();
+    const orphaned = new Set<string>();
+    const stalePids: string[] = [];
+
+    for (const pidStr of Object.keys(registry)) {
+      const pid = Number(pidStr);
+      if (!isProcessAlive(pid)) {
+        for (const udid of registry[pidStr].udids) {
+          orphaned.add(udid);
+        }
+        stalePids.push(pidStr);
+      }
+    }
+
+    if (stalePids.length > 0) {
+      for (const pid of stalePids) {
+        delete registry[pid];
+      }
+      writeRegistry(registry);
+      console.error(`[DeviceRegistry] Pruned ${stalePids.length} stale PID(s)`);
+    }
+
+    return orphaned;
+  });
+}
+
 function readRegistry(): DeviceRegistry {
   try {
     const data = fs.readFileSync(REGISTRY_PATH, 'utf-8');
@@ -244,9 +277,12 @@ async function detectOrphanedProcesses(): Promise<number> {
 }
 
 /**
- * Runtime cleanup: shut down booted simulators not managed by our pool
- * AND not managed by any other live process in the shared registry.
- * Uses `simctl shutdown` for safe teardown instead of raw process kills.
+ * Runtime cleanup: shut down booted simulators that were previously registered
+ * by opensafari but whose owning process has died.
+ *
+ * Devices that were never registered by opensafari (e.g. booted manually,
+ * by test scripts, or by external tools) are never touched. This prevents
+ * the cleanup from interfering with developer workflows and CI pipelines.
  */
 async function cleanupOrphanedSimulators(knownDeviceIds: Set<string>): Promise<number> {
   let cleaned = 0;
@@ -254,13 +290,18 @@ async function cleanupOrphanedSimulators(knownDeviceIds: Set<string>): Promise<n
     const { stdout } = await execFileAsync('xcrun', ['simctl', 'list', 'devices', 'booted', '--json']);
     const data = JSON.parse(stdout);
 
-    // Merge local pool IDs with cross-process registry IDs
-    const registeredIds = getAllManagedDeviceIds();
-    const protectedIds = new Set([...knownDeviceIds, ...registeredIds]);
+    // Collect UDIDs from dead processes before pruning them
+    const orphanedIds = getOrphanedRegisteredDeviceIds();
+
+    // Devices owned by live processes (including this one) are protected
+    const liveIds = getAllManagedDeviceIds();
+    const protectedIds = new Set([...knownDeviceIds, ...liveIds]);
 
     for (const runtime of Object.values(data.devices) as any[]) {
       for (const device of runtime) {
-        if (device.state === 'Booted' && !protectedIds.has(device.udid)) {
+        if (device.state === 'Booted'
+            && orphanedIds.has(device.udid)
+            && !protectedIds.has(device.udid)) {
           try {
             await execFileAsync('xcrun', ['simctl', 'shutdown', device.udid]);
             cleaned++;
