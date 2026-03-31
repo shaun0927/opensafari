@@ -7,6 +7,7 @@ export interface AssertionOptions {
   selector?: string;   // element to check
   check: AssertionCheck;
   expected?: string;   // for text_matches
+  includeScreenshot?: boolean; // capture screenshot from each device
 }
 
 export interface DeviceAssertionResult {
@@ -15,6 +16,7 @@ export interface DeviceAssertionResult {
   passed: boolean;
   actual?: unknown;
   error?: string;
+  screenshot?: string; // base64-encoded screenshot when includeScreenshot is true
 }
 
 export interface CrossDeviceAssertionResult {
@@ -61,6 +63,8 @@ export class CrossDeviceAssert {
   private async runCheck(sim: PooledSimulator, options: AssertionOptions): Promise<DeviceAssertionResult> {
     const base = { device: sim.preset, deviceId: sim.device.udid };
 
+    let result: DeviceAssertionResult;
+
     switch (options.check) {
       case 'visible': {
         if (!options.selector) {
@@ -69,7 +73,8 @@ export class CrossDeviceAssert {
         const safeSelector = JSON.stringify(options.selector);
         const expression = `(() => { const el = document.querySelector(${safeSelector}); if (!el) return false; const s = getComputedStyle(el); if (s.display === 'none' || s.visibility === 'hidden') return false; return el.offsetParent !== null || s.position === 'fixed' || s.position === 'sticky'; })()`;
         const actual = await sim.client.evaluate<boolean>(expression);
-        return { ...base, passed: !!actual, actual };
+        result = { ...base, passed: !!actual, actual };
+        break;
       }
 
       case 'exists': {
@@ -79,7 +84,8 @@ export class CrossDeviceAssert {
         const safeSelector = JSON.stringify(options.selector);
         const expression = `document.querySelector(${safeSelector}) !== null`;
         const actual = await sim.client.evaluate<boolean>(expression);
-        return { ...base, passed: !!actual, actual };
+        result = { ...base, passed: !!actual, actual };
+        break;
       }
 
       case 'text_matches': {
@@ -93,7 +99,8 @@ export class CrossDeviceAssert {
         const expression = `(() => { const el = document.querySelector(${safeSelector}); return el ? el.textContent : null; })()`;
         const actual = await sim.client.evaluate<string | null>(expression);
         const passed = actual === options.expected;
-        return { ...base, passed, actual };
+        result = { ...base, passed, actual };
+        break;
       }
 
       case 'custom': {
@@ -101,11 +108,25 @@ export class CrossDeviceAssert {
           return { ...base, passed: false, error: 'assertion is required for custom check' };
         }
         const actual = await sim.client.evaluate<unknown>(options.assertion);
-        return { ...base, passed: !!actual, actual };
+        result = { ...base, passed: !!actual, actual };
+        break;
       }
 
       default:
         return { ...base, passed: false, error: `Unknown check type: ${options.check}` };
     }
+
+    // Capture screenshot if requested
+    if (options.includeScreenshot) {
+      try {
+        const buffer = await sim.client.screenshot();
+        result.screenshot = buffer.toString('base64');
+      } catch (err) {
+        // Screenshot failure should not fail the assertion itself
+        console.error(`Screenshot capture failed for ${sim.preset}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    return result;
   }
 }

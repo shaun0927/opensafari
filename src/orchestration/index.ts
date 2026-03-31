@@ -22,3 +22,11 @@ export type {
   BarrierResult,
   BarrierStatus,
 } from './step-barrier';
+
+export { CrossDeviceAssert } from './cross-device-assert';
+export type {
+  AssertionCheck,
+  AssertionOptions,
+  DeviceAssertionResult,
+  CrossDeviceAssertionResult,
+} from './cross-device-assert';
