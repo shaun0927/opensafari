@@ -8,7 +8,6 @@
 
 import * as fs from 'fs';
 import * as child_process from 'child_process';
-import { promisify } from 'util';
 import {
   registerManagedDevices,
   addManagedDevice,
@@ -35,6 +34,7 @@ const fsMock = fs as jest.Mocked<typeof fs>;
 let _execFileImpl: ((...args: any[]) => void) | null = null;
 
 jest.mock('child_process', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { promisify } = require('util');
 
   // The base mock function delegates to whatever _execFileImpl is set to.
