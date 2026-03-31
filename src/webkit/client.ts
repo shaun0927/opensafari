@@ -54,6 +54,7 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
 
   // Target-multiplexed protocol state
   private activeTargetId: string | null = null;
+  private knownTargets: Set<string> = new Set();
   private innerMessageId = 0;
   private innerPendingRequests: Map<
     number,
@@ -115,6 +116,7 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
     this.connected = false;
     this.enabledDomains.clear();
     this.activeTargetId = null;
+    this.knownTargets.clear();
     this.targetReady = null;
     this.targetReadyResolve = null;
   }
@@ -133,14 +135,31 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
 
   // ========== Protocol Message Layer ==========
 
+  /**
+   * Send a protocol command to the active target.
+   * For multi-tab, use sendToTarget() with an explicit targetId.
+   */
   async send<T = unknown>(
     method: string,
     params?: Record<string, unknown>,
   ): Promise<T> {
+    return this.sendToTarget<T>(method, params, this.activeTargetId);
+  }
+
+  /**
+   * Send a protocol command to a specific target (tab).
+   * @param targetId - Target to send to. Falls back to activeTargetId if null.
+   */
+  async sendToTarget<T = unknown>(
+    method: string,
+    params?: Record<string, unknown>,
+    targetId?: string | null,
+  ): Promise<T> {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       throw new ConnectionError('WebSocket not connected');
     }
-    if (!this.activeTargetId) {
+    const resolvedTargetId = targetId ?? this.activeTargetId;
+    if (!resolvedTargetId) {
       throw new ConnectionError(
         'No active target. Is Safari open in the simulator?',
       );
@@ -183,7 +202,7 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
       JSON.stringify({
         id: outerId,
         method: 'Target.sendMessageToTarget',
-        params: { targetId: this.activeTargetId, message: innerMessage },
+        params: { targetId: resolvedTargetId, message: innerMessage },
       }),
     );
 
@@ -202,28 +221,41 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
     if (msg.method === 'Target.targetCreated') {
       const info = msg.params?.targetInfo;
       if (info?.type === 'page') {
-        // Always track the latest page target
-        // If old target still exists, it will be destroyed shortly
-        this.activeTargetId = info.targetId;
+        this.knownTargets.add(info.targetId);
+        this.emit('target:created', { targetId: info.targetId, url: info.url });
+
+        // Set as active target only if none is active yet (single-tab compat)
+        // In multi-tab mode, callers manage targets explicitly via TabPool
+        if (!this.activeTargetId) {
+          this.activeTargetId = info.targetId;
+        }
+
         // Re-enable domains on new target (e.g., after navigation destroys old target)
         const domains = [...this.enabledDomains];
-        this.enabledDomains.clear();
         // Re-enable domains then signal target readiness
         Promise.all(
-          domains.map(domain => this.enableDomain(domain).catch(err => {
-            console.error(`[WebKitClient] Failed to re-enable ${domain} on new target: ${(err as Error).message}`);
-          }))
+          domains.map(domain =>
+            this.sendToTarget(`${domain}.enable`, undefined, info.targetId).catch(err => {
+              console.error(`[WebKitClient] Failed to re-enable ${domain} on new target: ${(err as Error).message}`);
+            })
+          )
         ).then(() => {
           this.targetReadyResolve?.();
         });
-        return;  // Don't call targetReadyResolve here, wait for domains
+        return;
       }
       return;
     }
 
     if (msg.method === 'Target.targetDestroyed') {
-      if (msg.params?.targetId === this.activeTargetId) {
-        this.activeTargetId = null;
+      const destroyedId = msg.params?.targetId;
+      this.knownTargets.delete(destroyedId);
+      this.emit('target:destroyed', { targetId: destroyedId });
+      if (destroyedId === this.activeTargetId) {
+        // Fallback to another known target, or null
+        this.activeTargetId = this.knownTargets.size > 0
+          ? this.knownTargets.values().next().value ?? null
+          : null;
       }
       return;
     }
@@ -291,6 +323,30 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
     }
   }
 
+  /**
+   * Enable a domain on a specific target (tab).
+   */
+  async enableDomainForTarget(domain: string, targetId: string): Promise<void> {
+    await this.sendToTarget(`${domain}.enable`, undefined, targetId);
+  }
+
+  // ========== Multi-Tab Target Management ==========
+
+  getActiveTargetId(): string | null {
+    return this.activeTargetId;
+  }
+
+  setActiveTargetId(targetId: string): void {
+    if (!this.knownTargets.has(targetId)) {
+      throw new ConnectionError(`Target ${targetId} not found in known targets`);
+    }
+    this.activeTargetId = targetId;
+  }
+
+  getKnownTargets(): Set<string> {
+    return new Set(this.knownTargets);
+  }
+
   // ========== Heartbeat ==========
 
   private startHeartbeat(): void {
@@ -326,6 +382,7 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
     }
     this.innerPendingRequests.clear();
     this.activeTargetId = null;
+    this.knownTargets.clear();
 
     this.stopHeartbeat();
 
