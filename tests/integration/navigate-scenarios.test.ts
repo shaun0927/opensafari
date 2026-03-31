@@ -79,7 +79,6 @@ describeWithSimulator('Navigate E2E: real-world scenarios (#241)', () => {
   let manager: SimulatorManager;
   let proxy: WebInspectorProxy | null = null;
   let client: WebKitClient;
-  let deviceUdid: string | null = null;
   let available = false;
   let connected = false;
 
@@ -90,7 +89,6 @@ describeWithSimulator('Navigate E2E: real-world scenarios (#241)', () => {
     manager = new SimulatorManager();
     const deviceName = await resolveDeviceName();
     const device = await manager.boot(deviceName, { timeout: BOOT_TIMEOUT });
-    deviceUdid = device.udid;
     registerManagedDevices([device.udid]);
 
     // Open Safari with retries
