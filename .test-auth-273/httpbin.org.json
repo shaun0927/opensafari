@@ -1,0 +1,20 @@
+{
+  "site": "httpbin.org",
+  "savedAt": "2026-03-31T09:39:10.977Z",
+  "currentUrl": "https://httpbin.org/",
+  "cookies": [
+    {
+      "name": "site_b_session",
+      "value": "bbb222",
+      "domain": "httpbin.org",
+      "path": "/",
+      "expires": 1774953550,
+      "httpOnly": false,
+      "secure": false
+    }
+  ],
+  "localStorage": {
+    "site_b_data": "data_for_b"
+  },
+  "sessionStorage": {}
+}

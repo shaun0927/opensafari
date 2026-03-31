@@ -1,0 +1,100 @@
+{
+  "site": "example.com",
+  "savedAt": "2026-03-31T09:39:10.975Z",
+  "currentUrl": "https://example.com/",
+  "cookies": [
+    {
+      "name": "site_a_session",
+      "value": "aaa111",
+      "domain": "example.com",
+      "path": "/",
+      "expires": 1774953550000,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "None"
+    },
+    {
+      "name": "site_a_session",
+      "value": "aaa111",
+      "domain": ".example.com",
+      "path": "/",
+      "expires": 0,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "None"
+    },
+    {
+      "name": "test_session",
+      "value": "abc123",
+      "domain": ".example.com",
+      "path": "/",
+      "expires": 0,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "None"
+    },
+    {
+      "name": "test_user",
+      "value": "johndoe",
+      "domain": ".example.com",
+      "path": "/",
+      "expires": 0,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "None"
+    }
+  ],
+  "domainGroups": [
+    {
+      "domain": "example.com",
+      "cookies": [
+        {
+          "name": "site_a_session",
+          "value": "aaa111",
+          "domain": "example.com",
+          "path": "/",
+          "expires": 1774953550000,
+          "httpOnly": false,
+          "secure": false,
+          "sameSite": "None"
+        },
+        {
+          "name": "site_a_session",
+          "value": "aaa111",
+          "domain": ".example.com",
+          "path": "/",
+          "expires": 0,
+          "httpOnly": false,
+          "secure": false,
+          "sameSite": "None"
+        },
+        {
+          "name": "test_session",
+          "value": "abc123",
+          "domain": ".example.com",
+          "path": "/",
+          "expires": 0,
+          "httpOnly": false,
+          "secure": false,
+          "sameSite": "None"
+        },
+        {
+          "name": "test_user",
+          "value": "johndoe",
+          "domain": ".example.com",
+          "path": "/",
+          "expires": 0,
+          "httpOnly": false,
+          "secure": false,
+          "sameSite": "None"
+        }
+      ]
+    }
+  ],
+  "localStorage": {
+    "auth_token": "tok_test_12345",
+    "user_pref": "dark_mode",
+    "site_a_data": "data_for_a"
+  },
+  "sessionStorage": {}
+}

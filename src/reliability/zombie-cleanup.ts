@@ -179,6 +179,76 @@ export function getAllManagedDeviceIds(): Set<string> {
   });
 }
 
+/**
+ * Return device UDIDs that were registered by now-dead processes.
+ * These are the only devices eligible for orphan cleanup — devices
+ * never registered by opensafari are left untouched.
+ */
+export function getOrphanedRegisteredDeviceIds(): Set<string> {
+  return withRegistryLock(() => {
+    const registry = readRegistry();
+    const orphaned = new Set<string>();
+    const stalePids: string[] = [];
+
+    for (const pidStr of Object.keys(registry)) {
+      const pid = Number(pidStr);
+      if (!isProcessAlive(pid)) {
+        for (const udid of registry[pidStr].udids) {
+          orphaned.add(udid);
+        }
+        stalePids.push(pidStr);
+      }
+    }
+
+    if (stalePids.length > 0) {
+      for (const pid of stalePids) {
+        delete registry[pid];
+      }
+      writeRegistry(registry);
+      console.error(`[DeviceRegistry] Pruned ${stalePids.length} stale PID(s)`);
+    }
+
+    return orphaned;
+  });
+}
+
+/**
+ * Single-lock partition: return both orphaned (dead-process) and live device sets
+ * in one atomic registry read, avoiding TOCTOU between separate calls.
+ */
+function getOrphanedAndLiveDeviceIds(): { orphanedIds: Set<string>; liveIds: Set<string> } {
+  return withRegistryLock(() => {
+    const registry = readRegistry();
+    const orphanedIds = new Set<string>();
+    const liveIds = new Set<string>();
+    const stalePids: string[] = [];
+
+    for (const pidStr of Object.keys(registry)) {
+      const pid = Number(pidStr);
+      if (isProcessAlive(pid)) {
+        for (const udid of registry[pidStr].udids) {
+          liveIds.add(udid);
+        }
+      } else {
+        for (const udid of registry[pidStr].udids) {
+          orphanedIds.add(udid);
+        }
+        stalePids.push(pidStr);
+      }
+    }
+
+    if (stalePids.length > 0) {
+      for (const pid of stalePids) {
+        delete registry[pid];
+      }
+      writeRegistry(registry);
+      console.error(`[DeviceRegistry] Pruned ${stalePids.length} stale PID(s)`);
+    }
+
+    return { orphanedIds, liveIds };
+  });
+}
+
 function readRegistry(): DeviceRegistry {
   try {
     const data = fs.readFileSync(REGISTRY_PATH, 'utf-8');
@@ -244,9 +314,12 @@ async function detectOrphanedProcesses(): Promise<number> {
 }
 
 /**
- * Runtime cleanup: shut down booted simulators not managed by our pool
- * AND not managed by any other live process in the shared registry.
- * Uses `simctl shutdown` for safe teardown instead of raw process kills.
+ * Runtime cleanup: shut down booted simulators that were previously registered
+ * by opensafari but whose owning process has died.
+ *
+ * Devices that were never registered by opensafari (e.g. booted manually,
+ * by test scripts, or by external tools) are never touched. This prevents
+ * the cleanup from interfering with developer workflows and CI pipelines.
  */
 async function cleanupOrphanedSimulators(knownDeviceIds: Set<string>): Promise<number> {
   let cleaned = 0;
@@ -254,13 +327,15 @@ async function cleanupOrphanedSimulators(knownDeviceIds: Set<string>): Promise<n
     const { stdout } = await execFileAsync('xcrun', ['simctl', 'list', 'devices', 'booted', '--json']);
     const data = JSON.parse(stdout);
 
-    // Merge local pool IDs with cross-process registry IDs
-    const registeredIds = getAllManagedDeviceIds();
-    const protectedIds = new Set([...knownDeviceIds, ...registeredIds]);
+    // Single locked read: partition registry into orphaned and live device sets
+    const { orphanedIds, liveIds } = getOrphanedAndLiveDeviceIds();
+    const protectedIds = new Set([...knownDeviceIds, ...liveIds]);
 
     for (const runtime of Object.values(data.devices) as any[]) {
       for (const device of runtime) {
-        if (device.state === 'Booted' && !protectedIds.has(device.udid)) {
+        if (device.state === 'Booted'
+            && orphanedIds.has(device.udid)
+            && !protectedIds.has(device.udid)) {
           try {
             await execFileAsync('xcrun', ['simctl', 'shutdown', device.udid]);
             cleaned++;
@@ -284,14 +359,26 @@ let cleanupGraceTimeout: ReturnType<typeof setTimeout> | null = null;
  * Start periodic zombie cleanup that compares booted simulators against
  * the pool's known devices and shuts down orphans.
  *
- * @param graceMs - Delay before the first cleanup run (default 30 000 ms).
- *   This gives other MCP sessions time to register their devices after boot.
+ * Environment variables:
+ * - `OPENSAFARI_DISABLE_ZOMBIE_CLEANUP=1` — skip periodic cleanup entirely
+ * - `OPENSAFARI_CLEANUP_GRACE_MS` — delay before first run (default 60000ms)
+ * - `OPENSAFARI_CLEANUP_INTERVAL_MS` — interval between runs (default 60000ms)
  */
 export function startPeriodicCleanup(
   getKnownDeviceIds: () => Set<string>,
-  intervalMs = 60000,
-  graceMs = 30000,
+  intervalMs?: number,
+  graceMs?: number,
 ): void {
+  if (process.env.OPENSAFARI_DISABLE_ZOMBIE_CLEANUP === '1') {
+    console.error('[ZombieCleanup] Periodic cleanup disabled via OPENSAFARI_DISABLE_ZOMBIE_CLEANUP');
+    return;
+  }
+
+  const parsedInterval = process.env.OPENSAFARI_CLEANUP_INTERVAL_MS ? parseInt(process.env.OPENSAFARI_CLEANUP_INTERVAL_MS, 10) : NaN;
+  const parsedGrace = process.env.OPENSAFARI_CLEANUP_GRACE_MS ? parseInt(process.env.OPENSAFARI_CLEANUP_GRACE_MS, 10) : NaN;
+  const resolvedInterval = intervalMs ?? (Number.isNaN(parsedInterval) ? 60000 : parsedInterval);
+  const resolvedGrace = graceMs ?? (Number.isNaN(parsedGrace) ? 60000 : parsedGrace);
+
   stopPeriodicCleanup();
 
   const runCleanup = async () => {
@@ -309,9 +396,9 @@ export function startPeriodicCleanup(
     runCleanup().catch(() => {});
     cleanupInterval = setInterval(() => {
       runCleanup().catch(() => {});
-    }, intervalMs);
+    }, resolvedInterval);
     cleanupInterval.unref();
-  }, graceMs);
+  }, resolvedGrace);
   (cleanupGraceTimeout as any).unref?.();
 }
 

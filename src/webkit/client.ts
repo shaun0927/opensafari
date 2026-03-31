@@ -224,10 +224,6 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
     if (msg.method === 'Target.targetDestroyed') {
       if (msg.params?.targetId === this.activeTargetId) {
         this.activeTargetId = null;
-        // Create a fresh gate so callers (e.g. navigate) can await the replacement target
-        this.targetReady = new Promise<void>((resolve) => {
-          this.targetReadyResolve = resolve;
-        });
       }
       return;
     }
@@ -301,16 +297,10 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
     const interval =
       this.options.heartbeatInterval ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
     this.heartbeatTimer = setInterval(async () => {
-      // Skip heartbeat while target is transitioning (e.g. during navigation)
-      if (!this.activeTargetId) return;
       try {
         await this.send('Runtime.evaluate', { expression: '1' });
       } catch {
-        // Only trigger disconnect if we have a target — null target means
-        // a navigation-triggered target swap, not a connection failure
-        if (this.activeTargetId) {
-          this.handleDisconnect();
-        }
+        this.handleDisconnect();
       }
     }, interval);
   }
@@ -391,7 +381,6 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
 
   async navigate(options: NavigateOptions): Promise<NavigateResult> {
     const startTime = Date.now();
-    const navTimeout = options.timeout ?? 30000;
     this.lastUrl = options.url;
 
     await this.enableDomain('Page');
@@ -409,20 +398,10 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
       }
     }
 
-    // Wait for target re-acquisition if Page.navigate triggers a target swap.
-    // On iOS 26+, cross-document navigation destroys the old page target and
-    // creates a new one; we must wait for the new target before polling.
-    if (this.targetReady && !this.activeTargetId) {
-      const targetSwapTimeout = Math.min(navTimeout / 2, 10000);
-      await Promise.race([
-        this.targetReady,
-        new Promise(r => setTimeout(r, targetSwapTimeout)),
-      ]);
-    }
-
     // Poll document.readyState instead of relying on Page.loadEventFired
     const waitUntil = options.waitUntil;
     const waitStart = Date.now();
+    const navTimeout = options.timeout ?? 30000;
     while (Date.now() - waitStart < navTimeout) {
       await new Promise(r => setTimeout(r, 300));
       try {
@@ -442,13 +421,7 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
           if (readyState === 'complete') break;
         }
       } catch {
-        // Target may be transitioning during navigation — wait for new target
-        if (this.activeTargetId === null && this.targetReady) {
-          await Promise.race([
-            this.targetReady,
-            new Promise(r => setTimeout(r, 2000)),
-          ]);
-        }
+        // Target may be transitioning during navigation, keep polling
         continue;
       }
     }
@@ -1006,9 +979,8 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
   onConsole(handler: (msg: { type: string; text: string }) => void): void {
     this.enableDomain('Console').then(() => {
       this.on('Console.messageAdded', (params: any) => {
-        const rawLevel = params.message?.level ?? params.message?.type ?? 'log';
         handler({
-          type: rawLevel === 'warning' ? 'warn' : rawLevel,
+          type: params.message?.level ?? params.message?.type ?? 'log',
           text: params.message?.text ?? '',
         });
       });
@@ -1045,49 +1017,24 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
 
 
   onError(handler: (error: { message: string; stack?: string; source?: string; line?: number; column?: number }) => void): void {
-    const DEDUP_WINDOW_MS = 500;
-    const seen = new Map<string, number>();
-    const dedup = (error: { message: string; stack?: string; source?: string; line?: number; column?: number }) => {
-      const key = `${error.message}|${error.source ?? ''}|${error.line ?? ''}`;
-      const now = Date.now();
-      const lastSeen = seen.get(key);
-      if (lastSeen !== undefined && now - lastSeen < DEDUP_WINDOW_MS) return;
-      seen.set(key, now);
-      if (seen.size > 200) {
-        const first = seen.keys().next().value;
-        if (first !== undefined) seen.delete(first);
-      }
-      handler(error);
-    };
-
-    // Primary: Runtime.exceptionThrown
-    this.enableDomain('Runtime').then(() => {
-      this.on('Runtime.exceptionThrown', (params: any) => {
-        const exception = params.exceptionDetails ?? {};
-        const exObj = exception.exception ?? {};
-        dedup({
-          message: exObj.description ?? exception.text ?? 'Unknown error',
-          stack: exObj.description ?? undefined,
-          source: exception.url ?? undefined,
-          line: exception.lineNumber ?? undefined,
-          column: exception.columnNumber ?? undefined,
-        });
-      });
-    });
-
-    // Fallback: Console.messageAdded error-level (Safari/WebKit routes JS errors here)
+    // WebKit reports unhandled JS errors via Console.messageAdded with level "error"
+    // (Runtime.exceptionThrown is Chrome-specific and not available in WebKit)
     this.enableDomain('Console').then(() => {
       this.on('Console.messageAdded', (params: any) => {
-        const level = params.message?.level ?? '';
-        if (level !== 'error') return;
-        const text = params.message?.text ?? '';
-        if (!/^(TypeError|ReferenceError|SyntaxError|RangeError|URIError|EvalError|Error)\b/.test(text)) return;
-        dedup({
-          message: text,
-          source: params.message?.url ?? undefined,
-          line: params.message?.line ?? undefined,
-          column: params.message?.column ?? undefined,
-        });
+        const msg = params.message ?? {};
+        if (msg.level === 'error' && msg.source === 'javascript') {
+          const frames = msg.stackTrace?.callFrames ?? [];
+          const stackLines = frames.map((f: any) =>
+            `  at ${f.functionName || '(anonymous)'} (${f.url}:${f.lineNumber}:${f.columnNumber})`
+          );
+          handler({
+            message: msg.text ?? 'Unknown error',
+            stack: stackLines.length ? stackLines.join('\n') : undefined,
+            source: msg.url ?? undefined,
+            line: msg.line ?? undefined,
+            column: msg.column ?? undefined,
+          });
+        }
       });
     });
   }

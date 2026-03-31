@@ -281,6 +281,8 @@ export function generateAuditHtml(
   options?: {
     trendEntries?: TrendEntry[];
     regression?: RegressionReport;
+    screenshotBase64?: string;
+    annotatedScreenshotBase64?: string;
   },
 ): string {
   const failed = report.detectors.filter((d) => !d.passed);
@@ -292,6 +294,26 @@ export function generateAuditHtml(
       : '';
 
   const regressionSection = options?.regression ? generateRegressionSection(options.regression) : '';
+
+  const screenshotSection = options?.screenshotBase64 ? `
+    <div class="section">
+      <h2>Page Screenshot</h2>
+      <div style="display:flex;gap:16px;flex-wrap:wrap;">
+        <div style="flex:1;min-width:280px;">
+          <h3 style="font-size:14px;font-weight:600;margin-bottom:8px;">Original</h3>
+          <img src="data:image/png;base64,${options.screenshotBase64}"
+               style="max-width:100%;border:1px solid #e5e7eb;border-radius:8px;"
+               alt="Page screenshot"/>
+        </div>
+        ${options?.annotatedScreenshotBase64 ? `
+        <div style="flex:1;min-width:280px;">
+          <h3 style="font-size:14px;font-weight:600;margin-bottom:8px;">Annotated Issues</h3>
+          <img src="data:image/png;base64,${options.annotatedScreenshotBase64}"
+               style="max-width:100%;border:1px solid #e5e7eb;border-radius:8px;"
+               alt="Annotated screenshot with issues"/>
+        </div>` : ''}
+      </div>
+    </div>` : '';
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -334,6 +356,8 @@ export function generateAuditHtml(
       </div>
     </div>
 
+    ${screenshotSection}
+
     ${trendChart ? `
     <div class="section">
       <h2>Score Trend</h2>
@@ -364,7 +388,13 @@ export function generateAuditHtml(
 </html>`;
 }
 
-export async function saveHtmlReport(report: AuditReport, options?: HtmlReportOptions): Promise<string> {
+export async function saveHtmlReport(
+  report: AuditReport,
+  options?: HtmlReportOptions & {
+    screenshotBase64?: string;
+    annotatedScreenshotBase64?: string;
+  },
+): Promise<string> {
   const opts = {
     includeTrend: true,
     maxTrendEntries: 10,
@@ -386,7 +416,12 @@ export async function saveHtmlReport(report: AuditReport, options?: HtmlReportOp
     trendEntries = await loadTrendEntries(report.url, opts.maxTrendEntries);
   }
 
-  const html = generateAuditHtml(report, { trendEntries, regression });
+  const html = generateAuditHtml(report, {
+    trendEntries,
+    regression,
+    screenshotBase64: options?.screenshotBase64,
+    annotatedScreenshotBase64: options?.annotatedScreenshotBase64,
+  });
 
   await fs.mkdir(opts.outputDir, { recursive: true });
   const filename = `report-${new Date().toISOString().replace(/[:.]/g, '-')}.html`;
@@ -428,4 +463,61 @@ function sanitizeHostname(url: string): string {
   } catch {
     return url.replace(/[^a-zA-Z0-9.-]/g, '_');
   }
+}
+
+export interface DeviceCapture {
+  device: string;
+  viewport: { w: number; h: number };
+  screenshot?: string; // base64
+}
+
+export function generateComparisonHtml(url: string, captures: DeviceCapture[]): string {
+  const deviceCards = captures
+    .map((cap) => {
+      const screenshotImg = cap.screenshot
+        ? `<img src="data:image/png;base64,${cap.screenshot}" style="max-width:100%;border:1px solid #e5e7eb;border-radius:8px;" alt="${escapeHtml(cap.device)} screenshot"/>`
+        : '<p style="color:#6b7280;">No screenshot available</p>';
+      return `
+        <div style="flex:1;min-width:280px;max-width:480px;">
+          <div style="padding:12px 16px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px 8px 0 0;display:flex;justify-content:space-between;align-items:center;">
+            <span style="font-weight:600;font-size:14px;">${escapeHtml(cap.device)}</span>
+            <span style="font-size:12px;color:#6b7280;">${cap.viewport.w}x${cap.viewport.h}</span>
+          </div>
+          <div style="border:1px solid #e5e7eb;border-top:none;border-radius:0 0 8px 8px;overflow:hidden;">
+            ${screenshotImg}
+          </div>
+        </div>`;
+    })
+    .join('');
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cross-Viewport Comparison - ${escapeHtml(url)}</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f9fafb; color: #111827; line-height: 1.5; }
+    .container { max-width: 1200px; margin: 0 auto; padding: 32px 24px; }
+    h1 { font-size: 24px; font-weight: 700; margin-bottom: 8px; }
+    .devices { display: flex; gap: 24px; flex-wrap: wrap; margin-top: 24px; }
+    .footer { margin-top: 48px; padding-top: 16px; border-top: 1px solid #e5e7eb; font-size: 12px; color: #9ca3af; text-align: center; }
+    @media print { body { background: white; } }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Cross-Viewport Comparison</h1>
+    <p style="color:#6b7280;margin-bottom:8px;">URL: <a href="${escapeHtml(url)}" style="color:#2563eb;text-decoration:none;">${escapeHtml(url)}</a></p>
+    <p style="color:#6b7280;">${captures.length} device${captures.length !== 1 ? 's' : ''} compared</p>
+    <div class="devices">
+      ${deviceCards}
+    </div>
+    <div class="footer">
+      Generated by OpenSafari &middot; ${new Date().toISOString()}
+    </div>
+  </div>
+</body>
+</html>`;
 }

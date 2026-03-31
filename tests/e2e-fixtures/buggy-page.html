@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html>
+<!-- NO lang attribute: triggers accessibility detector (WCAG 3.1.1) -->
+<head>
+  <!-- viewport with viewport-fit=cover but NO safe-area padding: triggers safe-area detector -->
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>QA Detector Buggy Reference Page</title>
+  <!-- NO theme-color, NO color-scheme, NO apple-touch-icon, NO manifest: triggers pwa-meta detector -->
+  <!-- NO color-scheme meta: triggers dark-mode detector -->
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: sans-serif; padding: 20px; }
+
+    /* auto-zoom trigger: font-size < 16px on inputs */
+    .small-input { font-size: 12px; padding: 4px; }
+
+    /* touch-targets trigger: button < 44x44px */
+    .tiny-btn { width: 30px; height: 30px; font-size: 10px; border: 1px solid #333; background: #eee; }
+
+    /* hover-only trigger: :hover changes display */
+    .hover-menu { display: none; background: #fff; border: 1px solid #ccc; padding: 10px; }
+    .hover-container:hover .hover-menu { display: block; }
+
+    /* horizontal-overflow trigger: element wider than viewport (direct body child) */
+    .wide-element { width: 2000px; height: 50px; background: #f0f0f0; }
+
+    /* fixed-stacking trigger: overlapping fixed elements with same z-index */
+    .fixed-header { position: fixed; top: 0; left: 0; right: 0; height: 50px; background: rgba(0,0,255,0.3); z-index: 10; }
+    .fixed-banner { position: fixed; top: 10px; left: 0; right: 0; height: 40px; background: rgba(255,0,0,0.3); z-index: 10; }
+
+    /* safe-area + keyboard-overlap trigger: fixed bottom element without safe-area-inset */
+    .fixed-bottom-bar { position: fixed; bottom: 0; left: 0; right: 0; height: 60px; background: #333; color: #fff; display: flex; align-items: center; justify-content: center; z-index: 20; }
+
+    /* accessibility contrast trigger: low contrast text */
+    .low-contrast { color: #aaa; background-color: #ccc; padding: 4px; }
+
+    .section { margin: 80px 0 20px; }
+    h2 { margin-bottom: 10px; }
+  </style>
+</head>
+<body>
+  <!-- scroll-lock: set overflow hidden on html element without visible modal -->
+  <script>document.documentElement.style.overflow = 'hidden';</script>
+
+  <!-- fixed-stacking: two overlapping fixed elements with z-index: 10 -->
+  <div class="fixed-header" id="fixedHeader">Header</div>
+  <div class="fixed-banner" id="fixedBanner">Banner</div>
+
+  <!-- safe-area + keyboard-overlap: fixed bottom bar -->
+  <div class="fixed-bottom-bar" id="bottomBar">Fixed Bottom Bar</div>
+
+  <!-- horizontal-overflow: DIRECT body child wider than viewport -->
+  <div class="wide-element" id="wideEl">This element is 2000px wide</div>
+
+  <div style="padding-top: 70px;">
+    <!-- accessibility: heading skip h1 -> h3 -->
+    <h1>QA Detector Buggy Reference Page</h1>
+
+    <div class="section">
+      <h3>Auto-Zoom Test</h3>
+      <!-- auto-zoom: input with 12px font -->
+      <input type="text" class="small-input" id="smallInput" name="username" placeholder="Small font input (12px)">
+    </div>
+
+    <div class="section">
+      <h3>Touch Targets Test</h3>
+      <!-- touch-targets: 30x30 button -->
+      <button class="tiny-btn" id="tinyBtn">Go</button>
+    </div>
+
+    <div class="section">
+      <h3>Hover-Only Test</h3>
+      <!-- hover-only: menu visible only on hover -->
+      <div class="hover-container">
+        <button>Hover Menu</button>
+        <div class="hover-menu">Dropdown content</div>
+      </div>
+    </div>
+
+    <div class="section">
+      <h3>Input Type Test</h3>
+      <!-- input-type: phone field with type="text" -->
+      <input type="text" name="phone" id="phoneInput" placeholder="Phone number">
+      <!-- input-type: email field with type="text" -->
+      <input type="text" name="email" id="emailInput" placeholder="Email address">
+    </div>
+
+    <div class="section">
+      <h3>Accessibility Tests</h3>
+      <!-- accessibility: image without alt -->
+      <img src="test-image.png" id="noAltImg" width="50" height="50">
+
+      <!-- accessibility: input without label -->
+      <input type="text" name="unlabeled" id="unlabeledInput" placeholder="No label">
+
+      <!-- accessibility: low contrast text -->
+      <p class="low-contrast" id="lowContrast">This text has very low contrast</p>
+
+      <!-- accessibility: generic link text -->
+      <a href="#section1">click here</a>
+      <a href="#section2">read more</a>
+
+      <!-- accessibility: positive tabindex -->
+      <button tabindex="5" id="tabBtn">Tab Order 5</button>
+
+      <!-- accessibility: button without accessible name -->
+      <button id="emptyBtn"></button>
+
+      <!-- accessibility: ARIA role missing required attributes -->
+      <div role="checkbox" id="ariaCheckbox">Check me</div>
+    </div>
+  </div>
+</body>
+</html>

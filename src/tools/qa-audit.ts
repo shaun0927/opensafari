@@ -32,7 +32,24 @@ export function registerQAAuditTools(server: MCPServer): void {
 
       if (format === 'html') {
         const { saveHtmlReport } = await import('../qa/report-html');
-        const filePath = await saveHtmlReport(report);
+        let screenshotBase64: string | undefined;
+        let annotatedScreenshotBase64: string | undefined;
+
+        try {
+          const screenshotBuf = await client.screenshot({});
+          screenshotBase64 = screenshotBuf.toString('base64');
+
+          try {
+            const annotated = await audit.annotateReport(report, screenshotBase64);
+            annotatedScreenshotBase64 = annotated.annotatedScreenshot;
+          } catch {
+            // Annotation is best-effort
+          }
+        } catch {
+          // Screenshot is best-effort
+        }
+
+        const filePath = await saveHtmlReport(report, { screenshotBase64, annotatedScreenshotBase64 });
         return { content: [{ type: 'text' as const, text: `HTML report saved to: ${filePath}` }] };
       }
 

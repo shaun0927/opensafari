@@ -219,8 +219,6 @@ describe('AuthManager: save/list/delete lifecycle', () => {
       const sessionData = { authToken: 'tok_abc123', userId: '42' };
       const clientWithSession = createMockClient(sessionData);
       await authManager.save(TEST_SITE, clientWithSession);
-      const profile = await authManager.loadProfile(TEST_SITE);
-      expect(profile.sessionStorage).toEqual(sessionData);
 
       const profile = await authManager.loadProfile(TEST_SITE);
       expect(profile.sessionStorage).toEqual(sessionData);
