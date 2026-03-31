@@ -1018,13 +1018,16 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
 
 
   onError(handler: (error: { message: string; stack?: string; source?: string; line?: number; column?: number }) => void): void {
-    const seen = new Set<string>();
+    const DEDUP_WINDOW_MS = 500;
+    const seen = new Map<string, number>();
     const dedup = (error: { message: string; stack?: string; source?: string; line?: number; column?: number }) => {
-      const key = error.message;
-      if (seen.has(key)) return;
-      seen.add(key);
+      const key = `${error.message}|${error.source ?? ''}|${error.line ?? ''}`;
+      const now = Date.now();
+      const lastSeen = seen.get(key);
+      if (lastSeen !== undefined && now - lastSeen < DEDUP_WINDOW_MS) return;
+      seen.set(key, now);
       if (seen.size > 200) {
-        const first = seen.values().next().value;
+        const first = seen.keys().next().value;
         if (first !== undefined) seen.delete(first);
       }
       handler(error);
