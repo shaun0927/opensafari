@@ -212,6 +212,43 @@ export function getOrphanedRegisteredDeviceIds(): Set<string> {
   });
 }
 
+/**
+ * Single-lock partition: return both orphaned (dead-process) and live device sets
+ * in one atomic registry read, avoiding TOCTOU between separate calls.
+ */
+function getOrphanedAndLiveDeviceIds(): { orphanedIds: Set<string>; liveIds: Set<string> } {
+  return withRegistryLock(() => {
+    const registry = readRegistry();
+    const orphanedIds = new Set<string>();
+    const liveIds = new Set<string>();
+    const stalePids: string[] = [];
+
+    for (const pidStr of Object.keys(registry)) {
+      const pid = Number(pidStr);
+      if (isProcessAlive(pid)) {
+        for (const udid of registry[pidStr].udids) {
+          liveIds.add(udid);
+        }
+      } else {
+        for (const udid of registry[pidStr].udids) {
+          orphanedIds.add(udid);
+        }
+        stalePids.push(pidStr);
+      }
+    }
+
+    if (stalePids.length > 0) {
+      for (const pid of stalePids) {
+        delete registry[pid];
+      }
+      writeRegistry(registry);
+      console.error(`[DeviceRegistry] Pruned ${stalePids.length} stale PID(s)`);
+    }
+
+    return { orphanedIds, liveIds };
+  });
+}
+
 function readRegistry(): DeviceRegistry {
   try {
     const data = fs.readFileSync(REGISTRY_PATH, 'utf-8');
@@ -290,11 +327,8 @@ async function cleanupOrphanedSimulators(knownDeviceIds: Set<string>): Promise<n
     const { stdout } = await execFileAsync('xcrun', ['simctl', 'list', 'devices', 'booted', '--json']);
     const data = JSON.parse(stdout);
 
-    // Collect UDIDs from dead processes before pruning them
-    const orphanedIds = getOrphanedRegisteredDeviceIds();
-
-    // Devices owned by live processes (including this one) are protected
-    const liveIds = getAllManagedDeviceIds();
+    // Single locked read: partition registry into orphaned and live device sets
+    const { orphanedIds, liveIds } = getOrphanedAndLiveDeviceIds();
     const protectedIds = new Set([...knownDeviceIds, ...liveIds]);
 
     for (const runtime of Object.values(data.devices) as any[]) {
