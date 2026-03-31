@@ -247,7 +247,14 @@ describe('Zombie cleanup: cross-session safety (#263)', () => {
   describe('cleanupZombieProcesses DOES kill orphaned simulators', () => {
     it('shuts down a booted simulator with no owning session', async () => {
       const orphanUdid = 'UDID-ORPHAN-NO-OWNER';
-      setupFsForRegistry({});
+      const deadPid = 9999999;
+      const registry: DeviceRegistry = {
+        [String(deadPid)]: {
+          udids: [orphanUdid],
+          startedAt: new Date().toISOString(),
+        },
+      };
+      setupFsForRegistry(registry);
 
       // First call returns device list; second call (shutdown) returns empty stdout.
       let callNum = 0;
@@ -273,8 +280,14 @@ describe('Zombie cleanup: cross-session safety (#263)', () => {
     it('shuts down orphan but not protected device in same list', async () => {
       const orphanUdid = 'UDID-ORPHAN';
       const protectedUdid = 'UDID-PROTECTED';
-
-      setupFsForRegistry({});
+      const deadPid = 9999999;
+      const registry: DeviceRegistry = {
+        [String(deadPid)]: {
+          udids: [orphanUdid],
+          startedAt: new Date().toISOString(),
+        },
+      };
+      setupFsForRegistry(registry);
 
       let callNum = 0;
       _execFileImpl = (...args: any[]) => {
