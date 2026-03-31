@@ -239,9 +239,14 @@ export class SimulatorPool extends EventEmitter {
         console.error(`[SimulatorPool] Sequential: ${preset} failed: ${msg}`);
         results.set(preset, { status: 'failed', error: msg, duration: Date.now() - start });
       } finally {
-        // Always shut down before moving to next device
+        // Always shut down before moving to next device — wrapped in try/catch
+        // to prevent shutdown failures from aborting the remaining devices
         if (sim) {
-          await this.shutdownOne(sim.device.udid);
+          try {
+            await this.shutdownOne(sim.device.udid);
+          } catch (shutdownErr) {
+            console.error(`[SimulatorPool] Sequential: shutdown failed for ${preset}: ${shutdownErr}`);
+          }
         }
       }
     }

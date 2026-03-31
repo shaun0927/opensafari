@@ -114,14 +114,16 @@ export class TabPool extends EventEmitter {
     const tab = this.tabs.get(targetId);
     if (!tab) return;
 
+    // Remove from map first to prevent double-fire from target:destroyed listener
+    this.tabs.delete(targetId);
+    tab.client.destroy();
+
     try {
-      // Close tab by navigating to about:blank then closing via JavaScript
       await tab.client.evaluate('window.close()');
     } catch {
       // Tab may already be gone
     }
 
-    this.tabs.delete(targetId);
     this.emit('tab:closed', { targetId });
   }
 
