@@ -281,6 +281,8 @@ export function generateAuditHtml(
   options?: {
     trendEntries?: TrendEntry[];
     regression?: RegressionReport;
+    screenshotBase64?: string;
+    annotatedScreenshotBase64?: string;
   },
 ): string {
   const failed = report.detectors.filter((d) => !d.passed);
@@ -292,6 +294,26 @@ export function generateAuditHtml(
       : '';
 
   const regressionSection = options?.regression ? generateRegressionSection(options.regression) : '';
+
+  const screenshotSection = options?.screenshotBase64 ? `
+    <div class="section">
+      <h2>Page Screenshot</h2>
+      <div style="display:flex;gap:16px;flex-wrap:wrap;">
+        <div style="flex:1;min-width:280px;">
+          <h3 style="font-size:14px;font-weight:600;margin-bottom:8px;">Original</h3>
+          <img src="data:image/png;base64,${options.screenshotBase64}"
+               style="max-width:100%;border:1px solid #e5e7eb;border-radius:8px;"
+               alt="Page screenshot"/>
+        </div>
+        ${options?.annotatedScreenshotBase64 ? `
+        <div style="flex:1;min-width:280px;">
+          <h3 style="font-size:14px;font-weight:600;margin-bottom:8px;">Annotated Issues</h3>
+          <img src="data:image/png;base64,${options.annotatedScreenshotBase64}"
+               style="max-width:100%;border:1px solid #e5e7eb;border-radius:8px;"
+               alt="Annotated screenshot with issues"/>
+        </div>` : ''}
+      </div>
+    </div>` : '';
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -334,6 +356,8 @@ export function generateAuditHtml(
       </div>
     </div>
 
+    ${screenshotSection}
+
     ${trendChart ? `
     <div class="section">
       <h2>Score Trend</h2>
@@ -364,7 +388,13 @@ export function generateAuditHtml(
 </html>`;
 }
 
-export async function saveHtmlReport(report: AuditReport, options?: HtmlReportOptions): Promise<string> {
+export async function saveHtmlReport(
+  report: AuditReport,
+  options?: HtmlReportOptions & {
+    screenshotBase64?: string;
+    annotatedScreenshotBase64?: string;
+  },
+): Promise<string> {
   const opts = {
     includeTrend: true,
     maxTrendEntries: 10,
@@ -386,7 +416,12 @@ export async function saveHtmlReport(report: AuditReport, options?: HtmlReportOp
     trendEntries = await loadTrendEntries(report.url, opts.maxTrendEntries);
   }
 
-  const html = generateAuditHtml(report, { trendEntries, regression });
+  const html = generateAuditHtml(report, {
+    trendEntries,
+    regression,
+    screenshotBase64: options?.screenshotBase64,
+    annotatedScreenshotBase64: options?.annotatedScreenshotBase64,
+  });
 
   await fs.mkdir(opts.outputDir, { recursive: true });
   const filename = `report-${new Date().toISOString().replace(/[:.]/g, '-')}.html`;
