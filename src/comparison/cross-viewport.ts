@@ -73,7 +73,6 @@ export class CrossViewportCapture {
   }
 
   private mapBreakpoint(width: number): string {
-    if (width < 640) return 'sm';
     if (width < 768) return 'sm';
     if (width < 1024) return 'md';
     if (width < 1280) return 'lg';
