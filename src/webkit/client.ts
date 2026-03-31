@@ -1017,17 +1017,24 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
 
 
   onError(handler: (error: { message: string; stack?: string; source?: string; line?: number; column?: number }) => void): void {
-    this.enableDomain('Runtime').then(() => {
-      this.on('Runtime.exceptionThrown', (params: any) => {
-        const exception = params.exceptionDetails ?? {};
-        const exObj = exception.exception ?? {};
-        handler({
-          message: exObj.description ?? exception.text ?? 'Unknown error',
-          stack: exObj.description ?? undefined,
-          source: exception.url ?? undefined,
-          line: exception.lineNumber ?? undefined,
-          column: exception.columnNumber ?? undefined,
-        });
+    // WebKit reports unhandled JS errors via Console.messageAdded with level "error"
+    // (Runtime.exceptionThrown is Chrome-specific and not available in WebKit)
+    this.enableDomain('Console').then(() => {
+      this.on('Console.messageAdded', (params: any) => {
+        const msg = params.message ?? {};
+        if (msg.level === 'error' && msg.source === 'javascript') {
+          const frames = msg.stackTrace?.callFrames ?? [];
+          const stackLines = frames.map((f: any) =>
+            `  at ${f.functionName || '(anonymous)'} (${f.url}:${f.lineNumber}:${f.columnNumber})`
+          );
+          handler({
+            message: msg.text ?? 'Unknown error',
+            stack: stackLines.length ? stackLines.join('\n') : undefined,
+            source: msg.url ?? undefined,
+            line: msg.line ?? undefined,
+            column: msg.column ?? undefined,
+          });
+        }
       });
     });
   }
