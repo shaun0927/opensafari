@@ -16,6 +16,7 @@ import {
 } from '../config/defaults';
 import { registerManagedDevices, unregisterManagedDevices } from '../reliability/zombie-cleanup';
 import { CircuitBreakerRegistry } from '../reliability/circuit-breaker';
+import { getSessionManager } from '../session-manager';
 
 const execFileAsync = promisify(execFile);
 
@@ -160,6 +161,23 @@ export class SimulatorPool extends EventEmitter {
     const udids = results.map(r => r.device.udid);
     registerManagedDevices(udids);
 
+    // Sync pool state to SessionManager for unified connection tracking
+    const sm = getSessionManager();
+    for (const pooled of results) {
+      const presetInfo = DEVICE_PRESETS[pooled.preset];
+      sm.addSimulator(pooled.device.udid, {
+        deviceId: pooled.device.udid,
+        deviceType: pooled.device.name,
+        state: 'booted',
+        viewport: { width: presetInfo?.w ?? 390, height: presetInfo?.h ?? 844 },
+        bootedAt: pooled.bootedAt,
+        lastActivity: pooled.lastActivity,
+      });
+      if (pooled.client.isConnected()) {
+        sm.setConnection(pooled.device.udid, pooled.client);
+      }
+    }
+
     return results;
   }
 
@@ -187,6 +205,7 @@ export class SimulatorPool extends EventEmitter {
   async shutdownAll(): Promise<void> {
     this.stopIdleMonitor();
     this.stopResourceMonitor();
+    const sm = getSessionManager();
     await Promise.allSettled(
       this.getAll().map(async (sim) => {
         try {
@@ -195,6 +214,7 @@ export class SimulatorPool extends EventEmitter {
         try {
           await this.manager.shutdown(sim.device.udid);
         } catch { /* best effort */ }
+        sm.removeSimulator(sim.device.udid);
         this.pool.delete(sim.device.udid);
       })
     );
@@ -210,6 +230,7 @@ export class SimulatorPool extends EventEmitter {
     if (!sim) return;
     try { await sim.client.disconnect(); } catch { /* */ }
     try { await this.manager.shutdown(deviceId); } catch { /* */ }
+    getSessionManager().removeSimulator(deviceId);
     this.pool.delete(deviceId);
     this.devicePorts.delete(deviceId);
 

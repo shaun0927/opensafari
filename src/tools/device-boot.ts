@@ -1,8 +1,10 @@
-import { MCPServer, getWebKitClient, setWebKitClient } from '../mcp-server';
+import { MCPServer } from '../mcp-server';
 import { SimulatorManager } from '../simulator';
 import { getSharedProxy } from '../simulator/proxy';
 import { WebKitClient } from '../webkit/client';
 import { addManagedDevice } from '../reliability/zombie-cleanup';
+import { getSessionManager } from '../session-manager';
+import { DEVICE_PRESETS } from '../simulator/presets';
 
 export function registerDeviceBootTool(server: MCPServer): void {
   server.registerTool(
@@ -34,10 +36,15 @@ export function registerDeviceBootTool(server: MCPServer): void {
 
         // Open Safari so it registers with WebInspector, then connect WebKitClient
         try {
-          // Disconnect any existing client to avoid leaking WebSocket connections on re-boot
-          const existingClient = getWebKitClient();
-          if (existingClient) {
-            try { await existingClient.disconnect(); } catch { /* best-effort */ }
+          const sm = getSessionManager();
+
+          // Disconnect any existing client for THIS device to avoid leaking WebSocket connections
+          if (sm.hasConnection(device.udid)) {
+            const existingClient = sm.getConnection(device.udid);
+            if (existingClient) {
+              try { await existingClient.disconnect(); } catch { /* best-effort */ }
+            }
+            sm.removeConnection(device.udid);
           }
 
           // Retry openUrl — the simulator may report "Booted" before app
@@ -53,10 +60,23 @@ export function registerDeviceBootTool(server: MCPServer): void {
               await new Promise(r => setTimeout(r, 2000));
             }
           }
+
           // Connect to WebKit with retries — Safari may need time to register with WebInspector
           const client = new WebKitClient({ host: 'localhost', port: proxy.port });
           await client.connect({ retries: 5, retryDelay: 2000 });
-          setWebKitClient(client);
+
+          // Register in SessionManager — tracks connection and sets as active device
+          const preset = Object.entries(DEVICE_PRESETS).find(([, p]) => p.name === device.name);
+          sm.addSimulator(device.udid, {
+            deviceId: device.udid,
+            deviceType: device.name,
+            state: 'booted',
+            viewport: { width: preset?.[1]?.w ?? 390, height: preset?.[1]?.h ?? 844 },
+            bootedAt: Date.now(),
+            lastActivity: Date.now(),
+          });
+          sm.setConnection(device.udid, client);
+          sm.setActiveDevice(device.udid);
         } catch (err) {
           console.error(`[device_boot] WebKit connection failed (proxy running, tools may not work): ${err}`);
         }
