@@ -1,6 +1,9 @@
 import { DevicePreset } from './types';
 
 export const DEVICE_PRESETS: Record<string, DevicePreset> = {
+  'iphone-se-1': { name: 'iPhone SE (1st generation)', w: 320, h: 568, dpr: 2 },
+  'iphone-se-2': { name: 'iPhone SE (2nd generation)', w: 375, h: 667, dpr: 2 },
+  'iphone-se-3': { name: 'iPhone SE (3rd generation)', w: 375, h: 667, dpr: 3 },
   'iphone-17e': { name: 'iPhone 17e', w: 390, h: 844, dpr: 3 },
   'iphone-17': { name: 'iPhone 17', w: 402, h: 874, dpr: 3 },
   'iphone-air': { name: 'iPhone Air', w: 420, h: 912, dpr: 3 },
