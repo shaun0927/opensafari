@@ -4,13 +4,7 @@
  */
 
 import { WebKitClient } from '../src/webkit/client';
-import { SimulatorManager } from '../src/simulator';
-import { getSharedProxy } from '../src/simulator/proxy';
 import * as http from 'http';
-import { execFile } from 'child_process';
-import { promisify } from 'util';
-
-const execFileAsync = promisify(execFile);
 
 const TEST_HTML = `<!DOCTYPE html>
 <html>
