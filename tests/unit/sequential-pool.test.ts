@@ -3,7 +3,7 @@
  * Verifies SimulatorPool.bootSequential() for low-memory multi-device testing.
  */
 
-import { SimulatorPool, PooledSimulator } from '../../src/simulator/pool';
+import { SimulatorPool } from '../../src/simulator/pool';
 import { getSessionManager } from '../../src/session-manager';
 
 // Mock SimulatorManager

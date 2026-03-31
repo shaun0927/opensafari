@@ -11,7 +11,11 @@ export type { SimulatorInfo, WorkerInfo } from './session-manager';
 export type { MCPServerOptions } from './mcp-server';
 
 // Tool registration
-export { registerAllTools, setWorkflowEngine, setCrossViewportCapture, setScenarioRunner, setBarrier, setCrossDeviceAssert, setCompareDevicesCapture, setCompareDevicesBatchExecutor } from './tools';
+export { registerAllTools, setWorkflowEngine, setCrossViewportCapture, setScenarioRunner, setBarrier, setCrossDeviceAssert, setCompareDevicesCapture, setCompareDevicesBatchExecutor, setHybridQAEngine } from './tools';
+
+// Hybrid QA
+export { HybridQAEngine } from './orchestration/hybrid-qa';
+export type { HybridQAOptions, HybridQAResult, PageScanResult, VerifiedIssue } from './orchestration/hybrid-qa';
 
 // WebKit client
 export { WebKitClient } from './webkit/client';
