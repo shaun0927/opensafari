@@ -57,9 +57,31 @@ export function registerAssertAllDevicesTool(server: MCPServer): void {
           includeScreenshot: params.includeScreenshot as boolean | undefined,
         });
 
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
+        const content: Array<{ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string }> = [];
+
+        // Build summary without screenshots to avoid bloated JSON
+        const summaryResult = {
+          ...result,
+          results: result.results.map((r: any) => {
+            const { screenshot, ...rest } = r;
+            return rest;
+          }),
         };
+        content.push({ type: 'text' as const, text: JSON.stringify(summaryResult, null, 2) });
+
+        // Add screenshots as proper MCP image content blocks
+        if (params.includeScreenshot) {
+          for (const r of result.results as any[]) {
+            if (r.screenshot) {
+              content.push(
+                { type: 'text' as const, text: `Screenshot: ${r.deviceName ?? 'unknown'}` },
+                { type: 'image' as const, data: r.screenshot, mimeType: 'image/png' },
+              );
+            }
+          }
+        }
+
+        return { content };
       } catch (err) {
         return {
           content: [{ type: 'text' as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }],
