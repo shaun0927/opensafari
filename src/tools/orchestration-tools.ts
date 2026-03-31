@@ -29,6 +29,7 @@ export function registerOrchestrationTools(server: MCPServer): void {
           authProfile: { type: 'string', description: 'Auth profile name to inject' },
           taskDescription: { type: 'string', description: 'Task description for worker prompts' },
           workerNames: { type: 'array', items: { type: 'string' }, description: 'Custom worker names' },
+          mode: { type: 'string', enum: ['concurrent', 'sequential'], description: 'Execution mode: concurrent (all at once, high RAM) or sequential (one at a time, low RAM). Default: concurrent' },
         },
         required: ['devices'],
       },
