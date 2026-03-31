@@ -1,0 +1,436 @@
+{
+  "timestamp": "2026-03-31T06:26:08.729Z",
+  "device": "E2E-248",
+  "runtime": "26.4",
+  "buggyPage": "http://localhost:8765/buggy-page.html",
+  "cleanPage": "http://localhost:8765/clean-page.html",
+  "detectors": [
+    {
+      "name": "auto_zoom",
+      "expectBuggy": true,
+      "buggy": {
+        "passed": false,
+        "issues": 4,
+        "severity": "high",
+        "details": [
+          {
+            "selector": "#smallInput",
+            "problem": "font-size is 12px (< 16px minimum)",
+            "fix": "Set font-size to at least 16px to prevent iOS Safari auto-zoom on focus"
+          },
+          {
+            "selector": "#phoneInput",
+            "problem": "font-size is 11px (< 16px minimum)",
+            "fix": "Set font-size to at least 16px to prevent iOS Safari auto-zoom on focus"
+          },
+          {
+            "selector": "#emailInput",
+            "problem": "font-size is 11px (< 16px minimum)",
+            "fix": "Set font-size to at least 16px to prevent iOS Safari auto-zoom on focus"
+          },
+          {
+            "selector": "#unlabeledInput",
+            "problem": "font-size is 11px (< 16px minimum)",
+            "fix": "Set font-size to at least 16px to prevent iOS Safari auto-zoom on focus"
+          }
+        ]
+      },
+      "clean": {
+        "passed": true,
+        "issues": 0,
+        "severity": "pass",
+        "details": []
+      }
+    },
+    {
+      "name": "touch_targets",
+      "expectBuggy": true,
+      "buggy": {
+        "passed": false,
+        "issues": 10,
+        "severity": "high",
+        "details": [
+          {
+            "selector": "#smallInput",
+            "problem": "Touch target is 163x25px (minimum: 44x44px)",
+            "fix": "Increase element size to at least 44x44px or add padding",
+            "size": {
+              "width": 163,
+              "height": 25
+            }
+          },
+          {
+            "selector": "#tinyBtn",
+            "problem": "Touch target is 30x30px (minimum: 44x44px)",
+            "fix": "Increase element size to at least 44x44px or add padding",
+            "size": {
+              "width": 30,
+              "height": 30
+            }
+          },
+          {
+            "selector": "button",
+            "problem": "Touch target is 65x20px (minimum: 44x44px)",
+            "fix": "Increase element size to at least 44x44px or add padding",
+            "size": {
+              "width": 65,
+              "height": 20
+            }
+          },
+          {
+            "selector": "#phoneInput",
+            "problem": "Touch target is 144x16px (minimum: 44x44px)",
+            "fix": "Increase element size to at least 44x44px or add padding",
+            "size": {
+              "width": 144,
+              "height": 16
+            }
+          },
+          {
+            "selector": "#emailInput",
+            "problem": "Touch target is 144x16px (minimum: 44x44px)",
+            "fix": "Increase element size to at least 44x44px or add padding",
+            "size": {
+              "width": 144,
+              "height": 16
+            }
+          },
+          {
+            "selector": "#unlabeledInput",
+            "problem": "Touch target is 144x16px (minimum: 44x44px)",
+            "fix": "Increase element size to at least 44x44px or add padding",
+            "size": {
+              "width": 144,
+              "height": 16
+            }
+          },
+          {
+            "selector": "a",
+            "problem": "Touch target is 68x20px (minimum: 44x44px)",
+            "fix": "Increase element size to at least 44x44px or add padding",
+            "size": {
+              "width": 68,
+              "height": 20
+            }
+          },
+          {
+            "selector": "a",
+            "problem": "Touch target is 73x20px (minimum: 44x44px)",
+            "fix": "Increase element size to at least 44x44px or add padding",
+            "size": {
+              "width": 73,
+              "height": 20
+            }
+          },
+          {
+            "selector": "#tabBtn",
+            "problem": "Touch target is 64x20px (minimum: 44x44px)",
+            "fix": "Increase element size to at least 44x44px or add padding",
+            "size": {
+              "width": 64,
+              "height": 20
+            }
+          },
+          {
+            "selector": "#emptyBtn",
+            "problem": "Touch target is 2x20px (minimum: 44x44px)",
+            "fix": "Increase element size to at least 44x44px or add padding",
+            "size": {
+              "width": 2,
+              "height": 20
+            }
+          }
+        ]
+      },
+      "clean": {
+        "passed": true,
+        "issues": 0,
+        "severity": "pass",
+        "details": []
+      }
+    },
+    {
+      "name": "hover_only",
+      "expectBuggy": true,
+      "buggy": {
+        "passed": false,
+        "issues": 1,
+        "severity": "medium",
+        "details": [
+          {
+            "selector": ".hover-container .hover-menu",
+            "problem": ":hover changes visibility — inaccessible on touch devices",
+            "fix": "Add click/touch handler or use :focus-within as alternative",
+            "cssRule": ".hover-container:hover .hover-menu"
+          }
+        ]
+      },
+      "clean": {
+        "passed": true,
+        "issues": 0,
+        "severity": "pass",
+        "details": []
+      }
+    },
+    {
+      "name": "input_type",
+      "expectBuggy": true,
+      "buggy": {
+        "passed": false,
+        "issues": 2,
+        "severity": "medium",
+        "details": [
+          {
+            "selector": "#phoneInput",
+            "problem": "Likely numeric field using type=\"text\" without inputmode",
+            "fix": "Add inputmode=\"numeric\" or inputmode=\"tel\""
+          },
+          {
+            "selector": "#emailInput",
+            "problem": "Email field using type=\"text\"",
+            "fix": "Use type=\"email\" for email keyboard"
+          }
+        ]
+      },
+      "clean": {
+        "passed": true,
+        "issues": 0,
+        "severity": "pass",
+        "details": []
+      }
+    },
+    {
+      "name": "safe_area",
+      "expectBuggy": true,
+      "buggy": {
+        "passed": false,
+        "issues": 2,
+        "severity": "high",
+        "details": [
+          {
+            "selector": "#fixedHeader",
+            "problem": "Fixed element at top edge without safe-area-inset padding",
+            "fix": "Add padding: env(safe-area-inset-top)"
+          },
+          {
+            "selector": "#bottomBar",
+            "problem": "Fixed element at bottom edge without safe-area-inset padding",
+            "fix": "Add padding: env(safe-area-inset-bottom)"
+          }
+        ]
+      },
+      "clean": {
+        "passed": true,
+        "issues": 0,
+        "severity": "pass",
+        "details": []
+      }
+    },
+    {
+      "name": "keyboard_overlap",
+      "expectBuggy": true,
+      "buggy": {
+        "passed": true,
+        "issues": 0,
+        "severity": "pass",
+        "details": []
+      },
+      "clean": {
+        "passed": true,
+        "issues": 0,
+        "severity": "pass",
+        "details": []
+      }
+    },
+    {
+      "name": "horizontal_overflow",
+      "expectBuggy": true,
+      "buggy": {
+        "passed": false,
+        "issues": 1,
+        "severity": "high",
+        "details": [
+          {
+            "selector": "#wideEl",
+            "problem": "Element extends to 2020px (viewport: 402px)",
+            "fix": "Add overflow-x: hidden or max-width: 100%",
+            "overflow": "1618px"
+          }
+        ]
+      },
+      "clean": {
+        "passed": true,
+        "issues": 0,
+        "severity": "pass",
+        "details": []
+      }
+    },
+    {
+      "name": "100vh",
+      "expectBuggy": false,
+      "buggy": {
+        "passed": false,
+        "issues": 1,
+        "severity": "medium",
+        "details": [
+          {
+            "selector": "viewport",
+            "problem": "100vh = 754px but visible viewport = 714px (diff: 40px)",
+            "fix": "Use 100dvh or calc(var(--vh, 1vh) * 100) with JS viewport listener"
+          }
+        ]
+      },
+      "clean": {
+        "passed": false,
+        "issues": 1,
+        "severity": "medium",
+        "details": [
+          {
+            "selector": "viewport",
+            "problem": "100vh = 754px but visible viewport = 714px (diff: 40px)",
+            "fix": "Use 100dvh or calc(var(--vh, 1vh) * 100) with JS viewport listener"
+          }
+        ]
+      }
+    },
+    {
+      "name": "fixed_stacking",
+      "expectBuggy": true,
+      "buggy": {
+        "passed": false,
+        "issues": 1,
+        "severity": "medium",
+        "details": [
+          {
+            "selector": "#fixedHeader <-> #fixedBanner",
+            "problem": "Overlapping fixed elements with same z-index (10)",
+            "fix": "Set distinct z-index values"
+          }
+        ]
+      },
+      "clean": {
+        "passed": true,
+        "issues": 0,
+        "severity": "pass",
+        "details": []
+      }
+    },
+    {
+      "name": "scroll_lock",
+      "expectBuggy": true,
+      "buggy": {
+        "passed": false,
+        "issues": 1,
+        "severity": "high",
+        "details": [
+          {
+            "selector": "document.documentElement",
+            "problem": "overflow: hidden set but no visible modal found",
+            "fix": "Ensure modal close handlers restore overflow"
+          }
+        ]
+      },
+      "clean": {
+        "passed": true,
+        "issues": 0,
+        "severity": "pass",
+        "details": []
+      }
+    },
+    {
+      "name": "dark_mode",
+      "expectBuggy": true,
+      "buggy": {
+        "passed": false,
+        "issues": 1,
+        "severity": "medium",
+        "details": [
+          {
+            "selector": "head",
+            "problem": "No <meta name=\"color-scheme\"> tag — browser may apply forced dark mode",
+            "fix": "Add <meta name=\"color-scheme\" content=\"light only\"> or implement proper dark mode"
+          }
+        ]
+      },
+      "clean": {
+        "passed": true,
+        "issues": 0,
+        "severity": "pass",
+        "details": []
+      }
+    },
+    {
+      "name": "orientation",
+      "expectBuggy": false,
+      "buggy": {
+        "passed": false,
+        "issues": 1,
+        "severity": "medium",
+        "details": [
+          {
+            "selector": "document.documentElement",
+            "problem": "Horizontal overflow in landscape (scrollWidth: 2020px, viewport: 402px)",
+            "fix": "Ensure responsive layout handles landscape orientation"
+          }
+        ]
+      },
+      "clean": {
+        "passed": true,
+        "issues": 0,
+        "severity": "pass",
+        "details": []
+      }
+    },
+    {
+      "name": "pwa_meta",
+      "expectBuggy": true,
+      "buggy": {
+        "passed": false,
+        "issues": 4,
+        "severity": "low",
+        "details": [
+          {
+            "selector": "head",
+            "problem": "Missing theme-color (recommended)",
+            "fix": "Add <meta name=\"theme-color\" content=\"#yourColor\">"
+          },
+          {
+            "selector": "head",
+            "problem": "Missing color-scheme (recommended)",
+            "fix": "Add <meta name=\"color-scheme\" content=\"light only\">"
+          },
+          {
+            "selector": "head",
+            "problem": "Missing apple-touch-icon (recommended)",
+            "fix": "Add <link rel=\"apple-touch-icon\" href=\"/icon-180.png\">"
+          },
+          {
+            "selector": "head",
+            "problem": "Missing manifest (recommended)",
+            "fix": "Add <link rel=\"manifest\" href=\"/manifest.json\">"
+          }
+        ]
+      },
+      "clean": {
+        "passed": true,
+        "issues": 0,
+        "severity": "pass",
+        "details": []
+      }
+    },
+    {
+      "name": "accessibility",
+      "expectBuggy": true,
+      "buggy": null,
+      "clean": null
+    }
+  ],
+  "summary": {
+    "truePositives": 10,
+    "totalExpected": 11,
+    "falsePositives": 1,
+    "errors": 1,
+    "accuracy": 91,
+    "fpRate": 7
+  }
+}
