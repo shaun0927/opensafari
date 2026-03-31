@@ -82,7 +82,7 @@ program
     }).catch(() => {});
 
     // Periodic zombie cleanup: compare booted simulators against pool
-    if (options.zombieCleanup !== false) {
+    if (options.zombieCleanup !== false && process.env.OPENSAFARI_DISABLE_ZOMBIE_CLEANUP !== '1') {
       startPeriodicCleanup(() => {
         const ids = new Set<string>();
         for (const sim of pool.getAll()) ids.add(sim.device.udid);
