@@ -40,13 +40,16 @@ export function registerErrorLogTool(server: MCPServer): void {
 
       if (action === 'start') {
         if (attachedClient !== client) {
-          const recentMessages = new Set<string>();
+          const DEDUP_WINDOW_MS = 500;
+          const recentMessages = new Map<string, number>();
           const pushError = (entry: ErrorEntry) => {
-            const key = entry.message;
-            if (recentMessages.has(key)) return;
-            recentMessages.add(key);
+            const key = `${entry.message}|${entry.source ?? ''}|${entry.line ?? ''}`;
+            const now = Date.now();
+            const lastSeen = recentMessages.get(key);
+            if (lastSeen !== undefined && now - lastSeen < DEDUP_WINDOW_MS) return;
+            recentMessages.set(key, now);
             if (recentMessages.size > 200) {
-              const first = recentMessages.values().next().value;
+              const first = recentMessages.keys().next().value;
               if (first !== undefined) recentMessages.delete(first);
             }
             for (const c of collectors.values()) {
