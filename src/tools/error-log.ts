@@ -39,12 +39,37 @@ export function registerErrorLogTool(server: MCPServer): void {
       const collector = getOrCreateCollector(sessionId);
 
       if (action === 'start') {
-        if (attachedClient !== client && (client as any).onError) {
-          (client as any).onError((error: { message: string; stack?: string; source?: string; line?: number; column?: number }) => {
-            for (const c of collectors.values()) {
-              c.push({ timestamp: Date.now(), message: error.message, stack: error.stack, source: error.source, line: error.line, column: error.column });
+        if (attachedClient !== client) {
+          const recentMessages = new Set<string>();
+          const pushError = (entry: ErrorEntry) => {
+            const key = entry.message;
+            if (recentMessages.has(key)) return;
+            recentMessages.add(key);
+            if (recentMessages.size > 200) {
+              const first = recentMessages.values().next().value;
+              if (first !== undefined) recentMessages.delete(first);
             }
-          });
+            for (const c of collectors.values()) {
+              c.push(entry);
+            }
+          };
+
+          // Primary: Runtime.exceptionThrown via onError
+          if ((client as any).onError) {
+            (client as any).onError((error: { message: string; stack?: string; source?: string; line?: number; column?: number }) => {
+              pushError({ timestamp: Date.now(), message: error.message, stack: error.stack, source: error.source, line: error.line, column: error.column });
+            });
+          }
+
+          // Fallback: Console.messageAdded error-level (Safari/WebKit routes JS errors here)
+          if ((client as any).onConsole) {
+            (client as any).onConsole((msg: { type: string; text: string }) => {
+              if (msg.type !== 'error') return;
+              if (!/^(TypeError|ReferenceError|SyntaxError|RangeError|URIError|EvalError|Error)\b/.test(msg.text)) return;
+              pushError({ timestamp: Date.now(), message: msg.text });
+            });
+          }
+
           attachedClient = client;
         }
         collector.start();
