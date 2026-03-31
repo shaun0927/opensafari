@@ -3,9 +3,7 @@
  * Handles: boot, Safari open, proxy start, detection, cleanup
  */
 import { WebKitClient } from '../src/webkit/client';
-import { WebInspectorProxy } from '../src/simulator/proxy';
 import { SimulatorManager } from '../src/simulator/manager';
-import { addManagedDevice } from '../src/reliability/zombie-cleanup';
 import { detectAutoZoom } from '../src/qa/detectors/auto-zoom';
 import { detectTouchTargets } from '../src/qa/detectors/touch-targets';
 import { detectHoverOnly } from '../src/qa/detectors/hover-only';

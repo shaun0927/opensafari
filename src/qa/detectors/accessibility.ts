@@ -52,7 +52,7 @@ export async function detectAccessibility(client: BrowserBackend): Promise<Detec
         return 0.2126 * sRGB[0] + 0.7152 * sRGB[1] + 0.0722 * sRGB[2];
       }
       function parseColor(str) {
-        var m = str.match(/rgba?\\((\\d+),\\s*(\\d+),\\s*(\\d+)/);
+        var m = str.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
         if (m) return { r: parseInt(m[1]), g: parseInt(m[2]), b: parseInt(m[3]) };
         return null;
       }
