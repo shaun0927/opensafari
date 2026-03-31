@@ -65,6 +65,21 @@ batch_navigate, batch_screenshot, batch_execute, cross_viewport_compare, workflo
 
 qa_auto_zoom, qa_touch_targets, qa_hover_only, qa_input_type, qa_safe_area, qa_keyboard_overlap, qa_horizontal_overflow, qa_100vh, qa_fixed_stacking, qa_scroll_lock, qa_dark_mode, qa_orientation, qa_pwa_meta, qa_full_audit
 
+#### qa_full_audit
+
+Run all 13 iOS QA detectors and generate a scored report.
+
+- **Input:**
+  - `url?: string` — URL to audit (uses current page if omitted)
+  - `format?: 'markdown' | 'junit' | 'json' | 'html'` — Report format (default: `markdown`)
+    - `markdown` — Human-readable Markdown summary (default)
+    - `junit` — JUnit XML for CI systems (GitHub Actions, Jenkins, CircleCI)
+    - `json` — Structured JSON for programmatic processing or dashboards
+    - `html` — Self-contained HTML report saved to disk; returns the file path
+  - `annotate?: boolean` — Overlay issue bounding boxes on a screenshot (default: `false`, `markdown` format only)
+- **Output:** Report content as text (or file path for `html` format)
+- **CI usage:** See [CI/CD Integration](ci-integration.md) for example GitHub Actions workflows, exit code gating, and Jenkins/CircleCI examples.
+
 ## Claude Code Configuration
 
 ```json
