@@ -284,14 +284,26 @@ let cleanupGraceTimeout: ReturnType<typeof setTimeout> | null = null;
  * Start periodic zombie cleanup that compares booted simulators against
  * the pool's known devices and shuts down orphans.
  *
- * @param graceMs - Delay before the first cleanup run (default 30 000 ms).
- *   This gives other MCP sessions time to register their devices after boot.
+ * Environment variables:
+ * - `OPENSAFARI_DISABLE_ZOMBIE_CLEANUP=1` — skip periodic cleanup entirely
+ * - `OPENSAFARI_CLEANUP_GRACE_MS` — delay before first run (default 60000ms)
+ * - `OPENSAFARI_CLEANUP_INTERVAL_MS` — interval between runs (default 60000ms)
  */
 export function startPeriodicCleanup(
   getKnownDeviceIds: () => Set<string>,
-  intervalMs = 60000,
-  graceMs = 30000,
+  intervalMs?: number,
+  graceMs?: number,
 ): void {
+  if (process.env.OPENSAFARI_DISABLE_ZOMBIE_CLEANUP === '1') {
+    console.error('[ZombieCleanup] Periodic cleanup disabled via OPENSAFARI_DISABLE_ZOMBIE_CLEANUP');
+    return;
+  }
+
+  const resolvedInterval = intervalMs
+    ?? (process.env.OPENSAFARI_CLEANUP_INTERVAL_MS ? parseInt(process.env.OPENSAFARI_CLEANUP_INTERVAL_MS, 10) : 60000);
+  const resolvedGrace = graceMs
+    ?? (process.env.OPENSAFARI_CLEANUP_GRACE_MS ? parseInt(process.env.OPENSAFARI_CLEANUP_GRACE_MS, 10) : 60000);
+
   stopPeriodicCleanup();
 
   const runCleanup = async () => {
@@ -309,9 +321,9 @@ export function startPeriodicCleanup(
     runCleanup().catch(() => {});
     cleanupInterval = setInterval(() => {
       runCleanup().catch(() => {});
-    }, intervalMs);
+    }, resolvedInterval);
     cleanupInterval.unref();
-  }, graceMs);
+  }, resolvedGrace);
   (cleanupGraceTimeout as any).unref?.();
 }
 
