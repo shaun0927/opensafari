@@ -20,6 +20,9 @@ export type { WebKitClientOptions, WebKitTarget } from './webkit/client';
 // Simulator
 export { SimulatorManager } from './simulator';
 export { SimulatorPool } from './simulator/pool';
+export { TabPool } from './simulator/tab-pool';
+export type { TabInfo, TabPoolOptions } from './simulator/tab-pool';
+export { TabClient } from './simulator/tab-client';
 export type { PooledSimulator, SimulatorPoolOptions } from './simulator/pool';
 export { WebInspectorProxy, getSharedProxy } from './simulator/proxy';
 export type { ProxyOptions } from './simulator/proxy';
