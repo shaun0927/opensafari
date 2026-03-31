@@ -299,10 +299,10 @@ export function startPeriodicCleanup(
     return;
   }
 
-  const resolvedInterval = intervalMs
-    ?? (process.env.OPENSAFARI_CLEANUP_INTERVAL_MS ? parseInt(process.env.OPENSAFARI_CLEANUP_INTERVAL_MS, 10) : 60000);
-  const resolvedGrace = graceMs
-    ?? (process.env.OPENSAFARI_CLEANUP_GRACE_MS ? parseInt(process.env.OPENSAFARI_CLEANUP_GRACE_MS, 10) : 60000);
+  const parsedInterval = process.env.OPENSAFARI_CLEANUP_INTERVAL_MS ? parseInt(process.env.OPENSAFARI_CLEANUP_INTERVAL_MS, 10) : NaN;
+  const parsedGrace = process.env.OPENSAFARI_CLEANUP_GRACE_MS ? parseInt(process.env.OPENSAFARI_CLEANUP_GRACE_MS, 10) : NaN;
+  const resolvedInterval = intervalMs ?? (Number.isNaN(parsedInterval) ? 60000 : parsedInterval);
+  const resolvedGrace = graceMs ?? (Number.isNaN(parsedGrace) ? 60000 : parsedGrace);
 
   stopPeriodicCleanup();
 

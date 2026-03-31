@@ -3,7 +3,7 @@
  * Tests long_press, swipe, select_option on real iOS Simulator
  */
 
-import { WebKitClient } from '../src/webkit/client';
+import { WebKitClient } from '../../src/webkit/client';
 import * as http from 'http';
 
 const TEST_HTML = `<!DOCTYPE html>
