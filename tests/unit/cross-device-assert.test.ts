@@ -1,9 +1,12 @@
 import { CrossDeviceAssert } from '../../src/orchestration/cross-device-assert';
 
-function createMockSimulator(preset: string, udid: string, evaluateFn: (expr: string) => unknown) {
+function createMockSimulator(preset: string, udid: string, evaluateFn: (expr: string) => unknown, screenshotFn?: () => Buffer) {
   return {
     device: { udid },
-    client: { evaluate: jest.fn(evaluateFn) },
+    client: {
+      evaluate: jest.fn(evaluateFn),
+      screenshot: jest.fn(screenshotFn ?? (() => Buffer.from('fake-png-data'))),
+    },
     preset,
     bootedAt: Date.now(),
     lastActivity: Date.now(),
@@ -202,6 +205,75 @@ describe('CrossDeviceAssert', () => {
 
       expect(result.passed).toBe(false);
       expect(result.results[0].error).toBe('assertion is required for custom check');
+    });
+  });
+
+  describe('screenshot capture', () => {
+    it('includes screenshot when includeScreenshot is true', async () => {
+      const pngData = Buffer.from('fake-screenshot-data');
+      const sims = [
+        createMockSimulator('iPhone 15', 'udid-1', () => true, () => pngData),
+        createMockSimulator('iPad Air', 'udid-2', () => true, () => pngData),
+      ];
+      const pool = createMockPool(sims);
+      const asserter = new CrossDeviceAssert(pool);
+      const result = await asserter.assertAll({
+        check: 'exists',
+        selector: '#nav',
+        includeScreenshot: true,
+      });
+
+      expect(result.passed).toBe(true);
+      result.results.forEach(r => {
+        expect(r.screenshot).toBe(pngData.toString('base64'));
+      });
+      sims.forEach(sim => {
+        expect(sim.client.screenshot).toHaveBeenCalledTimes(1);
+      });
+    });
+
+    it('does not include screenshot by default', async () => {
+      const sims = [
+        createMockSimulator('iPhone 15', 'udid-1', () => true),
+        createMockSimulator('iPad Air', 'udid-2', () => true),
+      ];
+      const pool = createMockPool(sims);
+      const asserter = new CrossDeviceAssert(pool);
+      const result = await asserter.assertAll({
+        check: 'exists',
+        selector: '#nav',
+      });
+
+      expect(result.passed).toBe(true);
+      result.results.forEach(r => {
+        expect(r.screenshot).toBeUndefined();
+      });
+      sims.forEach(sim => {
+        expect(sim.client.screenshot).not.toHaveBeenCalled();
+      });
+    });
+
+    it('does not fail assertion when screenshot capture fails', async () => {
+      const sims = [
+        createMockSimulator('iPhone 15', 'udid-1', () => true, () => {
+          throw new Error('Screenshot failed');
+        }),
+      ];
+      const pool = createMockPool(sims);
+      const asserter = new CrossDeviceAssert(pool);
+      const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
+
+      const result = await asserter.assertAll({
+        check: 'exists',
+        selector: '#nav',
+        includeScreenshot: true,
+      });
+
+      expect(result.passed).toBe(true);
+      expect(result.results[0].passed).toBe(true);
+      expect(result.results[0].screenshot).toBeUndefined();
+      expect(consoleSpy).toHaveBeenCalled();
+      consoleSpy.mockRestore();
     });
   });
 

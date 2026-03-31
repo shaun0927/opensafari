@@ -32,6 +32,10 @@ export function registerAssertAllDevicesTool(server: MCPServer): void {
             type: 'string',
             description: 'Expected text content (for text_matches check)',
           },
+          includeScreenshot: {
+            type: 'boolean',
+            description: 'Capture a screenshot from each device after the assertion check',
+          },
         },
         required: ['check'],
       },
@@ -50,6 +54,7 @@ export function registerAssertAllDevicesTool(server: MCPServer): void {
           selector: params.selector as string | undefined,
           assertion: params.assertion as string | undefined,
           expected: params.expected as string | undefined,
+          includeScreenshot: params.includeScreenshot as boolean | undefined,
         });
 
         return {

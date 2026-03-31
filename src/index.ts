@@ -30,6 +30,19 @@ export type { AuthProfile, ExpiryInfo } from './auth';
 // Orchestration
 export { SimulatorWorkflowEngine } from './orchestration/workflow-engine';
 export { ScenarioRunner } from './orchestration/scenario-runner';
+export { CrossDeviceAssert } from './orchestration/cross-device-assert';
+export type {
+  AssertionCheck,
+  AssertionOptions,
+  DeviceAssertionResult,
+  CrossDeviceAssertionResult,
+} from './orchestration/cross-device-assert';
+export { StepBarrier } from './orchestration/step-barrier';
+export type {
+  BarrierOptions,
+  BarrierResult,
+  BarrierStatus,
+} from './orchestration/step-barrier';
 export { CrossViewportCapture } from './comparison/cross-viewport';
 
 // Comparison Engines
