@@ -42,6 +42,7 @@ import { registerNetworkHarTool } from './network-har';
 import { registerMockPermissionTool } from './mock-permission';
 import { registerNetworkInterceptTool } from './network-intercept';
 import { registerNetworkOfflineTool } from './network-offline';
+import { registerHybridQATools } from './hybrid-qa-tools';
 
 export { setWorkflowEngine } from './orchestration-tools';
 export { setBarrier } from './barrier-tools';
@@ -52,6 +53,7 @@ export { setBatchExecutor as setBatchScreenshotExecutor } from './batch-screensh
 export { setBatchExecutor as setBatchExecuteExecutor } from './batch-execute';
 export { setScenarioRunner } from './scenario-tools';
 export { setCrossDeviceAssert } from './assert-all-devices';
+export { setHybridQAEngine } from './hybrid-qa-tools';
 
 export function registerAllTools(server: MCPServer): void {
   // Tier 1: Core
@@ -127,4 +129,7 @@ export function registerAllTools(server: MCPServer): void {
   // Tier 2: Network Interception
   registerNetworkInterceptTool(server);
   registerNetworkOfflineTool(server);
+
+  // Tier 3: Hybrid QA (Fast Scan + Deep Verify)
+  registerHybridQATools(server);
 }
