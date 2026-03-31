@@ -979,8 +979,9 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
   onConsole(handler: (msg: { type: string; text: string }) => void): void {
     this.enableDomain('Console').then(() => {
       this.on('Console.messageAdded', (params: any) => {
+        const rawLevel = params.message?.level ?? params.message?.type ?? 'log';
         handler({
-          type: params.message?.level ?? params.message?.type ?? 'log',
+          type: rawLevel === 'warning' ? 'warn' : rawLevel,
           text: params.message?.text ?? '',
         });
       });
@@ -1017,16 +1018,45 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
 
 
   onError(handler: (error: { message: string; stack?: string; source?: string; line?: number; column?: number }) => void): void {
+    const seen = new Set<string>();
+    const dedup = (error: { message: string; stack?: string; source?: string; line?: number; column?: number }) => {
+      const key = error.message;
+      if (seen.has(key)) return;
+      seen.add(key);
+      if (seen.size > 200) {
+        const first = seen.values().next().value;
+        if (first !== undefined) seen.delete(first);
+      }
+      handler(error);
+    };
+
+    // Primary: Runtime.exceptionThrown
     this.enableDomain('Runtime').then(() => {
       this.on('Runtime.exceptionThrown', (params: any) => {
         const exception = params.exceptionDetails ?? {};
         const exObj = exception.exception ?? {};
-        handler({
+        dedup({
           message: exObj.description ?? exception.text ?? 'Unknown error',
           stack: exObj.description ?? undefined,
           source: exception.url ?? undefined,
           line: exception.lineNumber ?? undefined,
           column: exception.columnNumber ?? undefined,
+        });
+      });
+    });
+
+    // Fallback: Console.messageAdded error-level (Safari/WebKit routes JS errors here)
+    this.enableDomain('Console').then(() => {
+      this.on('Console.messageAdded', (params: any) => {
+        const level = params.message?.level ?? '';
+        if (level !== 'error') return;
+        const text = params.message?.text ?? '';
+        if (!/^(TypeError|ReferenceError|SyntaxError|RangeError|URIError|EvalError|Error)\b/.test(text)) return;
+        dedup({
+          message: text,
+          source: params.message?.url ?? undefined,
+          line: params.message?.line ?? undefined,
+          column: params.message?.column ?? undefined,
         });
       });
     });
