@@ -224,6 +224,10 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
     if (msg.method === 'Target.targetDestroyed') {
       if (msg.params?.targetId === this.activeTargetId) {
         this.activeTargetId = null;
+        // Create a fresh gate so callers (e.g. navigate) can await the replacement target
+        this.targetReady = new Promise<void>((resolve) => {
+          this.targetReadyResolve = resolve;
+        });
       }
       return;
     }
@@ -297,10 +301,16 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
     const interval =
       this.options.heartbeatInterval ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
     this.heartbeatTimer = setInterval(async () => {
+      // Skip heartbeat while target is transitioning (e.g. during navigation)
+      if (!this.activeTargetId) return;
       try {
         await this.send('Runtime.evaluate', { expression: '1' });
       } catch {
-        this.handleDisconnect();
+        // Only trigger disconnect if we have a target — null target means
+        // a navigation-triggered target swap, not a connection failure
+        if (this.activeTargetId) {
+          this.handleDisconnect();
+        }
       }
     }, interval);
   }
@@ -381,6 +391,7 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
 
   async navigate(options: NavigateOptions): Promise<NavigateResult> {
     const startTime = Date.now();
+    const navTimeout = options.timeout ?? 30000;
     this.lastUrl = options.url;
 
     await this.enableDomain('Page');
@@ -398,10 +409,20 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
       }
     }
 
+    // Wait for target re-acquisition if Page.navigate triggers a target swap.
+    // On iOS 26+, cross-document navigation destroys the old page target and
+    // creates a new one; we must wait for the new target before polling.
+    if (this.targetReady && !this.activeTargetId) {
+      const targetSwapTimeout = Math.min(navTimeout / 2, 10000);
+      await Promise.race([
+        this.targetReady,
+        new Promise(r => setTimeout(r, targetSwapTimeout)),
+      ]);
+    }
+
     // Poll document.readyState instead of relying on Page.loadEventFired
     const waitUntil = options.waitUntil;
     const waitStart = Date.now();
-    const navTimeout = options.timeout ?? 30000;
     while (Date.now() - waitStart < navTimeout) {
       await new Promise(r => setTimeout(r, 300));
       try {
@@ -421,7 +442,13 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
           if (readyState === 'complete') break;
         }
       } catch {
-        // Target may be transitioning during navigation, keep polling
+        // Target may be transitioning during navigation — wait for new target
+        if (this.activeTargetId === null && this.targetReady) {
+          await Promise.race([
+            this.targetReady,
+            new Promise(r => setTimeout(r, 2000)),
+          ]);
+        }
         continue;
       }
     }
