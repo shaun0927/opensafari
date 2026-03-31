@@ -17,17 +17,34 @@ import {
 import { WebKitClient } from '../webkit/client';
 
 export class TabClient extends EventEmitter implements BrowserBackend {
+  private _listeners: Array<{ event: string; handler: (...args: any[]) => void }> = [];
+  private _destroyHandler: (event: { targetId: string }) => void;
+
   constructor(
     private client: WebKitClient,
     private targetId: string,
   ) {
     super();
     // Forward inner events scoped to this target
-    this.client.on('target:destroyed', (event: { targetId: string }) => {
+    this._destroyHandler = (event: { targetId: string }) => {
       if (event.targetId === this.targetId) {
         this.emit('disconnect');
       }
-    });
+    };
+    this.client.on('target:destroyed', this._destroyHandler);
+  }
+
+  /**
+   * Remove all listeners registered on the parent WebKitClient.
+   * Must be called when the tab is closed to prevent memory leaks.
+   */
+  destroy(): void {
+    this.client.removeListener('target:destroyed', this._destroyHandler);
+    for (const { event, handler } of this._listeners) {
+      this.client.removeListener(event, handler);
+    }
+    this._listeners = [];
+    this.removeAllListeners();
   }
 
   getTargetId(): string {
@@ -261,21 +278,30 @@ export class TabClient extends EventEmitter implements BrowserBackend {
   // ========== Events ==========
 
   onConsole(handler: (msg: { type: string; text: string }) => void): void {
-    this.client.on('Runtime.consoleAPICalled', (params: any) => {
+    const boundHandler = (params: any, meta?: { targetId?: string }) => {
+      if (meta?.targetId && meta.targetId !== this.targetId) return;
       handler({ type: params.type, text: params.args?.map((a: any) => a.value ?? a.description).join(' ') ?? '' });
-    });
+    };
+    this._listeners.push({ event: 'Runtime.consoleAPICalled', handler: boundHandler });
+    this.client.on('Runtime.consoleAPICalled', boundHandler);
   }
 
   onRequest(handler: (request: { url: string; method: string }) => void): void {
-    this.client.on('Network.requestWillBeSent', (params: any) => {
+    const boundHandler = (params: any, meta?: { targetId?: string }) => {
+      if (meta?.targetId && meta.targetId !== this.targetId) return;
       handler({ url: params.request?.url, method: params.request?.method });
-    });
+    };
+    this._listeners.push({ event: 'Network.requestWillBeSent', handler: boundHandler });
+    this.client.on('Network.requestWillBeSent', boundHandler);
   }
 
   onResponse(handler: (response: { url: string; status: number }) => void): void {
-    this.client.on('Network.responseReceived', (params: any) => {
+    const boundHandler = (params: any, meta?: { targetId?: string }) => {
+      if (meta?.targetId && meta.targetId !== this.targetId) return;
       handler({ url: params.response?.url, status: params.response?.status });
-    });
+    };
+    this._listeners.push({ event: 'Network.responseReceived', handler: boundHandler });
+    this.client.on('Network.responseReceived', boundHandler);
   }
 
   // ========== Private Helpers ==========

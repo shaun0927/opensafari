@@ -286,7 +286,9 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
         }
       } else if (innerMsg.method) {
         // Inner event (e.g., Page.loadEventFired, Runtime.consoleAPICalled)
-        this.emit(innerMsg.method, innerMsg.params);
+        // Include targetId so multi-tab consumers can filter by target
+        const sourceTargetId = msg.params.targetId;
+        this.emit(innerMsg.method, innerMsg.params, { targetId: sourceTargetId });
       }
       return;
     }

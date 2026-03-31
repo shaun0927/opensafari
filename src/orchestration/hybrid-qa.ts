@@ -56,7 +56,8 @@ export interface VerifiedIssue {
 
 export interface HybridQAResult {
   id: string;
-  status: 'running' | 'phase-a' | 'phase-b' | 'completed';
+  status: 'running' | 'phase-a' | 'phase-b' | 'completed' | 'error';
+  error?: string;
   phaseA: {
     duration: number;
     scans: PageScanResult[];
@@ -114,7 +115,7 @@ export async function applyViewportEmulation(
       meta.content = 'width=${viewport.width}, initial-scale=1';
 
       // Store original dimensions for detection scripts
-      window.__opensafari_viewport = { width: ${viewport.width}, height: ${viewport.height}, preset: '${viewport.preset}' };
+      window.__opensafari_viewport = { width: ${viewport.width}, height: ${viewport.height}, preset: ${JSON.stringify(viewport.preset)} };
     })()
   `);
 }
@@ -156,6 +157,11 @@ export class HybridQAEngine extends EventEmitter {
 
       if (!sim.client.isConnected()) {
         throw new Error('WebKit connection failed for host simulator');
+      }
+
+      // Inject auth if configured
+      if (options.authProfile) {
+        await this.pool.injectAuth(options.authProfile);
       }
 
       const tabPool = new TabPool(sim.client as WebKitClient, sim.device.udid);
@@ -213,6 +219,8 @@ export class HybridQAEngine extends EventEmitter {
 
     } catch (err) {
       console.error(`[HybridQA] Phase A failed: ${err}`);
+      result.status = 'error';
+      result.error = `Phase A failed: ${err}`;
     }
 
     result.phaseA.duration = Date.now() - phaseAStart;
@@ -253,8 +261,8 @@ export class HybridQAEngine extends EventEmitter {
             await new Promise(r => setTimeout(r, 1000));
 
             // Re-run only the detectors that found issues
-            const detectorNames = pair.issues.map(i => i.detector);
-            const verifyResults = await this.runDetectors(sim.client, detectorNames);
+            const detectorsToVerify = pair.issues.map(i => i.detector);
+            const verifyResults = await this.runDetectors(sim.client, detectorsToVerify);
 
             for (const original of pair.issues) {
               const verified_result = verifyResults.find(v => v.detector === original.detector);

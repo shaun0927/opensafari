@@ -58,7 +58,7 @@ describe('HybridQAEngine', () => {
       const expr = (client.evaluate as jest.Mock).mock.calls[0][0] as string;
       expect(expr).toContain('width=390');
       expect(expr).toContain('height: 844');
-      expect(expr).toContain("preset: 'iphone-17'");
+      expect(expr).toContain('preset: "iphone-17"');
     });
 
     it('should handle different viewport sizes', async () => {
