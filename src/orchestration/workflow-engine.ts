@@ -11,6 +11,7 @@ export interface WorkflowInitOptions {
   authProfile?: string;
   taskDescription?: string;
   workerNames?: string[];
+  mode?: 'concurrent' | 'sequential';
 }
 
 export interface WorkflowInitResult {
@@ -132,23 +133,25 @@ export class SimulatorWorkflowEngine extends EventEmitter {
   }
 
   async initWorkflow(options: WorkflowInitOptions): Promise<WorkflowInitResult> {
+    const mode = options.mode ?? 'concurrent';
     const workflowId = `wf-${Date.now()}`;
 
-    // Boot all devices
+    if (mode === 'sequential') {
+      return this.initSequentialWorkflow(workflowId, options);
+    }
+
+    // ── Concurrent mode (default) ──
     const simulators = await this.pool.bootAll(options.devices);
 
-    // Inject auth
     if (options.authProfile) {
       await this.pool.injectAuth(options.authProfile);
     }
 
-    // Navigate all to URL
     if (options.url) {
       const batch = new BatchExecutor(this.pool);
       await batch.batchNavigate(options.url);
     }
 
-    // Create worker entries
     const workers: WorkerEntry[] = simulators.map((sim, i) => ({
       name: options.workerNames?.[i] ?? `worker-${sim.preset}`,
       deviceId: sim.device.udid,
@@ -157,7 +160,6 @@ export class SimulatorWorkflowEngine extends EventEmitter {
       startedAt: Date.now(),
     }));
 
-    // Save state
     const state: WorkflowState = {
       id: workflowId,
       status: 'running',
@@ -168,7 +170,95 @@ export class SimulatorWorkflowEngine extends EventEmitter {
     this.workflows.set(workflowId, state);
     this.persistWorkflow(state);
 
-    // Generate prompts
+    const prompts = workers.map(w => ({
+      workerName: w.name,
+      prompt: this.generateWorkerPrompt(w, options),
+    }));
+
+    return { workflowId, workers: workers.map(w => ({ name: w.name, device: w.preset })), prompts };
+  }
+
+  /**
+   * Sequential mode: boot one device at a time, run, collect results, shutdown.
+   * Peak RAM = ~2GB regardless of device count.
+   */
+  private async initSequentialWorkflow(
+    workflowId: string,
+    options: WorkflowInitOptions,
+  ): Promise<WorkflowInitResult> {
+    const workers: WorkerEntry[] = options.devices.map((preset, i) => ({
+      name: options.workerNames?.[i] ?? `worker-${preset}`,
+      deviceId: '', // Assigned during sequential execution
+      preset,
+      status: 'pending' as const,
+      startedAt: Date.now(),
+    }));
+
+    const state: WorkflowState = {
+      id: workflowId,
+      status: 'running',
+      workers,
+      startedAt: Date.now(),
+      options,
+    };
+    this.workflows.set(workflowId, state);
+    this.persistWorkflow(state);
+
+    // Run sequentially in background — each device boots, runs, shuts down
+    const sequentialResults = await this.pool.bootSequential(
+      options.devices,
+      async (sim, preset) => {
+        const worker = state.workers.find(w => w.preset === preset);
+        if (worker) {
+          worker.deviceId = sim.device.udid;
+          worker.status = 'active';
+          this.persistWorkflow(state);
+        }
+
+        // Inject auth if configured
+        if (options.authProfile) {
+          try {
+            const authMgr = this.authManager;
+            const profile = await authMgr.loadProfile(options.authProfile!);
+            if (sim.client.isConnected()) {
+              await sim.client.setCookies(profile.cookies);
+            }
+          } catch (err) {
+            console.error(`[Workflow] Auth injection failed for ${preset}: ${err}`);
+          }
+        }
+
+        // Navigate to URL
+        if (options.url && sim.client.isConnected()) {
+          try {
+            await sim.client.navigate({ url: options.url });
+          } catch (err) {
+            console.error(`[Workflow] Navigation failed for ${preset}: ${err}`);
+          }
+        }
+
+        return { device: preset, deviceId: sim.device.udid, ready: true };
+      },
+    );
+
+    // Update worker statuses from sequential results
+    for (const [preset, result] of sequentialResults) {
+      const worker = state.workers.find(w => w.preset === preset);
+      if (!worker) continue;
+      if (result.status === 'completed') {
+        worker.status = 'completed';
+        worker.results = result.result;
+        worker.completedAt = Date.now();
+      } else {
+        worker.status = 'failed';
+        worker.error = result.error;
+        worker.completedAt = Date.now();
+      }
+    }
+
+    this.checkWorkflowCompletion(state);
+    this.persistWorkflow(state);
+
     const prompts = workers.map(w => ({
       workerName: w.name,
       prompt: this.generateWorkerPrompt(w, options),

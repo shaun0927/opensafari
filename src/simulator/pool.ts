@@ -181,6 +181,74 @@ export class SimulatorPool extends EventEmitter {
     return results;
   }
 
+  /**
+   * Boot devices sequentially: one at a time, run a task, then shut down.
+   * Peak RAM = 1 simulator (~2GB) regardless of device count.
+   */
+  async bootSequential(
+    presets: string[],
+    runner: (sim: PooledSimulator, preset: string) => Promise<unknown>,
+  ): Promise<Map<string, { status: 'completed' | 'failed'; result?: unknown; error?: string; duration: number }>> {
+    const results = new Map<string, { status: 'completed' | 'failed'; result?: unknown; error?: string; duration: number }>();
+
+    for (const preset of presets) {
+      const start = Date.now();
+      let sim: PooledSimulator | null = null;
+
+      try {
+        await this.checkResources(1);
+        const device = await this.manager.boot(preset);
+        await this.manager.openUrl(device.udid, 'https://example.com');
+
+        const port = this.getPortForDevice(device.udid);
+        const client = new WebKitClient({ host: 'localhost', port });
+
+        try {
+          await client.connect();
+        } catch {
+          console.error(`[SimulatorPool] Sequential: WebKit connection failed for ${preset}`);
+        }
+
+        const presetInfo = DEVICE_PRESETS[preset];
+        sim = {
+          device: { ...device, viewport: { width: presetInfo?.w ?? 390, height: presetInfo?.h ?? 844 } } as any,
+          client,
+          preset,
+          bootedAt: Date.now(),
+          lastActivity: Date.now(),
+        };
+
+        this.pool.set(device.udid, sim);
+        const sm = getSessionManager();
+        sm.addSimulator(device.udid, {
+          deviceId: device.udid,
+          deviceType: device.name,
+          state: 'booted',
+          viewport: { width: presetInfo?.w ?? 390, height: presetInfo?.h ?? 844 },
+          bootedAt: sim.bootedAt,
+          lastActivity: sim.lastActivity,
+        });
+        if (client.isConnected()) {
+          sm.setConnection(device.udid, client);
+        }
+
+        const result = await runner(sim, preset);
+        results.set(preset, { status: 'completed', result, duration: Date.now() - start });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`[SimulatorPool] Sequential: ${preset} failed: ${msg}`);
+        results.set(preset, { status: 'failed', error: msg, duration: Date.now() - start });
+      } finally {
+        // Always shut down before moving to next device
+        if (sim) {
+          await this.shutdownOne(sim.device.udid);
+        }
+      }
+    }
+
+    return results;
+  }
+
   getAll(): PooledSimulator[] {
     return Array.from(this.pool.values());
   }
