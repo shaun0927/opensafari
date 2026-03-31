@@ -16,6 +16,7 @@ import {
 } from '../config/defaults';
 import { registerManagedDevices, unregisterManagedDevices } from '../reliability/zombie-cleanup';
 import { CircuitBreakerRegistry } from '../reliability/circuit-breaker';
+import { getSessionManager } from '../session-manager';
 
 const execFileAsync = promisify(execFile);
 
@@ -160,6 +161,91 @@ export class SimulatorPool extends EventEmitter {
     const udids = results.map(r => r.device.udid);
     registerManagedDevices(udids);
 
+    // Sync pool state to SessionManager for unified connection tracking
+    const sm = getSessionManager();
+    for (const pooled of results) {
+      const presetInfo = DEVICE_PRESETS[pooled.preset];
+      sm.addSimulator(pooled.device.udid, {
+        deviceId: pooled.device.udid,
+        deviceType: pooled.device.name,
+        state: 'booted',
+        viewport: { width: presetInfo?.w ?? 390, height: presetInfo?.h ?? 844 },
+        bootedAt: pooled.bootedAt,
+        lastActivity: pooled.lastActivity,
+      });
+      if (pooled.client.isConnected()) {
+        sm.setConnection(pooled.device.udid, pooled.client);
+      }
+    }
+
+    return results;
+  }
+
+  /**
+   * Boot devices sequentially: one at a time, run a task, then shut down.
+   * Peak RAM = 1 simulator (~2GB) regardless of device count.
+   */
+  async bootSequential(
+    presets: string[],
+    runner: (sim: PooledSimulator, preset: string) => Promise<unknown>,
+  ): Promise<Map<string, { status: 'completed' | 'failed'; result?: unknown; error?: string; duration: number }>> {
+    const results = new Map<string, { status: 'completed' | 'failed'; result?: unknown; error?: string; duration: number }>();
+
+    for (const preset of presets) {
+      const start = Date.now();
+      let sim: PooledSimulator | null = null;
+
+      try {
+        await this.checkResources(1);
+        const device = await this.manager.boot(preset);
+        await this.manager.openUrl(device.udid, 'https://example.com');
+
+        const port = this.getPortForDevice(device.udid);
+        const client = new WebKitClient({ host: 'localhost', port });
+
+        try {
+          await client.connect();
+        } catch {
+          console.error(`[SimulatorPool] Sequential: WebKit connection failed for ${preset}`);
+        }
+
+        const presetInfo = DEVICE_PRESETS[preset];
+        sim = {
+          device: { ...device, viewport: { width: presetInfo?.w ?? 390, height: presetInfo?.h ?? 844 } } as any,
+          client,
+          preset,
+          bootedAt: Date.now(),
+          lastActivity: Date.now(),
+        };
+
+        this.pool.set(device.udid, sim);
+        const sm = getSessionManager();
+        sm.addSimulator(device.udid, {
+          deviceId: device.udid,
+          deviceType: device.name,
+          state: 'booted',
+          viewport: { width: presetInfo?.w ?? 390, height: presetInfo?.h ?? 844 },
+          bootedAt: sim.bootedAt,
+          lastActivity: sim.lastActivity,
+        });
+        if (client.isConnected()) {
+          sm.setConnection(device.udid, client);
+        }
+
+        const result = await runner(sim, preset);
+        results.set(preset, { status: 'completed', result, duration: Date.now() - start });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`[SimulatorPool] Sequential: ${preset} failed: ${msg}`);
+        results.set(preset, { status: 'failed', error: msg, duration: Date.now() - start });
+      } finally {
+        // Always shut down before moving to next device
+        if (sim) {
+          await this.shutdownOne(sim.device.udid);
+        }
+      }
+    }
+
     return results;
   }
 
@@ -187,6 +273,7 @@ export class SimulatorPool extends EventEmitter {
   async shutdownAll(): Promise<void> {
     this.stopIdleMonitor();
     this.stopResourceMonitor();
+    const sm = getSessionManager();
     await Promise.allSettled(
       this.getAll().map(async (sim) => {
         try {
@@ -195,6 +282,7 @@ export class SimulatorPool extends EventEmitter {
         try {
           await this.manager.shutdown(sim.device.udid);
         } catch { /* best effort */ }
+        sm.removeSimulator(sim.device.udid);
         this.pool.delete(sim.device.udid);
       })
     );
@@ -210,6 +298,7 @@ export class SimulatorPool extends EventEmitter {
     if (!sim) return;
     try { await sim.client.disconnect(); } catch { /* */ }
     try { await this.manager.shutdown(deviceId); } catch { /* */ }
+    getSessionManager().removeSimulator(deviceId);
     this.pool.delete(deviceId);
     this.devicePorts.delete(deviceId);
 

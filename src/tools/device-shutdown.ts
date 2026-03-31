@@ -1,6 +1,7 @@
-import { MCPServer, getWebKitClient, setWebKitClient } from '../mcp-server';
+import { MCPServer } from '../mcp-server';
 import { SimulatorManager } from '../simulator';
 import { getSharedProxy } from '../simulator/proxy';
+import { getSessionManager } from '../session-manager';
 
 export function registerDeviceShutdownTool(server: MCPServer): void {
   server.registerTool(
@@ -17,27 +18,31 @@ export function registerDeviceShutdownTool(server: MCPServer): void {
     },
     async (_sessionId: string, params: Record<string, unknown>) => {
       const manager = new SimulatorManager();
+      const sm = getSessionManager();
       const booted = await manager.listBooted();
-      const deviceId = (params.deviceId as string) ?? booted[0]?.udid;
+      const deviceId = (params.deviceId as string) ?? sm.getActiveDeviceId() ?? booted[0]?.udid;
       if (!deviceId) {
         return { content: [{ type: 'text' as const, text: 'Error: no booted device found' }], isError: true };
       }
 
-      // Disconnect and clear the WebKitClient before shutting down
-      const client = getWebKitClient();
-      if (client) {
-        try {
-          await client.disconnect();
-        } catch (err) {
-          console.error(`[device_shutdown] WebKit disconnect failed: ${err}`);
+      // Disconnect and remove the WebKitClient via SessionManager
+      if (sm.hasConnection(deviceId)) {
+        const client = sm.getConnection(deviceId);
+        if (client) {
+          try {
+            await client.disconnect();
+          } catch (err) {
+            console.error(`[device_shutdown] WebKit disconnect failed: ${err}`);
+          }
         }
       }
-      setWebKitClient(null);
+      // Remove simulator from SessionManager (also clears connection, updates active device)
+      sm.removeSimulator(deviceId);
 
-      // Stop the WebInspector proxy if we own it
+      // Stop the WebInspector proxy if no more connections remain
       const proxy = getSharedProxy();
       let proxyStopped = false;
-      if (proxy.running) {
+      if (proxy.running && sm.listConnections().length === 0) {
         try {
           await proxy.stop();
           proxyStopped = true;
