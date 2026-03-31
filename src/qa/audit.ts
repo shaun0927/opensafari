@@ -151,7 +151,6 @@ export class QAAudit {
       annotatedScreenshot: annotationResult.annotatedImage,
       legend: formatLegend(annotationResult.legend),
     };
-    return { ...report, annotatedScreenshot: annotationResult.annotatedImage, legend: formatLegend(annotationResult.legend) };
   }
 
   private calculateScore(results: DetectorResult[]): number {
