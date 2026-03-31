@@ -73,6 +73,19 @@ export class SessionManager extends EventEmitter {
     return this.connections.get(id) ?? null;
   }
 
+  removeConnection(deviceId: string): void {
+    this.connections.delete(deviceId);
+    this.emit('connection:removed', { deviceId });
+  }
+
+  hasConnection(deviceId: string): boolean {
+    return this.connections.has(deviceId);
+  }
+
+  listConnections(): Array<{ deviceId: string; client: BrowserBackend }> {
+    return Array.from(this.connections.entries()).map(([deviceId, client]) => ({ deviceId, client }));
+  }
+
   // Active device
   setActiveDevice(deviceId: string): void {
     if (!this.simulators.has(deviceId)) {

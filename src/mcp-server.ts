@@ -19,25 +19,61 @@ import { createTransport, MCPTransport, TransportMode } from './transports';
 import { TOOL_TIERS, getToolTier } from './config/tool-tiers';
 import { BrowserBackend } from './types/browser-backend';
 import { logAuditEntry } from './security/audit-logger';
+import { getSessionManager } from './session-manager';
 
 // Re-export so callers can use canonical names without knowing the internal alias
 export type { MCPToolDefinition as ToolDefinition, ToolHandler };
 export { TOOL_TIERS, getToolTier };
 
 // ---------------------------------------------------------------------------
-// Global WebKit client accessor — populated during server initialization.
-// Safari tools (Epic 1B/1C) will call getWebKitClient() to obtain the active
-// BrowserBackend instance without creating circular dependencies.
+// Global WebKit client accessor — delegates to SessionManager.
+// All tools call getWebKitClient() to obtain the active BrowserBackend.
+// With SessionManager integration, multiple devices are tracked and the
+// active device connection is returned by default.
 // ---------------------------------------------------------------------------
 
-let webkitClient: BrowserBackend | null = null;
-
-export function getWebKitClient(): BrowserBackend | null {
-  return webkitClient;
+/**
+ * Get the WebKit client for a specific device or the active device.
+ * @param deviceId - Optional device UDID. Falls back to active device.
+ */
+export function getWebKitClient(deviceId?: string): BrowserBackend | null {
+  return getSessionManager().getConnection(deviceId);
 }
 
-export function setWebKitClient(client: BrowserBackend | null): void {
-  webkitClient = client;
+/**
+ * Register a WebKit client for a device and set it as active.
+ * @deprecated Prefer registering via SessionManager directly.
+ * Kept for backward compatibility with device_boot and tests.
+ */
+const LEGACY_DEVICE_ID = '__default__';
+
+export function setWebKitClient(client: BrowserBackend | null, deviceId?: string): void {
+  const sm = getSessionManager();
+  const id = deviceId ?? LEGACY_DEVICE_ID;
+
+  if (client) {
+    // Ensure a simulator entry exists for legacy callers (e.g. tests)
+    if (!sm.getSimulator(id)) {
+      sm.addSimulator(id, {
+        deviceId: id,
+        deviceType: 'legacy',
+        state: 'booted',
+        viewport: { width: 390, height: 844 },
+        bootedAt: Date.now(),
+        lastActivity: Date.now(),
+      });
+    }
+    sm.setConnection(id, client);
+    sm.setActiveDevice(id);
+  } else {
+    // Clear: remove the specified or active device's connection
+    const activeId = sm.getActiveDeviceId();
+    const targetId = deviceId ?? activeId;
+    if (targetId) {
+      sm.removeConnection(targetId);
+      sm.removeSimulator(targetId);
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -6,6 +6,8 @@ import { registerAllTools } from './tools';
 
 // Core server
 export { MCPServer, getWebKitClient, setWebKitClient } from './mcp-server';
+export { getSessionManager, SessionManager } from './session-manager';
+export type { SimulatorInfo, WorkerInfo } from './session-manager';
 export type { MCPServerOptions } from './mcp-server';
 
 // Tool registration
