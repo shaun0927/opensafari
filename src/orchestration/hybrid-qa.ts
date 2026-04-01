@@ -250,7 +250,25 @@ export class HybridQAEngine extends EventEmitter {
 
       // Sequential verification per device
       const devicesToVerify = Array.from(byDevice.keys());
+
+      // If an auth profile was used in Phase A, seed the first Phase B device with it
+      if (options.authProfile) {
+        const { AuthManager } = await import('../auth/manager');
+        const authManager = new AuthManager();
+        try {
+          const profile = await authManager.loadProfile(options.authProfile);
+          this.pool.setTempAuth(id, profile.cookies, profile.localStorage ?? {});
+        } catch (err) {
+          console.error(`[HybridQA] Failed to seed auth for Phase B: ${err}`);
+        }
+      }
+
       await this.pool.bootSequential(devicesToVerify, async (sim, preset) => {
+        // Restore auth state from previous device (if any)
+        if (sim.client.isConnected()) {
+          await this.pool.restoreTempAuth(id, sim.client);
+        }
+
         const pairs = byDevice.get(preset) ?? [];
 
         for (const pair of pairs) {
@@ -281,6 +299,11 @@ export class HybridQAEngine extends EventEmitter {
             console.error(`[HybridQA] Phase B verify failed for ${pair.url} @ ${preset}: ${err}`);
           }
         }
+
+        // Save auth state for next device in sequence
+        if (sim.client.isConnected()) {
+          await this.pool.saveTempAuth(id, sim.client);
+        }
       });
 
       result.phaseB = {
@@ -296,6 +319,9 @@ export class HybridQAEngine extends EventEmitter {
         confirmed: result.phaseB.confirmedCount,
         falsePositives: result.phaseB.falsePositiveCount,
       });
+
+      // Clean up temp auth state now that Phase B is complete
+      this.pool.clearTempAuth(id);
     }
 
     result.status = 'completed';
