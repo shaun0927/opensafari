@@ -294,15 +294,12 @@ describe('WorkflowEngine sequential mode', () => {
     const mockPool = {
       bootSequential: jest.fn().mockImplementation(
         async (presets: string[], _runner: unknown) => {
-          const results = new Map<string, { status: string; result?: unknown; error?: string; duration: number }>();
-          for (const preset of presets) {
-            results.set(preset, {
-              status: 'completed',
-              result: { tested: preset },
-              duration: 50,
-            });
-          }
-          return results;
+          return presets.map(preset => ({
+            preset,
+            status: 'completed' as const,
+            result: { tested: preset },
+            duration: 50,
+          }));
         },
       ),
       bootAll: jest.fn(),
@@ -330,23 +327,12 @@ describe('WorkflowEngine sequential mode', () => {
     const mockPool = {
       bootSequential: jest.fn().mockImplementation(
         async (presets: string[], _runner: unknown) => {
-          const results = new Map<string, { status: string; result?: unknown; error?: string; duration: number }>();
-          for (const preset of presets) {
+          return presets.map(preset => {
             if (preset === 'bad-device') {
-              results.set(preset, {
-                status: 'failed',
-                error: 'Boot failed',
-                duration: 10,
-              });
-            } else {
-              results.set(preset, {
-                status: 'completed',
-                result: { ok: true },
-                duration: 100,
-              });
+              return { preset, status: 'failed' as const, error: 'Boot failed', duration: 10 };
             }
-          }
-          return results;
+            return { preset, status: 'completed' as const, result: { ok: true }, duration: 100 };
+          });
         },
       ),
       bootAll: jest.fn(),
