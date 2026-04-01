@@ -26,7 +26,9 @@ import { describeWithSimulator } from './helpers/simulator-check';
 
 // ── Test Configuration ──
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const BUGGY_URL = 'http://localhost:8787/buggy-page.html';
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const CLEAN_URL = 'http://localhost:8787/clean-page.html';
 
 // Use devices available in Xcode — the engine handles viewport emulation

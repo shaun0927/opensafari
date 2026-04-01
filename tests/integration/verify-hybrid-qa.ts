@@ -22,6 +22,7 @@ import { DetectorResult } from '../../src/qa/types';
 // ── Config ──
 const FIXTURES_DIR = path.resolve(__dirname, '../e2e-fixtures');
 const WEBKIT_PORT = 9322;
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const DEVICE_UDID = process.env.DEVICE_UDID || 'D7D26213-C3E9-4623-BCCB-984CDF5D0793';
 
 // ── Results tracking ──

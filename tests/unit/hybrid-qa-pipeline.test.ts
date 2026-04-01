@@ -174,7 +174,7 @@ describe('HybridQAEngine.start() Pipeline', () => {
     const engine = new HybridQAEngine(mockPool);
     jest.spyOn(engine as any, 'runDetectors').mockResolvedValue([highSeverityResult('touch-targets')]);
 
-    mockPool.bootSequential = jest.fn().mockImplementation(async (presets: string[], runner: Function) => {
+    mockPool.bootSequential = jest.fn().mockImplementation(async (presets: string[], runner: (...args: unknown[]) => Promise<void>) => {
       for (const p of presets) {
         await runner({ client: mockTabClient, device: { udid: 'mock-udid' }, preset: p }, p, 0);
       }

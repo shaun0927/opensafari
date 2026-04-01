@@ -6,6 +6,7 @@
 import { TabClient } from '../../src/simulator/tab-client';
 import { TabPool } from '../../src/simulator/tab-pool';
 import { WebKitClient } from '../../src/webkit/client';
+import * as webkitClientModule from '../../src/webkit/client';
 import { EventEmitter } from 'events';
 
 // ========== Mock WebKitClient ==========
@@ -260,10 +261,9 @@ describe('TabPool', () => {
     mockClient.addTarget('tab-3');
 
     // Mock WebKitClient constructor for dedicated connections
-    jest.spyOn(require('../../src/webkit/client'), 'WebKitClient').mockImplementation(() => {
-      const dc = new MockWebKitClient();
-      return dc;
-    });
+    jest.spyOn(webkitClientModule, 'WebKitClient').mockImplementation((() => {
+      return new MockWebKitClient();
+    }) as unknown as (options: any) => any);
 
     const pool = new TabPool(mockClient as unknown as WebKitClient, 'test-udid');
     const clients = await pool.discoverExistingTabs();
@@ -304,10 +304,9 @@ describe('TabPool', () => {
     mockClient.addTarget('tab-2');
 
     // Mock WebKitClient constructor for dedicated connections
-    jest.spyOn(require('../../src/webkit/client'), 'WebKitClient').mockImplementation(() => {
-      const dc = new MockWebKitClient();
-      return dc;
-    });
+    jest.spyOn(webkitClientModule, 'WebKitClient').mockImplementation((() => {
+      return new MockWebKitClient();
+    }) as unknown as (options: any) => any);
 
     const pool = new TabPool(mockClient as unknown as WebKitClient, 'test-udid');
     await pool.discoverExistingTabs();
@@ -469,7 +468,7 @@ describe('TabPool.waitForNewTarget() Timeout', () => {
   it('should succeed when new target appears on 3rd poll', async () => {
     // Mock WebKitClient constructor to return mock instances for dedicated connections
     const mockDedicatedClient = new MockWebKitClient();
-    jest.spyOn(require('../../src/webkit/client'), 'WebKitClient').mockImplementation(() => mockDedicatedClient);
+    jest.spyOn(webkitClientModule, 'WebKitClient').mockImplementation((() => mockDedicatedClient) as unknown as (options: any) => any);
 
     const pool = new TabPool(mockClient as unknown as WebKitClient, 'test-udid', {
       targetDiscoveryTimeout: 5000,
