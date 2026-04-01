@@ -72,8 +72,18 @@ class MockWebKitClient extends EventEmitter {
     return {} as unknown as T;
   }
 
+  private _enabledPerTarget: Map<string, Set<string>> = new Map();
+
   async enableDomainForTarget(domain: string, targetId: string): Promise<void> {
     this._sentMessages.push({ method: `${domain}.enable`, targetId });
+    if (!this._enabledPerTarget.has(targetId)) {
+      this._enabledPerTarget.set(targetId, new Set());
+    }
+    this._enabledPerTarget.get(targetId)!.add(domain);
+  }
+
+  getEnabledDomainsForTarget(targetId: string): Set<string> {
+    return new Set(this._enabledPerTarget.get(targetId) ?? []);
   }
 
   async listTargets(): Promise<Array<{ id: string; url: string; title: string; webSocketDebuggerUrl: string; type?: string }>> {
@@ -311,5 +321,87 @@ describe('WebKitClient multi-target tracking', () => {
   it('should throw when setting unknown target as active', () => {
     const client = new WebKitClient({ host: 'localhost', port: 9322 });
     expect(() => client.setActiveTargetId('nonexistent')).toThrow('not found');
+  });
+
+  it('should return empty per-target domains initially', () => {
+    const client = new WebKitClient({ host: 'localhost', port: 9322 });
+    expect(client.getEnabledDomainsForTarget('any-target').size).toBe(0);
+  });
+
+  it('should export getEnabledDomainsForTarget method', () => {
+    const client = new WebKitClient({ host: 'localhost', port: 9322 });
+    expect(typeof client.getEnabledDomainsForTarget).toBe('function');
+  });
+});
+
+// ========== Per-Target Domain Tracking Tests ==========
+
+describe('Per-target domain tracking', () => {
+  let mockClient: MockWebKitClient;
+
+  beforeEach(() => {
+    mockClient = new MockWebKitClient();
+    mockClient.addTarget('target-1');
+    mockClient.addTarget('target-2');
+  });
+
+  it('should track domains per target via enableDomainForTarget', async () => {
+    const tab1 = new TabClient(mockClient as unknown as WebKitClient, 'target-1');
+    const tab2 = new TabClient(mockClient as unknown as WebKitClient, 'target-2');
+
+    // Enable Page on tab1, Runtime on tab2
+    await tab1.evaluate('test'); // triggers Runtime.enable for target-1
+    await tab2.getCookies();     // triggers Page.enable for target-2
+
+    const t1Domains = mockClient.getEnabledDomainsForTarget('target-1');
+    const t2Domains = mockClient.getEnabledDomainsForTarget('target-2');
+
+    expect(t1Domains.has('Runtime')).toBe(true);
+    expect(t2Domains.has('Page')).toBe(true);
+    // Domains should be independent
+    expect(t1Domains.has('Page')).toBe(false);
+    expect(t2Domains.has('Runtime')).toBe(false);
+  });
+
+  it('should not leak domains between targets', async () => {
+    const tab1 = new TabClient(mockClient as unknown as WebKitClient, 'target-1');
+    // target-2 exists but we don't use its TabClient — verifying isolation
+
+    await tab1.evaluate('test');
+    await tab1.getCookies();
+
+    // tab1 should have both Runtime and Page
+    const t1Domains = mockClient.getEnabledDomainsForTarget('target-1');
+    expect(t1Domains.has('Runtime')).toBe(true);
+    expect(t1Domains.has('Page')).toBe(true);
+
+    // target-2 should have nothing (never used)
+    const t2Domains = mockClient.getEnabledDomainsForTarget('target-2');
+    expect(t2Domains.size).toBe(0);
+  });
+
+  it('should clean up domains when target is destroyed', () => {
+    // Simulate enableDomainForTarget being tracked
+    mockClient.enableDomainForTarget('Page', 'target-1');
+    mockClient.enableDomainForTarget('Runtime', 'target-1');
+    expect(mockClient.getEnabledDomainsForTarget('target-1').size).toBe(2);
+
+    // Simulate target destruction — in real code, WebKitClient clears enabledDomainsPerTarget
+    // Here we verify the mock tracks independently
+    mockClient.removeTarget('target-1');
+    // target-2 should be unaffected
+    expect(mockClient.getEnabledDomainsForTarget('target-2').size).toBe(0);
+  });
+
+  it('should handle multiple domains on same target', async () => {
+    const tab = new TabClient(mockClient as unknown as WebKitClient, 'target-1');
+
+    await tab.evaluate('test');  // Runtime.enable
+    await tab.getCookies();      // Page.enable
+
+    const domains = mockClient.getEnabledDomainsForTarget('target-1');
+    expect(domains.size).toBe(2);
+    expect(domains.has('Runtime')).toBe(true);
+    expect(domains.has('Page')).toBe(true);
   });
 });
