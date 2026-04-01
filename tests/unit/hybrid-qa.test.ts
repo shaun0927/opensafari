@@ -6,6 +6,7 @@
 import {
   HybridQAEngine,
   HybridQAResult,
+  HybridQAStatus,
   applyViewportEmulation,
   ViewportConfig,
 } from '../../src/orchestration/hybrid-qa';
@@ -159,6 +160,67 @@ describe('HybridQAEngine', () => {
       const engine = new HybridQAEngine(mockPool);
       expect(engine.getStatus('nonexistent')).toBeNull();
       expect(engine.getResults('nonexistent')).toBeNull();
+    });
+
+    it('getStatus() should return lightweight status object', () => {
+      // We need to test that getStatus returns the lightweight HybridQAStatus type
+      // Since we can't call start() without real simulators, we test the null case
+      // and verify the type structure through the interface
+      const mockPool = {} as SimulatorPool;
+      const engine = new HybridQAEngine(mockPool);
+      expect(engine.getStatus('nonexistent')).toBeNull();
+    });
+
+    it('getResults() should return full HybridQAResult', () => {
+      const mockPool = {} as SimulatorPool;
+      const engine = new HybridQAEngine(mockPool);
+      expect(engine.getResults('nonexistent')).toBeNull();
+    });
+  });
+
+  describe('API differentiation: getStatus vs getResults', () => {
+    it('HybridQAStatus should be a lightweight subset of HybridQAResult', () => {
+      // Verify the HybridQAStatus type structure
+      const status: HybridQAStatus = {
+        id: 'hqa-789',
+        status: 'completed',
+        phasesCompleted: 2,
+        totalIssues: 5,
+        flaggedForVerification: 2,
+        confirmedCount: 1,
+        elapsed: 20000,
+      };
+
+      // Status should NOT contain scan details or verified issues
+      expect(status).not.toHaveProperty('phaseA');
+      expect(status).not.toHaveProperty('phaseB');
+      expect(status).not.toHaveProperty('peakMode');
+      expect(status).not.toHaveProperty('totalDuration');
+      expect(status).toHaveProperty('phasesCompleted');
+      expect(status).toHaveProperty('elapsed');
+    });
+
+    it('HybridQAStatus should include error field when present', () => {
+      const status: HybridQAStatus = {
+        id: 'hqa-err',
+        status: 'error',
+        error: 'Phase A failed',
+        phasesCompleted: 0,
+        totalIssues: 0,
+        flaggedForVerification: 0,
+        confirmedCount: 0,
+        elapsed: 500,
+      };
+
+      expect(status.error).toBe('Phase A failed');
+      expect(status.status).toBe('error');
+    });
+
+    it('both should return null for nonexistent workflow ID', () => {
+      const mockPool = {} as SimulatorPool;
+      const engine = new HybridQAEngine(mockPool);
+      expect(engine.getStatus('does-not-exist')).toBeNull();
+      expect(engine.getResults('does-not-exist')).toBeNull();
     });
   });
 

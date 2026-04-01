@@ -74,6 +74,17 @@ export interface HybridQAResult {
   peakMode: 'tabs-only' | 'tabs+sequential';
 }
 
+export interface HybridQAStatus {
+  id: string;
+  status: 'running' | 'phase-a' | 'phase-b' | 'completed' | 'error';
+  error?: string;
+  phasesCompleted: number;
+  totalIssues: number;
+  flaggedForVerification: number;
+  confirmedCount: number;
+  elapsed: number;
+}
+
 // ── Severity Levels (ordered) ──
 
 const SEVERITY_ORDER: Record<string, number> = {
@@ -306,8 +317,19 @@ export class HybridQAEngine extends EventEmitter {
     return result;
   }
 
-  getStatus(id: string): HybridQAResult | null {
-    return this.workflows.get(id) ?? null;
+  getStatus(id: string): HybridQAStatus | null {
+    const w = this.workflows.get(id);
+    if (!w) return null;
+    return {
+      id: w.id,
+      status: w.status,
+      error: w.error,
+      phasesCompleted: w.phaseB ? 2 : w.phaseA.scans.length > 0 ? 1 : 0,
+      totalIssues: w.phaseA.totalIssues,
+      flaggedForVerification: w.phaseA.flaggedForVerification,
+      confirmedCount: w.phaseB?.confirmedCount ?? 0,
+      elapsed: w.totalDuration,
+    };
   }
 
   getResults(id: string): HybridQAResult | null {
