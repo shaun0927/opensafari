@@ -217,6 +217,25 @@ describe('SimulatorPool.bootSequential', () => {
   });
 });
 
+// Mock AuthManager
+jest.mock('../../src/auth/manager', () => ({
+  AuthManager: jest.fn().mockImplementation(() => ({
+    loadProfile: jest.fn().mockResolvedValue({ cookies: [], localStorage: {}, sessionStorage: {} }),
+  })),
+}));
+
+// Mock WorkflowPersistence
+jest.mock('../../src/orchestration/workflow-persistence', () => ({
+  WorkflowPersistence: jest.fn().mockImplementation(() => ({
+    save: jest.fn(),
+    loadAll: jest.fn().mockReturnValue([]),
+    remove: jest.fn(),
+  })),
+}));
+
+import { SimulatorWorkflowEngine } from '../../src/orchestration/workflow-engine';
+import { AuthManager } from '../../src/auth/manager';
+
 describe('WorkflowEngine sequential mode', () => {
   it('should accept mode parameter in WorkflowInitOptions', () => {
     // Type-level test: ensure mode is accepted
@@ -230,5 +249,127 @@ describe('WorkflowEngine sequential mode', () => {
   it('should default to concurrent mode', () => {
     const options: { devices: string[]; mode?: string } = { devices: ['iphone-17'] };
     expect(options.mode ?? 'concurrent').toBe('concurrent');
+  });
+
+  it('should generate completion prompts for sequential mode', async () => {
+    // Create a mocked pool with bootSequential returning a Map of results
+    const mockPool = {
+      bootSequential: jest.fn().mockImplementation(
+        async (presets: string[], _runner: unknown) => {
+          const results = new Map<string, { status: string; result?: unknown; error?: string; duration: number }>();
+          for (const preset of presets) {
+            results.set(preset, {
+              status: 'completed',
+              result: { tested: preset },
+              duration: 100,
+            });
+          }
+          return results;
+        },
+      ),
+      bootAll: jest.fn(),
+      shutdownAll: jest.fn(),
+      injectAuth: jest.fn(),
+    } as unknown as SimulatorPool;
+
+    const mockAuth = new AuthManager();
+    const engine = new SimulatorWorkflowEngine(mockPool, mockAuth);
+
+    const result = await engine.initWorkflow({
+      devices: ['iphone-17', 'ipad-pro'],
+      mode: 'sequential',
+      taskDescription: 'Test login flow',
+    });
+
+    // Verify prompts contain completion markers
+    expect(result.prompts).toHaveLength(2);
+    for (const p of result.prompts) {
+      expect(p.prompt).toContain('[COMPLETED]');
+      expect(p.prompt).toContain('Results available via workflow_collect');
+      expect(p.prompt).not.toContain('Use these tools');
+    }
+  });
+
+  it('should include worker name and preset in sequential completion prompts', async () => {
+    const mockPool = {
+      bootSequential: jest.fn().mockImplementation(
+        async (presets: string[], _runner: unknown) => {
+          const results = new Map<string, { status: string; result?: unknown; error?: string; duration: number }>();
+          for (const preset of presets) {
+            results.set(preset, {
+              status: 'completed',
+              result: { tested: preset },
+              duration: 50,
+            });
+          }
+          return results;
+        },
+      ),
+      bootAll: jest.fn(),
+      shutdownAll: jest.fn(),
+      injectAuth: jest.fn(),
+    } as unknown as SimulatorPool;
+
+    const mockAuth = new AuthManager();
+    const engine = new SimulatorWorkflowEngine(mockPool, mockAuth);
+
+    const result = await engine.initWorkflow({
+      devices: ['iphone-se'],
+      workerNames: ['mobile-tester'],
+      mode: 'sequential',
+    });
+
+    expect(result.prompts).toHaveLength(1);
+    expect(result.prompts[0].workerName).toBe('mobile-tester');
+    expect(result.prompts[0].prompt).toContain('mobile-tester');
+    expect(result.prompts[0].prompt).toContain('iphone-se');
+    expect(result.prompts[0].prompt).toContain('completed');
+  });
+
+  it('should show failed status in sequential prompts when device fails', async () => {
+    const mockPool = {
+      bootSequential: jest.fn().mockImplementation(
+        async (presets: string[], _runner: unknown) => {
+          const results = new Map<string, { status: string; result?: unknown; error?: string; duration: number }>();
+          for (const preset of presets) {
+            if (preset === 'bad-device') {
+              results.set(preset, {
+                status: 'failed',
+                error: 'Boot failed',
+                duration: 10,
+              });
+            } else {
+              results.set(preset, {
+                status: 'completed',
+                result: { ok: true },
+                duration: 100,
+              });
+            }
+          }
+          return results;
+        },
+      ),
+      bootAll: jest.fn(),
+      shutdownAll: jest.fn(),
+      injectAuth: jest.fn(),
+    } as unknown as SimulatorPool;
+
+    const mockAuth = new AuthManager();
+    const engine = new SimulatorWorkflowEngine(mockPool, mockAuth);
+
+    const result = await engine.initWorkflow({
+      devices: ['iphone-17', 'bad-device'],
+      mode: 'sequential',
+    });
+
+    expect(result.prompts).toHaveLength(2);
+
+    const goodPrompt = result.prompts.find(p => p.workerName === 'worker-iphone-17')!;
+    expect(goodPrompt.prompt).toContain('[COMPLETED]');
+    expect(goodPrompt.prompt).toContain('completed');
+
+    const badPrompt = result.prompts.find(p => p.workerName === 'worker-bad-device')!;
+    expect(badPrompt.prompt).toContain('[COMPLETED]');
+    expect(badPrompt.prompt).toContain('failed');
   });
 });
