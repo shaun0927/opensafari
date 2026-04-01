@@ -274,62 +274,68 @@ export class HybridQAEngine extends EventEmitter {
         }
       }
 
-      await this.pool.bootSequential(devicesToVerify, async (sim, preset) => {
-        // Restore auth state from previous device (if any)
-        if (sim.client.isConnected()) {
-          await this.pool.restoreTempAuth(id, sim.client);
-        }
-
-        const pairs = byDevice.get(preset) ?? [];
-
-        for (const pair of pairs) {
-          if (!sim.client.isConnected()) continue;
-
-          try {
-            await sim.client.navigate({ url: pair.url });
-            await new Promise(r => setTimeout(r, 1000));
-
-            // Re-run only the detectors that found issues
-            const detectorsToVerify = pair.issues.map(i => i.detector);
-            const verifyResults = await this.runDetectors(sim.client, detectorsToVerify);
-
-            for (const original of pair.issues) {
-              const verified_result = verifyResults.find(v => v.detector === original.detector);
-              const confirmed = verified_result ? !verified_result.passed : false;
-
-              verified.push({
-                url: pair.url,
-                device: preset,
-                detector: original.detector,
-                severity: original.severity,
-                confirmedOnDevice: confirmed,
-                issue: verified_result ?? original,
-              });
-            }
-          } catch (err) {
-            console.error(`[HybridQA] Phase B verify failed for ${pair.url} @ ${preset}: ${err}`);
+      try {
+        await this.pool.bootSequential(devicesToVerify, async (sim, preset) => {
+          // Restore auth state from previous device (if any)
+          if (sim.client.isConnected()) {
+            await this.pool.restoreTempAuth(id, sim.client);
           }
-        }
 
-        // Save auth state for next device in sequence
-        if (sim.client.isConnected()) {
-          await this.pool.saveTempAuth(id, sim.client);
-        }
-      });
+          const pairs = byDevice.get(preset) ?? [];
 
-      result.phaseB = {
-        duration: Date.now() - phaseBStart,
-        verified,
-        confirmedCount: verified.filter(v => v.confirmedOnDevice).length,
-        falsePositiveCount: verified.filter(v => !v.confirmedOnDevice).length,
-      };
+          for (const pair of pairs) {
+            if (!sim.client.isConnected()) continue;
 
-      this.emit('hybrid:phase-b-complete', {
-        id,
-        duration: result.phaseB.duration,
-        confirmed: result.phaseB.confirmedCount,
-        falsePositives: result.phaseB.falsePositiveCount,
-      });
+            try {
+              await sim.client.navigate({ url: pair.url });
+              await new Promise(r => setTimeout(r, 1000));
+
+              // Re-run only the detectors that found issues
+              const detectorsToVerify = pair.issues.map(i => i.detector);
+              const verifyResults = await this.runDetectors(sim.client, detectorsToVerify);
+
+              for (const original of pair.issues) {
+                const verified_result = verifyResults.find(v => v.detector === original.detector);
+                const confirmed = verified_result ? !verified_result.passed : false;
+
+                verified.push({
+                  url: pair.url,
+                  device: preset,
+                  detector: original.detector,
+                  severity: original.severity,
+                  confirmedOnDevice: confirmed,
+                  issue: verified_result ?? original,
+                });
+              }
+            } catch (err) {
+              console.error(`[HybridQA] Phase B verify failed for ${pair.url} @ ${preset}: ${err}`);
+            }
+          }
+
+          // Save auth state for next device in sequence
+          if (sim.client.isConnected()) {
+            await this.pool.saveTempAuth(id, sim.client);
+          }
+        });
+
+        result.phaseB = {
+          duration: Date.now() - phaseBStart,
+          verified,
+          confirmedCount: verified.filter(v => v.confirmedOnDevice).length,
+          falsePositiveCount: verified.filter(v => !v.confirmedOnDevice).length,
+        };
+
+        this.emit('hybrid:phase-b-complete', {
+          id,
+          duration: result.phaseB.duration,
+          confirmed: result.phaseB.confirmedCount,
+          falsePositives: result.phaseB.falsePositiveCount,
+        });
+      } catch (err) {
+        result.status = 'error';
+        result.error = `Phase B failed: ${(err as Error).message}`;
+        console.error(`[HybridQA] Phase B error: ${err}`);
+      }
 
       // Clean up temp auth state now that Phase B is complete
       this.pool.clearTempAuth(id);

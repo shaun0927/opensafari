@@ -20,7 +20,7 @@ import * as http from 'http';
 import * as fs from 'fs';
 import * as path from 'path';
 import { SimulatorPool } from '../../src/simulator/pool';
-import { HybridQAEngine, HybridQAResult } from '../../src/orchestration/hybrid-qa';
+import { HybridQAEngine } from '../../src/orchestration/hybrid-qa';
 import { WebInspectorProxy } from '../../src/simulator/proxy';
 import { describeWithSimulator } from './helpers/simulator-check';
 
@@ -45,7 +45,8 @@ const FIXTURES_DIR = path.resolve(__dirname, '../e2e-fixtures');
 function startFixtureServer(): Promise<number> {
   return new Promise((resolve, reject) => {
     server = http.createServer((req, res) => {
-      const filePath = path.join(FIXTURES_DIR, req.url === '/' ? '/buggy-page.html' : req.url!);
+      const filePath = path.resolve(FIXTURES_DIR, (req.url === '/' ? 'buggy-page.html' : req.url!.slice(1)));
+      if (!filePath.startsWith(FIXTURES_DIR)) { res.writeHead(403); res.end(); return; }
       const ext = path.extname(filePath);
       const contentType = ext === '.html' ? 'text/html' : 'text/plain';
 

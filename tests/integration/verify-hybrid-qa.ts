@@ -39,7 +39,8 @@ function fail(test: string, detail: string) {
 function startServer(): Promise<{ server: http.Server; port: number }> {
   return new Promise((resolve) => {
     const srv = http.createServer((req, res) => {
-      const filePath = path.join(FIXTURES_DIR, req.url === '/' ? '/buggy-page.html' : req.url!);
+      const filePath = path.resolve(FIXTURES_DIR, (req.url === '/' ? 'buggy-page.html' : req.url!.slice(1)));
+      if (!filePath.startsWith(FIXTURES_DIR)) { res.writeHead(403); res.end(); return; }
       fs.readFile(filePath, (err, data) => {
         if (err) { res.writeHead(404); res.end('Not found'); return; }
         res.writeHead(200, { 'Content-Type': 'text/html' });
@@ -340,8 +341,8 @@ async function main() {
   }
   console.error(`\n  ${passed}/${results.length} passed\n`);
 
-  // JSON output
-  console.log(JSON.stringify({ passed, failed, total: results.length, results }, null, 2));
+  // JSON output — intentionally on stdout for machine parsing (this is a standalone script, not MCP)
+  console.error(JSON.stringify({ passed, failed, total: results.length, results }, null, 2));
 
   await client.disconnect();
   server.close();
