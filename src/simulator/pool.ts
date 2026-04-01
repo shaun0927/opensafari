@@ -6,6 +6,7 @@ import { SimulatorDevice } from './types';
 import { DEVICE_PRESETS } from './presets';
 import { WebKitClient } from '../webkit/client';
 import { AuthManager } from '../auth/manager';
+import { BrowserBackend, Cookie } from '../types/browser-backend';
 import * as os from 'os';
 import {
   DEFAULT_IDLE_CHECK_INTERVAL_MS,
@@ -52,6 +53,7 @@ export class SimulatorPool extends EventEmitter {
   private memoryKillMB: number;
   private circuitBreakers: CircuitBreakerRegistry | null = null;
   private memoryCriticalHandlerRegistered = false;
+  private tempAuthState: Map<string, { cookies: Cookie[]; localStorage: Record<string, string> }> = new Map();
 
   constructor(options?: SimulatorPoolOptions) {
     super();
@@ -382,6 +384,66 @@ export class SimulatorPool extends EventEmitter {
         console.error(`[SimulatorPool] Auth injection failed for ${sim.preset}: ${err}`);
       }
     }
+  }
+
+  /**
+   * Save temporary auth state for transfer between sequential devices.
+   * Called before shutting down a device in a sequential workflow.
+   */
+  async saveTempAuth(workflowId: string, client: BrowserBackend): Promise<void> {
+    try {
+      const cookies = await client.getCookies();
+      const localStorage = await client.evaluate<Record<string, string>>(`
+        (function() {
+          var data = {};
+          for (var i = 0; i < window.localStorage.length; i++) {
+            var key = window.localStorage.key(i);
+            if (key) data[key] = window.localStorage.getItem(key) || '';
+          }
+          return data;
+        })()
+      `) ?? {};
+      this.tempAuthState.set(workflowId, { cookies, localStorage });
+    } catch (err) {
+      console.error(`[SimulatorPool] Failed to save temp auth for ${workflowId}: ${err}`);
+    }
+  }
+
+  /**
+   * Restore temporary auth state onto a newly booted sequential device.
+   * Called after connecting to a new device in a sequential workflow.
+   */
+  async restoreTempAuth(workflowId: string, client: BrowserBackend): Promise<boolean> {
+    const state = this.tempAuthState.get(workflowId);
+    if (!state) return false;
+    try {
+      await client.setCookies(state.cookies);
+      if (Object.keys(state.localStorage).length > 0) {
+        await client.evaluate(`
+          (function(data) {
+            Object.entries(data).forEach(function(e) { localStorage.setItem(e[0], e[1]); });
+          })(${JSON.stringify(state.localStorage)})
+        `);
+      }
+      return true;
+    } catch (err) {
+      console.error(`[SimulatorPool] Failed to restore temp auth for ${workflowId}: ${err}`);
+      return false;
+    }
+  }
+
+  /**
+   * Seed temporary auth state directly (e.g. from a loaded auth profile).
+   */
+  setTempAuth(workflowId: string, cookies: Cookie[], localStorage: Record<string, string>): void {
+    this.tempAuthState.set(workflowId, { cookies, localStorage });
+  }
+
+  /**
+   * Clear temporary auth state after workflow completion.
+   */
+  clearTempAuth(workflowId: string): void {
+    this.tempAuthState.delete(workflowId);
   }
 
   get size(): number {
