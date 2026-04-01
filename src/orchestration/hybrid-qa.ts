@@ -335,7 +335,9 @@ export class HybridQAEngine extends EventEmitter {
       this.pool.clearTempAuth(id);
     }
 
-    result.status = 'completed';
+    if (result.status !== 'error') {
+      result.status = 'completed';
+    }
     result.totalDuration = Date.now() - overallStart;
     this.workflows.set(id, result);
     this.emit('hybrid:completed', { id, totalDuration: result.totalDuration });
