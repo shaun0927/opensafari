@@ -26,7 +26,7 @@ import { AuthManager } from '../src/auth';
 const program = new Command()
   .name('opensafari')
   .description('iOS Safari automation MCP server via Xcode Simulator')
-  .version('0.0.1');
+  .version(require('../package.json').version);
 
 // --- serve ---
 program
