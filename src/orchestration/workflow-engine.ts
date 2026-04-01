@@ -259,9 +259,11 @@ export class SimulatorWorkflowEngine extends EventEmitter {
     this.checkWorkflowCompletion(state);
     this.persistWorkflow(state);
 
+    // Sequential mode: all devices have already run and shut down,
+    // so generate completion summaries instead of action prompts.
     const prompts = workers.map(w => ({
       workerName: w.name,
-      prompt: this.generateWorkerPrompt(w, options),
+      prompt: `[COMPLETED] ${w.name} on ${w.preset}: ${w.status}. Results available via workflow_collect.`,
     }));
 
     return { workflowId, workers: workers.map(w => ({ name: w.name, device: w.preset })), prompts };
