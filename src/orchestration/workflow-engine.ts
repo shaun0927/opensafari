@@ -207,8 +207,8 @@ export class SimulatorWorkflowEngine extends EventEmitter {
     // Run sequentially in background — each device boots, runs, shuts down
     const sequentialResults = await this.pool.bootSequential(
       options.devices,
-      async (sim, preset) => {
-        const worker = state.workers.find(w => w.preset === preset);
+      async (sim, preset, index) => {
+        const worker = state.workers[index];
         if (worker) {
           worker.deviceId = sim.device.udid;
           worker.status = 'active';
@@ -241,9 +241,10 @@ export class SimulatorWorkflowEngine extends EventEmitter {
       },
     );
 
-    // Update worker statuses from sequential results
-    for (const [preset, result] of sequentialResults) {
-      const worker = state.workers.find(w => w.preset === preset);
+    // Update worker statuses from sequential results (index-based to handle duplicate presets)
+    for (let i = 0; i < sequentialResults.length; i++) {
+      const result = sequentialResults[i];
+      const worker = state.workers[i];
       if (!worker) continue;
       if (result.status === 'completed') {
         worker.status = 'completed';
@@ -259,9 +260,11 @@ export class SimulatorWorkflowEngine extends EventEmitter {
     this.checkWorkflowCompletion(state);
     this.persistWorkflow(state);
 
+    // Sequential mode: all devices have already run and shut down,
+    // so generate completion summaries instead of action prompts.
     const prompts = workers.map(w => ({
       workerName: w.name,
-      prompt: this.generateWorkerPrompt(w, options),
+      prompt: `[COMPLETED] ${w.name} on ${w.preset}: ${w.status}. Results available via workflow_collect.`,
     }));
 
     return { workflowId, workers: workers.map(w => ({ name: w.name, device: w.preset })), prompts };

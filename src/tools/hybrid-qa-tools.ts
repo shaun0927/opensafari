@@ -60,25 +60,9 @@ export function registerHybridQATools(server: MCPServer): void {
     },
     async (_sessionId: string, params: Record<string, unknown>) => {
       if (!engine) return errorResult('Hybrid QA engine not initialized');
-      const result = engine.getStatus(params.id as string);
-      if (!result) return errorResult(`Workflow not found: ${params.id}`);
-      return jsonResult({
-        id: result.id,
-        status: result.status,
-        phaseA: {
-          duration: result.phaseA.duration,
-          scansCompleted: result.phaseA.scans.length,
-          totalIssues: result.phaseA.totalIssues,
-          flaggedForVerification: result.phaseA.flaggedForVerification,
-        },
-        phaseB: result.phaseB ? {
-          duration: result.phaseB.duration,
-          confirmedCount: result.phaseB.confirmedCount,
-          falsePositiveCount: result.phaseB.falsePositiveCount,
-        } : null,
-        totalDuration: result.totalDuration,
-        peakMode: result.peakMode,
-      });
+      const status = engine.getStatus(params.id as string);
+      if (!status) return errorResult(`Workflow not found: ${params.id}`);
+      return jsonResult(status);
     },
   );
 

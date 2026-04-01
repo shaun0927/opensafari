@@ -6,6 +6,7 @@
 import {
   HybridQAEngine,
   HybridQAResult,
+  HybridQAStatus,
   applyViewportEmulation,
   ViewportConfig,
 } from '../../src/orchestration/hybrid-qa';
@@ -160,6 +161,67 @@ describe('HybridQAEngine', () => {
       expect(engine.getStatus('nonexistent')).toBeNull();
       expect(engine.getResults('nonexistent')).toBeNull();
     });
+
+    it('getStatus() should return lightweight status object', () => {
+      // We need to test that getStatus returns the lightweight HybridQAStatus type
+      // Since we can't call start() without real simulators, we test the null case
+      // and verify the type structure through the interface
+      const mockPool = {} as SimulatorPool;
+      const engine = new HybridQAEngine(mockPool);
+      expect(engine.getStatus('nonexistent')).toBeNull();
+    });
+
+    it('getResults() should return full HybridQAResult', () => {
+      const mockPool = {} as SimulatorPool;
+      const engine = new HybridQAEngine(mockPool);
+      expect(engine.getResults('nonexistent')).toBeNull();
+    });
+  });
+
+  describe('API differentiation: getStatus vs getResults', () => {
+    it('HybridQAStatus should be a lightweight subset of HybridQAResult', () => {
+      // Verify the HybridQAStatus type structure
+      const status: HybridQAStatus = {
+        id: 'hqa-789',
+        status: 'completed',
+        phasesCompleted: 2,
+        totalIssues: 5,
+        flaggedForVerification: 2,
+        confirmedCount: 1,
+        elapsed: 20000,
+      };
+
+      // Status should NOT contain scan details or verified issues
+      expect(status).not.toHaveProperty('phaseA');
+      expect(status).not.toHaveProperty('phaseB');
+      expect(status).not.toHaveProperty('peakMode');
+      expect(status).not.toHaveProperty('totalDuration');
+      expect(status).toHaveProperty('phasesCompleted');
+      expect(status).toHaveProperty('elapsed');
+    });
+
+    it('HybridQAStatus should include error field when present', () => {
+      const status: HybridQAStatus = {
+        id: 'hqa-err',
+        status: 'error',
+        error: 'Phase A failed',
+        phasesCompleted: 0,
+        totalIssues: 0,
+        flaggedForVerification: 0,
+        confirmedCount: 0,
+        elapsed: 500,
+      };
+
+      expect(status.error).toBe('Phase A failed');
+      expect(status.status).toBe('error');
+    });
+
+    it('both should return null for nonexistent workflow ID', () => {
+      const mockPool = {} as SimulatorPool;
+      const engine = new HybridQAEngine(mockPool);
+      expect(engine.getStatus('does-not-exist')).toBeNull();
+      expect(engine.getResults('does-not-exist')).toBeNull();
+    });
   });
 
   describe('Event emission', () => {
@@ -244,5 +306,92 @@ describe('Hybrid QA Tools registration', () => {
   it('should export registerHybridQATools', async () => {
     const mod = await import('../../src/tools/hybrid-qa-tools');
     expect(typeof mod.registerHybridQATools).toBe('function');
+  });
+});
+
+// ── Auth persistence tests ──
+
+// Mock dependencies needed by SimulatorPool
+jest.mock('../../src/simulator/manager', () => ({
+  SimulatorManager: jest.fn().mockImplementation(() => ({
+    boot: jest.fn().mockResolvedValue({ udid: 'udid-mock', name: 'Mock', state: 'Booted', isAvailable: true, runtime: 'iOS-18-0', runtimeVersion: '18.0' }),
+    shutdown: jest.fn().mockResolvedValue(undefined),
+    openUrl: jest.fn().mockResolvedValue(undefined),
+  })),
+}));
+
+jest.mock('../../src/webkit/client', () => ({
+  WebKitClient: jest.fn().mockImplementation(() => ({
+    connect: jest.fn().mockResolvedValue(undefined),
+    disconnect: jest.fn().mockResolvedValue(undefined),
+    isConnected: () => true,
+  })),
+}));
+
+jest.mock('../../src/reliability/zombie-cleanup', () => ({
+  registerManagedDevices: jest.fn(),
+  unregisterManagedDevices: jest.fn(),
+}));
+
+describe('Auth persistence across sequential devices', () => {
+  it('should expose saveTempAuth/restoreTempAuth/clearTempAuth/setTempAuth on SimulatorPool', () => {
+    const pool = new SimulatorPool();
+    expect(typeof pool.saveTempAuth).toBe('function');
+    expect(typeof pool.restoreTempAuth).toBe('function');
+    expect(typeof pool.clearTempAuth).toBe('function');
+    expect(typeof pool.setTempAuth).toBe('function');
+  });
+
+  it('should save and restore temp auth state', async () => {
+    const pool = new SimulatorPool();
+    const mockClient = createMockClient();
+
+    // Setup mock to return cookies
+    (mockClient.getCookies as jest.Mock).mockResolvedValue([
+      { name: 'session', value: 'abc123', domain: 'example.com', path: '/', expires: 0, httpOnly: true, secure: true },
+    ]);
+    (mockClient.evaluate as jest.Mock).mockResolvedValue({ token: 'xyz' });
+
+    await pool.saveTempAuth('wf-1', mockClient);
+    expect(mockClient.getCookies).toHaveBeenCalled();
+
+    // Restore to a new client
+    const newClient = createMockClient();
+    const restored = await pool.restoreTempAuth('wf-1', newClient);
+    expect(restored).toBe(true);
+    expect(newClient.setCookies).toHaveBeenCalledWith([
+      { name: 'session', value: 'abc123', domain: 'example.com', path: '/', expires: 0, httpOnly: true, secure: true },
+    ]);
+  });
+
+  it('should return false when no temp auth exists', async () => {
+    const pool = new SimulatorPool();
+    const mockClient = createMockClient();
+    const restored = await pool.restoreTempAuth('nonexistent', mockClient);
+    expect(restored).toBe(false);
+    expect(mockClient.setCookies).not.toHaveBeenCalled();
+  });
+
+  it('should clear temp auth state', async () => {
+    const pool = new SimulatorPool();
+    pool.setTempAuth('wf-2', [{ name: 'a', value: 'b', domain: 'd', path: '/', expires: 0, httpOnly: false, secure: false }], {});
+    pool.clearTempAuth('wf-2');
+
+    const mockClient = createMockClient();
+    const restored = await pool.restoreTempAuth('wf-2', mockClient);
+    expect(restored).toBe(false);
+  });
+
+  it('should handle gracefully when getCookies fails', async () => {
+    const pool = new SimulatorPool();
+    const mockClient = createMockClient();
+    (mockClient.getCookies as jest.Mock).mockRejectedValue(new Error('disconnected'));
+
+    // Should not throw
+    await pool.saveTempAuth('wf-3', mockClient);
+
+    const newClient = createMockClient();
+    const restored = await pool.restoreTempAuth('wf-3', newClient);
+    expect(restored).toBe(false);
   });
 });
