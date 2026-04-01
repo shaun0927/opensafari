@@ -47,6 +47,7 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
     }
   > = new Map();
   private enabledDomains: Set<string> = new Set();
+  private enabledDomainsPerTarget: Map<string, Set<string>> = new Map();
   private connected = false;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private lastUrl: string = '';
@@ -115,6 +116,7 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
     }
     this.connected = false;
     this.enabledDomains.clear();
+    this.enabledDomainsPerTarget.clear();
     this.activeTargetId = null;
     this.knownTargets.clear();
     this.targetReady = null;
@@ -231,10 +233,13 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
         }
 
         // Re-enable domains on new target (e.g., after navigation destroys old target)
-        const domains = [...this.enabledDomains];
+        // Merge global domains + any per-target domains that were tracked for this target
+        const globalDomains = [...this.enabledDomains];
+        const perTargetDomains = this.enabledDomainsPerTarget.get(info.targetId);
+        const domainsToEnable = new Set([...globalDomains, ...(perTargetDomains ?? [])]);
         // Re-enable domains then signal target readiness
         Promise.all(
-          domains.map(domain =>
+          [...domainsToEnable].map(domain =>
             this.sendToTarget(`${domain}.enable`, undefined, info.targetId).catch(err => {
               console.error(`[WebKitClient] Failed to re-enable ${domain} on new target: ${(err as Error).message}`);
             })
@@ -250,6 +255,7 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
     if (msg.method === 'Target.targetDestroyed') {
       const destroyedId = msg.params?.targetId;
       this.knownTargets.delete(destroyedId);
+      this.enabledDomainsPerTarget.delete(destroyedId);
       this.emit('target:destroyed', { targetId: destroyedId });
       if (destroyedId === this.activeTargetId) {
         // Fallback to another known target, or null
@@ -327,9 +333,14 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
 
   /**
    * Enable a domain on a specific target (tab).
+   * Tracks the domain per-target so it can be re-enabled after target recreation.
    */
   async enableDomainForTarget(domain: string, targetId: string): Promise<void> {
     await this.sendToTarget(`${domain}.enable`, undefined, targetId);
+    if (!this.enabledDomainsPerTarget.has(targetId)) {
+      this.enabledDomainsPerTarget.set(targetId, new Set());
+    }
+    this.enabledDomainsPerTarget.get(targetId)!.add(domain);
   }
 
   // ========== Multi-Tab Target Management ==========
@@ -347,6 +358,10 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
 
   getKnownTargets(): Set<string> {
     return new Set(this.knownTargets);
+  }
+
+  getEnabledDomainsForTarget(targetId: string): Set<string> {
+    return new Set(this.enabledDomainsPerTarget.get(targetId) ?? []);
   }
 
   // ========== Heartbeat ==========
@@ -409,9 +424,10 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
         await this.connect();
         console.error(`[WebKitClient] Reconnected successfully`);
 
-        // Re-enable domains
+        // Re-enable domains (global + per-target state is rebuilt via enableDomain/enableDomainForTarget)
         const domains = [...this.enabledDomains];
         this.enabledDomains.clear();
+        this.enabledDomainsPerTarget.clear();
         for (const domain of domains) {
           await this.enableDomain(domain);
         }
