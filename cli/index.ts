@@ -23,10 +23,13 @@ import { EventLoopMonitor, setGlobalEventLoopMonitor } from '../src/watchdog/eve
 import { SimulatorMonitor } from '../src/watchdog/simulator-monitor';
 import { AuthManager } from '../src/auth';
 
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const pkg = require('../package.json');
+
 const program = new Command()
   .name('opensafari')
   .description('iOS Safari automation MCP server via Xcode Simulator')
-  .version(require('../package.json').version);
+  .version(pkg.version);
 
 // --- serve ---
 program
