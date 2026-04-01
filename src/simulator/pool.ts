@@ -187,11 +187,12 @@ export class SimulatorPool extends EventEmitter {
    */
   async bootSequential(
     presets: string[],
-    runner: (sim: PooledSimulator, preset: string) => Promise<unknown>,
-  ): Promise<Map<string, { status: 'completed' | 'failed'; result?: unknown; error?: string; duration: number }>> {
-    const results = new Map<string, { status: 'completed' | 'failed'; result?: unknown; error?: string; duration: number }>();
+    runner: (sim: PooledSimulator, preset: string, index: number) => Promise<unknown>,
+  ): Promise<Array<{ preset: string; status: 'completed' | 'failed'; result?: unknown; error?: string; duration: number }>> {
+    const results: Array<{ preset: string; status: 'completed' | 'failed'; result?: unknown; error?: string; duration: number }> = [];
 
-    for (const preset of presets) {
+    for (let i = 0; i < presets.length; i++) {
+      const preset = presets[i];
       const start = Date.now();
       let sim: PooledSimulator | null = null;
 
@@ -232,12 +233,12 @@ export class SimulatorPool extends EventEmitter {
           sm.setConnection(device.udid, client);
         }
 
-        const result = await runner(sim, preset);
-        results.set(preset, { status: 'completed', result, duration: Date.now() - start });
+        const result = await runner(sim, preset, i);
+        results.push({ preset, status: 'completed', result, duration: Date.now() - start });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         console.error(`[SimulatorPool] Sequential: ${preset} failed: ${msg}`);
-        results.set(preset, { status: 'failed', error: msg, duration: Date.now() - start });
+        results.push({ preset, status: 'failed', error: msg, duration: Date.now() - start });
       } finally {
         // Always shut down before moving to next device — wrapped in try/catch
         // to prevent shutdown failures from aborting the remaining devices

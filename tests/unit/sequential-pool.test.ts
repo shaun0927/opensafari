@@ -75,14 +75,14 @@ describe('SimulatorPool.bootSequential', () => {
       },
     );
 
-    expect(results.size).toBe(3);
+    expect(results.length).toBe(3);
     expect(executionOrder).toEqual(['iphone-17', 'ipad-pro', 'iphone-se']);
 
-    const r1 = results.get('iphone-17');
+    const r1 = results.find(r => r.preset === 'iphone-17');
     expect(r1?.status).toBe('completed');
     expect(r1?.result).toEqual({ tested: 'iphone-17', pages: 5 });
 
-    const r2 = results.get('ipad-pro');
+    const r2 = results.find(r => r.preset === 'ipad-pro');
     expect(r2?.status).toBe('completed');
   });
 
@@ -103,7 +103,7 @@ describe('SimulatorPool.bootSequential', () => {
     );
 
     expect(maxConcurrent).toBe(1);
-    expect(results.size).toBe(3);
+    expect(results.length).toBe(3);
   });
 
   it('should continue after a device failure', async () => {
@@ -117,11 +117,11 @@ describe('SimulatorPool.bootSequential', () => {
       },
     );
 
-    expect(results.size).toBe(3);
-    expect(results.get('good-1')?.status).toBe('completed');
-    expect(results.get('bad-device')?.status).toBe('failed');
-    expect(results.get('bad-device')?.error).toContain('Simulated failure');
-    expect(results.get('good-2')?.status).toBe('completed');
+    expect(results.length).toBe(3);
+    expect(results.find(r => r.preset === 'good-1')?.status).toBe('completed');
+    expect(results.find(r => r.preset === 'bad-device')?.status).toBe('failed');
+    expect(results.find(r => r.preset === 'bad-device')?.error).toContain('Simulated failure');
+    expect(results.find(r => r.preset === 'good-2')?.status).toBe('completed');
   });
 
   it('should track duration per device', async () => {
@@ -135,8 +135,8 @@ describe('SimulatorPool.bootSequential', () => {
       },
     );
 
-    const fast = results.get('fast')!;
-    const slow = results.get('slow')!;
+    const fast = results.find(r => r.preset === 'fast')!;
+    const slow = results.find(r => r.preset === 'slow')!;
     expect(fast.duration).toBeGreaterThanOrEqual(0);
     expect(slow.duration).toBeGreaterThan(fast.duration);
   });
@@ -149,12 +149,12 @@ describe('SimulatorPool.bootSequential', () => {
 
     // After sequential completion, pool should be empty
     expect(pool.size).toBe(0);
-    expect(results.size).toBe(2);
+    expect(results.length).toBe(2);
   });
 
   it('should handle empty device list', async () => {
     const results = await pool.bootSequential([], async () => 'done');
-    expect(results.size).toBe(0);
+    expect(results.length).toBe(0);
   });
 
   it('should handle single device', async () => {
@@ -163,9 +163,57 @@ describe('SimulatorPool.bootSequential', () => {
       async () => ({ result: 42 }),
     );
 
-    expect(results.size).toBe(1);
-    expect(results.get('solo-device')?.status).toBe('completed');
-    expect(results.get('solo-device')?.result).toEqual({ result: 42 });
+    expect(results.length).toBe(1);
+    expect(results.find(r => r.preset === 'solo-device')?.status).toBe('completed');
+    expect(results.find(r => r.preset === 'solo-device')?.result).toEqual({ result: 42 });
+  });
+
+  it('should preserve all results for duplicate presets', async () => {
+    const results = await pool.bootSequential(
+      ['iphone-17', 'iphone-17'],
+      async (_sim, preset) => {
+        return { tested: preset };
+      },
+    );
+
+    expect(results.length).toBe(2);
+    expect(results[0].preset).toBe('iphone-17');
+    expect(results[0].status).toBe('completed');
+    expect(results[1].preset).toBe('iphone-17');
+    expect(results[1].status).toBe('completed');
+  });
+
+  it('should return correct results for mixed duplicate presets', async () => {
+    let callCount = 0;
+    const results = await pool.bootSequential(
+      ['a', 'b', 'a'],
+      async (_sim, preset) => {
+        callCount++;
+        return { preset, call: callCount };
+      },
+    );
+
+    expect(results.length).toBe(3);
+    expect(results[0]).toMatchObject({ preset: 'a', status: 'completed' });
+    expect(results[0].result).toEqual({ preset: 'a', call: 1 });
+    expect(results[1]).toMatchObject({ preset: 'b', status: 'completed' });
+    expect(results[1].result).toEqual({ preset: 'b', call: 2 });
+    expect(results[2]).toMatchObject({ preset: 'a', status: 'completed' });
+    expect(results[2].result).toEqual({ preset: 'a', call: 3 });
+    expect(results.every(r => r.duration >= 0)).toBe(true);
+  });
+
+  it('should pass correct index to runner callback', async () => {
+    const receivedIndices: number[] = [];
+    await pool.bootSequential(
+      ['x', 'y', 'z'],
+      async (_sim, _preset, index) => {
+        receivedIndices.push(index);
+        return 'done';
+      },
+    );
+
+    expect(receivedIndices).toEqual([0, 1, 2]);
   });
 });
 
