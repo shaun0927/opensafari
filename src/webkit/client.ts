@@ -72,6 +72,31 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
     super();
   }
 
+  getHost(): string { return this.options.host; }
+  getPort(): number { return this.options.port; }
+
+  /**
+   * Connect directly to a specific WebSocket URL (e.g., per-tab endpoint).
+   */
+  async connectToUrl(wsUrl: string, options?: { retries?: number; retryDelay?: number }): Promise<void> {
+    const maxRetries = options?.retries ?? 0;
+    const delay = options?.retryDelay ?? 2000;
+
+    let lastError: Error | null = null;
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        await this.connectToTarget(wsUrl);
+        return;
+      } catch (err) {
+        lastError = err as Error;
+        if (attempt < maxRetries) {
+          await new Promise(r => setTimeout(r, delay));
+        }
+      }
+    }
+    throw lastError ?? new Error('WebKit connection failed');
+  }
+
   // ========== Lifecycle ==========
 
   async connect(options?: { retries?: number; retryDelay?: number }): Promise<void> {
@@ -132,7 +157,17 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
   async listTargets(): Promise<WebKitTarget[]> {
     const url = `http://${this.options.host}:${this.options.port}/json`;
     const json = await this.httpGet(url);
-    return JSON.parse(json) as WebKitTarget[];
+    const targets = JSON.parse(json) as WebKitTarget[];
+
+    // ios-webkit-debug-proxy doesn't include an `id` field — derive from webSocketDebuggerUrl
+    for (const t of targets) {
+      if (!t.id && t.webSocketDebuggerUrl) {
+        const match = t.webSocketDebuggerUrl.match(/\/devtools\/page\/(\S+)/);
+        if (match) t.id = match[1];
+      }
+    }
+
+    return targets;
   }
 
   // ========== Protocol Message Layer ==========
@@ -1212,7 +1247,7 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
   private httpGet(url: string): Promise<string> {
     return new Promise((resolve, reject) => {
       http
-        .get(url, (res) => {
+        .get(url, { agent: false }, (res) => {
           let data = '';
           res.on('data', (chunk: string) => (data += chunk));
           res.on('end', () => resolve(data));

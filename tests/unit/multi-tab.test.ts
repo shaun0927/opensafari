@@ -96,9 +96,30 @@ class MockWebKitClient extends EventEmitter {
     }));
   }
 
+  getHost(): string { return 'localhost'; }
+  getPort(): number { return 9222; }
+  async connectToUrl(_wsUrl: string, _options?: { retries?: number; retryDelay?: number }): Promise<void> {
+    // Mock: set up a target from the wsUrl
+    const match = _wsUrl.match(/\/devtools\/page\/(\S+)/);
+    if (match) {
+      this.addTarget(match[1]);
+    }
+  }
+  async disconnect(): Promise<void> { this._connected = false; }
+
   getSentMessages() { return this._sentMessages; }
   clearSentMessages() { this._sentMessages = []; }
 }
+
+// ── Module mock for openTab tests (hoisted by Jest) ──
+
+jest.mock('../../src/simulator/manager', () => ({
+  SimulatorManager: jest.fn().mockImplementation(() => ({
+    boot: jest.fn().mockResolvedValue(undefined),
+    shutdown: jest.fn().mockResolvedValue(undefined),
+    openUrl: jest.fn().mockResolvedValue(undefined),
+  })),
+}));
 
 // ========== TabClient Tests ==========
 
@@ -238,10 +259,18 @@ describe('TabPool', () => {
     mockClient.addTarget('tab-2');
     mockClient.addTarget('tab-3');
 
+    // Mock WebKitClient constructor for dedicated connections
+    jest.spyOn(require('../../src/webkit/client'), 'WebKitClient').mockImplementation(() => {
+      const dc = new MockWebKitClient();
+      return dc;
+    });
+
     const pool = new TabPool(mockClient as unknown as WebKitClient, 'test-udid');
     const clients = await pool.discoverExistingTabs();
     expect(clients).toHaveLength(3);
     expect(pool.size).toBe(3);
+
+    jest.restoreAllMocks();
   });
 
   it('should enforce max tabs limit', async () => {
@@ -261,23 +290,33 @@ describe('TabPool', () => {
     expect(pool.getTab('initial-tab')).toBeNull();
   });
 
-  it('should remove tab when target is destroyed externally', async () => {
+  it('should remove tab on explicit close', async () => {
     const pool = new TabPool(mockClient as unknown as WebKitClient, 'test-udid');
     await pool.getDefaultTab();
     expect(pool.size).toBe(1);
 
-    mockClient.emit('target:destroyed', { targetId: 'initial-tab' });
+    await pool.closeTab('initial-tab');
     expect(pool.size).toBe(0);
+    expect(pool.getTab('initial-tab')).toBeNull();
   });
 
   it('should close all tabs', async () => {
     mockClient.addTarget('tab-2');
+
+    // Mock WebKitClient constructor for dedicated connections
+    jest.spyOn(require('../../src/webkit/client'), 'WebKitClient').mockImplementation(() => {
+      const dc = new MockWebKitClient();
+      return dc;
+    });
+
     const pool = new TabPool(mockClient as unknown as WebKitClient, 'test-udid');
     await pool.discoverExistingTabs();
     expect(pool.size).toBe(2);
 
     await pool.closeAll();
     expect(pool.size).toBe(0);
+
+    jest.restoreAllMocks();
   });
 
   it('should emit events on tab open and close', async () => {
@@ -403,5 +442,121 @@ describe('Per-target domain tracking', () => {
     expect(domains.size).toBe(2);
     expect(domains.has('Runtime')).toBe(true);
     expect(domains.has('Page')).toBe(true);
+  });
+});
+
+// ========== TabPool.waitForNewTarget() Timeout Tests (Issue #320) ==========
+
+describe('TabPool.waitForNewTarget() Timeout', () => {
+  let mockClient: MockWebKitClient;
+
+  beforeEach(() => {
+    mockClient = new MockWebKitClient();
+    mockClient.addTarget('existing-tab');
+  });
+
+  it('should throw timeout when new target never appears', async () => {
+    const pool = new TabPool(mockClient as unknown as WebKitClient, 'test-udid', {
+      targetDiscoveryTimeout: 600,
+    });
+
+    // listTargets always returns only the existing target — no new target ever appears
+    await expect(pool.openTab('https://example.com')).rejects.toThrow(
+      'New tab target not discovered within 600ms'
+    );
+  }, 10000);
+
+  it('should succeed when new target appears on 3rd poll', async () => {
+    // Mock WebKitClient constructor to return mock instances for dedicated connections
+    const mockDedicatedClient = new MockWebKitClient();
+    jest.spyOn(require('../../src/webkit/client'), 'WebKitClient').mockImplementation(() => mockDedicatedClient);
+
+    const pool = new TabPool(mockClient as unknown as WebKitClient, 'test-udid', {
+      targetDiscoveryTimeout: 5000,
+    });
+
+    let callCount = 0;
+    jest.spyOn(mockClient, 'listTargets').mockImplementation(async () => {
+      callCount++;
+      const targets: Array<{ id: string; url: string; title: string; webSocketDebuggerUrl: string; type: string }> = [
+        { id: 'existing-tab', url: 'about:blank', title: 'Tab', webSocketDebuggerUrl: 'ws://localhost/devtools/page/existing-tab', type: 'page' },
+      ];
+      if (callCount >= 3) {
+        targets.push({ id: 'new-tab', url: 'https://example.com', title: 'New', webSocketDebuggerUrl: 'ws://localhost/devtools/page/new-tab', type: 'page' });
+      }
+      return targets;
+    });
+
+    const tab = await pool.openTab('https://example.com');
+    expect(tab).toBeInstanceOf(TabClient);
+    // targetId is the protocol-level ID from the dedicated client
+    expect(tab.getTargetId()).toBe('new-tab');
+
+    jest.restoreAllMocks();
+  }, 10000);
+});
+
+// ========== TabClient Edge Cases (Issue #320) ==========
+
+describe('TabClient Edge Cases', () => {
+  let mockClient: MockWebKitClient;
+
+  beforeEach(() => {
+    mockClient = new MockWebKitClient();
+    mockClient.addTarget('target-1');
+  });
+
+  it('waitFor() with element not found → throws after timeout', async () => {
+    const tab = new TabClient(mockClient as unknown as WebKitClient, 'target-1');
+    jest.spyOn(tab, 'querySelector').mockResolvedValue(null);
+
+    await expect(
+      tab.waitFor('.nonexistent', { timeout: 500 })
+    ).rejects.toThrow('waitFor: .nonexistent not found within 500ms');
+  }, 10000);
+
+  it('clearCookies() calls getCookies then deleteCookie for each', async () => {
+    const tab = new TabClient(mockClient as unknown as WebKitClient, 'target-1');
+
+    jest.spyOn(tab, 'getCookies').mockResolvedValue([
+      { name: 'session', value: 'abc', domain: '.example.com', path: '/', expires: 0, httpOnly: true, secure: true },
+      { name: 'token', value: 'xyz', domain: '.example.com', path: '/api', expires: 0, httpOnly: false, secure: true },
+    ]);
+
+    const sendSpy = jest.spyOn(tab as any, 'send').mockResolvedValue(undefined);
+
+    await tab.clearCookies();
+
+    expect(tab.getCookies).toHaveBeenCalled();
+    const deleteCalls = sendSpy.mock.calls.filter(c => c[0] === 'Page.deleteCookie');
+    expect(deleteCalls).toHaveLength(2);
+    expect(deleteCalls[0][1]).toEqual({ cookieName: 'session', url: 'https://.example.com/' });
+    expect(deleteCalls[1][1]).toEqual({ cookieName: 'token', url: 'https://.example.com/api' });
+  });
+
+  it('destroy() removes all listeners, subsequent events not received', () => {
+    const tab = new TabClient(mockClient as unknown as WebKitClient, 'target-1');
+
+    // Register an event handler via the public API
+    tab.onConsole(() => {});
+    expect((tab as any)._listeners).toHaveLength(1);
+
+    // Before destroy: target:destroyed triggers disconnect
+    const disconnectHandler = jest.fn();
+    tab.on('disconnect', disconnectHandler);
+    mockClient.emit('target:destroyed', { targetId: 'target-1' });
+    expect(disconnectHandler).toHaveBeenCalledTimes(1);
+
+    // Destroy cleans up
+    disconnectHandler.mockClear();
+    tab.destroy();
+    expect((tab as any)._listeners).toHaveLength(0);
+
+    // Re-add listener after destroy
+    tab.on('disconnect', disconnectHandler);
+
+    // After destroy: target:destroyed does NOT trigger disconnect
+    mockClient.emit('target:destroyed', { targetId: 'target-1' });
+    expect(disconnectHandler).not.toHaveBeenCalled();
   });
 });

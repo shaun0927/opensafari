@@ -2,19 +2,21 @@
  * TabPool — Manages multiple Safari tabs within a single simulator.
  *
  * Opens tabs via `simctl openurl`, discovers new targets via ios-webkit-debug-proxy's
- * /json endpoint, and creates TabClient wrappers for independent per-tab control.
- * This enables lightweight parallelism (~15-50MB per tab vs ~2GB per simulator).
+ * /json endpoint, and creates dedicated per-tab WebKitClient connections.
+ * Each tab gets its own WebSocket connection to its specific /devtools/page/N endpoint,
+ * since ios-webkit-debug-proxy does not emit Target.targetCreated events for new tabs.
  */
 
 import { EventEmitter } from 'events';
 import { SimulatorManager } from './manager';
-import { WebKitClient, WebKitTarget } from '../webkit/client';
+import { WebKitClient } from '../webkit/client';
 import { TabClient } from './tab-client';
 
 export interface TabInfo {
   targetId: string;
   url: string;
   client: TabClient;
+  dedicatedClient?: WebKitClient;
   createdAt: number;
 }
 
@@ -40,66 +42,76 @@ export class TabPool extends EventEmitter {
     this.manager = new SimulatorManager();
     this.maxTabs = options?.maxTabs ?? 10;
     this.discoveryTimeout = options?.targetDiscoveryTimeout ?? 5000;
-
-    // Track target destruction
-    this.client.on('target:destroyed', (event: { targetId: string }) => {
-      if (this.tabs.has(event.targetId)) {
-        this.tabs.delete(event.targetId);
-        this.emit('tab:closed', { targetId: event.targetId });
-      }
-    });
   }
 
   /**
    * Open a new Safari tab by navigating to a URL.
-   * Returns a TabClient for independent control of the new tab.
+   * Creates a dedicated WebKitClient connection for the new tab.
    */
   async openTab(url: string): Promise<TabClient> {
     if (this.tabs.size >= this.maxTabs) {
       throw new Error(`Tab limit reached (${this.maxTabs}). Close tabs before opening new ones.`);
     }
 
-    // Snapshot current targets before opening new tab
+    // Snapshot current /json targets before opening new tab
     const beforeTargets = await this.client.listTargets();
     const beforeIds = new Set(beforeTargets.map(t => t.id));
 
-    // Open URL — creates a new Safari tab
-    await this.manager.openUrl(this.deviceId, url);
+    // Add unique fragment to prevent Safari from reusing an existing tab with the same URL.
+    // Fragments are not sent to the server, so this doesn't change the actual request.
+    const uniqueUrl = url + (url.includes('#') ? '' : `#_ostab${Date.now()}`);
 
-    // Wait for new target to appear
+    // Open URL — creates a new Safari tab
+    await this.manager.openUrl(this.deviceId, uniqueUrl);
+
+    // Poll /json for the new target
     const newTarget = await this.waitForNewTarget(beforeIds);
 
-    const tabClient = new TabClient(this.client, newTarget.id);
-    this.tabs.set(newTarget.id, {
-      targetId: newTarget.id,
+    // Create a dedicated WebKitClient for this specific tab
+    const dedicatedClient = new WebKitClient({
+      host: this.client.getHost(),
+      port: this.client.getPort(),
+    });
+    await dedicatedClient.connectToUrl(newTarget.webSocketDebuggerUrl, { retries: 3, retryDelay: 1000 });
+
+    // Get the protocol-level target ID from the dedicated connection
+    const protocolTargetId = dedicatedClient.getActiveTargetId();
+    if (!protocolTargetId) {
+      await dedicatedClient.disconnect();
+      throw new Error('Failed to obtain protocol target ID for new tab');
+    }
+
+    const tabClient = new TabClient(dedicatedClient, protocolTargetId);
+    this.tabs.set(protocolTargetId, {
+      targetId: protocolTargetId,
       url,
       client: tabClient,
+      dedicatedClient,
       createdAt: Date.now(),
     });
 
-    this.emit('tab:opened', { targetId: newTarget.id, url });
+    this.emit('tab:opened', { targetId: protocolTargetId, url });
     return tabClient;
   }
 
   /**
    * Get a TabClient for the current active (first) tab.
-   * Useful when a tab already exists from the initial boot.
+   * Uses the boot-time WebKitClient connection.
    */
   async getDefaultTab(): Promise<TabClient> {
-    const targets = await this.client.listTargets();
-    const pageTarget = targets.find(t => t.type === 'page' || !t.type);
-    if (!pageTarget) {
+    const activeId = this.client.getActiveTargetId();
+    if (!activeId) {
       throw new Error('No Safari tab found. Is Safari open?');
     }
 
-    if (this.tabs.has(pageTarget.id)) {
-      return this.tabs.get(pageTarget.id)!.client;
+    if (this.tabs.has(activeId)) {
+      return this.tabs.get(activeId)!.client;
     }
 
-    const tabClient = new TabClient(this.client, pageTarget.id);
-    this.tabs.set(pageTarget.id, {
-      targetId: pageTarget.id,
-      url: pageTarget.url,
+    const tabClient = new TabClient(this.client, activeId);
+    this.tabs.set(activeId, {
+      targetId: activeId,
+      url: '',
       client: tabClient,
       createdAt: Date.now(),
     });
@@ -114,7 +126,6 @@ export class TabPool extends EventEmitter {
     const tab = this.tabs.get(targetId);
     if (!tab) return;
 
-    // Remove from map first to prevent double-fire from target:destroyed listener
     this.tabs.delete(targetId);
     tab.client.destroy();
 
@@ -122,6 +133,11 @@ export class TabPool extends EventEmitter {
       await tab.client.evaluate('window.close()');
     } catch {
       // Tab may already be gone
+    }
+
+    // Disconnect dedicated per-tab connection
+    if (tab.dedicatedClient) {
+      try { await tab.dedicatedClient.disconnect(); } catch { /* ignore */ }
     }
 
     this.emit('tab:closed', { targetId });
@@ -160,22 +176,40 @@ export class TabPool extends EventEmitter {
 
   /**
    * Discover all existing Safari tabs and wrap them as TabClients.
+   * Creates dedicated WebKitClient connections for each discovered tab.
    */
   async discoverExistingTabs(): Promise<TabClient[]> {
     const targets = await this.client.listTargets();
     const clients: TabClient[] = [];
 
     for (const target of targets) {
-      if (this.tabs.has(target.id)) {
-        clients.push(this.tabs.get(target.id)!.client);
+      // Check if already tracked by any means
+      const existing = Array.from(this.tabs.values()).find(
+        t => t.url === target.url || t.targetId === target.id
+      );
+      if (existing) {
+        clients.push(existing.client);
         continue;
       }
 
-      const tabClient = new TabClient(this.client, target.id);
-      this.tabs.set(target.id, {
-        targetId: target.id,
+      const dedicatedClient = new WebKitClient({
+        host: this.client.getHost(),
+        port: this.client.getPort(),
+      });
+      await dedicatedClient.connectToUrl(target.webSocketDebuggerUrl, { retries: 2, retryDelay: 500 });
+
+      const protocolTargetId = dedicatedClient.getActiveTargetId();
+      if (!protocolTargetId) {
+        await dedicatedClient.disconnect();
+        continue;
+      }
+
+      const tabClient = new TabClient(dedicatedClient, protocolTargetId);
+      this.tabs.set(protocolTargetId, {
+        targetId: protocolTargetId,
         url: target.url,
         client: tabClient,
+        dedicatedClient,
         createdAt: Date.now(),
       });
       clients.push(tabClient);
@@ -184,10 +218,9 @@ export class TabPool extends EventEmitter {
     return clients;
   }
 
-  private async waitForNewTarget(beforeIds: Set<string>): Promise<WebKitTarget> {
+  private async waitForNewTarget(beforeIds: Set<string>): Promise<{ id: string; webSocketDebuggerUrl: string; url: string }> {
     const start = Date.now();
     const pollInterval = 300;
-
     while (Date.now() - start < this.discoveryTimeout) {
       const currentTargets = await this.client.listTargets();
       const newTarget = currentTargets.find(t => !beforeIds.has(t.id));

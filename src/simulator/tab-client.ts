@@ -81,13 +81,21 @@ export class TabClient extends EventEmitter implements BrowserBackend {
     return { url: options.url, status: 200, loadTime: Date.now() - start };
   }
 
-  async screenshot(_options?: ScreenshotOptions): Promise<Buffer> {
+  async screenshot(options?: ScreenshotOptions): Promise<Buffer> {
     await this.enableDomain('Page');
+    const viewport = await this.evaluate<{ w: number; h: number }>(
+      '({w: window.innerWidth, h: window.innerHeight})',
+    );
+    const clip = options?.clip ?? { x: 0, y: 0, width: viewport.w, height: viewport.h };
     const result = await this.send<{ dataURL: string }>('Page.snapshotRect', {
-      x: 0, y: 0, width: 0, height: 0, coordinateSystem: 'Viewport',
+      x: clip.x, y: clip.y, width: clip.width, height: clip.height,
+      coordinateSystem: 'Viewport',
     });
-    const base64 = result.dataURL.replace(/^data:image\/png;base64,/, '');
-    return Buffer.from(base64, 'base64');
+    const base64Data = result.dataURL.split(',')[1];
+    if (!base64Data) {
+      throw new Error('Could not capture snapshot');
+    }
+    return Buffer.from(base64Data, 'base64');
   }
 
   async evaluate<T = unknown>(expression: string): Promise<T> {
