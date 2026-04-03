@@ -5,6 +5,7 @@
 
 import { HybridQAEngine } from '../../src/orchestration/hybrid-qa';
 import { SimulatorPool } from '../../src/simulator/pool';
+import { TabPool } from '../../src/simulator/tab-pool';
 import { BrowserBackend } from '../../src/types/browser-backend';
 import { DetectorResult } from '../../src/qa/types';
 
@@ -218,6 +219,43 @@ describe('HybridQAEngine.start() Pipeline', () => {
 
     expect(result.phaseA.flaggedForVerification).toBe(0);
     expect(result.phaseB).toBeUndefined();
+  });
+
+  it('isolateCookies: option is passed to TabPool constructor', async () => {
+    const engine = new HybridQAEngine(mockPool);
+    jest.spyOn(engine as any, 'runDetectors').mockResolvedValue([passResult('auto-zoom')]);
+
+    await engine.start({
+      urls: ['https://example.com'],
+      devices: ['iphone-17'],
+      isolateCookies: true,
+      skipPhaseB: true,
+    });
+
+    // Verify TabPool was constructed with isolateCookies option
+    expect(TabPool).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.any(String),
+      expect.objectContaining({ isolateCookies: true }),
+    );
+  });
+
+  it('HybridQAOptions accepts isolateCookies as false by default', async () => {
+    const engine = new HybridQAEngine(mockPool);
+    jest.spyOn(engine as any, 'runDetectors').mockResolvedValue([passResult('auto-zoom')]);
+
+    await engine.start({
+      urls: ['https://example.com'],
+      devices: ['iphone-17'],
+      skipPhaseB: true,
+    });
+
+    // When isolateCookies is not specified, it should pass undefined (which defaults to false)
+    expect(TabPool).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.any(String),
+      expect.objectContaining({ isolateCookies: undefined }),
+    );
   });
 
   it('Auth injection: authProfile set → injectAuth called', async () => {

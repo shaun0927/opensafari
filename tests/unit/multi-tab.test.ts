@@ -495,6 +495,197 @@ describe('TabPool.waitForNewTarget() Timeout', () => {
   }, 10000);
 });
 
+// ========== TabPool Cookie Isolation Tests (Issue #333) ==========
+
+describe('TabPool Cookie Isolation', () => {
+  let mockClient: MockWebKitClient;
+  let getCookiesSpy: jest.SpyInstance;
+  let clearCookiesSpy: jest.SpyInstance;
+  let setCookiesSpy: jest.SpyInstance;
+
+  beforeEach(() => {
+    mockClient = new MockWebKitClient();
+    mockClient.addTarget('initial-tab');
+
+    // Add cookie-related methods to the mock
+    (mockClient as any).getCookies = jest.fn().mockResolvedValue([
+      { name: 'session', value: 'abc123', domain: '.example.com', path: '/', expires: 0, httpOnly: true, secure: true },
+    ]);
+    (mockClient as any).clearCookies = jest.fn().mockResolvedValue(undefined);
+    (mockClient as any).setCookies = jest.fn().mockResolvedValue(undefined);
+
+    getCookiesSpy = (mockClient as any).getCookies;
+    clearCookiesSpy = (mockClient as any).clearCookies;
+    setCookiesSpy = (mockClient as any).setCookies;
+  });
+
+  it('should snapshot cookies before tab navigation when isolateCookies is true', async () => {
+    // Mock WebKitClient constructor for dedicated connections
+    const mockDedicatedClient = new MockWebKitClient();
+    jest.spyOn(webkitClientModule, 'WebKitClient').mockImplementation((() => mockDedicatedClient) as unknown as (options: any) => any);
+
+    let callCount = 0;
+    jest.spyOn(mockClient, 'listTargets').mockImplementation(async () => {
+      callCount++;
+      const targets: Array<{ id: string; url: string; title: string; webSocketDebuggerUrl: string; type: string }> = [
+        { id: 'initial-tab', url: 'about:blank', title: 'Tab', webSocketDebuggerUrl: 'ws://localhost/devtools/page/initial-tab', type: 'page' },
+      ];
+      if (callCount >= 2) {
+        targets.push({ id: 'new-tab', url: 'https://example.com', title: 'New', webSocketDebuggerUrl: 'ws://localhost/devtools/page/new-tab', type: 'page' });
+      }
+      return targets;
+    });
+
+    const pool = new TabPool(mockClient as unknown as WebKitClient, 'test-udid', {
+      isolateCookies: true,
+      targetDiscoveryTimeout: 5000,
+    });
+
+    await pool.openTab('https://example.com');
+
+    // getCookies should have been called to take a snapshot
+    expect(getCookiesSpy).toHaveBeenCalled();
+    // clearCookies should have been called to isolate the new tab
+    expect(clearCookiesSpy).toHaveBeenCalled();
+
+    jest.restoreAllMocks();
+  }, 10000);
+
+  it('should clear cookies between tab openings when isolateCookies is true', async () => {
+    const mockDedicatedClient = new MockWebKitClient();
+    jest.spyOn(webkitClientModule, 'WebKitClient').mockImplementation((() => mockDedicatedClient) as unknown as (options: any) => any);
+
+    let callCount = 0;
+    jest.spyOn(mockClient, 'listTargets').mockImplementation(async () => {
+      callCount++;
+      const targets: Array<{ id: string; url: string; title: string; webSocketDebuggerUrl: string; type: string }> = [
+        { id: 'initial-tab', url: 'about:blank', title: 'Tab', webSocketDebuggerUrl: 'ws://localhost/devtools/page/initial-tab', type: 'page' },
+      ];
+      if (callCount >= 2) {
+        targets.push({ id: `new-tab-${callCount}`, url: 'https://example.com', title: 'New', webSocketDebuggerUrl: `ws://localhost/devtools/page/new-tab-${callCount}`, type: 'page' });
+      }
+      return targets;
+    });
+
+    const pool = new TabPool(mockClient as unknown as WebKitClient, 'test-udid', {
+      isolateCookies: true,
+      targetDiscoveryTimeout: 5000,
+    });
+
+    await pool.openTab('https://example.com');
+
+    // clearCookies should have been called once (during openTab)
+    expect(clearCookiesSpy).toHaveBeenCalledTimes(1);
+
+    jest.restoreAllMocks();
+  }, 10000);
+
+  it('should restore cookie snapshot on tab close when isolateCookies is true', async () => {
+    const mockDedicatedClient = new MockWebKitClient();
+    jest.spyOn(webkitClientModule, 'WebKitClient').mockImplementation((() => mockDedicatedClient) as unknown as (options: any) => any);
+
+    let callCount = 0;
+    jest.spyOn(mockClient, 'listTargets').mockImplementation(async () => {
+      callCount++;
+      const targets: Array<{ id: string; url: string; title: string; webSocketDebuggerUrl: string; type: string }> = [
+        { id: 'initial-tab', url: 'about:blank', title: 'Tab', webSocketDebuggerUrl: 'ws://localhost/devtools/page/initial-tab', type: 'page' },
+      ];
+      if (callCount >= 2) {
+        targets.push({ id: 'new-tab', url: 'https://example.com', title: 'New', webSocketDebuggerUrl: 'ws://localhost/devtools/page/new-tab', type: 'page' });
+      }
+      return targets;
+    });
+
+    const savedCookies = [
+      { name: 'session', value: 'abc123', domain: '.example.com', path: '/', expires: 0, httpOnly: true, secure: true },
+    ];
+    getCookiesSpy.mockResolvedValue(savedCookies);
+
+    const pool = new TabPool(mockClient as unknown as WebKitClient, 'test-udid', {
+      isolateCookies: true,
+      targetDiscoveryTimeout: 5000,
+    });
+
+    const tab = await pool.openTab('https://example.com');
+    const targetId = tab.getTargetId();
+
+    // Reset spies to track close behavior
+    clearCookiesSpy.mockClear();
+    setCookiesSpy.mockClear();
+
+    await pool.closeTab(targetId);
+
+    // On close: clearCookies should be called, then setCookies to restore snapshot
+    expect(clearCookiesSpy).toHaveBeenCalled();
+    expect(setCookiesSpy).toHaveBeenCalledWith(savedCookies);
+
+    jest.restoreAllMocks();
+  }, 10000);
+
+  it('should not snapshot or restore cookies when isolateCookies is false (default)', async () => {
+    const mockDedicatedClient = new MockWebKitClient();
+    jest.spyOn(webkitClientModule, 'WebKitClient').mockImplementation((() => mockDedicatedClient) as unknown as (options: any) => any);
+
+    let callCount = 0;
+    jest.spyOn(mockClient, 'listTargets').mockImplementation(async () => {
+      callCount++;
+      const targets: Array<{ id: string; url: string; title: string; webSocketDebuggerUrl: string; type: string }> = [
+        { id: 'initial-tab', url: 'about:blank', title: 'Tab', webSocketDebuggerUrl: 'ws://localhost/devtools/page/initial-tab', type: 'page' },
+      ];
+      if (callCount >= 2) {
+        targets.push({ id: 'new-tab', url: 'https://example.com', title: 'New', webSocketDebuggerUrl: 'ws://localhost/devtools/page/new-tab', type: 'page' });
+      }
+      return targets;
+    });
+
+    const pool = new TabPool(mockClient as unknown as WebKitClient, 'test-udid', {
+      targetDiscoveryTimeout: 5000,
+    });
+
+    const tab = await pool.openTab('https://example.com');
+    await pool.closeTab(tab.getTargetId());
+
+    // getCookies, clearCookies, setCookies should NOT have been called
+    expect(getCookiesSpy).not.toHaveBeenCalled();
+    expect(clearCookiesSpy).not.toHaveBeenCalled();
+    expect(setCookiesSpy).not.toHaveBeenCalled();
+
+    jest.restoreAllMocks();
+  }, 10000);
+
+  it('should clear cookieSnapshots on closeAll', async () => {
+    const mockDedicatedClient = new MockWebKitClient();
+    jest.spyOn(webkitClientModule, 'WebKitClient').mockImplementation((() => mockDedicatedClient) as unknown as (options: any) => any);
+
+    let callCount = 0;
+    jest.spyOn(mockClient, 'listTargets').mockImplementation(async () => {
+      callCount++;
+      const targets: Array<{ id: string; url: string; title: string; webSocketDebuggerUrl: string; type: string }> = [
+        { id: 'initial-tab', url: 'about:blank', title: 'Tab', webSocketDebuggerUrl: 'ws://localhost/devtools/page/initial-tab', type: 'page' },
+      ];
+      if (callCount >= 2) {
+        targets.push({ id: 'new-tab', url: 'https://example.com', title: 'New', webSocketDebuggerUrl: 'ws://localhost/devtools/page/new-tab', type: 'page' });
+      }
+      return targets;
+    });
+
+    const pool = new TabPool(mockClient as unknown as WebKitClient, 'test-udid', {
+      isolateCookies: true,
+      targetDiscoveryTimeout: 5000,
+    });
+
+    await pool.openTab('https://example.com');
+
+    await pool.closeAll();
+
+    // After closeAll, the internal cookieSnapshots map should be cleared
+    // Verify by checking that size is 0
+    expect(pool.size).toBe(0);
+
+    jest.restoreAllMocks();
+  }, 10000);
+});
+
 // ========== TabClient Edge Cases (Issue #320) ==========
 
 describe('TabClient Edge Cases', () => {
