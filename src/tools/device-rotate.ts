@@ -10,6 +10,7 @@ export function registerDeviceRotateTool(server: MCPServer): void {
         type: 'object' as const,
         properties: {
           deviceId: { type: 'string', description: 'Device UDID to rotate' },
+          direction: { type: 'string', enum: ['left', 'right'], description: 'Rotation direction (default: left)' },
         },
         required: [],
       },
@@ -21,8 +22,12 @@ export function registerDeviceRotateTool(server: MCPServer): void {
       if (!deviceId) {
         return { content: [{ type: 'text' as const, text: 'Error: no booted device found' }], isError: true };
       }
-      await manager.rotate(deviceId);
-      return { content: [{ type: 'text' as const, text: JSON.stringify({ rotated: true, deviceId }) }] };
+      const direction = (params.direction as 'left' | 'right') ?? 'left';
+      const result = await manager.rotate(deviceId, direction);
+      if (!result.success) {
+        return { content: [{ type: 'text' as const, text: JSON.stringify({ rotated: false, deviceId, method: 'none', error: 'No rotation method available (headless environment?)' }) }], isError: true };
+      }
+      return { content: [{ type: 'text' as const, text: JSON.stringify({ rotated: true, deviceId, method: result.method, orientation: result.orientation }) }] };
     },
   );
 }
