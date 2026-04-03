@@ -7,6 +7,7 @@ import {
   HybridQAEngine,
   HybridQAResult,
   HybridQAStatus,
+  PageScanResult,
   applyViewportEmulation,
   ViewportConfig,
 } from '../../src/orchestration/hybrid-qa';
@@ -49,28 +50,57 @@ function createMockClient(): BrowserBackend {
 
 describe('HybridQAEngine', () => {
   describe('applyViewportEmulation', () => {
-    it('should inject viewport meta via evaluate', async () => {
+    it('should inject viewport meta and dimension overrides via evaluate', async () => {
       const client = createMockClient();
-      const viewport: ViewportConfig = { preset: 'iphone-17', width: 390, height: 844 };
+      const viewport: ViewportConfig = { preset: 'iphone-17', width: 390, height: 844, dpr: 3 };
 
       await applyViewportEmulation(client, viewport);
 
-      expect(client.evaluate).toHaveBeenCalledTimes(1);
+      // First call: main viewport override script, second call: resize event
+      expect(client.evaluate).toHaveBeenCalledTimes(2);
       const expr = (client.evaluate as jest.Mock).mock.calls[0][0] as string;
       expect(expr).toContain('width=390');
       expect(expr).toContain('height: 844');
+      expect(expr).toContain('dpr: 3');
       expect(expr).toContain('preset: "iphone-17"');
+    });
+
+    it('should override innerWidth, innerHeight, and devicePixelRatio', async () => {
+      const client = createMockClient();
+      const viewport: ViewportConfig = { preset: 'iphone-17', width: 390, height: 844, dpr: 3 };
+
+      await applyViewportEmulation(client, viewport);
+
+      const expr = (client.evaluate as jest.Mock).mock.calls[0][0] as string;
+      expect(expr).toContain("Object.defineProperty(window, 'innerWidth'");
+      expect(expr).toContain("Object.defineProperty(window, 'innerHeight'");
+      expect(expr).toContain("Object.defineProperty(window, 'devicePixelRatio'");
+      expect(expr).toContain("Object.defineProperty(screen, 'width'");
+      expect(expr).toContain("Object.defineProperty(screen, 'height'");
+    });
+
+    it('should dispatch resize event after viewport override', async () => {
+      const client = createMockClient();
+      const viewport: ViewportConfig = { preset: 'iphone-17', width: 390, height: 844, dpr: 3 };
+
+      await applyViewportEmulation(client, viewport);
+
+      expect(client.evaluate).toHaveBeenCalledTimes(2);
+      const resizeExpr = (client.evaluate as jest.Mock).mock.calls[1][0] as string;
+      expect(resizeExpr).toContain('dispatchEvent');
+      expect(resizeExpr).toContain('resize');
     });
 
     it('should handle different viewport sizes', async () => {
       const client = createMockClient();
-      const viewport: ViewportConfig = { preset: 'ipad-pro', width: 1024, height: 1366 };
+      const viewport: ViewportConfig = { preset: 'ipad-pro', width: 1024, height: 1366, dpr: 2 };
 
       await applyViewportEmulation(client, viewport);
 
       const expr = (client.evaluate as jest.Mock).mock.calls[0][0] as string;
       expect(expr).toContain('width=1024');
       expect(expr).toContain('height: 1366');
+      expect(expr).toContain('dpr: 2');
     });
   });
 
@@ -83,7 +113,7 @@ describe('HybridQAEngine', () => {
           duration: 5000,
           scans: [{
             url: 'https://example.com',
-            viewport: { preset: 'iphone-17', width: 390, height: 844 },
+            viewport: { preset: 'iphone-17', width: 390, height: 844, dpr: 3 },
             detectorResults: [{
               detector: 'touch-targets',
               severity: 'high',
@@ -94,6 +124,7 @@ describe('HybridQAEngine', () => {
             }],
             issueCount: 1,
             maxSeverity: 'high',
+            emulationConfidence: 'low',
           }],
           totalIssues: 1,
           flaggedForVerification: 1,
@@ -293,6 +324,68 @@ describe('HybridQAEngine', () => {
       expect(meetsThreshold('pass', 'medium')).toBe(false);
       expect(meetsThreshold('critical', 'critical')).toBe(true);
       expect(meetsThreshold('high', 'critical')).toBe(false);
+    });
+  });
+
+  describe('ViewportConfig with DPR', () => {
+    it('should include dpr field', () => {
+      const viewport: ViewportConfig = { preset: 'iphone-17', width: 402, height: 874, dpr: 3 };
+      expect(viewport.dpr).toBe(3);
+    });
+
+    it('should support different DPR values for different devices', () => {
+      const iphone: ViewportConfig = { preset: 'iphone-17', width: 402, height: 874, dpr: 3 };
+      const ipad: ViewportConfig = { preset: 'ipad-pro', width: 1032, height: 1376, dpr: 2 };
+      expect(iphone.dpr).toBe(3);
+      expect(ipad.dpr).toBe(2);
+    });
+  });
+
+  describe('PageScanResult with emulationConfidence', () => {
+    it('should include emulationConfidence field', () => {
+      const scan: PageScanResult = {
+        url: 'https://example.com',
+        viewport: { preset: 'iphone-17', width: 402, height: 874, dpr: 3 },
+        detectorResults: [],
+        issueCount: 0,
+        maxSeverity: 'pass',
+        emulationConfidence: 'high',
+      };
+      expect(scan.emulationConfidence).toBe('high');
+    });
+
+    it('should support all confidence levels', () => {
+      const levels: Array<'high' | 'medium' | 'low'> = ['high', 'medium', 'low'];
+      for (const level of levels) {
+        const scan: PageScanResult = {
+          url: 'https://example.com',
+          viewport: { preset: 'iphone-17', width: 402, height: 874, dpr: 3 },
+          detectorResults: [],
+          issueCount: 0,
+          maxSeverity: 'pass',
+          emulationConfidence: level,
+        };
+        expect(scan.emulationConfidence).toBe(level);
+      }
+    });
+  });
+
+  describe('resolveViewports with DPR', () => {
+    it('should include dpr from device presets', () => {
+      const mockPool = {} as SimulatorPool;
+      const engine = new HybridQAEngine(mockPool);
+      const viewports = (engine as any).resolveViewports(['iphone-17', 'ipad-pro']);
+      expect(viewports[0].dpr).toBe(3);  // iphone-17 has dpr: 3
+      expect(viewports[1].dpr).toBe(2);  // ipad-pro has dpr: 2
+    });
+
+    it('should default dpr to 3 for unknown presets', () => {
+      const mockPool = {} as SimulatorPool;
+      const engine = new HybridQAEngine(mockPool);
+      const viewports = (engine as any).resolveViewports(['unknown-device']);
+      expect(viewports[0].dpr).toBe(3);
+      expect(viewports[0].width).toBe(390);
+      expect(viewports[0].height).toBe(844);
     });
   });
 });

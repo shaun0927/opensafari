@@ -109,8 +109,8 @@ async function main() {
   console.error('── Test 1: Phase A Fast Scan ──');
   try {
     const viewports: ViewportConfig[] = [
-      { preset: 'iphone-17', width: DEVICE_PRESETS['iphone-17'].w, height: DEVICE_PRESETS['iphone-17'].h },
-      { preset: 'ipad-pro', width: DEVICE_PRESETS['ipad-pro'].w, height: DEVICE_PRESETS['ipad-pro'].h },
+      { preset: 'iphone-17', width: DEVICE_PRESETS['iphone-17'].w, height: DEVICE_PRESETS['iphone-17'].h, dpr: DEVICE_PRESETS['iphone-17'].dpr },
+      { preset: 'ipad-pro', width: DEVICE_PRESETS['ipad-pro'].w, height: DEVICE_PRESETS['ipad-pro'].h, dpr: DEVICE_PRESETS['ipad-pro'].dpr },
     ];
 
     const scans: { viewport: string; issueCount: number; maxSev: string; detectorResults: DetectorResult[] }[] = [];
@@ -144,7 +144,7 @@ async function main() {
   console.error('\n── Test 2: Phase A → Phase B Trigger ──');
   try {
     // Phase A: scan with small viewport emulation
-    const smallVp: ViewportConfig = { preset: 'iphone-17', width: 402, height: 874 };
+    const smallVp: ViewportConfig = { preset: 'iphone-17', width: 402, height: 874, dpr: 3 };
     await client.navigate({ url: buggyUrl });
     await applyViewportEmulation(client, smallVp);
     await new Promise(r => setTimeout(r, 2000));
@@ -224,9 +224,9 @@ async function main() {
   try {
     const urls = [buggyUrl, cleanUrl];
     const viewports: ViewportConfig[] = [
-      { preset: 'iphone-17', width: 402, height: 874 },
-      { preset: 'ipad-pro', width: 1032, height: 1376 },
-      { preset: 'iphone-17-pro', width: 402, height: 874 },
+      { preset: 'iphone-17', width: 402, height: 874, dpr: 3 },
+      { preset: 'ipad-pro', width: 1032, height: 1376, dpr: 2 },
+      { preset: 'iphone-17-pro', width: 402, height: 874, dpr: 3 },
     ];
 
     const matrix: Record<string, Record<string, number>> = {};
@@ -298,8 +298,8 @@ async function main() {
   console.error('\n── Test 6: Clean Page → No Phase B ──');
   try {
     const viewports6: ViewportConfig[] = [
-      { preset: 'iphone-17', width: 402, height: 874 },
-      { preset: 'ipad-pro', width: 1032, height: 1376 },
+      { preset: 'iphone-17', width: 402, height: 874, dpr: 3 },
+      { preset: 'ipad-pro', width: 1032, height: 1376, dpr: 2 },
     ];
 
     let totalIssues = 0;

@@ -258,6 +258,53 @@ describe('HybridQAEngine.start() Pipeline', () => {
     );
   });
 
+  it('Low-confidence detectors auto-flagged for Phase B regardless of severity', async () => {
+    const engine = new HybridQAEngine(mockPool);
+    // touch-targets is a low-confidence detector, even with pass result
+    // the scan should still be flagged due to low confidence
+    jest.spyOn(engine as any, 'runDetectors').mockResolvedValue([passResult('touch-targets')]);
+
+    const result = await engine.start({
+      urls: ['https://example.com'],
+      devices: ['iphone-17'],
+      skipPhaseB: true,
+    });
+
+    // touch-targets is low-confidence, so scan should be flagged even with no issues
+    expect(result.phaseA.scans[0].emulationConfidence).toBe('low');
+    expect(result.phaseA.flaggedForVerification).toBeGreaterThan(0);
+  });
+
+  it('High-confidence detectors not auto-flagged when no issues found', async () => {
+    const engine = new HybridQAEngine(mockPool);
+    // auto-zoom is a high-confidence detector
+    jest.spyOn(engine as any, 'runDetectors').mockResolvedValue([passResult('auto-zoom')]);
+
+    const result = await engine.start({
+      urls: ['https://example.com'],
+      devices: ['iphone-17'],
+      skipPhaseB: true,
+    });
+
+    expect(result.phaseA.scans[0].emulationConfidence).toBe('high');
+    expect(result.phaseA.flaggedForVerification).toBe(0);
+  });
+
+  it('Scan results include emulationConfidence field', async () => {
+    const engine = new HybridQAEngine(mockPool);
+    jest.spyOn(engine as any, 'runDetectors').mockResolvedValue([
+      highSeverityResult('horizontal-overflow'),
+    ]);
+
+    const result = await engine.start({
+      urls: ['https://example.com'],
+      devices: ['iphone-17'],
+      skipPhaseB: true,
+    });
+
+    expect(result.phaseA.scans[0].emulationConfidence).toBe('medium');
+  });
+
   it('Auth injection: authProfile set → injectAuth called', async () => {
     const engine = new HybridQAEngine(mockPool);
     jest.spyOn(engine as any, 'runDetectors').mockResolvedValue([passResult('auto-zoom')]);
