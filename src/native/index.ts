@@ -19,3 +19,5 @@ export type {
   LogOptions,
   LogEntry,
 } from './types';
+export { AccessibilityBridge, AccessibilityBridgeError, getAccessibilityBridge } from './accessibility-bridge';
+export type { AXNode, AXFrame, AXQuery, AXQueryResult, AXDumpOptions, AXQueryOptions } from './ax-types';
