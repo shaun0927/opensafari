@@ -38,6 +38,13 @@ export const TOOL_TIERS: Record<string, number> = {
   network_intercept: 2,
   network_offline: 2,
 
+  // Tier 2: Native App Interactions
+  app_tap: 2,
+  app_double_tap: 2,
+  app_type_text: 2,
+  app_swipe_native: 2,
+  app_key_input: 2,
+
   // Tier 3: Auth & orchestration
   auth_save: 3,
   auth_restore: 3,
