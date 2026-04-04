@@ -9,6 +9,9 @@ export enum ErrorCode {
   XCODE_NOT_FOUND = 'XCODE_NOT_FOUND',
   WEBKIT_CONNECT_FAILED = 'WEBKIT_CONNECT_FAILED',
   WEBKIT_PROTOCOL_ERROR = 'WEBKIT_PROTOCOL_ERROR',
+  APP_NOT_INSTALLED = 'APP_NOT_INSTALLED',
+  APP_LAUNCH_FAILED = 'APP_LAUNCH_FAILED',
+  APP_NOT_RUNNING = 'APP_NOT_RUNNING',
 }
 
 export interface StructuredError {
@@ -29,4 +32,7 @@ export const ERROR_CATALOG: Record<ErrorCode, Omit<StructuredError, 'message'>> 
   [ErrorCode.XCODE_NOT_FOUND]: { code: ErrorCode.XCODE_NOT_FOUND, recoverable: false, suggestion: 'Install Xcode from the App Store' },
   [ErrorCode.WEBKIT_CONNECT_FAILED]: { code: ErrorCode.WEBKIT_CONNECT_FAILED, recoverable: true, suggestion: 'Ensure ios-webkit-debug-proxy is running' },
   [ErrorCode.WEBKIT_PROTOCOL_ERROR]: { code: ErrorCode.WEBKIT_PROTOCOL_ERROR, recoverable: true, suggestion: 'Check WebKit Inspector Protocol compatibility' },
+  [ErrorCode.APP_NOT_INSTALLED]: { code: ErrorCode.APP_NOT_INSTALLED, recoverable: false, suggestion: 'Install the app on the simulator first (e.g. simctl install)' },
+  [ErrorCode.APP_LAUNCH_FAILED]: { code: ErrorCode.APP_LAUNCH_FAILED, recoverable: true, suggestion: 'Verify the bundle ID and that the device is booted' },
+  [ErrorCode.APP_NOT_RUNNING]: { code: ErrorCode.APP_NOT_RUNNING, recoverable: true, suggestion: 'Launch the app first using app_launch' },
 };

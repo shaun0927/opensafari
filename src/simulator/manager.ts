@@ -238,6 +238,68 @@ export class SimulatorManager {
     return buffer.toString('base64');
   }
 
+  // === App Lifecycle ===
+
+  async launchApp(
+    deviceId: string,
+    bundleId: string,
+    options?: { args?: string[]; env?: Record<string, string> },
+  ): Promise<{ pid: number; bundleId: string; deviceId: string }> {
+    const device = await this.getDevice(deviceId);
+    if (!device || device.state !== 'Booted') {
+      throw new DeviceNotBootedError(deviceId);
+    }
+
+    const cmdArgs = ['launch', deviceId, bundleId];
+    if (options?.args) {
+      cmdArgs.push(...options.args);
+    }
+
+    // simctl passes SIMCTL_CHILD_* env vars to the launched app
+    const childEnv: Record<string, string> = {};
+    if (options?.env) {
+      for (const [key, value] of Object.entries(options.env)) {
+        childEnv[`SIMCTL_CHILD_${key}`] = value;
+      }
+    }
+
+    try {
+      const output = await this.simctl.exec(cmdArgs, { env: childEnv });
+      const pidMatch = output.match(/:\s*(\d+)/);
+      const pid = pidMatch ? parseInt(pidMatch[1], 10) : -1;
+      return { pid, bundleId, deviceId };
+    } catch (err) {
+      if (err instanceof SimctlError) {
+        if (err.message.includes('domain not found') || err.message.includes('not installed')) {
+          throw new AppNotInstalledError(bundleId, deviceId);
+        }
+      }
+      throw new AppLaunchError(bundleId, deviceId, err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async terminateApp(deviceId: string, bundleId: string): Promise<{ terminated: boolean; bundleId: string; deviceId: string }> {
+    const device = await this.getDevice(deviceId);
+    if (!device || device.state !== 'Booted') {
+      throw new DeviceNotBootedError(deviceId);
+    }
+
+    try {
+      await this.simctl.exec(['terminate', deviceId, bundleId]);
+      return { terminated: true, bundleId, deviceId };
+    } catch (err) {
+      if (err instanceof SimctlError) {
+        if (err.message.includes('not running') || err.message.includes('Failed to terminate')) {
+          return { terminated: false, bundleId, deviceId };
+        }
+        if (err.message.includes('domain not found') || err.message.includes('not installed')) {
+          throw new AppNotInstalledError(bundleId, deviceId);
+        }
+      }
+      throw err;
+    }
+  }
+
   // Expose simctl for direct use by other methods
   getSimctl(): SimctlExecutor {
     return this.simctl;
@@ -379,5 +441,26 @@ export class ScreenshotTimeoutError extends Error {
   constructor(public readonly deviceId: string) {
     super(`Screenshot capture timed out for device ${deviceId}`);
     this.name = 'ScreenshotTimeoutError';
+  }
+}
+
+export class AppNotInstalledError extends Error {
+  constructor(
+    public readonly bundleId: string,
+    public readonly deviceId: string,
+  ) {
+    super(`App "${bundleId}" is not installed on device ${deviceId}`);
+    this.name = 'AppNotInstalledError';
+  }
+}
+
+export class AppLaunchError extends Error {
+  constructor(
+    public readonly bundleId: string,
+    public readonly deviceId: string,
+    public readonly reason: string,
+  ) {
+    super(`Failed to launch "${bundleId}" on device ${deviceId}: ${reason}`);
+    this.name = 'AppLaunchError';
   }
 }
