@@ -24,6 +24,12 @@ interface SimctlListResult {
   }>;
 }
 
+export interface RotationResult {
+  success: boolean;
+  method: 'simctl' | 'applescript' | 'none';
+  orientation?: string;
+}
+
 export class SimulatorManager {
   private simctl = new SimctlExecutor();
 
@@ -264,28 +270,41 @@ export class SimulatorManager {
   }
 
   // === Rotation ===
-  // Note: simctl has no direct rotate command.
-  // Method A: AppleScript (requires Simulator.app GUI)
-  // Method B: WebKit Protocol viewport override (Epic 1B fallback)
+  // Method A: simctl io setorientation (works in headless/CI)
+  // Method B: AppleScript (requires Simulator.app GUI)
 
-  async rotate(deviceId: string): Promise<void> {
+  async rotate(deviceId: string, direction: 'left' | 'right' = 'left'): Promise<RotationResult> {
     const device = await this.getDevice(deviceId);
     if (!device || device.state !== 'Booted') {
       throw new DeviceNotBootedError(deviceId);
     }
 
-    // Try AppleScript rotation via Simulator.app menu
+    const orientation = direction === 'left' ? 'landscapeLeft' : 'landscapeRight';
+
+    // Try simctl first (works in headless/CI)
     try {
       const execFileAsync = promisify(execFile);
+      await execFileAsync('xcrun', ['simctl', 'io', deviceId, 'setorientation', orientation], { timeout: 10000 });
+      return { success: true, method: 'simctl', orientation };
+    } catch {
+      console.error('[SimulatorManager] simctl setorientation not available, trying AppleScript');
+    }
+
+    // Fallback to AppleScript (requires GUI)
+    try {
+      const execFileAsync = promisify(execFile);
+      const menuItem = direction === 'left' ? 'Rotate Left' : 'Rotate Right';
       await execFileAsync('osascript', [
         '-e', 'tell application "Simulator" to activate',
         '-e', 'delay 0.5',
-        '-e', 'tell application "System Events" to tell process "Simulator" to click menu item "Rotate Left" of menu "Device" of menu bar 1',
+        '-e', `tell application "System Events" to tell process "Simulator" to click menu item "${menuItem}" of menu "Device" of menu bar 1`,
       ], { timeout: 10000 });
+      return { success: true, method: 'applescript', orientation };
     } catch {
-      // AppleScript may fail in headless/CI environments
-      console.error('[SimulatorManager] Rotation via AppleScript failed — use WebKit Protocol viewport override as fallback (Epic 1B)');
+      console.error('[SimulatorManager] Rotation via AppleScript also failed — no rotation method available');
     }
+
+    return { success: false, method: 'none' };
   }
 
   // === Device Clone (state persistence alternative) ===

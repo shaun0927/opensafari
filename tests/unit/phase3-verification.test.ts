@@ -58,7 +58,7 @@ function createMockClient(evaluateResult?: any): BrowserBackend {
 function createMockSimulatorManager() {
   return {
     setAppearance: jest.fn().mockResolvedValue(undefined),
-    rotate: jest.fn().mockResolvedValue(undefined),
+    rotate: jest.fn().mockResolvedValue({ success: true, method: 'simctl', orientation: 'landscapeLeft' }),
     boot: jest.fn().mockResolvedValue(undefined),
     shutdown: jest.fn().mockResolvedValue(undefined),
   } as any;

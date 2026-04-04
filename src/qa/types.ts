@@ -8,7 +8,7 @@ export interface DetectorIssue {
 
 export interface DetectorResult {
   detector: string;
-  severity: 'critical' | 'high' | 'medium' | 'low' | 'pass' | 'error';
+  severity: 'critical' | 'high' | 'medium' | 'low' | 'warning' | 'pass' | 'error';
   issues: DetectorIssue[];
   passed: boolean;
   totalScanned: number;
