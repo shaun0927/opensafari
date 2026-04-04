@@ -29,6 +29,8 @@ export interface HybridQAOptions {
   deepVerifyThreshold?: 'critical' | 'high' | 'medium' | 'low';
   skipPhaseB?: boolean;
   authProfile?: string;
+  /** When true, isolate cookies between tabs to prevent cross-tab auth state leakage (default: false) */
+  isolateCookies?: boolean;
 }
 
 export interface ViewportConfig {
@@ -175,7 +177,9 @@ export class HybridQAEngine extends EventEmitter {
         await this.pool.injectAuth(options.authProfile);
       }
 
-      const tabPool = new TabPool(sim.client as WebKitClient, sim.device.udid);
+      const tabPool = new TabPool(sim.client as WebKitClient, sim.device.udid, {
+        isolateCookies: options.isolateCookies,
+      });
       const viewports = this.resolveViewports(options.devices);
 
       // For each URL × viewport combination, run QA detectors
