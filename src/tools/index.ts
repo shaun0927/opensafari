@@ -43,6 +43,10 @@ import { registerMockPermissionTool } from './mock-permission';
 import { registerNetworkInterceptTool } from './network-intercept';
 import { registerNetworkOfflineTool } from './network-offline';
 import { registerHybridQATools } from './hybrid-qa-tools';
+import { registerAppScreenshotNativeTool } from './app-screenshot-native';
+import { registerAppLogsTool } from './app-logs';
+import { registerAppCrashReportsTool } from './app-crash-reports';
+import { registerAppRecordVideoTool } from './app-record-video';
 
 export { setWorkflowEngine } from './orchestration-tools';
 export { setBarrier } from './barrier-tools';
@@ -132,4 +136,10 @@ export function registerAllTools(server: MCPServer): void {
 
   // Tier 3: Hybrid QA (Fast Scan + Deep Verify)
   registerHybridQATools(server);
+
+  // Tier 2: Native App Observability
+  registerAppScreenshotNativeTool(server);
+  registerAppLogsTool(server);
+  registerAppCrashReportsTool(server);
+  registerAppRecordVideoTool(server);
 }
