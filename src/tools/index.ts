@@ -45,6 +45,8 @@ import { registerNetworkOfflineTool } from './network-offline';
 import { registerHybridQATools } from './hybrid-qa-tools';
 import { registerAppLaunchTool } from './app-launch';
 import { registerAppTerminateTool } from './app-terminate';
+import { registerAppActivateTool } from './app-activate';
+import { registerAppListRunningTool } from './app-list-running';
 
 export { setWorkflowEngine } from './orchestration-tools';
 export { setBarrier } from './barrier-tools';
@@ -138,4 +140,6 @@ export function registerAllTools(server: MCPServer): void {
   // Tier 2: App Lifecycle
   registerAppLaunchTool(server);
   registerAppTerminateTool(server);
+  registerAppActivateTool(server);
+  registerAppListRunningTool(server);
 }
