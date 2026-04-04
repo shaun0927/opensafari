@@ -4,11 +4,15 @@ import { promisify } from 'util';
 const execFileAsync = promisify(execFile);
 
 export class SimctlExecutor {
-  async exec(args: string[], options?: { timeout?: number }): Promise<string> {
+  async exec(args: string[], options?: { timeout?: number; env?: Record<string, string> }): Promise<string> {
     try {
-      const { stdout } = await execFileAsync('xcrun', ['simctl', ...args], {
+      const execOptions: { timeout: number; env?: NodeJS.ProcessEnv } = {
         timeout: options?.timeout ?? 30000,
-      });
+      };
+      if (options?.env && Object.keys(options.env).length > 0) {
+        execOptions.env = { ...process.env, ...options.env };
+      }
+      const { stdout } = await execFileAsync('xcrun', ['simctl', ...args], execOptions);
       return stdout;
     } catch (err: unknown) {
       const error = err as Error & { stderr?: string; code?: number };

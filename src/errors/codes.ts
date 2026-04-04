@@ -12,6 +12,9 @@ export enum ErrorCode {
   ACCESSIBILITY_UNAVAILABLE = 'ACCESSIBILITY_UNAVAILABLE',
   NATIVE_GESTURE_FAILED = 'NATIVE_GESTURE_FAILED',
   APP_STATE_UNKNOWN = 'APP_STATE_UNKNOWN',
+  APP_NOT_INSTALLED = 'APP_NOT_INSTALLED',
+  APP_LAUNCH_FAILED = 'APP_LAUNCH_FAILED',
+  APP_NOT_RUNNING = 'APP_NOT_RUNNING',
 }
 
 export interface StructuredError {
@@ -35,4 +38,7 @@ export const ERROR_CATALOG: Record<ErrorCode, Omit<StructuredError, 'message'>> 
   [ErrorCode.ACCESSIBILITY_UNAVAILABLE]: { code: ErrorCode.ACCESSIBILITY_UNAVAILABLE, recoverable: false, suggestion: 'Enable accessibility on the simulator or check app supports accessibility' },
   [ErrorCode.NATIVE_GESTURE_FAILED]: { code: ErrorCode.NATIVE_GESTURE_FAILED, recoverable: true, suggestion: 'Verify target coordinates are within screen bounds and app is in foreground' },
   [ErrorCode.APP_STATE_UNKNOWN]: { code: ErrorCode.APP_STATE_UNKNOWN, recoverable: true, suggestion: 'Check if the app bundle ID is correct and the simulator is running' },
+  [ErrorCode.APP_NOT_INSTALLED]: { code: ErrorCode.APP_NOT_INSTALLED, recoverable: false, suggestion: 'Install the app on the simulator first (e.g. simctl install)' },
+  [ErrorCode.APP_LAUNCH_FAILED]: { code: ErrorCode.APP_LAUNCH_FAILED, recoverable: true, suggestion: 'Verify the bundle ID and that the device is booted' },
+  [ErrorCode.APP_NOT_RUNNING]: { code: ErrorCode.APP_NOT_RUNNING, recoverable: true, suggestion: 'Launch the app first using app_launch' },
 };
