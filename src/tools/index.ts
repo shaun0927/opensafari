@@ -47,6 +47,7 @@ import { registerAppLaunchTool } from './app-launch';
 import { registerAppTerminateTool } from './app-terminate';
 import { registerAppActivateTool } from './app-activate';
 import { registerAppListRunningTool } from './app-list-running';
+import { registerAppResetTool } from './app-reset';
 
 export { setWorkflowEngine } from './orchestration-tools';
 export { setBarrier } from './barrier-tools';
@@ -142,4 +143,5 @@ export function registerAllTools(server: MCPServer): void {
   registerAppTerminateTool(server);
   registerAppActivateTool(server);
   registerAppListRunningTool(server);
+  registerAppResetTool(server);
 }
