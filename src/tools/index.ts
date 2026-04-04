@@ -45,6 +45,9 @@ import { registerNetworkOfflineTool } from './network-offline';
 import { registerHybridQATools } from './hybrid-qa-tools';
 import { registerAppLaunchTool } from './app-launch';
 import { registerAppTerminateTool } from './app-terminate';
+import { registerAppTreeTool } from './app-tree';
+import { registerAppQueryTool } from './app-query';
+import { registerAppInspectTool } from './app-inspect';
 
 export { setWorkflowEngine } from './orchestration-tools';
 export { setBarrier } from './barrier-tools';
@@ -138,4 +141,9 @@ export function registerAllTools(server: MCPServer): void {
   // Tier 2: App Lifecycle
   registerAppLaunchTool(server);
   registerAppTerminateTool(server);
+
+  // Tier 2: Native Accessibility
+  registerAppTreeTool(server);
+  registerAppQueryTool(server);
+  registerAppInspectTool(server);
 }
