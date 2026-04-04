@@ -82,6 +82,7 @@ describe('Memory & Resource Stress Tests', () => {
     const strictPool = new SimulatorPool({ max: 5, concurrency: 1 });
 
     // Mock os.freemem to return very low value (100MB)
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const os = require('os');
     const originalFreemem = os.freemem;
     os.freemem = jest.fn().mockReturnValue(100 * 1024 * 1024); // 100MB
@@ -100,6 +101,7 @@ describe('Memory & Resource Stress Tests', () => {
   test('should pass resource check when enough RAM is available', async () => {
     const strictPool = new SimulatorPool({ max: 5, concurrency: 1 });
 
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const os = require('os');
     const originalFreemem = os.freemem;
     os.freemem = jest.fn().mockReturnValue(16 * 1024 * 1024 * 1024); // 16GB
@@ -343,6 +345,7 @@ describe('Memory & Resource Stress Tests', () => {
   test('should handle resource check failure gracefully in sequential mode', async () => {
     const constrainedPool = new SimulatorPool({ max: 5, concurrency: 1 });
 
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const os = require('os');
     const originalFreemem = os.freemem;
     os.freemem = jest.fn().mockReturnValue(100 * 1024 * 1024); // 100MB — too low

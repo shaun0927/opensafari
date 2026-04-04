@@ -6,12 +6,7 @@
  * is covered by sequential-e2e.test.ts.
  */
 
-import { SimulatorPool, InsufficientResourcesError } from '../../src/simulator/pool';
-import {
-  registerManagedDevices,
-  unregisterManagedDevices,
-  getAllManagedDeviceIds,
-} from '../../src/reliability/zombie-cleanup';
+import { SimulatorPool } from '../../src/simulator/pool';
 import { DEVICE_PRESETS } from '../../src/simulator/presets';
 
 // ── Mock SimulatorManager ──

@@ -5,7 +5,7 @@
  * and status tracking. Uses mocks for simulator/WebKit layers.
  */
 
-import { HybridQAEngine, HybridQAOptions, HybridQAResult } from '../../src/orchestration/hybrid-qa';
+import { HybridQAEngine, HybridQAOptions } from '../../src/orchestration/hybrid-qa';
 import { SimulatorPool } from '../../src/simulator/pool';
 import { DEVICE_PRESETS } from '../../src/simulator/presets';
 
