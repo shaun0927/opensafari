@@ -29,12 +29,15 @@ export interface HybridQAOptions {
   deepVerifyThreshold?: 'critical' | 'high' | 'medium' | 'low';
   skipPhaseB?: boolean;
   authProfile?: string;
+  /** When true, isolate cookies between tabs to prevent cross-tab auth state leakage (default: false) */
+  isolateCookies?: boolean;
 }
 
 export interface ViewportConfig {
   preset: string;
   width: number;
   height: number;
+  dpr: number;
 }
 
 export interface PageScanResult {
@@ -43,6 +46,7 @@ export interface PageScanResult {
   detectorResults: DetectorResult[];
   issueCount: number;
   maxSeverity: string;
+  emulationConfidence: 'high' | 'medium' | 'low';
 }
 
 export interface VerifiedIssue {
@@ -108,6 +112,29 @@ const DEFAULT_DETECTORS = [
   'scroll-lock', 'pwa-meta',
 ];
 
+// ── Emulation Confidence Scoring ──
+
+const DETECTOR_CONFIDENCE: Record<string, 'high' | 'medium' | 'low'> = {
+  'auto-zoom': 'high',
+  'hover-only': 'high',
+  'input-type': 'high',
+  'pwa-meta': 'high',
+  'horizontal-overflow': 'medium',
+  'scroll-lock': 'medium',
+  'fixed-stacking': 'medium',
+  'touch-targets': 'low',
+  'safe-area': 'low',
+  'vh100': 'low',
+  'orientation': 'low',
+};
+
+function getEmulationConfidence(detectorResults: DetectorResult[]): 'high' | 'medium' | 'low' {
+  const confidenceLevels = detectorResults.map(r => DETECTOR_CONFIDENCE[r.detector] ?? 'medium');
+  if (confidenceLevels.includes('low')) return 'low';
+  if (confidenceLevels.includes('medium')) return 'medium';
+  return 'high';
+}
+
 // ── Viewport Emulation ──
 
 export async function applyViewportEmulation(
@@ -125,10 +152,20 @@ export async function applyViewportEmulation(
       }
       meta.content = 'width=${viewport.width}, initial-scale=1';
 
-      // Store original dimensions for detection scripts
-      window.__opensafari_viewport = { width: ${viewport.width}, height: ${viewport.height}, preset: ${JSON.stringify(viewport.preset)} };
+      // Override window dimension APIs for accurate detector results
+      Object.defineProperty(window, 'innerWidth', { get: function() { return ${viewport.width}; }, configurable: true });
+      Object.defineProperty(window, 'innerHeight', { get: function() { return ${viewport.height}; }, configurable: true });
+      Object.defineProperty(window, 'devicePixelRatio', { get: function() { return ${viewport.dpr}; }, configurable: true });
+      Object.defineProperty(screen, 'width', { get: function() { return ${viewport.width * viewport.dpr}; }, configurable: true });
+      Object.defineProperty(screen, 'height', { get: function() { return ${viewport.height * viewport.dpr}; }, configurable: true });
+
+      // Store for detectors
+      window.__opensafari_viewport = { width: ${viewport.width}, height: ${viewport.height}, dpr: ${viewport.dpr}, preset: ${JSON.stringify(viewport.preset)} };
     })()
   `);
+
+  // Trigger resize event so responsive JS re-evaluates
+  await client.evaluate('window.dispatchEvent(new Event("resize"))');
 }
 
 // ── HybridQAEngine ──
@@ -175,7 +212,9 @@ export class HybridQAEngine extends EventEmitter {
         await this.pool.injectAuth(options.authProfile);
       }
 
-      const tabPool = new TabPool(sim.client as WebKitClient, sim.device.udid);
+      const tabPool = new TabPool(sim.client as WebKitClient, sim.device.udid, {
+        isolateCookies: options.isolateCookies,
+      });
       const viewports = this.resolveViewports(options.devices);
 
       // For each URL × viewport combination, run QA detectors
@@ -194,11 +233,12 @@ export class HybridQAEngine extends EventEmitter {
             const issueCount = detectorResults.reduce((sum, r) => sum + r.issueCount, 0);
             const maxSeverity = this.getMaxSeverity(detectorResults);
 
-            const scan: PageScanResult = { url, viewport, detectorResults, issueCount, maxSeverity };
+            const confidence = getEmulationConfidence(detectorResults);
+            const scan: PageScanResult = { url, viewport, detectorResults, issueCount, maxSeverity, emulationConfidence: confidence };
             result.phaseA.scans.push(scan);
             result.phaseA.totalIssues += issueCount;
 
-            if (issueCount > 0 && meetsThreshold(maxSeverity, threshold)) {
+            if ((issueCount > 0 && meetsThreshold(maxSeverity, threshold)) || confidence === 'low') {
               result.phaseA.flaggedForVerification++;
             }
 
@@ -219,6 +259,7 @@ export class HybridQAEngine extends EventEmitter {
               }],
               issueCount: 0,
               maxSeverity: 'error',
+              emulationConfidence: 'low',
             });
           }
         }
@@ -248,7 +289,7 @@ export class HybridQAEngine extends EventEmitter {
 
       // Collect flagged (url, device) pairs
       const flaggedPairs = result.phaseA.scans
-        .filter(s => s.issueCount > 0 && meetsThreshold(s.maxSeverity, threshold))
+        .filter(s => (s.issueCount > 0 && meetsThreshold(s.maxSeverity, threshold)) || s.emulationConfidence === 'low')
         .map(s => ({ url: s.url, device: s.viewport.preset, issues: s.detectorResults.filter(d => !d.passed) }));
 
       // Group by device for sequential execution
@@ -396,6 +437,7 @@ export class HybridQAEngine extends EventEmitter {
         preset: d,
         width: preset?.w ?? 390,
         height: preset?.h ?? 844,
+        dpr: preset?.dpr ?? 3,
       };
     });
   }

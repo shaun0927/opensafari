@@ -11,6 +11,7 @@ import { EventEmitter } from 'events';
 import { SimulatorManager } from './manager';
 import { WebKitClient } from '../webkit/client';
 import { TabClient } from './tab-client';
+import { Cookie } from '../types/browser-backend';
 
 export interface TabInfo {
   targetId: string;
@@ -25,6 +26,8 @@ export interface TabPoolOptions {
   maxTabs?: number;
   /** Time to wait for new target to appear after openurl (default: 5000ms) */
   targetDiscoveryTimeout?: number;
+  /** When true, snapshot and restore cookies per tab to prevent cross-tab contamination (default: false) */
+  isolateCookies?: boolean;
 }
 
 export class TabPool extends EventEmitter {
@@ -32,6 +35,8 @@ export class TabPool extends EventEmitter {
   private manager: SimulatorManager;
   private maxTabs: number;
   private discoveryTimeout: number;
+  private cookieSnapshots: Map<string, Cookie[]> = new Map();
+  private isolateCookies: boolean;
 
   constructor(
     private client: WebKitClient,
@@ -42,6 +47,7 @@ export class TabPool extends EventEmitter {
     this.manager = new SimulatorManager();
     this.maxTabs = options?.maxTabs ?? 10;
     this.discoveryTimeout = options?.targetDiscoveryTimeout ?? 5000;
+    this.isolateCookies = options?.isolateCookies ?? false;
   }
 
   /**
@@ -51,6 +57,14 @@ export class TabPool extends EventEmitter {
   async openTab(url: string): Promise<TabClient> {
     if (this.tabs.size >= this.maxTabs) {
       throw new Error(`Tab limit reached (${this.maxTabs}). Close tabs before opening new ones.`);
+    }
+
+    // Cookie isolation: snapshot current cookies and clear before opening new tab
+    if (this.isolateCookies) {
+      const currentCookies = await this.client.getCookies();
+      // Store snapshot keyed by a temporary ID; will be re-keyed to the target ID below
+      this.cookieSnapshots.set(`_pending_${Date.now()}`, currentCookies);
+      await this.client.clearCookies();
     }
 
     // Snapshot current /json targets before opening new tab
@@ -89,6 +103,16 @@ export class TabPool extends EventEmitter {
       dedicatedClient,
       createdAt: Date.now(),
     });
+
+    // Cookie isolation: re-key the pending snapshot to the actual target ID
+    if (this.isolateCookies) {
+      const pendingKey = Array.from(this.cookieSnapshots.keys()).find(k => k.startsWith('_pending_'));
+      if (pendingKey) {
+        const snapshot = this.cookieSnapshots.get(pendingKey)!;
+        this.cookieSnapshots.delete(pendingKey);
+        this.cookieSnapshots.set(protocolTargetId, snapshot);
+      }
+    }
 
     this.emit('tab:opened', { targetId: protocolTargetId, url });
     return tabClient;
@@ -140,6 +164,22 @@ export class TabPool extends EventEmitter {
       try { await tab.dedicatedClient.disconnect(); } catch { /* ignore */ }
     }
 
+    // Cookie isolation: restore cookies from snapshot after tab closes
+    if (this.isolateCookies) {
+      const snapshot = this.cookieSnapshots.get(targetId);
+      if (snapshot) {
+        try {
+          await this.client.clearCookies();
+          if (snapshot.length > 0) {
+            await this.client.setCookies(snapshot);
+          }
+        } catch (err) {
+          console.error(`[TabPool] Failed to restore cookie snapshot for ${targetId}: ${err}`);
+        }
+        this.cookieSnapshots.delete(targetId);
+      }
+    }
+
     this.emit('tab:closed', { targetId });
   }
 
@@ -172,6 +212,7 @@ export class TabPool extends EventEmitter {
     for (const id of ids) {
       await this.closeTab(id);
     }
+    this.cookieSnapshots.clear();
   }
 
   /**

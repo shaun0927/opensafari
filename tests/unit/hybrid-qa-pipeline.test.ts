@@ -5,6 +5,7 @@
 
 import { HybridQAEngine } from '../../src/orchestration/hybrid-qa';
 import { SimulatorPool } from '../../src/simulator/pool';
+import { TabPool } from '../../src/simulator/tab-pool';
 import { BrowserBackend } from '../../src/types/browser-backend';
 import { DetectorResult } from '../../src/qa/types';
 
@@ -218,6 +219,90 @@ describe('HybridQAEngine.start() Pipeline', () => {
 
     expect(result.phaseA.flaggedForVerification).toBe(0);
     expect(result.phaseB).toBeUndefined();
+  });
+
+  it('isolateCookies: option is passed to TabPool constructor', async () => {
+    const engine = new HybridQAEngine(mockPool);
+    jest.spyOn(engine as any, 'runDetectors').mockResolvedValue([passResult('auto-zoom')]);
+
+    await engine.start({
+      urls: ['https://example.com'],
+      devices: ['iphone-17'],
+      isolateCookies: true,
+      skipPhaseB: true,
+    });
+
+    // Verify TabPool was constructed with isolateCookies option
+    expect(TabPool).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.any(String),
+      expect.objectContaining({ isolateCookies: true }),
+    );
+  });
+
+  it('HybridQAOptions accepts isolateCookies as false by default', async () => {
+    const engine = new HybridQAEngine(mockPool);
+    jest.spyOn(engine as any, 'runDetectors').mockResolvedValue([passResult('auto-zoom')]);
+
+    await engine.start({
+      urls: ['https://example.com'],
+      devices: ['iphone-17'],
+      skipPhaseB: true,
+    });
+
+    // When isolateCookies is not specified, it should pass undefined (which defaults to false)
+    expect(TabPool).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.any(String),
+      expect.objectContaining({ isolateCookies: undefined }),
+    );
+  });
+
+  it('Low-confidence detectors auto-flagged for Phase B regardless of severity', async () => {
+    const engine = new HybridQAEngine(mockPool);
+    // touch-targets is a low-confidence detector, even with pass result
+    // the scan should still be flagged due to low confidence
+    jest.spyOn(engine as any, 'runDetectors').mockResolvedValue([passResult('touch-targets')]);
+
+    const result = await engine.start({
+      urls: ['https://example.com'],
+      devices: ['iphone-17'],
+      skipPhaseB: true,
+    });
+
+    // touch-targets is low-confidence, so scan should be flagged even with no issues
+    expect(result.phaseA.scans[0].emulationConfidence).toBe('low');
+    expect(result.phaseA.flaggedForVerification).toBeGreaterThan(0);
+  });
+
+  it('High-confidence detectors not auto-flagged when no issues found', async () => {
+    const engine = new HybridQAEngine(mockPool);
+    // auto-zoom is a high-confidence detector
+    jest.spyOn(engine as any, 'runDetectors').mockResolvedValue([passResult('auto-zoom')]);
+
+    const result = await engine.start({
+      urls: ['https://example.com'],
+      devices: ['iphone-17'],
+      skipPhaseB: true,
+    });
+
+    expect(result.phaseA.scans[0].emulationConfidence).toBe('high');
+    expect(result.phaseA.flaggedForVerification).toBe(0);
+  });
+
+  it('Scan results include emulationConfidence field', async () => {
+    const engine = new HybridQAEngine(mockPool);
+    jest.spyOn(engine as any, 'runDetectors').mockResolvedValue([
+      highSeverityResult('horizontal-overflow'),
+    ]);
+
+    const result = await engine.start({
+      urls: ['https://example.com'],
+      devices: ['iphone-17'],
+      skipPhaseB: true,
+    });
+
+    expect(result.phaseA.scans[0].emulationConfidence).toBe('medium');
   });
 
   it('Auth injection: authProfile set → injectAuth called', async () => {
