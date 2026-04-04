@@ -43,6 +43,7 @@ import { registerMockPermissionTool } from './mock-permission';
 import { registerNetworkInterceptTool } from './network-intercept';
 import { registerNetworkOfflineTool } from './network-offline';
 import { registerHybridQATools } from './hybrid-qa-tools';
+import { registerAppAlertHandleTool } from './app-alert-handle';
 
 export { setWorkflowEngine } from './orchestration-tools';
 export { setBarrier } from './barrier-tools';
@@ -80,6 +81,9 @@ export function registerAllTools(server: MCPServer): void {
   registerDeviceListTool(server);
   registerDeviceRotateTool(server);
   registerAppearanceToggleTool(server);
+
+  // Tier 2: Native App — System Surfaces
+  registerAppAlertHandleTool(server);
 
   // Tier 2: Device Mocking
   registerMockGeolocationTool(server);
