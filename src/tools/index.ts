@@ -43,6 +43,7 @@ import { registerMockPermissionTool } from './mock-permission';
 import { registerNetworkInterceptTool } from './network-intercept';
 import { registerNetworkOfflineTool } from './network-offline';
 import { registerHybridQATools } from './hybrid-qa-tools';
+import { registerAppOpenUrlTool } from './app-open-url';
 
 export { setWorkflowEngine } from './orchestration-tools';
 export { setBarrier } from './barrier-tools';
@@ -113,6 +114,9 @@ export function registerAllTools(server: MCPServer): void {
 
   // Tier 3: Auth Persistence
   registerAuthTools(server);
+
+  // Tier 2: Native App — System Surfaces
+  registerAppOpenUrlTool(server);
 
   // Tier 2: Network Throttle
   registerNetworkThrottleTool(server);
