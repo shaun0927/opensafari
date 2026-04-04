@@ -52,6 +52,7 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private lastUrl: string = '';
   private reconnecting = false;
+  readonly backendType = 'safari' as const;
 
   // Target-multiplexed protocol state
   private activeTargetId: string | null = null;

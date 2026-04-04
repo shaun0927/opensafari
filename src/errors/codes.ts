@@ -9,6 +9,9 @@ export enum ErrorCode {
   XCODE_NOT_FOUND = 'XCODE_NOT_FOUND',
   WEBKIT_CONNECT_FAILED = 'WEBKIT_CONNECT_FAILED',
   WEBKIT_PROTOCOL_ERROR = 'WEBKIT_PROTOCOL_ERROR',
+  ACCESSIBILITY_UNAVAILABLE = 'ACCESSIBILITY_UNAVAILABLE',
+  NATIVE_GESTURE_FAILED = 'NATIVE_GESTURE_FAILED',
+  APP_STATE_UNKNOWN = 'APP_STATE_UNKNOWN',
 }
 
 export interface StructuredError {
@@ -29,4 +32,7 @@ export const ERROR_CATALOG: Record<ErrorCode, Omit<StructuredError, 'message'>> 
   [ErrorCode.XCODE_NOT_FOUND]: { code: ErrorCode.XCODE_NOT_FOUND, recoverable: false, suggestion: 'Install Xcode from the App Store' },
   [ErrorCode.WEBKIT_CONNECT_FAILED]: { code: ErrorCode.WEBKIT_CONNECT_FAILED, recoverable: true, suggestion: 'Ensure ios-webkit-debug-proxy is running' },
   [ErrorCode.WEBKIT_PROTOCOL_ERROR]: { code: ErrorCode.WEBKIT_PROTOCOL_ERROR, recoverable: true, suggestion: 'Check WebKit Inspector Protocol compatibility' },
+  [ErrorCode.ACCESSIBILITY_UNAVAILABLE]: { code: ErrorCode.ACCESSIBILITY_UNAVAILABLE, recoverable: false, suggestion: 'Enable accessibility on the simulator or check app supports accessibility' },
+  [ErrorCode.NATIVE_GESTURE_FAILED]: { code: ErrorCode.NATIVE_GESTURE_FAILED, recoverable: true, suggestion: 'Verify target coordinates are within screen bounds and app is in foreground' },
+  [ErrorCode.APP_STATE_UNKNOWN]: { code: ErrorCode.APP_STATE_UNKNOWN, recoverable: true, suggestion: 'Check if the app bundle ID is correct and the simulator is running' },
 };

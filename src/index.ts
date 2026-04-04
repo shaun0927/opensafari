@@ -54,6 +54,11 @@ export type { OpenSafariConfig } from './config/global';
 // Types
 export type { BrowserBackend, NavigateOptions, NavigateResult, ElementInfo, Cookie } from './types/browser-backend';
 
+// Native app backend (stub)
+export { NativeAppClient } from './native-app/client';
+export type { NativeAppBackend, AccessibilityElement, AppInfo } from './types/native-app-backend';
+export type { AutomationBackend, AutomationBackendBase, BackendType } from './types/automation-backend';
+
 // Convenience factory
 export async function createServer(options?: {
   transport?: 'stdio' | 'http';

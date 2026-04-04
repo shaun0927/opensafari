@@ -6,6 +6,8 @@
  * browser automation via WebKit Remote Debugging Protocol.
  */
 
+import { BackendType } from './automation-backend';
+
 // Navigation
 export interface NavigateOptions {
   url: string;
@@ -51,6 +53,9 @@ export interface Cookie {
 
 // Main interface
 export interface BrowserBackend {
+  /** Backend type identifier. Defaults to 'safari' if not set. */
+  readonly backendType?: BackendType;
+
   // Lifecycle
   connect(): Promise<void>;
   disconnect(): Promise<void>;
