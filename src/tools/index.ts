@@ -43,6 +43,10 @@ import { registerMockPermissionTool } from './mock-permission';
 import { registerNetworkInterceptTool } from './network-intercept';
 import { registerNetworkOfflineTool } from './network-offline';
 import { registerHybridQATools } from './hybrid-qa-tools';
+import { registerAppPermissionsTool } from './app-permissions';
+import { registerAppDeeplinkTool } from './app-deeplink';
+import { registerAppPushNotificationTool } from './app-push-notification';
+import { registerAppHandleAlertTool } from './app-handle-alert';
 
 export { setWorkflowEngine } from './orchestration-tools';
 export { setBarrier } from './barrier-tools';
@@ -132,4 +136,10 @@ export function registerAllTools(server: MCPServer): void {
 
   // Tier 3: Hybrid QA (Fast Scan + Deep Verify)
   registerHybridQATools(server);
+
+  // Tier 2: Native App System Surfaces
+  registerAppPermissionsTool(server);
+  registerAppDeeplinkTool(server);
+  registerAppPushNotificationTool(server);
+  registerAppHandleAlertTool(server);
 }

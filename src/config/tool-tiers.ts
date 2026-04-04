@@ -37,6 +37,10 @@ export const TOOL_TIERS: Record<string, number> = {
   mock_permission: 2,
   network_intercept: 2,
   network_offline: 2,
+  app_permissions: 2,
+  app_deeplink: 2,
+  app_push_notification: 2,
+  app_handle_alert: 2,
 
   // Tier 3: Auth & orchestration
   auth_save: 3,
