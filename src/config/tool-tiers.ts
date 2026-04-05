@@ -39,6 +39,7 @@ export const TOOL_TIERS: Record<string, number> = {
   network_offline: 2,
   app_tree: 2,
   app_query: 2,
+  app_inspect: 2,
   app_launch: 2,
   app_terminate: 2,
 

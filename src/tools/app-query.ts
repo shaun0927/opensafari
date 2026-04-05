@@ -1,127 +1,96 @@
 import { MCPServer } from '../mcp-server';
+import { getAccessibilityBridge } from '../native';
 import { getSessionManager } from '../session-manager';
-import { queryAccessibilityTree, QueryMatch } from '../native/accessibility';
 
-/**
- * app_query — Query native elements by semantic selectors
- *
- * Searches the accessibility tree for nodes matching the given strategy
- * and selector value. Returns matched elements with hierarchy paths.
- */
 export function registerAppQueryTool(server: MCPServer): void {
   server.registerTool(
     {
       name: 'app_query',
-      description:
-        'Query native iOS accessibility elements by semantic selectors. ' +
-        'Supports querying by accessibility ID, label text, role, text content, ' +
-        'or predicate expressions (e.g. "role=Button AND label=Submit").',
+      description: 'Query native app UI elements by accessibility identifier, label, text, or role. Returns matching elements with metadata. Reports ambiguity when an identifier matches multiple elements.',
       inputSchema: {
         type: 'object' as const,
         properties: {
-          selector: {
+          identifier: {
             type: 'string',
-            description:
-              'Search value (accessibility ID, label text, role name, or predicate expression)',
+            description: 'Accessibility identifier (exact match)',
           },
-          strategy: {
+          label: {
             type: 'string',
-            enum: ['accessibilityId', 'label', 'text', 'role', 'predicate'],
-            description: 'Query strategy (default: label)',
+            description: 'Accessibility label (case-insensitive substring)',
           },
-          deviceId: {
+          text: {
             type: 'string',
-            description: 'Simulator UDID (uses active device if omitted)',
+            description: 'Text content in value or label (case-insensitive substring)',
+          },
+          role: {
+            type: 'string',
+            description: 'Accessibility role (e.g. "AXButton", "AXStaticText", "Button")',
+          },
+          device_id: {
+            type: 'string',
+            description: 'Simulator device UDID (defaults to active device)',
+          },
+          max_results: {
+            type: 'number',
+            description: 'Maximum number of results (default: 50)',
           },
         },
-        required: ['selector'],
+        required: [],
       },
     },
     async (_sessionId: string, params: Record<string, unknown>) => {
+      const identifier = params.identifier as string | undefined;
+      const label = params.label as string | undefined;
+      const text = params.text as string | undefined;
+      const role = params.role as string | undefined;
+
+      if (!identifier && !label && !text && !role) {
+        return {
+          content: [{
+            type: 'text' as const,
+            text: 'Error: at least one query parameter (identifier, label, text, or role) is required',
+          }],
+          isError: true,
+        };
+      }
+
       try {
-        const selector = params.selector as string;
-        const strategy = (params.strategy as string) || 'label';
-        const deviceId = (params.deviceId as string) || getSessionManager().getActiveDeviceId() || undefined;
+        const deviceId = (params.device_id as string) ?? getSessionManager().getActiveDeviceId() ?? undefined;
+        const maxResults = params.max_results as number | undefined;
 
-        const validStrategies = ['accessibilityId', 'label', 'text', 'role', 'predicate'];
-        if (!validStrategies.includes(strategy)) {
-          return {
-            content: [{
-              type: 'text' as const,
-              text: `Error: Invalid strategy "${strategy}". Must be one of: ${validStrategies.join(', ')}`,
-            }],
-            isError: true,
-          };
-        }
-
-        const matches = await queryAccessibilityTree(
-          {
-            strategy: strategy as 'accessibilityId' | 'label' | 'text' | 'role' | 'predicate',
-            value: selector,
-            deviceId,
-          },
+        const bridge = getAccessibilityBridge();
+        const result = await bridge.query(
+          { identifier, label, text, role },
+          { deviceId, maxResults },
         );
 
-        if (matches.length === 0) {
+        if (result.ambiguous) {
           return {
             content: [{
               type: 'text' as const,
               text: JSON.stringify({
-                matches: [],
-                count: 0,
-                message: `No elements found matching ${strategy}="${selector}". ` +
-                  'Try a different strategy or a broader selector. ' +
-                  'Use app_tree to see the full accessibility hierarchy.',
-              }),
+                warning: `Ambiguous query: identifier "${identifier}" matched ${result.total} elements. Use a more specific query or inspect individual paths.`,
+                ...result,
+              }, null, 2),
             }],
-            isError: true,
           };
         }
 
-        const result = formatMatches(matches);
         return {
-          content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
+          content: [{
+            type: 'text' as const,
+            text: JSON.stringify(result, null, 2),
+          }],
         };
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        console.error(`[app_query] ${message}`);
         return {
-          content: [{ type: 'text' as const, text: `Error: ${message}` }],
+          content: [{
+            type: 'text' as const,
+            text: `Error: ${err instanceof Error ? err.message : String(err)}`,
+          }],
           isError: true,
         };
       }
     },
   );
-}
-
-function formatMatches(matches: QueryMatch[]): {
-  matches: Array<{
-    role: string;
-    label?: string;
-    value?: string;
-    identifier?: string;
-    traits: string[];
-    frame: { x: number; y: number; width: number; height: number };
-    isVisible: boolean;
-    isEnabled: boolean;
-    path: string;
-    depth: number;
-  }>;
-  count: number;
-} {
-  return {
-    matches: matches.map(m => ({
-      role: m.node.role,
-      label: m.node.label,
-      value: m.node.value,
-      identifier: m.node.identifier,
-      traits: m.node.traits,
-      frame: m.node.frame,
-      isVisible: m.node.isVisible,
-      isEnabled: m.node.isEnabled,
-      path: m.path,
-      depth: m.depth,
-    })),
-    count: matches.length,
-  };
 }

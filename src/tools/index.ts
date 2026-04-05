@@ -45,6 +45,7 @@ import { registerNetworkOfflineTool } from './network-offline';
 import { registerHybridQATools } from './hybrid-qa-tools';
 import { registerAppTreeTool } from './app-tree';
 import { registerAppQueryTool } from './app-query';
+import { registerAppInspectTool } from './app-inspect';
 import { registerAppLaunchTool } from './app-launch';
 import { registerAppTerminateTool } from './app-terminate';
 
@@ -140,6 +141,7 @@ export function registerAllTools(server: MCPServer): void {
   // Tier 2: Native App Inspection
   registerAppTreeTool(server);
   registerAppQueryTool(server);
+  registerAppInspectTool(server);
 
   // Tier 2: App Lifecycle
   registerAppLaunchTool(server);
