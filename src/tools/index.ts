@@ -141,6 +141,9 @@ export function registerAllTools(server: MCPServer): void {
   // Tier 3: Auth Persistence
   registerAuthTools(server);
 
+  // Tier 2: Native App — System Surfaces
+  registerAppOpenUrlTool(server);
+
   // Tier 2: Network Throttle
   registerNetworkThrottleTool(server);
   // Tier 3: Scenario Runner
@@ -169,7 +172,6 @@ export function registerAllTools(server: MCPServer): void {
   registerAppLaunchTool(server);
   registerAppTerminateTool(server);
   registerAppListAppsTool(server);
-  registerAppOpenUrlTool(server);
   // Tier 2: Native App Interactions
   registerAppTapTool(server);
   registerAppDoubleTapTool(server);
