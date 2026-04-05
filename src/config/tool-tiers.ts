@@ -69,6 +69,8 @@ export const TOOL_TIERS: Record<string, number> = {
   app_push: 2,
   app_scroll_native: 2,
   app_dismiss_keyboard: 2,
+  app_permission_set: 2,
+  app_permission_reset: 2,
 
   // Tier 3: Auth & orchestration
   auth_save: 3,

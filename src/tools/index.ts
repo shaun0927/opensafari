@@ -74,6 +74,7 @@ import { registerAppDismissKeyboardTool } from './app-dismiss-keyboard';
 import { registerAppAssertTool } from './app-assert';
 import { registerAppWebviewConnectTool } from './app-webview-connect';
 import { registerSetActiveContextTool } from './set-active-context';
+import { registerAppPermissionTools } from './app-permission';
 
 export { setWorkflowEngine } from './orchestration-tools';
 export { setBarrier } from './barrier-tools';
@@ -210,4 +211,6 @@ export function registerAllTools(server: MCPServer): void {
   // Tier 2: Hybrid context switching
   registerAppWebviewConnectTool(server);
   registerSetActiveContextTool(server);
+  // Tier 2: Native App — System Surfaces
+  registerAppPermissionTools(server);
 }
