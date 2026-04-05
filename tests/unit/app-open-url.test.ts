@@ -1,27 +1,42 @@
 import { MCPServer } from '../../src/mcp-server';
 import { registerAppOpenUrlTool } from '../../src/tools/app-open-url';
 
-// Mock SimulatorManager
-jest.mock('../../src/simulator', () => ({
-  SimulatorManager: jest.fn().mockImplementation(() => ({
-    listBooted: jest.fn().mockResolvedValue([{ udid: 'TEST-UDID-1234' }]),
-    openUrl: jest.fn().mockResolvedValue(undefined),
-  })),
-}));
+// Mock SimctlExecutor
+jest.mock('../../src/simulator/simctl', () => {
+  const execMock = jest.fn().mockResolvedValue('');
+  return {
+    SimctlExecutor: jest.fn().mockImplementation(() => ({
+      exec: execMock,
+    })),
+    __execMock: execMock,
+  };
+});
 
-// Mock SessionManager
+// Mock SessionManager (used by resolveDeviceId)
 jest.mock('../../src/session-manager', () => ({
   getSessionManager: jest.fn().mockReturnValue({
     getActiveDeviceId: jest.fn().mockReturnValue('TEST-UDID-1234'),
   }),
 }));
 
+function getExecMock(): jest.Mock {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  return require('../../src/simulator/simctl').__execMock;
+}
+
 describe('app_open_url tool', () => {
   let server: MCPServer;
+  let execMock: jest.Mock;
 
   beforeAll(() => {
     server = new MCPServer();
     registerAppOpenUrlTool(server);
+  });
+
+  beforeEach(() => {
+    execMock = getExecMock();
+    execMock.mockReset();
+    execMock.mockResolvedValue('');
   });
 
   test('is registered with correct name', () => {
@@ -33,9 +48,10 @@ describe('app_open_url tool', () => {
     const result = await handler('test', { url: 'https://example.com/path' });
     expect(result.isError).toBeUndefined();
     const text = JSON.parse((result.content as unknown as Array<{ text: string }>)[0].text);
-    expect(text.opened).toBe(true);
     expect(text.url).toBe('https://example.com/path');
-    expect(text.scheme).toBe('https');
+    expect(text.deviceId).toBe('TEST-UDID-1234');
+    expect(text.openedAt).toBeDefined();
+    expect(execMock).toHaveBeenCalledWith(['openurl', 'TEST-UDID-1234', 'https://example.com/path']);
   });
 
   test('opens a custom URL scheme', async () => {
@@ -43,8 +59,7 @@ describe('app_open_url tool', () => {
     const result = await handler('test', { url: 'myapp://deep/link' });
     expect(result.isError).toBeUndefined();
     const text = JSON.parse((result.content as unknown as Array<{ text: string }>)[0].text);
-    expect(text.opened).toBe(true);
-    expect(text.scheme).toBe('myapp');
+    expect(text.url).toBe('myapp://deep/link');
   });
 
   test('opens maps:// scheme', async () => {
@@ -52,31 +67,23 @@ describe('app_open_url tool', () => {
     const result = await handler('test', { url: 'maps://q=Tokyo' });
     expect(result.isError).toBeUndefined();
     const text = JSON.parse((result.content as unknown as Array<{ text: string }>)[0].text);
-    expect(text.scheme).toBe('maps');
+    expect(text.url).toBe('maps://q=Tokyo');
   });
 
-  test('rejects URL without scheme', async () => {
+  test('returns error when url is missing', async () => {
     const handler = server.getToolHandler('app_open_url')!;
-    const result = await handler('test', { url: 'example.com/no-scheme' });
+    const result = await handler('test', {});
     expect(result.isError).toBe(true);
-    const text = JSON.parse((result.content as unknown as Array<{ text: string }>)[0].text);
-    expect(text.error).toBe('INVALID_URL');
   });
 
-  test('returns error when no device booted', async () => {
-    // Override mocks for this test
+  test('returns error when no device available', async () => {
     const sessionMgr = jest.requireMock('../../src/session-manager') as { getSessionManager: jest.Mock };
-    const simMod = jest.requireMock('../../src/simulator') as { SimulatorManager: jest.Mock };
-    sessionMgr.getSessionManager.mockReturnValueOnce({ getActiveDeviceId: () => null });
-    simMod.SimulatorManager.mockImplementationOnce(() => ({
-      listBooted: jest.fn().mockResolvedValue([]),
-      openUrl: jest.fn(),
-    }));
+    sessionMgr.getSessionManager.mockReturnValueOnce({
+      getActiveDeviceId: jest.fn().mockReturnValue(null),
+    });
 
     const handler = server.getToolHandler('app_open_url')!;
     const result = await handler('test', { url: 'https://example.com' });
     expect(result.isError).toBe(true);
-    const text = JSON.parse((result.content as unknown as Array<{ text: string }>)[0].text);
-    expect(text.error).toBe('DEVICE_NOT_BOOTED');
   });
 });

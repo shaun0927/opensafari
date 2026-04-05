@@ -192,19 +192,6 @@ export class SimulatorManager {
     return this.boot(presetKey);
   }
 
-  async launchApp(deviceId: string, bundleId: string): Promise<{ pid: number; bundleId: string; deviceId: string }> {
-    const device = await this.getDevice(deviceId);
-    if (!device || device.state !== 'Booted') {
-      throw new DeviceNotBootedError(deviceId);
-    }
-
-    const output = await this.simctl.exec(['launch', deviceId, bundleId]);
-    // simctl launch prints "<bundleId>: <pid>\n" on success
-    const pidMatch = output.match(/:\s*(\d+)/);
-    const pid = pidMatch ? parseInt(pidMatch[1], 10) : 0;
-    return { pid, bundleId, deviceId };
-  }
-
   async openUrl(deviceId: string, url: string): Promise<void> {
     // Validate URL
     try {
