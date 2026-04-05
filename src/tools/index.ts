@@ -70,6 +70,7 @@ import { registerAppResetTool } from './app-reset';
 import { registerAppAlertHandleTool } from './app-alert-handle';
 import { registerAppPushTool } from './app-push';
 import { registerAppScrollNativeTool } from './app-scroll-native';
+import { registerAppDismissKeyboardTool } from './app-dismiss-keyboard';
 
 export { setWorkflowEngine } from './orchestration-tools';
 export { setBarrier } from './barrier-tools';
@@ -199,4 +200,6 @@ export function registerAllTools(server: MCPServer): void {
   registerAppResetTool(server);
   // Tier 2: Native App Interactions
   registerAppScrollNativeTool(server);
+  // Tier 2: Native App Interaction
+  registerAppDismissKeyboardTool(server);
 }
