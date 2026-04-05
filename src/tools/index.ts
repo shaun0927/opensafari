@@ -170,4 +170,5 @@ export function registerAllTools(server: MCPServer): void {
   registerAppLogsTool(server);
   registerAppCrashReportsTool(server);
   registerAppRecordVideoTool(server);
+  // Tier 2: App Lifecycle
 }
