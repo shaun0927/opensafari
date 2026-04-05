@@ -300,6 +300,52 @@ export class SimulatorManager {
     }
   }
 
+  async activateApp(deviceId: string, bundleId: string): Promise<{ activated: boolean; bundleId: string; deviceId: string }> {
+    const device = await this.getDevice(deviceId);
+    if (!device || device.state !== 'Booted') {
+      throw new DeviceNotBootedError(deviceId);
+    }
+
+    // simctl launch brings an already-running app to the foreground;
+    // if the app is not running it starts it.
+    try {
+      await this.simctl.exec(['launch', deviceId, bundleId]);
+    } catch (err) {
+      if (err instanceof SimctlError) {
+        if (err.message.includes('domain not found') || err.message.includes('not installed')) {
+          throw new AppNotInstalledError(bundleId, deviceId);
+        }
+      }
+      throw err;
+    }
+    return { activated: true, bundleId, deviceId };
+  }
+
+  async listRunningApps(deviceId: string): Promise<Array<{ label: string; pid: number }>> {
+    const device = await this.getDevice(deviceId);
+    if (!device || device.state !== 'Booted') {
+      throw new DeviceNotBootedError(deviceId);
+    }
+
+    const output = await this.simctl.exec(['spawn', deviceId, 'launchctl', 'list']);
+    const lines = output.split('\n');
+    const apps: Array<{ label: string; pid: number }> = [];
+
+    for (const line of lines) {
+      const parts = line.split('\t');
+      if (parts.length < 3) continue;
+      const pid = parseInt(parts[0], 10);
+      const label = parts[2];
+      // Filter for UIKitApplication entries (running foreground apps)
+      if (!isNaN(pid) && pid > 0 && label.startsWith('UIKitApplication:')) {
+        const bundleId = label.replace('UIKitApplication:', '').replace(/\[.*\]$/, '');
+        apps.push({ label: bundleId, pid });
+      }
+    }
+
+    return apps;
+  }
+
   // Expose simctl for direct use by other methods
   getSimctl(): SimctlExecutor {
     return this.simctl;

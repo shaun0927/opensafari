@@ -63,6 +63,8 @@ import { registerAppPermissionsTool } from './app-permissions';
 import { registerAppDeeplinkTool } from './app-deeplink';
 import { registerAppPushNotificationTool } from './app-push-notification';
 import { registerAppHandleAlertTool } from './app-handle-alert';
+import { registerAppActivateTool } from './app-activate';
+import { registerAppListRunningTool } from './app-list-running';
 
 export { setWorkflowEngine } from './orchestration-tools';
 export { setBarrier } from './barrier-tools';
@@ -180,4 +182,6 @@ export function registerAllTools(server: MCPServer): void {
   registerAppDeeplinkTool(server);
   registerAppPushNotificationTool(server);
   registerAppHandleAlertTool(server);
+  registerAppActivateTool(server);
+  registerAppListRunningTool(server);
 }
