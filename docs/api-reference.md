@@ -53,6 +53,36 @@ Boot a simulator device.
 Shutdown a simulator.
 - **Input:** `{ deviceId?: string }`
 
+### App Lifecycle Tools (Tier 2)
+
+#### app_launch
+Launch an app by bundle identifier on a booted iOS Simulator.
+- **Input:** `{ bundleId: string, deviceId?: string, args?: string[], env?: Record<string, string> }`
+- **Output:** `{ pid, bundleId, deviceId }`
+- **Errors:** `APP_NOT_INSTALLED` if bundle ID not found, `DEVICE_NOT_BOOTED` if no booted simulator
+
+#### app_terminate
+Terminate a running app by bundle identifier.
+- **Input:** `{ bundleId: string, deviceId?: string }`
+- **Output:** `{ terminated: boolean, bundleId, deviceId }`
+- **Errors:** `APP_NOT_INSTALLED` if bundle ID not found
+
+#### app_activate
+Bring an app to the foreground. Launches the app if not already running.
+- **Input:** `{ bundleId: string, deviceId?: string }`
+- **Output:** `{ activated: boolean, bundleId, deviceId }`
+
+#### app_list_running
+List running foreground apps (UIKit) with bundle IDs and PIDs.
+- **Input:** `{ deviceId?: string }`
+- **Output:** `{ deviceId, apps: [{ label, pid }], count }`
+
+#### app_reset
+Reset app state: terminate, reset privacy permissions, uninstall. The app must be reinstalled after reset.
+- **Input:** `{ bundleId: string, deviceId?: string }`
+- **Output:** `{ reset: boolean, bundleId, deviceId, steps: string[] }`
+- **Steps:** `terminated` → `privacy_reset` → `uninstalled` (each step proceeds independently)
+
 ### Advanced Tools (Tier 2)
 
 inspect, wait_for, long_press, swipe, press, dismiss_keyboard, select_option, device_list, device_rotate, appearance_toggle
