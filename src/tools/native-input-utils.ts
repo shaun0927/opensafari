@@ -8,6 +8,10 @@
 import { getSessionManager } from '../session-manager';
 import { SimctlExecutor } from '../simulator/simctl';
 
+// Re-export input backend for tool files
+export { getInputBackend, resetInputBackend } from './native-input-backend';
+export type { InputBackend } from './native-input-backend';
+
 /**
  * Resolve the target device UDID from explicit param or the active device.
  * Throws a descriptive error when no device can be determined.
