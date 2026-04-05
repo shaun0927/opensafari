@@ -285,6 +285,135 @@ The JSON report includes:
 }
 ```
 
+## Native app observability in CI
+
+OpenSafari v0.2.0 adds native-level tools that complement the browser-based QA audit pipeline.
+These tools are useful for capturing device-level evidence during test failures.
+
+### Native screenshots
+
+Capture the full simulator screen (not just the browser viewport) at any point during a flow:
+
+```json
+{
+  "tool": "app_screenshot_native",
+  "params": {
+    "deviceId": "<UDID>",
+    "format": "png",
+    "mask": true
+  }
+}
+```
+
+When `mask` is `true`, the status bar is set to deterministic values (9:41, full battery, full signal)
+so screenshots are diffable across runs. The result includes a base64-encoded image.
+
+### Device log export
+
+Export structured JSON logs from the simulator, filtered by app, level, or text:
+
+```json
+{
+  "tool": "app_logs",
+  "params": {
+    "deviceId": "<UDID>",
+    "bundleId": "com.example.myapp",
+    "level": "error",
+    "since": "5m",
+    "limit": 50
+  }
+}
+```
+
+Upload the JSON output as a CI artifact for post-mortem analysis of failing runs.
+
+### Structured assertions (`app_assert`)
+
+Run native assertions that produce CI-friendly JSON output:
+
+```json
+{
+  "tool": "app_assert",
+  "params": {
+    "deviceId": "<UDID>",
+    "assertion": "app_running",
+    "bundleId": "com.example.myapp",
+    "suiteName": "smoke-tests",
+    "testName": "app-launches"
+  }
+}
+```
+
+Each assertion returns a structured result:
+
+```json
+{
+  "passed": true,
+  "assertion": "app_running",
+  "testName": "app-launches",
+  "suiteName": "smoke-tests",
+  "message": "App com.example.myapp is running",
+  "durationMs": 142,
+  "timestamp": "2026-04-05T03:35:00.000Z"
+}
+```
+
+Available assertion types: `app_running`, `element_exists`, `element_visible`,
+`screen_contains_text`, `text_matches`.
+
+### Hybrid context switching
+
+For apps that embed WebViews, discover and switch between native and web contexts:
+
+```json
+// Step 1: List available targets
+{ "tool": "app_webview_connect", "params": { "deviceId": "<UDID>" } }
+
+// Step 2: Switch to WebView context
+{ "tool": "set_active_context", "params": { "context": "webview", "targetId": "<id>" } }
+
+// Step 3: Run browser-level tools inside the WebView
+{ "tool": "navigate", "params": { "url": "https://example.com" } }
+
+// Step 4: Switch back to Safari
+{ "tool": "set_active_context", "params": { "context": "safari" } }
+```
+
+### CI workflow with native artifacts
+
+```yaml
+      - name: Run native smoke test
+        run: |
+          # Capture pre-test screenshot
+          opensafari tool app_screenshot_native --mask true --output pre-test.png
+
+          # Run app assertions
+          opensafari tool app_assert \
+            --assertion app_running \
+            --bundleId com.example.myapp \
+            --suiteName ci --testName launch > assert-result.json
+
+          # On failure, export logs
+          opensafari tool app_logs \
+            --bundleId com.example.myapp \
+            --level error \
+            --since 5m > error-logs.json
+
+          # Capture post-test screenshot
+          opensafari tool app_screenshot_native --mask true --output post-test.png
+
+      - name: Upload native artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-test-artifacts
+          path: |
+            pre-test.png
+            post-test.png
+            assert-result.json
+            error-logs.json
+```
+
 ## See also
 
 - [Getting Started](getting-started.md)

@@ -727,3 +727,71 @@ path to a working end-to-end native-automation loop:
 12. **`app_screen_recording`** — Recording; nice-to-have for CI artifacts.
 13. **`app_push_notification`** — Notification testing; depends on app lifecycle
     being solid.
+
+---
+
+## 7. Selector Best Practices by Framework
+
+The `app_tree`, `app_query`, and `app_inspect` tools read the macOS
+accessibility tree exposed by the iOS Simulator.  How much metadata is
+available depends on the UI framework the target app uses.
+
+### Native iOS (UIKit / SwiftUI)
+
+UIKit and SwiftUI expose the richest accessibility metadata by default.
+
+| Strategy | Example | Notes |
+|----------|---------|-------|
+| **Prefer `accessibilityIdentifier`** | `app_query --id "login_button"` | Stable across localizations; set via `accessibilityIdentifier` in UIKit or `.accessibilityIdentifier()` in SwiftUI |
+| **Fall back to `accessibilityLabel`** | `app_query --label "Sign In"` | Human-readable; changes with locale |
+| **Use role for broad filtering** | `app_query --role "AXButton"` | Combine with label/id for precision |
+| **Inspect by path for deep elements** | `app_inspect --path "0/3/2"` | Useful when identifiers are not set |
+
+**Tips:**
+- `UILabel`, `UIButton`, and `UITextField` expose labels automatically.
+- Custom `UIView` subclasses need `isAccessibilityElement = true` to appear in the tree.
+- SwiftUI views are accessible by default; use `.accessibilityIdentifier("id")` for stable selectors.
+
+### Flutter
+
+Flutter uses its own rendering engine and does **not** use native UIKit views.
+Accessibility metadata is available only when the Flutter `Semantics` widget
+is used or when the framework synthesizes semantics automatically.
+
+| Strategy | Example | Notes |
+|----------|---------|-------|
+| **Wrap widgets in `Semantics`** | `Semantics(identifier: 'cart_btn', child: ...)` | Required for `app_query --id` to work |
+| **Use `Key` for test identification** | `Key('cart_btn')` on widget | Keys do **not** appear in the accessibility tree — use `Semantics` instead |
+| **Query by label** | `app_query --label "Add to Cart"` | Works when `Semantics(label: ...)` is set |
+| **Enable semantics in test builds** | `flutter run --enable-software-rendering` | Ensures semantics tree is active |
+
+**Limitations:**
+- Without explicit `Semantics` widgets, many Flutter elements are invisible to the accessibility tree.
+- `SemanticsDebugger` in Flutter can help identify missing semantics during development.
+- Image-only buttons without a `Semantics` label will not appear — always add `label` or `identifier`.
+
+### React Native
+
+React Native maps components to native UIKit views, so accessibility works
+better than Flutter out of the box. However, defaults vary by component.
+
+| Strategy | Example | Notes |
+|----------|---------|-------|
+| **Set `testID`** | `<Button testID="submit_btn" />` | Maps to `accessibilityIdentifier` — best for `app_query --id` |
+| **Set `accessibilityLabel`** | `<Button accessibilityLabel="Submit" />` | Works with `app_query --label "Submit"` |
+| **Use `accessibilityRole`** | `accessibilityRole="button"` | Maps to AX role; useful for `app_query --role` |
+| **Mark non-accessible views** | `accessible={true}` | Required for custom views to appear in tree |
+
+**Tips:**
+- `testID` is the most reliable selector — it survives localization and UI changes.
+- `<Text>` components expose their content as `accessibilityLabel` by default.
+- `<TouchableOpacity>` is accessible by default; `<View>` is not — add `accessible={true}`.
+
+### General Recommendations
+
+1. **Always prefer identifiers over labels** for automation stability — identifiers survive localization, A/B tests, and copy changes.
+2. **Avoid coordinate-based selectors** unless no accessibility metadata is available. Coordinates break across device sizes and orientations.
+3. **Combine role + label** when identifiers are unavailable: `app_query --role "AXButton" --label "Submit"` is more robust than label alone.
+4. **Use `app_tree` first** to discover what metadata the app exposes before writing queries.
+5. **Check `visible` and `enabled` fields** — hidden or disabled elements are included in the tree but should generally be skipped in automation.
+6. **Use deterministic `path` values** from `app_tree` output for `app_inspect` when you need to re-inspect the same element across multiple calls.

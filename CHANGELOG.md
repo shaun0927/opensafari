@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.0] - 2026-04-05
+
+### Added
+
+- **Native app screenshot capture** (`app_screenshot_native`): Full simulator screen capture with deterministic status bar masking for diffable CI screenshots. Supports PNG/JPEG output with base64 encoding.
+- **Device log export** (`app_logs`): Structured JSON log export from simulator using NSPredicate filtering. Supports filtering by bundle ID, log level (default/info/debug/error/fault), time range, and text search.
+- **Native assertions** (`app_assert`): CI-friendly structured assertion tool with 5 assertion types (`app_running`, `element_exists`, `element_visible`, `screen_contains_text`, `text_matches`). Returns JSON results with pass/fail, duration, and timestamp for pipeline integration.
+- **Hybrid context switching** (`app_webview_connect`, `set_active_context`): Discover WebView targets inside running native apps and switch automation context between Safari and embedded WebViews. Target classification distinguishes Safari pages from WebView content by URL scheme.
+- **CI documentation for native tools**: Expanded `docs/ci-integration.md` with examples for native screenshots, log export, structured assertions, hybrid context switching, and artifact upload workflows.
+
+### Scope & Limitations
+
+- Native assertion `element_exists` / `element_visible` require Xcode 14+ with `simctl io enumerate` support.
+- Hybrid context switching relies on ios-webkit-debug-proxy target discovery; apps must have Web Inspector enabled for WebView targets to appear.
+- `app_screenshot_native` captures the full simulator display, not individual app windows.
+- Screen recording (`app_record_video`) is available but marked as experimental.
+
 ## [0.1.5] - 2026-03-31
 
 ### Added
