@@ -47,6 +47,15 @@ describe('app_alert_handle tool', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+
+    // Re-setup execFile mock (clearAllMocks resets the factory implementation)
+    const cp = jest.requireMock('child_process') as { execFile: jest.Mock };
+    cp.execFile.mockImplementation(
+      (_cmd: string, _args: string[], _opts: unknown, cb: (err: Error, stdout: string, stderr: string) => void) => {
+        cb(new Error('osascript not available in test'), '', '');
+      },
+    );
+
     // Re-setup default mock returns after clearAllMocks
     SimulatorManager.mockImplementation(() => ({
       listBooted: jest.fn().mockResolvedValue([{ udid: 'TEST-UDID-1234' }]),
