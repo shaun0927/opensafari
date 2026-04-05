@@ -19,4 +19,7 @@ export interface DevicePreset {
   w: number;
   h: number;
   dpr: number;
+  lastVerified?: string;
+  verifiedXcodeVersion?: string;
+  notes?: string;
 }
