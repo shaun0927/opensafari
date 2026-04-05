@@ -63,6 +63,7 @@ export const TOOL_TIERS: Record<string, number> = {
   app_handle_alert: 2,
   app_activate: 2,
   app_list_running: 2,
+  app_switch_app: 2,
 
   // Tier 3: Auth & orchestration
   auth_save: 3,
