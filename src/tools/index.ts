@@ -55,6 +55,10 @@ import { registerAppDoubleTapTool } from './app-double-tap';
 import { registerAppTypeTextTool } from './app-type';
 import { registerAppSwipeNativeTool } from './app-swipe';
 import { registerAppKeyInputTool } from './app-key-input';
+import { registerAppScreenshotNativeTool } from './app-screenshot-native';
+import { registerAppLogsTool } from './app-logs';
+import { registerAppCrashReportsTool } from './app-crash-reports';
+import { registerAppRecordVideoTool } from './app-record-video';
 
 export { setWorkflowEngine } from './orchestration-tools';
 export { setBarrier } from './barrier-tools';
@@ -161,4 +165,9 @@ export function registerAllTools(server: MCPServer): void {
   registerAppTypeTextTool(server);
   registerAppSwipeNativeTool(server);
   registerAppKeyInputTool(server);
+  // Tier 2: Native App Observability
+  registerAppScreenshotNativeTool(server);
+  registerAppLogsTool(server);
+  registerAppCrashReportsTool(server);
+  registerAppRecordVideoTool(server);
 }

@@ -52,6 +52,12 @@ export const TOOL_TIERS: Record<string, number> = {
   app_swipe_native: 2,
   app_key_input: 2,
 
+  // Tier 2: Native App Observability
+  app_screenshot_native: 2,
+  app_logs: 2,
+  app_crash_reports: 2,
+  app_record_video: 2,
+
   // Tier 3: Auth & orchestration
   auth_save: 3,
   auth_restore: 3,
