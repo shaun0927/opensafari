@@ -3,6 +3,12 @@ import { registerAppAlertHandleTool } from '../../src/tools/app-alert-handle';
 
 // ── Mocks ──
 
+jest.mock('child_process', () => ({
+  execFile: jest.fn((_cmd: string, _args: string[], _opts: unknown, cb: (err: Error, stdout: string, stderr: string) => void) => {
+    cb(new Error('osascript not available in test'), '', '');
+  }),
+}));
+
 jest.mock('../../src/simulator', () => ({
   SimulatorManager: jest.fn().mockImplementation(() => ({
     listBooted: jest.fn().mockResolvedValue([{ udid: 'TEST-UDID-1234' }]),
