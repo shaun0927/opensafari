@@ -359,6 +359,52 @@ export class SimulatorManager {
     return apps;
   }
 
+  /**
+   * Reset app state on a simulator.
+   * Strategy: terminate app, reset privacy permissions, clear app data container.
+   */
+  async resetApp(deviceId: string, bundleId: string): Promise<{ reset: boolean; bundleId: string; deviceId: string; steps: string[] }> {
+    const device = await this.getDevice(deviceId);
+    if (!device || device.state !== 'Booted') {
+      throw new DeviceNotBootedError(deviceId);
+    }
+
+    const steps: string[] = [];
+
+    // Step 1: Terminate the app if running
+    try {
+      await this.simctl.exec(['terminate', deviceId, bundleId]);
+      steps.push('terminated');
+    } catch {
+      steps.push('terminate_skipped');
+    }
+
+    // Step 2: Reset privacy permissions
+    try {
+      await this.simctl.exec(['privacy', deviceId, 'reset', 'all', bundleId]);
+      steps.push('privacy_reset');
+    } catch {
+      steps.push('privacy_reset_skipped');
+    }
+
+    // Step 3: Uninstall and note (cannot clear data container directly)
+    // simctl has no "clear data" command; the documented strategy is
+    // uninstall + reinstall. We uninstall here; the caller can reinstall.
+    try {
+      await this.simctl.exec(['uninstall', deviceId, bundleId]);
+      steps.push('uninstalled');
+    } catch (err) {
+      if (err instanceof SimctlError) {
+        if (err.message.includes('domain not found') || err.message.includes('not installed')) {
+          throw new AppNotInstalledError(bundleId, deviceId);
+        }
+      }
+      steps.push('uninstall_failed');
+    }
+
+    return { reset: true, bundleId, deviceId, steps };
+  }
+
   // Expose simctl for direct use by other methods
   getSimctl(): SimctlExecutor {
     return this.simctl;
