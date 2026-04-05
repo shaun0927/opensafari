@@ -7,7 +7,7 @@
  */
 
 import { MCPServer } from '../mcp-server';
-import { resolveDeviceId, createSimctl } from './native-input-utils';
+import { resolveDeviceId, getInputBackend } from './native-input-utils';
 
 /** Default swipe distance in points. */
 const DEFAULT_DISTANCE = 300;
@@ -105,22 +105,8 @@ export function registerAppSwipeNativeTool(server: MCPServer): void {
         }
 
         const { endX, endY } = calculateEndpoint(startX, startY, direction, distance);
-        const simctl = createSimctl();
-
-        // Try swipe first; fall back to drag (which accepts a duration parameter)
-        try {
-          await simctl.exec([
-            'io', deviceId, 'input', 'swipe',
-            String(startX), String(startY), String(endX), String(endY),
-          ]);
-        } catch {
-          // Fallback: drag supports a duration argument
-          await simctl.exec([
-            'io', deviceId, 'input', 'drag',
-            String(startX), String(startY), String(endX), String(endY),
-            String(duration),
-          ]);
-        }
+        const backend = await getInputBackend(deviceId);
+        await backend.swipe(deviceId, startX, startY, endX, endY, duration);
 
         return {
           content: [

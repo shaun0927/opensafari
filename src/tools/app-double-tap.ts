@@ -5,7 +5,7 @@
  */
 
 import { MCPServer } from '../mcp-server';
-import { resolveDeviceId, createSimctl } from './native-input-utils';
+import { resolveDeviceId, getInputBackend } from './native-input-utils';
 
 /** Delay between the two taps (ms). 50 ms matches typical double-tap cadence. */
 const INTER_TAP_DELAY_MS = 50;
@@ -51,13 +51,13 @@ export function registerAppDoubleTapTool(server: MCPServer): void {
           };
         }
 
-        const simctl = createSimctl();
+        const backend = await getInputBackend(deviceId);
 
         // First tap
-        await simctl.exec(['io', deviceId, 'input', 'tap', String(x), String(y)]);
+        await backend.tap(deviceId, x, y);
         await delay(INTER_TAP_DELAY_MS);
         // Second tap
-        await simctl.exec(['io', deviceId, 'input', 'tap', String(x), String(y)]);
+        await backend.tap(deviceId, x, y);
 
         return {
           content: [

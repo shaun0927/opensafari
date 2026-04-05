@@ -7,12 +7,23 @@ import { registerAppDismissKeyboardTool } from '../../src/tools/app-dismiss-keyb
 
 // ── Mocks ──
 
-const mockExec = jest.fn();
+const mockSendKey = jest.fn();
+const mockTap = jest.fn();
 const mockListBooted = jest.fn();
+
+jest.mock('../../src/tools/native-input-backend', () => ({
+  getInputBackend: jest.fn(async () => ({
+    sendKey: mockSendKey,
+    tap: mockTap,
+    swipe: jest.fn(),
+    typeText: jest.fn(),
+    keypress: jest.fn(),
+  })),
+  resetInputBackend: jest.fn(),
+}));
 
 jest.mock('../../src/simulator', () => ({
   SimulatorManager: jest.fn().mockImplementation(() => ({
-    getSimctl: () => ({ exec: mockExec }),
     listBooted: mockListBooted,
   })),
 }));
@@ -43,23 +54,21 @@ describe('app_dismiss_keyboard tool', () => {
     jest.clearAllMocks();
     setActiveDeviceId(null);
     mockListBooted.mockResolvedValue([]);
+    mockSendKey.mockResolvedValue(undefined);
+    mockTap.mockResolvedValue(undefined);
   });
 
   test('is registered with correct name', () => {
     expect(server.getRegisteredTools()).toContain('app_dismiss_keyboard');
   });
 
-  test('dismisses keyboard via sendkey Escape (primary method)', async () => {
+  test('dismisses keyboard via sendKey Escape (primary method)', async () => {
     setActiveDeviceId('device-123');
-    mockExec.mockResolvedValueOnce('');
 
     const handler = server.getToolHandler('app_dismiss_keyboard')!;
     const result = await handler('test-session', {});
 
-    expect(mockExec).toHaveBeenCalledWith(
-      ['io', 'device-123', 'sendkey', 'Escape'],
-      { timeout: 5000 },
-    );
+    expect(mockSendKey).toHaveBeenCalledWith('device-123', 'Escape');
     expect(result.isError).toBeUndefined();
     const body = JSON.parse((result.content as any)[0].text);
     expect(body.dismissed).toBe(true);
@@ -67,26 +76,15 @@ describe('app_dismiss_keyboard tool', () => {
     expect(body.method).toBe('sendkey');
   });
 
-  test('falls back to tap when sendkey fails', async () => {
+  test('falls back to tap when sendKey fails', async () => {
     setActiveDeviceId('device-456');
-    mockExec
-      .mockRejectedValueOnce(new Error('sendkey not supported'))
-      .mockResolvedValueOnce('');
+    mockSendKey.mockRejectedValueOnce(new Error('sendkey not supported'));
 
     const handler = server.getToolHandler('app_dismiss_keyboard')!;
     const result = await handler('test-session', {});
 
-    expect(mockExec).toHaveBeenCalledTimes(2);
-    expect(mockExec).toHaveBeenNthCalledWith(
-      1,
-      ['io', 'device-456', 'sendkey', 'Escape'],
-      { timeout: 5000 },
-    );
-    expect(mockExec).toHaveBeenNthCalledWith(
-      2,
-      ['io', 'device-456', 'input', 'tap', '195', '50'],
-      { timeout: 5000 },
-    );
+    expect(mockSendKey).toHaveBeenCalledWith('device-456', 'Escape');
+    expect(mockTap).toHaveBeenCalledWith('device-456', 195, 50);
     const body = JSON.parse((result.content as any)[0].text);
     expect(body.dismissed).toBe(true);
     expect(body.method).toBe('tap_fallback');
@@ -106,24 +104,19 @@ describe('app_dismiss_keyboard tool', () => {
 
   test('uses explicit deviceId when provided', async () => {
     setActiveDeviceId('active-device');
-    mockExec.mockResolvedValueOnce('');
 
     const handler = server.getToolHandler('app_dismiss_keyboard')!;
     const result = await handler('test-session', { deviceId: 'explicit-device' });
 
-    expect(mockExec).toHaveBeenCalledWith(
-      ['io', 'explicit-device', 'sendkey', 'Escape'],
-      { timeout: 5000 },
-    );
+    expect(mockSendKey).toHaveBeenCalledWith('explicit-device', 'Escape');
     const body = JSON.parse((result.content as any)[0].text);
     expect(body.deviceId).toBe('explicit-device');
   });
 
   test('returns error when both methods fail', async () => {
     setActiveDeviceId('device-789');
-    mockExec
-      .mockRejectedValueOnce(new Error('sendkey failed'))
-      .mockRejectedValueOnce(new Error('tap failed'));
+    mockSendKey.mockRejectedValueOnce(new Error('sendkey failed'));
+    mockTap.mockRejectedValueOnce(new Error('tap failed'));
 
     const handler = server.getToolHandler('app_dismiss_keyboard')!;
     const result = await handler('test-session', {});
@@ -137,15 +130,11 @@ describe('app_dismiss_keyboard tool', () => {
   test('falls back to first booted device when no active device', async () => {
     setActiveDeviceId(null);
     mockListBooted.mockResolvedValue([{ udid: 'booted-device-1' }]);
-    mockExec.mockResolvedValueOnce('');
 
     const handler = server.getToolHandler('app_dismiss_keyboard')!;
     const result = await handler('test-session', {});
 
-    expect(mockExec).toHaveBeenCalledWith(
-      ['io', 'booted-device-1', 'sendkey', 'Escape'],
-      { timeout: 5000 },
-    );
+    expect(mockSendKey).toHaveBeenCalledWith('booted-device-1', 'Escape');
     const body = JSON.parse((result.content as any)[0].text);
     expect(body.deviceId).toBe('booted-device-1');
   });

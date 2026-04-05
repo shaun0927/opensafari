@@ -6,7 +6,7 @@
  */
 
 import { MCPServer } from '../mcp-server';
-import { resolveDeviceId, createSimctl, KEY_MAP } from './native-input-utils';
+import { resolveDeviceId, getInputBackend, KEY_MAP } from './native-input-utils';
 
 export function registerAppKeyInputTool(server: MCPServer): void {
   server.registerTool(
@@ -49,8 +49,8 @@ export function registerAppKeyInputTool(server: MCPServer): void {
           };
         }
 
-        const simctl = createSimctl();
-        await simctl.exec(['io', deviceId, 'input', 'keypress', keyCode]);
+        const backend = await getInputBackend(deviceId);
+        await backend.keypress(deviceId, keyCode);
 
         return {
           content: [
