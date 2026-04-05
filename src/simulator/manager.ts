@@ -4,7 +4,7 @@ import * as path from 'path';
 import { randomUUID } from 'crypto';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import { SimctlExecutor } from './simctl';
+import { SimctlExecutor, SimctlError } from './simctl';
 import { SimulatorDevice, SimulatorRuntime } from './types';
 import { DEVICE_PRESETS } from './presets';
 import { DEFAULT_SIMULATOR_BOOT_TIMEOUT_MS, DEFAULT_SIMULATOR_SHUTDOWN_TIMEOUT_MS, DEFAULT_SCREENSHOT_TIMEOUT_MS } from '../config/defaults';
