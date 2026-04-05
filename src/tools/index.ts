@@ -72,6 +72,8 @@ import { registerAppPushTool } from './app-push';
 import { registerAppScrollNativeTool } from './app-scroll-native';
 import { registerAppDismissKeyboardTool } from './app-dismiss-keyboard';
 import { registerAppAssertTool } from './app-assert';
+import { registerAppWebviewConnectTool } from './app-webview-connect';
+import { registerSetActiveContextTool } from './set-active-context';
 
 export { setWorkflowEngine } from './orchestration-tools';
 export { setBarrier } from './barrier-tools';
@@ -205,4 +207,7 @@ export function registerAllTools(server: MCPServer): void {
   registerAppDismissKeyboardTool(server);
   // Tier 2: Native Assertions (CI-friendly)
   registerAppAssertTool(server);
+  // Tier 2: Hybrid context switching
+  registerAppWebviewConnectTool(server);
+  registerSetActiveContextTool(server);
 }

@@ -94,6 +94,10 @@ export const TOOL_TIERS: Record<string, number> = {
   performance_audit: 3,
   compare_devices: 3,
   app_assert: 2,
+
+  // Tier 2: Hybrid context switching
+  app_webview_connect: 2,
+  set_active_context: 2,
 };
 
 export function getToolTier(toolName: string): number {
