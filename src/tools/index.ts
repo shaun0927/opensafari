@@ -67,6 +67,7 @@ import { registerAppHandleAlertTool } from './app-handle-alert';
 import { registerAppActivateTool } from './app-activate';
 import { registerAppListRunningTool } from './app-list-running';
 import { registerAppResetTool } from './app-reset';
+import { registerAppAlertHandleTool } from './app-alert-handle';
 
 export { setWorkflowEngine } from './orchestration-tools';
 export { setBarrier } from './barrier-tools';
@@ -107,6 +108,7 @@ export function registerAllTools(server: MCPServer): void {
 
   // Tier 2: Native App — System Surfaces
   registerAppSwitchAppTool(server);
+  registerAppAlertHandleTool(server);
 
   // Tier 2: Device Mocking
   registerMockGeolocationTool(server);
