@@ -50,6 +50,11 @@ import { registerAppLaunchTool } from './app-launch';
 import { registerAppTerminateTool } from './app-terminate';
 import { registerAppListAppsTool } from './app-list-apps';
 import { registerAppOpenUrlTool } from './app-open-url';
+import { registerAppTapTool } from './app-tap';
+import { registerAppDoubleTapTool } from './app-double-tap';
+import { registerAppTypeTextTool } from './app-type';
+import { registerAppSwipeNativeTool } from './app-swipe';
+import { registerAppKeyInputTool } from './app-key-input';
 
 export { setWorkflowEngine } from './orchestration-tools';
 export { setBarrier } from './barrier-tools';
@@ -150,4 +155,10 @@ export function registerAllTools(server: MCPServer): void {
   registerAppTerminateTool(server);
   registerAppListAppsTool(server);
   registerAppOpenUrlTool(server);
+  // Tier 2: Native App Interactions
+  registerAppTapTool(server);
+  registerAppDoubleTapTool(server);
+  registerAppTypeTextTool(server);
+  registerAppSwipeNativeTool(server);
+  registerAppKeyInputTool(server);
 }
