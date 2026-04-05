@@ -57,6 +57,10 @@ export const TOOL_TIERS: Record<string, number> = {
   app_logs: 2,
   app_crash_reports: 2,
   app_record_video: 2,
+  app_permissions: 2,
+  app_deeplink: 2,
+  app_push_notification: 2,
+  app_handle_alert: 2,
 
   // Tier 3: Auth & orchestration
   auth_save: 3,

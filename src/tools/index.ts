@@ -59,6 +59,10 @@ import { registerAppScreenshotNativeTool } from './app-screenshot-native';
 import { registerAppLogsTool } from './app-logs';
 import { registerAppCrashReportsTool } from './app-crash-reports';
 import { registerAppRecordVideoTool } from './app-record-video';
+import { registerAppPermissionsTool } from './app-permissions';
+import { registerAppDeeplinkTool } from './app-deeplink';
+import { registerAppPushNotificationTool } from './app-push-notification';
+import { registerAppHandleAlertTool } from './app-handle-alert';
 
 export { setWorkflowEngine } from './orchestration-tools';
 export { setBarrier } from './barrier-tools';
@@ -171,4 +175,9 @@ export function registerAllTools(server: MCPServer): void {
   registerAppCrashReportsTool(server);
   registerAppRecordVideoTool(server);
   // Tier 2: App Lifecycle
+  // Tier 2: Native App System Surfaces
+  registerAppPermissionsTool(server);
+  registerAppDeeplinkTool(server);
+  registerAppPushNotificationTool(server);
+  registerAppHandleAlertTool(server);
 }
