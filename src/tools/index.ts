@@ -71,6 +71,7 @@ import { registerAppAlertHandleTool } from './app-alert-handle';
 import { registerAppPushTool } from './app-push';
 import { registerAppScrollNativeTool } from './app-scroll-native';
 import { registerAppDismissKeyboardTool } from './app-dismiss-keyboard';
+import { registerAppAssertTool } from './app-assert';
 
 export { setWorkflowEngine } from './orchestration-tools';
 export { setBarrier } from './barrier-tools';
@@ -202,4 +203,6 @@ export function registerAllTools(server: MCPServer): void {
   registerAppScrollNativeTool(server);
   // Tier 2: Native App Interaction
   registerAppDismissKeyboardTool(server);
+  // Tier 2: Native Assertions (CI-friendly)
+  registerAppAssertTool(server);
 }
