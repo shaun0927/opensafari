@@ -48,6 +48,8 @@ import { registerAppQueryTool } from './app-query';
 import { registerAppInspectTool } from './app-inspect';
 import { registerAppLaunchTool } from './app-launch';
 import { registerAppTerminateTool } from './app-terminate';
+import { registerAppListAppsTool } from './app-list-apps';
+import { registerAppOpenUrlTool } from './app-open-url';
 
 export { setWorkflowEngine } from './orchestration-tools';
 export { setBarrier } from './barrier-tools';
@@ -146,4 +148,6 @@ export function registerAllTools(server: MCPServer): void {
   // Tier 2: App Lifecycle
   registerAppLaunchTool(server);
   registerAppTerminateTool(server);
+  registerAppListAppsTool(server);
+  registerAppOpenUrlTool(server);
 }

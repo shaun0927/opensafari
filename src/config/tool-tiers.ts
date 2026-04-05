@@ -42,6 +42,8 @@ export const TOOL_TIERS: Record<string, number> = {
   app_inspect: 2,
   app_launch: 2,
   app_terminate: 2,
+  app_list_apps: 2,
+  app_open_url: 2,
 
   // Tier 3: Auth & orchestration
   auth_save: 3,
