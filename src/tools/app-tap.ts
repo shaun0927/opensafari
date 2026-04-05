@@ -7,7 +7,7 @@
  */
 
 import { MCPServer } from '../mcp-server';
-import { resolveDeviceId, createSimctl } from './native-input-utils';
+import { resolveDeviceId, getInputBackend } from './native-input-utils';
 
 export function registerAppTapTool(server: MCPServer): void {
   server.registerTool(
@@ -52,16 +52,8 @@ export function registerAppTapTool(server: MCPServer): void {
           };
         }
 
-        const simctl = createSimctl();
-
-        if (duration > 0) {
-          // Long press: use press with duration
-          await simctl.exec([
-            'io', deviceId, 'input', 'press', String(x), String(y), String(duration),
-          ]);
-        } else {
-          await simctl.exec(['io', deviceId, 'input', 'tap', String(x), String(y)]);
-        }
+        const backend = await getInputBackend(deviceId);
+        await backend.tap(deviceId, x, y, duration > 0 ? duration : undefined);
 
         return {
           content: [

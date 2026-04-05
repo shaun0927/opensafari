@@ -3,10 +3,17 @@ import { registerAppAlertHandleTool } from '../../src/tools/app-alert-handle';
 
 // ── Mocks ──
 
-jest.mock('child_process', () => ({
-  execFile: jest.fn((_cmd: string, _args: string[], _opts: unknown, cb: (err: Error, stdout: string, stderr: string) => void) => {
-    cb(new Error('osascript not available in test'), '', '');
-  }),
+const mockSendKey = jest.fn().mockResolvedValue(undefined);
+
+jest.mock('../../src/tools/native-input-backend', () => ({
+  getInputBackend: jest.fn(async () => ({
+    tap: jest.fn(),
+    swipe: jest.fn(),
+    typeText: jest.fn(),
+    keypress: jest.fn(),
+    sendKey: mockSendKey,
+  })),
+  resetInputBackend: jest.fn(),
 }));
 
 jest.mock('../../src/simulator', () => ({
@@ -47,14 +54,7 @@ describe('app_alert_handle tool', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-
-    // Re-setup execFile mock (clearAllMocks resets the factory implementation)
-    const cp = jest.requireMock('child_process') as { execFile: jest.Mock };
-    cp.execFile.mockImplementation(
-      (_cmd: string, _args: string[], _opts: unknown, cb: (err: Error, stdout: string, stderr: string) => void) => {
-        cb(new Error('osascript not available in test'), '', '');
-      },
-    );
+    mockSendKey.mockResolvedValue(undefined);
 
     // Re-setup default mock returns after clearAllMocks
     SimulatorManager.mockImplementation(() => ({
@@ -72,57 +72,39 @@ describe('app_alert_handle tool', () => {
     expect(server.getRegisteredTools()).toContain('app_alert_handle');
   });
 
-  test('accepts an alert via sendkey Return', async () => {
+  test('accepts an alert via sendKey Return', async () => {
     const handler = server.getToolHandler('app_alert_handle')!;
     const result = await handler('test', { action: 'accept' });
     expect(result.isError).toBeUndefined();
     const text = parseResult(result as { content: Array<{ type: string; text: string }> });
     expect(text.handled).toBe(true);
     expect(text.action).toBe('accept');
-    expect(text.method).toBe('sendkey');
+    expect(text.method).toBe('input_backend');
     expect(text.deviceId).toBe('TEST-UDID-1234');
   });
 
-  test('dismisses an alert via sendkey Escape', async () => {
+  test('dismisses an alert via sendKey Escape', async () => {
     const handler = server.getToolHandler('app_alert_handle')!;
     const result = await handler('test', { action: 'dismiss' });
     expect(result.isError).toBeUndefined();
     const text = parseResult(result as { content: Array<{ type: string; text: string }> });
     expect(text.handled).toBe(true);
     expect(text.action).toBe('dismiss');
-    expect(text.method).toBe('sendkey');
+    expect(text.method).toBe('input_backend');
   });
 
   test('sends correct key for accept (Return)', async () => {
-    const mockExec = jest.fn().mockResolvedValue('');
-    SimulatorManager.mockImplementation(() => ({
-      listBooted: jest.fn().mockResolvedValue([{ udid: 'TEST-UDID-1234' }]),
-      getSimctl: jest.fn().mockReturnValue({ exec: mockExec }),
-    }));
-
     const handler = server.getToolHandler('app_alert_handle')!;
     await handler('test', { action: 'accept' });
 
-    expect(mockExec).toHaveBeenCalledWith(
-      ['io', 'TEST-UDID-1234', 'sendkey', 'Return'],
-      { timeout: 10000 },
-    );
+    expect(mockSendKey).toHaveBeenCalledWith('TEST-UDID-1234', 'Return');
   });
 
   test('sends correct key for dismiss (Escape)', async () => {
-    const mockExec = jest.fn().mockResolvedValue('');
-    SimulatorManager.mockImplementation(() => ({
-      listBooted: jest.fn().mockResolvedValue([{ udid: 'TEST-UDID-1234' }]),
-      getSimctl: jest.fn().mockReturnValue({ exec: mockExec }),
-    }));
-
     const handler = server.getToolHandler('app_alert_handle')!;
     await handler('test', { action: 'dismiss' });
 
-    expect(mockExec).toHaveBeenCalledWith(
-      ['io', 'TEST-UDID-1234', 'sendkey', 'Escape'],
-      { timeout: 10000 },
-    );
+    expect(mockSendKey).toHaveBeenCalledWith('TEST-UDID-1234', 'Escape');
   });
 
   test('rejects invalid action', async () => {
@@ -151,33 +133,18 @@ describe('app_alert_handle tool', () => {
   });
 
   test('uses explicit deviceId when provided', async () => {
-    const mockExec = jest.fn().mockResolvedValue('');
-    SimulatorManager.mockImplementation(() => ({
-      listBooted: jest.fn().mockResolvedValue([{ udid: 'TEST-UDID-1234' }]),
-      getSimctl: jest.fn().mockReturnValue({ exec: mockExec }),
-    }));
-
     const handler = server.getToolHandler('app_alert_handle')!;
     await handler('test', { action: 'accept', deviceId: 'CUSTOM-UDID' });
 
-    expect(mockExec).toHaveBeenCalledWith(
-      ['io', 'CUSTOM-UDID', 'sendkey', 'Return'],
-      { timeout: 10000 },
-    );
+    expect(mockSendKey).toHaveBeenCalledWith('CUSTOM-UDID', 'Return');
   });
 
-  test('falls back to AppleScript when sendkey fails, then reports error if both fail', async () => {
-    const mockExec = jest.fn().mockRejectedValue(new Error('sendkey not supported'));
-    SimulatorManager.mockImplementation(() => ({
-      listBooted: jest.fn().mockResolvedValue([{ udid: 'TEST-UDID-1234' }]),
-      getSimctl: jest.fn().mockReturnValue({ exec: mockExec }),
-    }));
+  test('returns error when sendKey fails', async () => {
+    mockSendKey.mockRejectedValue(new Error('sendkey not supported'));
 
-    // AppleScript will also fail in test environment (no Simulator.app)
     const handler = server.getToolHandler('app_alert_handle')!;
     const result = await handler('test', { action: 'accept' });
 
-    // Both methods fail in test — should get ALERT_HANDLE_FAILED
     expect(result.isError).toBe(true);
     const text = parseResult(result as { content: Array<{ type: string; text: string }> });
     expect(text.error).toBe('ALERT_HANDLE_FAILED');

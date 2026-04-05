@@ -34,6 +34,41 @@ jest.mock('../../src/simulator/simctl', () => ({
   },
 }));
 
+// Mock getInputBackend to skip detection probe and delegate to mocked SimctlExecutor
+jest.mock('../../src/tools/native-input-backend', () => ({
+  getInputBackend: jest.fn(async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { SimctlExecutor } = require('../../src/simulator/simctl');
+    const simctl = new SimctlExecutor();
+    return {
+      tap: async (deviceId: string, x: number, y: number, duration?: number) => {
+        if (duration && duration > 0) {
+          await simctl.exec(['io', deviceId, 'input', 'press', String(x), String(y), String(duration)]);
+        } else {
+          await simctl.exec(['io', deviceId, 'input', 'tap', String(x), String(y)]);
+        }
+      },
+      swipe: async (deviceId: string, sx: number, sy: number, ex: number, ey: number, dur?: number) => {
+        try {
+          await simctl.exec(['io', deviceId, 'input', 'swipe', String(sx), String(sy), String(ex), String(ey)]);
+        } catch {
+          await simctl.exec(['io', deviceId, 'input', 'drag', String(sx), String(sy), String(ex), String(ey), String(dur ?? 0.5)]);
+        }
+      },
+      typeText: async (deviceId: string, text: string) => {
+        await simctl.exec(['io', deviceId, 'input', 'text', text]);
+      },
+      keypress: async (deviceId: string, keyCode: string) => {
+        await simctl.exec(['io', deviceId, 'input', 'keypress', keyCode]);
+      },
+      sendKey: async (deviceId: string, keyName: string) => {
+        await simctl.exec(['io', deviceId, 'sendkey', keyName]);
+      },
+    };
+  }),
+  resetInputBackend: jest.fn(),
+}));
+
 jest.mock('../../src/session-manager', () => ({
   getSessionManager: () => ({
     getActiveDeviceId: () => 'MOCK-DEVICE-UDID',

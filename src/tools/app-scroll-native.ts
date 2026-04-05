@@ -10,8 +10,8 @@
 
 import { MCPServer } from '../mcp-server';
 import { SimulatorManager } from '../simulator';
-import { SimctlExecutor } from '../simulator/simctl';
 import { getSessionManager } from '../session-manager';
+import { getInputBackend } from './native-input-backend';
 
 /** Default scroll amount in points. */
 const DEFAULT_AMOUNT = 300;
@@ -126,18 +126,8 @@ export function registerAppScrollNativeTool(server: MCPServer): void {
         }
 
         const { endX, endY } = calculateScrollEndpoint(x, y, direction, amount);
-        const simctl = new SimctlExecutor();
-
-        await simctl.exec([
-          'io',
-          deviceId,
-          'input',
-          'swipe',
-          String(x),
-          String(y),
-          String(endX),
-          String(endY),
-        ]);
+        const backend = await getInputBackend(deviceId);
+        await backend.swipe(deviceId, x, y, endX, endY);
 
         return {
           content: [

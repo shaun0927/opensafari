@@ -1,10 +1,7 @@
 import { MCPServer } from '../mcp-server';
 import { SimulatorManager } from '../simulator';
 import { getSessionManager } from '../session-manager';
-import { execFile } from 'child_process';
-import { promisify } from 'util';
-
-const execFileAsync = promisify(execFile);
+import { getInputBackend } from './native-input-backend';
 
 export function registerAppAlertHandleTool(server: MCPServer): void {
   server.registerTool(
@@ -68,13 +65,13 @@ export function registerAppAlertHandleTool(server: MCPServer): void {
         };
       }
 
-      // Primary: use simctl io sendkey to send keyboard input
+      // Use the input backend to send the appropriate key
       // Return/Enter accepts alerts, Escape dismisses them
       const keyName = action === 'accept' ? 'Return' : 'Escape';
-      const simctl = manager.getSimctl();
 
       try {
-        await simctl.exec(['io', deviceId, 'sendkey', keyName], { timeout: 10000 });
+        const backend = await getInputBackend(deviceId);
+        await backend.sendKey(deviceId, keyName);
 
         return {
           content: [
@@ -84,56 +81,25 @@ export function registerAppAlertHandleTool(server: MCPServer): void {
                 handled: true,
                 action,
                 deviceId,
-                method: 'sendkey',
+                method: 'input_backend',
               }),
             },
           ],
         };
-      } catch {
-        // Fallback: use AppleScript to interact with Simulator window
-        try {
-          const buttonName = action === 'accept' ? 'Allow' : "Don't Allow";
-          await execFileAsync(
-            'osascript',
-            [
-              '-e',
-              'tell application "Simulator" to activate',
-              '-e',
-              'delay 0.3',
-              '-e',
-              `tell application "System Events" to tell process "Simulator" to click button "${buttonName}" of sheet 1 of window 1`,
-            ],
-            { timeout: 10000 },
-          );
-
-          return {
-            content: [
-              {
-                type: 'text' as const,
-                text: JSON.stringify({
-                  handled: true,
-                  action,
-                  deviceId,
-                  method: 'applescript',
-                }),
-              },
-            ],
-          };
-        } catch (asErr: unknown) {
-          const message = asErr instanceof Error ? asErr.message : String(asErr);
-          return {
-            content: [
-              {
-                type: 'text' as const,
-                text: JSON.stringify({
-                  error: 'ALERT_HANDLE_FAILED',
-                  message: `Failed to ${action} alert: ${message}. No visible alert may be present.`,
-                }),
-              },
-            ],
-            isError: true,
-          };
-        }
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: JSON.stringify({
+                error: 'ALERT_HANDLE_FAILED',
+                message: `Failed to ${action} alert: ${message}. No visible alert may be present.`,
+              }),
+            },
+          ],
+          isError: true,
+        };
       }
     },
   );

@@ -6,7 +6,7 @@
  */
 
 import { MCPServer } from '../mcp-server';
-import { resolveDeviceId, createSimctl } from './native-input-utils';
+import { resolveDeviceId, getInputBackend } from './native-input-utils';
 
 export function registerAppTypeTextTool(server: MCPServer): void {
   server.registerTool(
@@ -46,10 +46,8 @@ export function registerAppTypeTextTool(server: MCPServer): void {
           };
         }
 
-        const simctl = createSimctl();
-
-        // simctl io input text sends each character as keyboard events
-        await simctl.exec(['io', deviceId, 'input', 'text', text]);
+        const backend = await getInputBackend(deviceId);
+        await backend.typeText(deviceId, text);
 
         return {
           content: [

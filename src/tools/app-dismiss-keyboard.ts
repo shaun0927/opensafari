@@ -1,6 +1,7 @@
 import { MCPServer } from '../mcp-server';
 import { getSessionManager } from '../session-manager';
 import { SimulatorManager } from '../simulator';
+import { getInputBackend } from './native-input-backend';
 
 export function registerAppDismissKeyboardTool(server: MCPServer): void {
   server.registerTool(
@@ -17,7 +18,6 @@ export function registerAppDismissKeyboardTool(server: MCPServer): void {
     },
     async (_sessionId: string, params: Record<string, unknown>) => {
       const manager = new SimulatorManager();
-      const simctl = manager.getSimctl();
 
       // Resolve device ID: explicit param → session active → first booted
       const deviceId =
@@ -35,9 +35,11 @@ export function registerAppDismissKeyboardTool(server: MCPServer): void {
         };
       }
 
+      const backend = await getInputBackend(deviceId);
+
       // Primary method: send Escape key to dismiss keyboard
       try {
-        await simctl.exec(['io', deviceId, 'sendkey', 'Escape'], { timeout: 5000 });
+        await backend.sendKey(deviceId, 'Escape');
         return {
           content: [{
             type: 'text' as const,
@@ -50,7 +52,7 @@ export function registerAppDismissKeyboardTool(server: MCPServer): void {
 
       // Fallback: tap on status bar area to defocus text fields
       try {
-        await simctl.exec(['io', deviceId, 'input', 'tap', '195', '50'], { timeout: 5000 });
+        await backend.tap(deviceId, 195, 50);
         return {
           content: [{
             type: 'text' as const,
