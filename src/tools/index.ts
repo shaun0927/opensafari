@@ -68,6 +68,7 @@ import { registerAppActivateTool } from './app-activate';
 import { registerAppListRunningTool } from './app-list-running';
 import { registerAppResetTool } from './app-reset';
 import { registerAppAlertHandleTool } from './app-alert-handle';
+import { registerAppPushTool } from './app-push';
 
 export { setWorkflowEngine } from './orchestration-tools';
 export { setBarrier } from './barrier-tools';
@@ -145,6 +146,7 @@ export function registerAllTools(server: MCPServer): void {
 
   // Tier 2: Native App — System Surfaces
   registerAppOpenUrlTool(server);
+  registerAppPushTool(server);
 
   // Tier 2: Network Throttle
   registerNetworkThrottleTool(server);
