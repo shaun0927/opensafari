@@ -225,6 +225,16 @@ OpenSafari shares battle-tested infrastructure with [OpenChrome](https://github.
 | `device_rotate` | Toggle portrait/landscape |
 | `appearance_toggle` | Switch light/dark mode via `simctl ui` |
 
+### App Lifecycle (Tier 2)
+
+| Tool | Description |
+|------|-------------|
+| `app_launch` | Launch app by bundle ID with optional args and env vars |
+| `app_terminate` | Terminate a running app by bundle ID |
+| `app_activate` | Bring app to foreground (launches if not running) |
+| `app_list_running` | List running foreground apps with PIDs |
+| `app_reset` | Reset app state: terminate, clear permissions, uninstall |
+
 ### Auth Tools (Tier 3)
 
 | Tool | Description |
