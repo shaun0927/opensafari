@@ -457,6 +457,20 @@ Together, they provide **complete browser coverage** — Chrome for desktop, Saf
 
 ---
 
+## Documentation
+
+| Document | Description |
+|----------|-------------|
+| [Getting Started](docs/getting-started.md) | Setup guide and first steps |
+| [API Reference](docs/api-reference.md) | Programmatic API documentation |
+| [Troubleshooting](docs/troubleshooting.md) | Common issues and solutions |
+| [CI Integration](docs/ci-integration.md) | Using OpenSafari in CI pipelines |
+| [RFC: Native App Backend](docs/rfc-native-app-backend.md) | Architecture RFC for native-app automation in Xcode Simulator |
+| [Native App Tool Surface](docs/native-app-tool-surface.md) | Proposed MCP tool surface for native-app automation |
+| [WebKit Protocol Research](docs/webkit-protocol-research.md) | WebKit Remote Debugging Protocol research notes |
+
+---
+
 ## License
 
 MIT
