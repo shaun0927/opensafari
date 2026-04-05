@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.1] - 2026-04-05
+
+### Added
+
+- **NativeInputBackend abstraction** (`native-input-backend.ts`): Input backend layer with automatic Xcode version detection. Provides `InputBackend` interface (tap, swipe, typeText, keypress, sendKey) with two implementations:
+  - `SimctlInputBackend`: Uses `xcrun simctl io input` commands (Xcode 15–16)
+  - `AppleScriptInputBackend`: Uses `osascript` + Swift CGEvent for input (Xcode 26+)
+- **Auto-detection**: Probes `simctl io input` on first use and automatically falls back to AppleScript/CGEvent when unavailable. Result is cached for process lifetime.
+- **HID-to-AppleScript key mapping**: Translates USB HID key codes to macOS virtual key codes for the AppleScript backend, supporting Return, Escape, Tab, Space, arrow keys, Backspace, and Home.
+- **Native app tool surface docs** (`docs/native-app-tool-surface.md`): Complete reference for all 31+ native app automation tools.
+- **CI integration examples** (`docs/ci-integration.md`): Expanded with native screenshot, log export, assertion, and hybrid context switching workflow examples.
+
+### Fixed
+
+- **Xcode 26 compatibility**: All 8 native interaction tools (`app_tap`, `app_double_tap`, `app_type_text`, `app_swipe_native`, `app_key_input`, `app_scroll_native`, `app_alert_handle`, `app_dismiss_keyboard`) now work on Xcode 26.4 where `simctl io input` subcommand was removed.
+- **app_alert_handle simplified**: Replaced dual simctl/AppleScript fallback code with unified `InputBackend.sendKey()` delegation, reducing code by 60 lines.
+- **app_dismiss_keyboard unified**: Migrated from direct simctl calls to InputBackend, ensuring consistent behavior across Xcode versions.
+
+### Changed
+
+- All native interaction tools now use `getInputBackend()` instead of direct `SimctlExecutor.exec()` calls. This is a transparent change — tools behave identically on Xcode versions that support `simctl io input`.
+
 ## [0.2.0] - 2026-04-05
 
 ### Added
