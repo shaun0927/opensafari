@@ -4,6 +4,7 @@ import { registerAppTerminateTool } from '../../src/tools/app-terminate';
 import { registerAppListAppsTool } from '../../src/tools/app-list-apps';
 import { registerAppOpenUrlTool } from '../../src/tools/app-open-url';
 import { getSessionManager } from '../../src/session-manager';
+import * as simctlModule from '../../src/simulator/simctl';
 
 // Mock SimctlExecutor to avoid requiring actual simulator
 jest.mock('../../src/simulator/simctl', () => {
@@ -18,8 +19,7 @@ jest.mock('../../src/simulator/simctl', () => {
 
 // Get the mocked exec function
 function getExecMock(): jest.Mock {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  return require('../../src/simulator/simctl').__execMock;
+  return (simctlModule as any).__execMock;
 }
 
 describe('Native App Lifecycle Tools', () => {
