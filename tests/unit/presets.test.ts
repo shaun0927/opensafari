@@ -7,7 +7,7 @@ describe('Device Presets', () => {
 
   it('all presets have lastVerified metadata with valid ISO date', () => {
     const isoDateRegex = /^\d{4}-\d{2}-\d{2}$/;
-    for (const [key, preset] of Object.entries(DEVICE_PRESETS)) {
+    for (const [, preset] of Object.entries(DEVICE_PRESETS)) {
       expect(preset.lastVerified).toBeDefined();
       expect(preset.lastVerified).toMatch(isoDateRegex);
       // Verify it's a parseable date
@@ -17,14 +17,14 @@ describe('Device Presets', () => {
   });
 
   it('all presets have verifiedXcodeVersion metadata', () => {
-    for (const [key, preset] of Object.entries(DEVICE_PRESETS)) {
+    for (const [, preset] of Object.entries(DEVICE_PRESETS)) {
       expect(preset.verifiedXcodeVersion).toBeDefined();
       expect(preset.verifiedXcodeVersion!.length).toBeGreaterThan(0);
     }
   });
 
   it('all presets have valid dimension values', () => {
-    for (const [key, preset] of Object.entries(DEVICE_PRESETS)) {
+    for (const [, preset] of Object.entries(DEVICE_PRESETS)) {
       expect(preset.w).toBeGreaterThan(0);
       expect(preset.h).toBeGreaterThan(0);
       expect(preset.dpr).toBeGreaterThanOrEqual(1);
