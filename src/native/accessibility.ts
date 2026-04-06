@@ -56,7 +56,9 @@ export function resolveDeviceId(explicit?: string): string {
 }
 
 /**
- * Capture the raw accessibility audit output from the simulator.
+ * @deprecated This function uses `xcrun simctl accessibility_audit` which does not exist.
+ * The active implementation is AccessibilityBridge (ax-bridge) in accessibility-bridge.ts.
+ * Do not use this function — it will always throw at runtime.
  */
 export async function captureAccessibilityAudit(
   deviceId: string,
