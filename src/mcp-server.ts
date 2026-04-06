@@ -100,7 +100,7 @@ export interface MCPServerOptions {
 export class MCPServer {
   private tools: Map<string, RegisteredTool> = new Map();
   private transport: MCPTransport | null = null;
-  private currentTier: number = 1;
+  private currentTier: number = 2;
   private auditLogEnabled = false;
 
   // ------------------------------------------------------------------
