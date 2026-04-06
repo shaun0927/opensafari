@@ -14,6 +14,7 @@
   ],
   "scripts": {
     "build": "npm run clean && npm run build:src && npm run build:cli",
+    "postbuild": "cp src/native/ax-bridge.swift dist/ 2>/dev/null || true",
     "build:src": "webpack --config webpack.config.js --config-name server",
     "build:cli": "webpack --config webpack.config.js --config-name cli",
     "clean": "rimraf dist",
