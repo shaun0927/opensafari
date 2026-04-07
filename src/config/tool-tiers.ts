@@ -28,12 +28,12 @@ export const TOOL_TIERS: Record<string, number> = {
   device_list: 2,
   device_rotate: 2,
   appearance_toggle: 2,
-  device_snapshot: 2,
   mock_geolocation: 2,
   network_throttle: 2,
   error_log: 2,
   console_log: 2,
   network_log: 2,
+  network_har: 2,
   mock_permission: 2,
   network_intercept: 2,
   network_offline: 2,
@@ -100,6 +100,26 @@ export const TOOL_TIERS: Record<string, number> = {
   // Tier 2: Hybrid context switching
   app_webview_connect: 2,
   set_active_context: 2,
+
+  // Tier 2: QA Detectors
+  qa_auto_zoom: 2,
+  qa_touch_targets: 2,
+  qa_hover_only: 2,
+  qa_input_type: 2,
+  qa_safe_area: 2,
+  qa_keyboard_overlap: 2,
+  qa_horizontal_overflow: 2,
+  qa_100vh: 2,
+  qa_fixed_stacking: 2,
+  qa_scroll_lock: 2,
+  qa_dark_mode: 2,
+  qa_orientation: 2,
+  qa_pwa_meta: 2,
+
+  // Tier 2: Hybrid QA
+  hybrid_qa_start: 2,
+  hybrid_qa_status: 2,
+  hybrid_qa_results: 2,
 };
 
 export function getToolTier(toolName: string): number {
