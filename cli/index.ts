@@ -38,7 +38,7 @@ program
   .option('--http [port]', 'Use HTTP transport (default: stdio)')
   .option('--devices <presets>', 'Auto-boot devices (comma-separated)')
   .option('--auth <path>', 'Auth profile to auto-restore')
-  .option('--all-tools', 'Expose all tool tiers immediately')
+  .option('--all-tools', 'Expose all tool tiers immediately (equivalent to OPENSAFARI_TOOL_TIER=3)')
   .option('--blocked-domains <domains>', 'Block navigation to these domains')
   .option('--audit-log', 'Enable tool call audit logging')
   .option('--no-zombie-cleanup', 'Disable periodic zombie simulator cleanup')
@@ -48,6 +48,13 @@ program
 
     if (options.allTools) {
       server.setTier(3);
+    } else if (process.env.OPENSAFARI_TOOL_TIER) {
+      const envTier = parseInt(process.env.OPENSAFARI_TOOL_TIER, 10);
+      if (envTier === 1 || envTier === 2 || envTier === 3) {
+        server.setTier(envTier);
+      } else {
+        console.error(`[OpenSafari] Warning: OPENSAFARI_TOOL_TIER=${process.env.OPENSAFARI_TOOL_TIER} is invalid (must be 1, 2, or 3). Using default tier.`);
+      }
     }
 
     // Wire orchestration subsystems

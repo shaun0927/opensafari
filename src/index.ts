@@ -67,7 +67,16 @@ export async function createServer(options?: {
 }): Promise<MCPServer> {
   const server = new MCPServer();
   registerAllTools(server);
-  if (options?.allTools) server.setTier(3);
+  if (options?.allTools) {
+    server.setTier(3);
+  } else if (process.env.OPENSAFARI_TOOL_TIER) {
+    const envTier = parseInt(process.env.OPENSAFARI_TOOL_TIER, 10);
+    if (envTier === 1 || envTier === 2 || envTier === 3) {
+      server.setTier(envTier);
+    } else {
+      console.error(`[OpenSafari] Warning: OPENSAFARI_TOOL_TIER=${process.env.OPENSAFARI_TOOL_TIER} is invalid (must be 1, 2, or 3). Using default tier.`);
+    }
+  }
   await server.start({
     transport: options?.transport ?? 'stdio',
     port: options?.port,
