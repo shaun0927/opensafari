@@ -17,7 +17,7 @@
     "postbuild": "cp src/native/ax-bridge.swift dist/ 2>/dev/null || true",
     "build:src": "webpack --config webpack.config.js --config-name server",
     "build:cli": "webpack --config webpack.config.js --config-name cli",
-    "build:ax-bridge": "swiftc -O src/native/ax-bridge.swift -o dist/ax-bridge 2>/dev/null && codesign --sign - dist/ax-bridge 2>/dev/null || echo 'ax-bridge: compiled binary skipped, using swift interpreter fallback'",
+    "build:ax-bridge": "swiftc -O src/native/ax-bridge.swift -o dist/ax-bridge 2>/dev/null && (codesign --sign - dist/ax-bridge 2>/dev/null || (echo 'ax-bridge: codesign failed, removing unsigned binary' && rm -f dist/ax-bridge)) || echo 'ax-bridge: compiled binary skipped, using swift interpreter fallback'",
     "clean": "rimraf dist",
     "dev": "ts-node --esm src/index.ts",
     "start": "node dist/index.js",
