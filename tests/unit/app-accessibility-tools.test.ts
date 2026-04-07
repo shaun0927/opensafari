@@ -1,5 +1,4 @@
 import {
-  parseAccessibilityOutput,
   filterTree,
   evaluatePredicate,
   formatTreeMarkdown,
@@ -18,21 +17,6 @@ jest.mock('../../src/session-manager', () => {
     }),
   };
 });
-
-// Mock simctl
-jest.mock('../../src/simulator/simctl', () => ({
-  SimctlExecutor: jest.fn(),
-  SimctlError: class SimctlError extends Error {
-    args: string[];
-    exitCode?: number;
-    constructor(message: string, args: string[], exitCode?: number) {
-      super(message);
-      this.name = 'SimctlError';
-      this.args = args;
-      this.exitCode = exitCode;
-    }
-  },
-}));
 
 describe('Native Accessibility Tools', () => {
   describe('resolveDeviceId', () => {
@@ -53,96 +37,6 @@ describe('Native Accessibility Tools', () => {
 
       // Restore
       getSessionManager()._setActiveDeviceId('MOCK-DEVICE-UUID');
-    });
-  });
-
-  describe('parseAccessibilityOutput', () => {
-    test('returns root node for empty output', () => {
-      const tree = parseAccessibilityOutput('');
-      expect(tree.role).toBe('Application');
-      expect(tree.children).toHaveLength(0);
-    });
-
-    test('parses single element', () => {
-      const raw = 'Button - Submit';
-      const tree = parseAccessibilityOutput(raw);
-      expect(tree.children).toHaveLength(1);
-      expect(tree.children[0].role).toBe('Button');
-      expect(tree.children[0].label).toBe('Submit');
-    });
-
-    test('parses element with "Element:" prefix', () => {
-      const raw = 'Element: StaticText - Hello World';
-      const tree = parseAccessibilityOutput(raw);
-      expect(tree.children).toHaveLength(1);
-      expect(tree.children[0].role).toBe('StaticText');
-      expect(tree.children[0].label).toBe('Hello World');
-    });
-
-    test('parses nested hierarchy by indentation', () => {
-      const raw = [
-        'Window - Main',
-        '  Button - OK',
-        '  TextField - Email',
-        '    StaticText - placeholder',
-      ].join('\n');
-
-      const tree = parseAccessibilityOutput(raw);
-      expect(tree.children).toHaveLength(1);
-
-      const window = tree.children[0];
-      expect(window.role).toBe('Window');
-      expect(window.children).toHaveLength(2);
-      expect(window.children[0].role).toBe('Button');
-      expect(window.children[0].label).toBe('OK');
-      expect(window.children[1].role).toBe('TextField');
-      expect(window.children[1].children).toHaveLength(1);
-      expect(window.children[1].children[0].role).toBe('StaticText');
-    });
-
-    test('parses properties like traits, frame, value', () => {
-      const raw = [
-        'Button - Submit',
-        '  Traits: ButtonTrait, PlaysSound',
-        '  Frame: {{10, 20}, {100, 44}}',
-        '  Value: active',
-        '  Identifier: submit-btn',
-        '  Enabled: true',
-        '  Visible: false',
-      ].join('\n');
-
-      const tree = parseAccessibilityOutput(raw);
-      const btn = tree.children[0];
-      expect(btn.traits).toEqual(['ButtonTrait', 'PlaysSound']);
-      expect(btn.frame).toEqual({ x: 10, y: 20, width: 100, height: 44 });
-      expect(btn.value).toBe('active');
-      expect(btn.identifier).toBe('submit-btn');
-      expect(btn.isEnabled).toBe(true);
-      expect(btn.isVisible).toBe(false);
-    });
-
-    test('skips audit metadata lines', () => {
-      const raw = [
-        'Audit: Running accessibility checks...',
-        'Pass: VoiceOver enabled',
-        '---',
-        'Button - OK',
-        'Result: 0 issues found',
-      ].join('\n');
-
-      const tree = parseAccessibilityOutput(raw);
-      expect(tree.children).toHaveLength(1);
-      expect(tree.children[0].role).toBe('Button');
-    });
-
-    test('parses Label property when not on element line', () => {
-      const raw = [
-        'Button',
-        '  Label: Submit Form',
-      ].join('\n');
-
-      const tree = parseAccessibilityOutput(raw);
-      expect(tree.children[0].label).toBe('Submit Form');
     });
   });
 
