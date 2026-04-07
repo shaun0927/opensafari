@@ -56,19 +56,6 @@ export function resolveDeviceId(explicit?: string): string {
 }
 
 /**
- * Prune the tree to a maximum depth.
- */
-function pruneTree(node: AccessibilityNode, currentDepth: number, maxDepth: number): void {
-  if (currentDepth >= maxDepth) {
-    node.children = [];
-    return;
-  }
-  for (const child of node.children) {
-    pruneTree(child, currentDepth + 1, maxDepth);
-  }
-}
-
-/**
  * Filter nodes from an already-loaded tree.
  */
 export function filterTree(
