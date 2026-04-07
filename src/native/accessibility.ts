@@ -1,13 +1,13 @@
-import { SimctlExecutor, SimctlError } from '../simulator/simctl';
 import { getSessionManager } from '../session-manager';
 
 /**
- * Native iOS Accessibility Tree — Parser & Query Engine
+ * Native iOS Accessibility Tree — Query Engine & Utilities
  *
- * Uses `xcrun simctl accessibility_audit` (Xcode 15+ / iOS 17+) to capture
- * the native accessibility hierarchy of the frontmost app in the simulator.
- * Parses the output into a structured tree of AccessibilityNode objects that
- * can be queried, filtered, and formatted.
+ * Provides types, tree traversal, filtering, predicate evaluation, and
+ * formatting helpers for AccessibilityNode trees.
+ *
+ * The actual accessibility tree capture is handled by AccessibilityBridge
+ * (ax-bridge) in accessibility-bridge.ts.
  */
 
 export interface AccessibilityNode {
@@ -56,224 +56,6 @@ export function resolveDeviceId(explicit?: string): string {
 }
 
 /**
- * @deprecated This function uses `xcrun simctl accessibility_audit` which does not exist.
- * The active implementation is AccessibilityBridge (ax-bridge) in accessibility-bridge.ts.
- * Do not use this function — it will always throw at runtime.
- */
-export async function captureAccessibilityAudit(
-  deviceId: string,
-  simctl?: SimctlExecutor,
-): Promise<string> {
-  const executor = simctl ?? new SimctlExecutor();
-  try {
-    const output = await executor.exec(['accessibility_audit', deviceId], { timeout: 15000 });
-    return output;
-  } catch (err) {
-    if (err instanceof SimctlError) {
-      // Check for common issues
-      if (err.message.includes('Invalid device') || err.message.includes('not found')) {
-        throw new Error(`Device ${deviceId} not found. Run device_list to see available devices.`);
-      }
-      if (
-        err.message.includes('not booted') ||
-        err.message.includes('Shutdown')
-      ) {
-        throw new Error(`Device ${deviceId} is not booted. Boot it first with device_boot.`);
-      }
-      // accessibility_audit may not be available on older Xcode
-      if (
-        err.message.includes('Unknown subcommand') ||
-        err.message.includes('unrecognized')
-      ) {
-        throw new Error(
-          'accessibility_audit is not available. This feature requires Xcode 15+ with iOS 17+ simulator runtime. ' +
-          'Please update Xcode or use a newer simulator runtime.',
-        );
-      }
-    }
-    throw err;
-  }
-}
-
-/**
- * Parse the raw accessibility audit output into a tree of AccessibilityNode objects.
- *
- * The audit output format is line-based with indentation indicating hierarchy:
- *   Element: <role> - <label>
- *     Trait: <trait>
- *     Frame: {{x, y}, {w, h}}
- *     ...
- *     Element: <role> - <child>
- *
- * This parser handles varying formats robustly.
- */
-export function parseAccessibilityOutput(raw: string): AccessibilityNode {
-  const lines = raw.split('\n').filter(line => line.trim().length > 0);
-
-  if (lines.length === 0) {
-    return createRootNode();
-  }
-
-  const root = createRootNode();
-  const stack: { node: AccessibilityNode; indent: number }[] = [{ node: root, indent: -1 }];
-
-  for (const line of lines) {
-    const indent = line.search(/\S/);
-    const trimmed = line.trim();
-
-    // Skip non-element metadata lines (audit warnings, summaries, etc.)
-    if (isAuditMetaLine(trimmed)) {
-      continue;
-    }
-
-    // Parse element lines
-    const elementMatch = trimmed.match(
-      /^(?:Element:\s*)?(\w[\w\s]*?)(?:\s*[-–]\s*(.+))?$/,
-    );
-    if (elementMatch) {
-      const node = parseElementLine(trimmed, elementMatch);
-
-      // Pop stack until we find a parent at a lower indent level
-      while (stack.length > 1 && stack[stack.length - 1].indent >= indent) {
-        stack.pop();
-      }
-
-      const parent = stack[stack.length - 1].node;
-      parent.children.push(node);
-      stack.push({ node, indent });
-      continue;
-    }
-
-    // Parse property lines for the current element
-    if (stack.length > 1) {
-      const current = stack[stack.length - 1].node;
-      applyProperty(current, trimmed);
-    }
-  }
-
-  return root;
-}
-
-function createRootNode(): AccessibilityNode {
-  return {
-    role: 'Application',
-    label: 'Root',
-    traits: [],
-    frame: { x: 0, y: 0, width: 0, height: 0 },
-    isVisible: true,
-    isEnabled: true,
-    children: [],
-  };
-}
-
-function isAuditMetaLine(line: string): boolean {
-  return (
-    line.startsWith('Audit:') ||
-    line.startsWith('Pass:') ||
-    line.startsWith('Fail:') ||
-    line.startsWith('Warning:') ||
-    line.startsWith('Result:') ||
-    line.startsWith('---') ||
-    line.startsWith('===') ||
-    /^\d+ (issue|warning|error)/.test(line)
-  );
-}
-
-function parseElementLine(
-  _raw: string,
-  match: RegExpMatchArray,
-): AccessibilityNode {
-  const role = (match[1] || 'Unknown').trim();
-  const label = match[2]?.trim();
-
-  return {
-    role,
-    label: label || undefined,
-    traits: [],
-    frame: { x: 0, y: 0, width: 0, height: 0 },
-    isVisible: true,
-    isEnabled: true,
-    children: [],
-  };
-}
-
-function applyProperty(node: AccessibilityNode, line: string): void {
-  // Trait: ButtonTrait, StaticTextTrait
-  const traitMatch = line.match(/^Traits?:\s*(.+)/i);
-  if (traitMatch) {
-    node.traits = traitMatch[1].split(',').map(t => t.trim()).filter(Boolean);
-    return;
-  }
-
-  // Frame: {{x, y}, {w, h}}
-  const frameMatch = line.match(
-    /Frame:\s*\{\{([\d.]+),\s*([\d.]+)\},\s*\{([\d.]+),\s*([\d.]+)\}\}/i,
-  );
-  if (frameMatch) {
-    node.frame = {
-      x: parseFloat(frameMatch[1]),
-      y: parseFloat(frameMatch[2]),
-      width: parseFloat(frameMatch[3]),
-      height: parseFloat(frameMatch[4]),
-    };
-    return;
-  }
-
-  // Value: <text>
-  const valueMatch = line.match(/^Value:\s*(.+)/i);
-  if (valueMatch) {
-    node.value = valueMatch[1].trim();
-    return;
-  }
-
-  // Identifier: <id>
-  const idMatch = line.match(/^(?:Identifier|AccessibilityIdentifier):\s*(.+)/i);
-  if (idMatch) {
-    node.identifier = idMatch[1].trim();
-    return;
-  }
-
-  // Enabled: false
-  const enabledMatch = line.match(/^Enabled:\s*(true|false|yes|no|0|1)/i);
-  if (enabledMatch) {
-    node.isEnabled = ['true', 'yes', '1'].includes(enabledMatch[1].toLowerCase());
-    return;
-  }
-
-  // Visible: false
-  const visibleMatch = line.match(/^(?:Visible|IsVisible):\s*(true|false|yes|no|0|1)/i);
-  if (visibleMatch) {
-    node.isVisible = ['true', 'yes', '1'].includes(visibleMatch[1].toLowerCase());
-    return;
-  }
-
-  // Label: <text>  (when not on the Element line itself)
-  const labelMatch = line.match(/^Label:\s*(.+)/i);
-  if (labelMatch && !node.label) {
-    node.label = labelMatch[1].trim();
-    return;
-  }
-}
-
-/**
- * Get the full accessibility tree for a device.
- */
-export async function getAccessibilityTree(
-  options: TreeOptions = {},
-  simctl?: SimctlExecutor,
-): Promise<AccessibilityNode> {
-  const deviceId = resolveDeviceId(options.deviceId);
-  const raw = await captureAccessibilityAudit(deviceId, simctl);
-  const tree = parseAccessibilityOutput(raw);
-
-  if (options.maxDepth !== undefined) {
-    pruneTree(tree, 0, options.maxDepth);
-  }
-
-  return tree;
-}
-
-/**
  * Prune the tree to a maximum depth.
  */
 function pruneTree(node: AccessibilityNode, currentDepth: number, maxDepth: number): void {
@@ -284,17 +66,6 @@ function pruneTree(node: AccessibilityNode, currentDepth: number, maxDepth: numb
   for (const child of node.children) {
     pruneTree(child, currentDepth + 1, maxDepth);
   }
-}
-
-/**
- * Query the accessibility tree for nodes matching the given criteria.
- */
-export async function queryAccessibilityTree(
-  options: QueryOptions,
-  simctl?: SimctlExecutor,
-): Promise<QueryMatch[]> {
-  const tree = await getAccessibilityTree({ deviceId: options.deviceId }, simctl);
-  return filterTree(tree, options);
 }
 
 /**
