@@ -78,8 +78,15 @@ export class NativeAppClient extends EventEmitter implements NativeAppBackend {
     return result.matches as unknown as AccessibilityElement[];
   }
 
-  async getElementInfo(_identifier: string): Promise<AccessibilityElement | null> {
-    throw new Error('NativeAppClient.getElementInfo is not yet implemented');
+  async getElementInfo(identifier: string): Promise<AccessibilityElement | null> {
+    const { getAccessibilityBridge } = await import('../native/accessibility-bridge');
+    const bridge = getAccessibilityBridge();
+    const result = await bridge.query(
+      { identifier },
+      { deviceId: this.deviceId, maxResults: 1 },
+    );
+    if (result.matches.length === 0) return null;
+    return result.matches[0] as unknown as AccessibilityElement;
   }
 
   // Interactions
