@@ -2,9 +2,9 @@ import { MCPServer, getWebKitClient } from '../mcp-server';
 import { WebKitClient } from '../webkit/client';
 import { setWebKitClient } from '../mcp-server';
 import { getSessionManager } from '../session-manager';
+import { getSharedProxy } from '../simulator/proxy';
 
 const DEFAULT_PROXY_HOST = 'localhost';
-const DEFAULT_PROXY_PORT = 9222;
 
 /**
  * Determine whether a target looks like a Safari browser tab vs a native app WebView.
@@ -59,7 +59,7 @@ export function registerAppWebviewConnectTool(server: MCPServer): void {
       if (!client) {
         const newClient = new WebKitClient({
           host: DEFAULT_PROXY_HOST,
-          port: DEFAULT_PROXY_PORT,
+          port: getSharedProxy().port,
         });
         setWebKitClient(newClient, resolvedDeviceId);
         client = newClient;
