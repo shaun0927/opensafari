@@ -1,9 +1,9 @@
 import { MCPServer, getWebKitClient, setWebKitClient } from '../mcp-server';
 import { WebKitClient } from '../webkit/client';
 import { getSessionManager } from '../session-manager';
+import { getSharedProxy } from '../simulator/proxy';
 
 const DEFAULT_PROXY_HOST = 'localhost';
-const DEFAULT_PROXY_PORT = 9222;
 
 export function registerSetActiveContextTool(server: MCPServer): void {
   server.registerTool(
@@ -49,7 +49,7 @@ export function registerSetActiveContextTool(server: MCPServer): void {
       if (!probeClient) {
         const newClient = new WebKitClient({
           host: DEFAULT_PROXY_HOST,
-          port: DEFAULT_PROXY_PORT,
+          port: getSharedProxy().port,
         });
         setWebKitClient(newClient, resolvedDeviceId);
         probeClient = newClient;

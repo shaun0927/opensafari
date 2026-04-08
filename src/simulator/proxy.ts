@@ -285,7 +285,8 @@ export class WebInspectorProxy {
     while (Date.now() - start < timeout) {
       try {
         const body = await this.httpGet(`http://localhost:${this._port}/json`);
-        if (body.startsWith('[')) return; // Valid JSON array = targets available
+        // Require at least one target — `[]` means proxy is up but no pages registered yet
+        if (body.startsWith('[') && body.trim() !== '[]') return;
       } catch { /* retry */ }
       await new Promise(r => setTimeout(r, 1000));
     }
