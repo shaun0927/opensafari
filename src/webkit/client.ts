@@ -587,7 +587,7 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
     }
   }
 
-  async evaluate<T = unknown>(expression: string): Promise<T> {
+  async evaluate<T = unknown>(expression: string, options?: { emulateUserGesture?: boolean }): Promise<T> {
     // Step 1: Evaluate with returnByValue:false to preserve objectId for Promises.
     // WebKit serializes Promises as {} when returnByValue:true, losing the objectId
     // needed for Runtime.awaitPromise.
@@ -597,7 +597,7 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
     }>('Runtime.evaluate', {
       expression,
       returnByValue: false,
-      emulateUserGesture: true,
+      emulateUserGesture: options?.emulateUserGesture ?? false,
     });
 
     if (result.wasThrown) {
@@ -782,17 +782,18 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
         el.dispatchEvent(new TouchEvent('touchend', { touches: emptyList, changedTouches: touchList, bubbles: true }));
         el.click();
       })(${x}, ${y})
-    `);
+    `, { emulateUserGesture: true });
   }
 
   async type(selector: string, text: string, options?: { delay?: number }): Promise<void> {
     // Focus the element explicitly — touch-based click() doesn't reliably trigger focus
+    // preventScroll prevents iOS Safari from auto-scrolling the element into view on focus
     await this.evaluate(`
       (function() {
         var el = document.querySelector(${JSON.stringify(selector)});
-        if (el && typeof el.focus === 'function') el.focus();
+        if (el && typeof el.focus === 'function') el.focus({ preventScroll: true });
       })()
-    `);
+    `, { emulateUserGesture: true });
 
     if (options?.delay) {
       // Character-by-character mode with delay
@@ -820,7 +821,7 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
             el.dispatchEvent(new Event('input', { bubbles: true }));
             el.dispatchEvent(new KeyboardEvent('keyup', { key: ${JSON.stringify(char)}, bubbles: true }));
           })()
-        `);
+        `, { emulateUserGesture: true });
         await new Promise(r => setTimeout(r, options.delay));
       }
     } else {
@@ -845,7 +846,7 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
           el.dispatchEvent(new Event('input', { bubbles: true }));
           el.dispatchEvent(new Event('change', { bubbles: true }));
         })()
-      `);
+      `, { emulateUserGesture: true });
     }
   }
 
@@ -875,7 +876,7 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
         var emptyList = document.createTouchList();
         el.dispatchEvent(new TouchEvent('touchend', { touches: emptyList, changedTouches: touchList, bubbles: true }));
       })(${center.x}, ${center.y}, ${dur})
-    `);
+    `, { emulateUserGesture: true });
   }
 
   async swipe(direction: 'up' | 'down' | 'left' | 'right', speed?: number): Promise<void> {
@@ -914,7 +915,7 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
         var emptyList = document.createTouchList();
         el.dispatchEvent(new TouchEvent('touchend', { touches: emptyList, changedTouches: endList, bubbles: true }));
       })(${sx}, ${sy}, ${ex}, ${ey}, ${steps})
-    `);
+    `, { emulateUserGesture: true });
   }
 
   async press(key: string): Promise<void> {

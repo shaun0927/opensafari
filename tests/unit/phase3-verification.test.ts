@@ -232,8 +232,12 @@ describe('2. Layout & Viewport Detectors', () => {
       .mockResolvedValueOnce([{ selector: 'div.bottom-nav', bottom: 0, rect: { y: 700, height: 50 } }])
       // Second call: input selectors
       .mockResolvedValueOnce(['input[name="email"]'])
-      // Third call: viewport height with keyboard
-      .mockResolvedValueOnce(400);
+      // Third call: scroll position before click
+      .mockResolvedValueOnce({ x: 0, y: 0 })
+      // Fourth call: viewport height with keyboard
+      .mockResolvedValueOnce(400)
+      // Fifth call: scroll restore (window.scrollTo)
+      .mockResolvedValueOnce(undefined);
 
     const result = await detectKeyboardOverlap(client);
     expect(result.detector).toBe('keyboard_overlap');

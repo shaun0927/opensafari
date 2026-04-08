@@ -52,12 +52,13 @@ describe('HybridQAEngine', () => {
   describe('applyViewportEmulation', () => {
     it('should inject viewport meta and dimension overrides via evaluate', async () => {
       const client = createMockClient();
+      (client.evaluate as jest.Mock).mockResolvedValueOnce(undefined).mockResolvedValueOnce({ x: 0, y: 0 });
       const viewport: ViewportConfig = { preset: 'iphone-17', width: 390, height: 844, dpr: 3 };
 
       await applyViewportEmulation(client, viewport);
 
-      // First call: main viewport override script, second call: resize event
-      expect(client.evaluate).toHaveBeenCalledTimes(2);
+      // Call 0: main viewport override script, call 1: scroll save, call 2: resize event, call 3: scroll restore
+      expect(client.evaluate).toHaveBeenCalledTimes(4);
       const expr = (client.evaluate as jest.Mock).mock.calls[0][0] as string;
       expect(expr).toContain('width=390');
       expect(expr).toContain('height: 844');
@@ -67,6 +68,7 @@ describe('HybridQAEngine', () => {
 
     it('should override innerWidth, innerHeight, and devicePixelRatio', async () => {
       const client = createMockClient();
+      (client.evaluate as jest.Mock).mockResolvedValueOnce(undefined).mockResolvedValueOnce({ x: 0, y: 0 });
       const viewport: ViewportConfig = { preset: 'iphone-17', width: 390, height: 844, dpr: 3 };
 
       await applyViewportEmulation(client, viewport);
@@ -81,18 +83,20 @@ describe('HybridQAEngine', () => {
 
     it('should dispatch resize event after viewport override', async () => {
       const client = createMockClient();
+      (client.evaluate as jest.Mock).mockResolvedValueOnce(undefined).mockResolvedValueOnce({ x: 0, y: 0 });
       const viewport: ViewportConfig = { preset: 'iphone-17', width: 390, height: 844, dpr: 3 };
 
       await applyViewportEmulation(client, viewport);
 
-      expect(client.evaluate).toHaveBeenCalledTimes(2);
-      const resizeExpr = (client.evaluate as jest.Mock).mock.calls[1][0] as string;
+      expect(client.evaluate).toHaveBeenCalledTimes(4);
+      const resizeExpr = (client.evaluate as jest.Mock).mock.calls[2][0] as string;
       expect(resizeExpr).toContain('dispatchEvent');
       expect(resizeExpr).toContain('resize');
     });
 
     it('should handle different viewport sizes', async () => {
       const client = createMockClient();
+      (client.evaluate as jest.Mock).mockResolvedValueOnce(undefined).mockResolvedValueOnce({ x: 0, y: 0 });
       const viewport: ViewportConfig = { preset: 'ipad-pro', width: 1024, height: 1366, dpr: 2 };
 
       await applyViewportEmulation(client, viewport);

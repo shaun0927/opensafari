@@ -164,8 +164,11 @@ export async function applyViewportEmulation(
     })()
   `);
 
-  // Trigger resize event so responsive JS re-evaluates
+  // Save scroll position before resize event, which may trigger framework scroll restoration
+  const scrollPos = await client.evaluate<{ x: number; y: number }>('({ x: window.scrollX, y: window.scrollY })') ?? { x: 0, y: 0 };
   await client.evaluate('window.dispatchEvent(new Event("resize"))');
+  // Restore scroll position after resize event
+  await client.evaluate(`window.scrollTo(${scrollPos.x}, ${scrollPos.y})`);
 }
 
 // ── HybridQAEngine ──
