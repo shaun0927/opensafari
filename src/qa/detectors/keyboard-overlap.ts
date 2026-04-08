@@ -33,6 +33,9 @@ export async function detectKeyboardOverlap(client: BrowserBackend): Promise<Det
 
   for (const inputSelector of (inputs || [])) {
     try {
+      // Save scroll position before clicking input (focus triggers iOS auto-scroll)
+      const scrollPos = await client.evaluate<{ x: number; y: number }>('({ x: window.scrollX, y: window.scrollY })');
+
       await client.click(inputSelector);
       await new Promise(r => setTimeout(r, 500));
 
@@ -51,6 +54,8 @@ export async function detectKeyboardOverlap(client: BrowserBackend): Promise<Det
 
       await client.dismissKeyboard();
       await new Promise(r => setTimeout(r, 300));
+      // Restore scroll position after keyboard dismissed
+      await client.evaluate(`window.scrollTo(${scrollPos.x}, ${scrollPos.y})`);
     } catch {
       // Input may not be focusable
     }
