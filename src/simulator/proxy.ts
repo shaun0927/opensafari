@@ -67,12 +67,12 @@ export class WebInspectorProxy {
     this._deviceListPort = options.deviceListPort ?? envDeviceListPort ?? (this._port - 1);
   }
 
-  async findSocketPath(): Promise<string | null> {
-    return findSocketPath();
+  async findSocketPath(targetUdid?: string): Promise<string | null> {
+    return findSocketPath(targetUdid ? { targetUdid } : undefined);
   }
 
   /** Start the proxy process. Resolves once the proxy is ready. */
-  async start(): Promise<void> {
+  async start(options?: { targetUdid?: string }): Promise<void> {
     if (this._running) return;
 
     // Check if our device-list port already has a healthy proxy (from another session)
@@ -109,7 +109,7 @@ export class WebInspectorProxy {
       throw new Error('ios_webkit_debug_proxy not found. Install: brew install ios-webkit-debug-proxy');
     }
 
-    const socketPath = await this.findSocketPath();
+    const socketPath = await this.findSocketPath(options?.targetUdid);
     if (!socketPath) {
       throw new Error('Web Inspector socket not found. Is a simulator booted?');
     }
