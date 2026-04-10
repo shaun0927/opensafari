@@ -1,6 +1,6 @@
 import { MCPServer } from '../mcp-server';
 import { SimulatorManager } from '../simulator';
-import { getSharedProxy } from '../simulator/proxy';
+import { getProxyForDevice } from '../simulator/proxy-manager';
 import { WebKitClient } from '../webkit/client';
 import { addManagedDevice } from '../reliability/zombie-cleanup';
 import { getSessionManager } from '../session-manager';
@@ -27,12 +27,16 @@ export function registerDeviceBootTool(server: MCPServer): void {
       // other MCP sessions' periodic cleanup won't shut it down as an orphan.
       addManagedDevice(device.udid);
 
-      // Auto-start the WebInspector proxy so WebKit debugging is available
-      let proxyStatus: { running: boolean; pid: number | null } = { running: false, pid: null };
+      // Auto-start a per-device WebInspector proxy so parallel sessions
+      // each get their own isolated proxy bound to their simulator's socket.
+      let proxyStatus: { running: boolean; pid: number | null; port: number | null } = {
+        running: false,
+        pid: null,
+        port: null,
+      };
       try {
-        const proxy = getSharedProxy();
-        await proxy.start({ targetUdid: device.udid });
-        proxyStatus = { running: proxy.running, pid: proxy.pid };
+        const proxy = await getProxyForDevice(device.udid);
+        proxyStatus = { running: proxy.running, pid: proxy.pid, port: proxy.port };
 
         // Open Safari so it registers with WebInspector, then connect WebKitClient
         try {
