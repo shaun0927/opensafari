@@ -30,7 +30,18 @@ function delay(ms: number): Promise<void> {
 
 // ── Interface ────────────────────────────────────────────────────────────────
 
+/**
+ * Stable identifier for each concrete input backend. Included in tool call
+ * results so MCP clients and users can audit which path dispatched their
+ * input — useful when diagnosing focus-theft reports or confirming that a
+ * call stayed on a headless tier.
+ */
+export type InputBackendKind = 'simctl' | 'webkit' | 'applescript';
+
 export interface InputBackend {
+  /** Stable identifier used for observability / audit logging. */
+  readonly kind: InputBackendKind;
+
   tap(deviceId: string, x: number, y: number, duration?: number): Promise<void>;
   swipe(
     deviceId: string,
@@ -52,6 +63,7 @@ export interface InputBackend {
  * Available on Xcode versions that ship the `input` subcommand (typically ≤ 16).
  */
 export class SimctlInputBackend implements InputBackend {
+  readonly kind = 'simctl' as const;
   private simctl: SimctlExecutor;
 
   constructor(simctl?: SimctlExecutor) {
@@ -142,6 +154,7 @@ const SENDKEY_TO_APPLESCRIPT: Record<string, number> = {
  * Coordinate translation assumes Simulator is at default "Point Accurate" (1:1) zoom.
  */
 export class AppleScriptInputBackend implements InputBackend {
+  readonly kind = 'applescript' as const;
   /** macOS title bar height in points. */
   private static readonly TITLE_BAR_HEIGHT = 28;
 
@@ -322,6 +335,7 @@ const SENDKEY_TO_WEBKIT_KEY: Record<string, string> = {
  *     scroll is supplemented with an explicit `window.scrollBy()` call
  */
 export class WebKitInputBackend implements InputBackend {
+  readonly kind = 'webkit' as const;
   constructor(private client: BrowserBackend) {}
 
   async tap(_deviceId: string, x: number, y: number, duration?: number): Promise<void> {

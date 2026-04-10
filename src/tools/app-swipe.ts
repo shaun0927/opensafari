@@ -120,6 +120,7 @@ export function registerAppSwipeNativeTool(server: MCPServer): void {
                 distance,
                 duration,
                 deviceId,
+                backend: backend.kind,
               }),
             },
           ],

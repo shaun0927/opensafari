@@ -67,6 +67,10 @@ describe('SimctlInputBackend', () => {
     backend = new SimctlInputBackend({ exec: execMock } as any);
   });
 
+  test('exposes kind="simctl" for observability', () => {
+    expect(backend.kind).toBe('simctl');
+  });
+
   test('tap sends simctl io input tap', async () => {
     await backend.tap(DEVICE, 100, 200);
     expect(execMock).toHaveBeenCalledWith(
@@ -147,6 +151,10 @@ describe('AppleScriptInputBackend', () => {
     execFileMock.mockClear();
     execFileMock.mockResolvedValue({ stdout: '', stderr: '' });
     backend = new AppleScriptInputBackend();
+  });
+
+  test('exposes kind="applescript" for observability', () => {
+    expect(backend.kind).toBe('applescript');
   });
 
   test('tap activates Simulator and calls osascript click', async () => {
@@ -325,6 +333,10 @@ describe('WebKitInputBackend', () => {
     backend = new WebKitInputBackend(mockClient as any);
   });
 
+  test('exposes kind="webkit" for observability', () => {
+    expect(backend.kind).toBe('webkit');
+  });
+
   test('tap delegates to client.click for normal tap', async () => {
     await backend.tap(DEVICE, 100, 200);
     expect(mockClient.click).toHaveBeenCalledWith({ x: 100, y: 200 });
@@ -449,6 +461,7 @@ describe('getInputBackend', () => {
     execMock.mockResolvedValueOnce('');
     const backend = await getInputBackend(DEVICE);
     expect(backend).toBeInstanceOf(SimctlInputBackend);
+    expect(backend.kind).toBe('simctl');
     expect(execMock).toHaveBeenCalledWith(
       ['io', DEVICE, 'input', 'tap', '0', '0'],
       { timeout: 5000 },
@@ -460,6 +473,7 @@ describe('getInputBackend', () => {
     const mockClient = { isConnected: () => true } as any;
     const backend = await getInputBackend(DEVICE, mockClient);
     expect(backend).toBeInstanceOf(SimctlInputBackend);
+    expect(backend.kind).toBe('simctl');
   });
 
   test('returns WebKitInputBackend when simctl fails but webkitClient is connected', async () => {
@@ -467,6 +481,7 @@ describe('getInputBackend', () => {
     const mockClient = { isConnected: () => true } as any;
     const backend = await getInputBackend(DEVICE, mockClient);
     expect(backend).toBeInstanceOf(WebKitInputBackend);
+    expect(backend.kind).toBe('webkit');
   });
 
   // ── Default-deny behavior (issue #405) ──────────────────────────────────
@@ -562,6 +577,7 @@ describe('getInputBackend', () => {
     process.env[OPENSAFARI_ALLOW_FOCUS_INPUT_ENV] = '1';
     const backend = await getInputBackend(DEVICE);
     expect(backend).toBeInstanceOf(AppleScriptInputBackend);
+    expect(backend.kind).toBe('applescript');
   });
 
   test('returns AppleScriptInputBackend when OPENSAFARI_ALLOW_FOCUS_INPUT=true', async () => {
@@ -569,6 +585,7 @@ describe('getInputBackend', () => {
     process.env[OPENSAFARI_ALLOW_FOCUS_INPUT_ENV] = 'true';
     const backend = await getInputBackend(DEVICE);
     expect(backend).toBeInstanceOf(AppleScriptInputBackend);
+    expect(backend.kind).toBe('applescript');
   });
 
   test('ignores opt-in values other than "1" or "true"', async () => {
@@ -584,6 +601,7 @@ describe('getInputBackend', () => {
     process.env[OPENSAFARI_ALLOW_FOCUS_INPUT_ENV] = '1';
     const backend = await getInputBackend(DEVICE, null);
     expect(backend).toBeInstanceOf(AppleScriptInputBackend);
+    expect(backend.kind).toBe('applescript');
   });
 
   // ── Caching / identity ──────────────────────────────────────────────────

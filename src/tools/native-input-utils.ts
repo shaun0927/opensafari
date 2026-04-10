@@ -15,7 +15,7 @@ export {
   HeadlessInputUnavailableError,
   OPENSAFARI_ALLOW_FOCUS_INPUT_ENV,
 } from './native-input-backend';
-export type { InputBackend } from './native-input-backend';
+export type { InputBackend, InputBackendKind } from './native-input-backend';
 
 /**
  * Resolve the target device UDID from explicit param or the active device.

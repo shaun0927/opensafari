@@ -57,6 +57,7 @@ export function registerAppTypeTextTool(server: MCPServer): void {
                 status: 'typed',
                 length: text.length,
                 deviceId,
+                backend: backend.kind,
               }),
             },
           ],

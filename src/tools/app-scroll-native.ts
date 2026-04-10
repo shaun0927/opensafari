@@ -140,6 +140,7 @@ export function registerAppScrollNativeTool(server: MCPServer): void {
                 from: { x, y },
                 to: { x: endX, y: endY },
                 deviceId,
+                backend: backend.kind,
               }),
             },
           ],

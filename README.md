@@ -439,6 +439,45 @@ Multiple Claude Code sessions can share the same proxy. When a session detects a
 
 ---
 
+## Input Backend Selection
+
+OpenSafari dispatches native input (`app_tap`, `app_swipe_native`,
+`app_scroll_native`, `app_double_tap`, `app_type_text`, `app_key_input`)
+through a 3-tier fallback chain and surfaces the selected path in each tool
+result via a `backend` field.
+
+| Tier | Backend | Identifier | Headless? | When used |
+|------|---------|------------|-----------|-----------|
+| 1 | `SimctlInputBackend` | `simctl` | Yes | Xcode ≤16 (where `simctl io input` is available) |
+| 2 | `WebKitInputBackend` | `webkit` | Yes | Xcode 26+ with an active Safari WebKit connection |
+| 3 | `AppleScriptInputBackend` | `applescript` | **No** | Opt-in only — moves the mouse cursor and activates Simulator.app |
+
+Example tool result:
+
+```json
+{ "status": "tapped", "x": 100, "y": 200, "deviceId": "…", "backend": "webkit" }
+```
+
+### Focus-theft protection (`OPENSAFARI_ALLOW_FOCUS_INPUT`)
+
+Tier 3 is **default-deny**. On Xcode 26+ with no Safari connection,
+`getInputBackend()` throws `HeadlessInputUnavailableError` instead of
+silently moving the physical mouse cursor. To re-enable the legacy
+AppleScript/CGEvent fallback (for example, to automate a non-Safari native
+app), opt in with an environment variable:
+
+```bash
+# Only set this if you understand the consequences — it WILL move your
+# mouse cursor and bring Simulator.app to the foreground.
+OPENSAFARI_ALLOW_FOCUS_INPUT=1 opensafari serve
+```
+
+Accepted values are `1` and `true`; anything else is ignored. When the
+opt-in is honored, a one-time warning is logged to stderr at the first
+tool call.
+
+---
+
 ## Relationship to OpenChrome
 
 OpenSafari is the **Safari/iOS counterpart** to [OpenChrome](https://github.com/shaun0927/openchrome). Same philosophy, same architecture — different browser.
