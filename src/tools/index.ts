@@ -10,6 +10,11 @@ import { registerQueryDomTool } from './query-dom';
 import { registerCookiesTool } from './cookies';
 import { registerDeviceBootTool } from './device-boot';
 import { registerDeviceShutdownTool } from './device-shutdown';
+import {
+  registerQaSessionCreateTool,
+  registerQaSessionDestroyTool,
+  registerQaSessionListTool,
+} from './qa-session';
 import { registerInspectTool } from './inspect';
 import { registerWaitForTool } from './wait-for';
 import { registerLongPressTool } from './long-press';
@@ -100,6 +105,11 @@ export function registerAllTools(server: MCPServer): void {
   registerCookiesTool(server);
   registerDeviceBootTool(server);
   registerDeviceShutdownTool(server);
+
+  // Multi-tab QA sessions (Phase 2A of #408)
+  registerQaSessionCreateTool(server);
+  registerQaSessionDestroyTool(server);
+  registerQaSessionListTool(server);
 
   // Tier 2: Advanced
   registerInspectTool(server);
