@@ -48,7 +48,7 @@ export function resolveClient(params: Record<string, unknown>): ResolveResult {
   return {
     client: client ?? null,
     source: client ? 'device' : 'none',
-    deviceId: deviceId ?? getSessionManager().getActiveDeviceId() ?? undefined,
+    deviceId: deviceId ?? getSessionManager().getSoleDeviceId() ?? undefined,
   };
 }
 
