@@ -35,7 +35,7 @@ export function registerAppInspectTool(server: MCPServer): void {
       }
 
       try {
-        const deviceId = (params.device_id as string) ?? getSessionManager().getActiveDeviceId() ?? undefined;
+        const deviceId = (params.device_id as string) ?? getSessionManager().getSoleDeviceId() ?? undefined;
 
         const bridge = getAccessibilityBridge();
         const node = await bridge.inspect(elementPath, deviceId);

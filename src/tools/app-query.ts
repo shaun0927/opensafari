@@ -55,7 +55,7 @@ export function registerAppQueryTool(server: MCPServer): void {
       }
 
       try {
-        const deviceId = (params.device_id as string) ?? getSessionManager().getActiveDeviceId() ?? undefined;
+        const deviceId = (params.device_id as string) ?? getSessionManager().getSoleDeviceId() ?? undefined;
         const maxResults = params.max_results as number | undefined;
 
         const bridge = getAccessibilityBridge();

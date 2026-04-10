@@ -26,7 +26,7 @@ async function resolveDeviceId(params: Record<string, unknown>): Promise<string 
   const sm = getSessionManager();
   const manager = new SimulatorManager();
   const booted = await manager.listBooted();
-  return (params.deviceId as string) ?? sm.getActiveDeviceId() ?? booted[0]?.udid ?? null;
+  return (params.deviceId as string) ?? sm.getSoleDeviceId() ?? booted[0]?.udid ?? null;
 }
 
 export function registerAppPermissionTools(server: MCPServer): void {

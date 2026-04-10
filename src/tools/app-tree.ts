@@ -24,7 +24,7 @@ export function registerAppTreeTool(server: MCPServer): void {
     },
     async (_sessionId: string, params: Record<string, unknown>) => {
       try {
-        const deviceId = (params.device_id as string) ?? getSessionManager().getActiveDeviceId() ?? undefined;
+        const deviceId = (params.device_id as string) ?? getSessionManager().getSoleDeviceId() ?? undefined;
         const maxDepth = params.max_depth as number | undefined;
 
         const bridge = getAccessibilityBridge();

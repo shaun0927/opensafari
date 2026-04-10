@@ -46,7 +46,7 @@ export interface QueryMatch {
  */
 export function resolveDeviceId(explicit?: string): string {
   if (explicit) return explicit;
-  const active = getSessionManager().getActiveDeviceId();
+  const active = getSessionManager().getSoleDeviceId();
   if (!active) {
     throw new Error(
       'No device specified and no active device found. Boot a simulator first with device_boot.',

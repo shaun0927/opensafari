@@ -42,7 +42,7 @@ export function registerSetActiveContextTool(server: MCPServer): void {
 
       // Resolve device ID
       const resolvedDeviceId =
-        deviceId ?? getSessionManager().getActiveDeviceId() ?? DEFAULT_PROXY_HOST;
+        deviceId ?? getSessionManager().getSoleDeviceId() ?? DEFAULT_PROXY_HOST;
 
       // Get or create a client to query targets
       let probeClient = getWebKitClient(deviceId);

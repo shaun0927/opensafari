@@ -22,7 +22,7 @@ export function registerAppDismissKeyboardTool(server: MCPServer): void {
       // Resolve device ID: explicit param → session active → first booted
       const deviceId =
         (params.deviceId as string) ??
-        getSessionManager().getActiveDeviceId() ??
+        getSessionManager().getSoleDeviceId() ??
         (await manager.listBooted())[0]?.udid;
 
       if (!deviceId) {

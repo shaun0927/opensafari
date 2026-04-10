@@ -27,7 +27,7 @@ jest.mock('../../src/simulator', () => ({
 
 jest.mock('../../src/session-manager', () => ({
   getSessionManager: jest.fn().mockReturnValue({
-    getActiveDeviceId: jest.fn().mockReturnValue('TEST-UDID-1234'),
+    getSoleDeviceId: jest.fn().mockReturnValue('TEST-UDID-1234'),
   }),
 }));
 
@@ -64,7 +64,7 @@ describe('app_alert_handle tool', () => {
       }),
     }));
     getSessionManager.mockReturnValue({
-      getActiveDeviceId: jest.fn().mockReturnValue('TEST-UDID-1234'),
+      getSoleDeviceId: jest.fn().mockReturnValue('TEST-UDID-1234'),
     });
   });
 
@@ -118,7 +118,7 @@ describe('app_alert_handle tool', () => {
 
   test('returns error when no device is booted', async () => {
     getSessionManager.mockReturnValue({
-      getActiveDeviceId: jest.fn().mockReturnValue(null),
+      getSoleDeviceId: jest.fn().mockReturnValue(null),
     });
     SimulatorManager.mockImplementation(() => ({
       listBooted: jest.fn().mockResolvedValue([]),

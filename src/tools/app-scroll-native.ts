@@ -106,7 +106,7 @@ export function registerAppScrollNativeTool(server: MCPServer): void {
         const booted = await manager.listBooted();
         const deviceId =
           (params.deviceId as string | undefined) ??
-          sm.getActiveDeviceId() ??
+          sm.getSoleDeviceId() ??
           booted[0]?.udid;
 
         if (!deviceId) {

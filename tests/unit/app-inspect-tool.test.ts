@@ -5,7 +5,7 @@ import { AccessibilityBridge, getAccessibilityBridge } from '../../src/native';
 jest.mock('../../src/native');
 jest.mock('../../src/session-manager', () => ({
   getSessionManager: () => ({
-    getActiveDeviceId: () => 'mock-device-id',
+    getSoleDeviceId: () => 'mock-device-id',
   }),
 }));
 

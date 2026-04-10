@@ -36,7 +36,7 @@ export function registerAppLaunchTool(server: MCPServer): void {
       const sm = getSessionManager();
       const manager = new SimulatorManager();
       const booted = await manager.listBooted();
-      const deviceId = (params.deviceId as string) ?? sm.getActiveDeviceId() ?? booted[0]?.udid;
+      const deviceId = (params.deviceId as string) ?? sm.getSoleDeviceId() ?? booted[0]?.udid;
 
       if (!deviceId) {
         return {

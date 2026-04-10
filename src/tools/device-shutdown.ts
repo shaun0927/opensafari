@@ -21,7 +21,7 @@ export function registerDeviceShutdownTool(server: MCPServer): void {
       const manager = new SimulatorManager();
       const sm = getSessionManager();
       const booted = await manager.listBooted();
-      const deviceId = (params.deviceId as string) ?? sm.getActiveDeviceId() ?? booted[0]?.udid;
+      const deviceId = (params.deviceId as string) ?? sm.getSoleDeviceId() ?? booted[0]?.udid;
       if (!deviceId) {
         return { content: [{ type: 'text' as const, text: 'Error: no booted device found' }], isError: true };
       }

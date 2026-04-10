@@ -15,7 +15,7 @@ jest.mock('../../src/simulator/simctl', () => {
 // Mock SessionManager (used by resolveDeviceId)
 jest.mock('../../src/session-manager', () => ({
   getSessionManager: jest.fn().mockReturnValue({
-    getActiveDeviceId: jest.fn().mockReturnValue('TEST-UDID-1234'),
+    getSoleDeviceId: jest.fn().mockReturnValue('TEST-UDID-1234'),
   }),
 }));
 
@@ -79,7 +79,7 @@ describe('app_open_url tool', () => {
   test('returns error when no device available', async () => {
     const sessionMgr = jest.requireMock('../../src/session-manager') as { getSessionManager: jest.Mock };
     sessionMgr.getSessionManager.mockReturnValueOnce({
-      getActiveDeviceId: jest.fn().mockReturnValue(null),
+      getSoleDeviceId: jest.fn().mockReturnValue(null),
     });
 
     const handler = server.getToolHandler('app_open_url')!;

@@ -31,7 +31,7 @@ export function registerAppAlertHandleTool(server: MCPServer): void {
       const manager = new SimulatorManager();
       const booted = await manager.listBooted();
       const deviceId =
-        (params.deviceId as string) ?? sm.getActiveDeviceId() ?? booted[0]?.udid;
+        (params.deviceId as string) ?? sm.getSoleDeviceId() ?? booted[0]?.udid;
 
       if (!deviceId) {
         return {
