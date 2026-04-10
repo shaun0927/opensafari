@@ -61,6 +61,7 @@ export function registerAppKeyInputTool(server: MCPServer): void {
                 key,
                 keyCode,
                 deviceId,
+                backend: backend.kind,
               }),
             },
           ],

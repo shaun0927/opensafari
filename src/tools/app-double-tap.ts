@@ -68,6 +68,7 @@ export function registerAppDoubleTapTool(server: MCPServer): void {
                 x,
                 y,
                 deviceId,
+                backend: backend.kind,
               }),
             },
           ],

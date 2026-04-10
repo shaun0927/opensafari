@@ -68,6 +68,7 @@ describe('app_scroll_native', () => {
     const body = JSON.parse(result.content[0].text);
     expect(body.status).toBe('scrolled');
     expect(body.direction).toBe('up');
+    expect(body.backend).toBe('simctl');
   });
 
   it('scrolls down with correct simctl args', async () => {

@@ -65,6 +65,7 @@ export function registerAppTapTool(server: MCPServer): void {
                 y,
                 duration,
                 deviceId,
+                backend: backend.kind,
               }),
             },
           ],
