@@ -5,7 +5,7 @@
  * to whatever field currently has focus in the foreground app.
  */
 
-import { MCPServer } from '../mcp-server';
+import { MCPServer, getWebKitClient } from '../mcp-server';
 import { resolveDeviceId, getInputBackend } from './native-input-utils';
 
 export function registerAppTypeTextTool(server: MCPServer): void {
@@ -46,7 +46,7 @@ export function registerAppTypeTextTool(server: MCPServer): void {
           };
         }
 
-        const backend = await getInputBackend(deviceId);
+        const backend = await getInputBackend(deviceId, getWebKitClient(deviceId));
         await backend.typeText(deviceId, text);
 
         return {

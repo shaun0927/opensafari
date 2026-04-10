@@ -32,6 +32,7 @@ const registerToolMock = jest.fn((_schema: unknown, handler: unknown) => {
 
 jest.mock('../../src/mcp-server', () => ({
   MCPServer: jest.fn(),
+  getWebKitClient: jest.fn().mockReturnValue(null),
 }));
 
 // Import after mocks

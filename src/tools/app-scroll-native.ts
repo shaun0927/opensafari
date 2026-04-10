@@ -8,7 +8,7 @@
  * sensible defaults for scroll amount and center coordinates.
  */
 
-import { MCPServer } from '../mcp-server';
+import { MCPServer, getWebKitClient } from '../mcp-server';
 import { SimulatorManager } from '../simulator';
 import { getSessionManager } from '../session-manager';
 import { getInputBackend } from './native-input-backend';
@@ -126,7 +126,7 @@ export function registerAppScrollNativeTool(server: MCPServer): void {
         }
 
         const { endX, endY } = calculateScrollEndpoint(x, y, direction, amount);
-        const backend = await getInputBackend(deviceId);
+        const backend = await getInputBackend(deviceId, getWebKitClient(deviceId));
         await backend.swipe(deviceId, x, y, endX, endY);
 
         return {

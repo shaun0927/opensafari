@@ -6,6 +6,12 @@
  * so we mock SimctlExecutor and the session manager rather than a WebKit client.
  */
 
+// Mock getWebKitClient before importing tool modules that depend on it
+jest.mock('../../src/mcp-server', () => {
+  const actual = jest.requireActual('../../src/mcp-server');
+  return { ...actual, getWebKitClient: jest.fn().mockReturnValue(null) };
+});
+
 import { MCPServer } from '../../src/mcp-server';
 import { registerAppTapTool } from '../../src/tools/app-tap';
 import { registerAppDoubleTapTool } from '../../src/tools/app-double-tap';

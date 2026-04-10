@@ -8,10 +8,13 @@
 import {
   SimctlInputBackend,
   AppleScriptInputBackend,
+  WebKitInputBackend,
   getInputBackend,
   resetInputBackend,
   HID_TO_APPLESCRIPT,
   SENDKEY_TO_APPLESCRIPT,
+  HID_TO_WEBKIT_KEY,
+  SENDKEY_TO_WEBKIT_KEY,
 } from '../../src/tools/native-input-backend';
 
 // ── Mocks ──────────────────────────────────────────────────────────────────
@@ -295,7 +298,133 @@ describe('Key mappings', () => {
   });
 });
 
-// ── Auto-detection ─────────────────────────────────────────────────────────
+// ── WebKitInputBackend ────────────────────────────────────────────────────
+
+describe('WebKitInputBackend', () => {
+  let backend: WebKitInputBackend;
+  let mockClient: {
+    click: jest.Mock;
+    scroll: jest.Mock;
+    swipe: jest.Mock;
+    evaluate: jest.Mock;
+    press: jest.Mock;
+    isConnected: jest.Mock;
+  };
+
+  beforeEach(() => {
+    mockClient = {
+      click: jest.fn().mockResolvedValue(undefined),
+      scroll: jest.fn().mockResolvedValue(undefined),
+      swipe: jest.fn().mockResolvedValue(undefined),
+      evaluate: jest.fn().mockResolvedValue(undefined),
+      press: jest.fn().mockResolvedValue(undefined),
+      isConnected: jest.fn().mockReturnValue(true),
+    };
+    backend = new WebKitInputBackend(mockClient as any);
+  });
+
+  test('tap delegates to client.click for normal tap', async () => {
+    await backend.tap(DEVICE, 100, 200);
+    expect(mockClient.click).toHaveBeenCalledWith({ x: 100, y: 200 });
+    expect(mockClient.evaluate).not.toHaveBeenCalled();
+  });
+
+  test('tap uses evaluate for long press', async () => {
+    await backend.tap(DEVICE, 100, 200, 1.5);
+    expect(mockClient.evaluate).toHaveBeenCalledTimes(1);
+    const js = mockClient.evaluate.mock.calls[0][0] as string;
+    expect(js).toContain('touchstart');
+    expect(js).toContain('touchend');
+    expect(js).toContain('1500'); // 1.5 * 1000
+    expect(mockClient.click).not.toHaveBeenCalled();
+  });
+
+  test('tap with zero duration delegates to client.click', async () => {
+    await backend.tap(DEVICE, 50, 60, 0);
+    expect(mockClient.click).toHaveBeenCalledWith({ x: 50, y: 60 });
+  });
+
+  test('swipe calls evaluate with scrollBy and touch events', async () => {
+    await backend.swipe(DEVICE, 200, 600, 200, 200, 0.5);
+    expect(mockClient.evaluate).toHaveBeenCalledTimes(1);
+    const js = mockClient.evaluate.mock.calls[0][0] as string;
+    expect(js).toContain('window.scrollBy');
+    expect(js).toContain('touchstart');
+    expect(js).toContain('touchmove');
+    expect(js).toContain('touchend');
+  });
+
+  test('swipe calculates correct scroll delta', async () => {
+    // Swipe up: startY(600) > endY(200) → scrollY = 400 (scroll down)
+    await backend.swipe(DEVICE, 200, 600, 200, 200);
+    const js = mockClient.evaluate.mock.calls[0][0] as string;
+    // scrollX = 200 - 200 = 0, scrollY = 600 - 200 = 400
+    expect(js).toContain('0, 400');
+  });
+
+  test('typeText calls evaluate with active element targeting', async () => {
+    await backend.typeText(DEVICE, 'hello');
+    expect(mockClient.evaluate).toHaveBeenCalledTimes(1);
+    const js = mockClient.evaluate.mock.calls[0][0] as string;
+    expect(js).toContain('document.activeElement');
+    expect(js).toContain('"hello"');
+    expect(js).toContain('input');
+    expect(js).toContain('change');
+  });
+
+  test('typeText escapes special characters in text', async () => {
+    await backend.typeText(DEVICE, 'say "hi" \\ there');
+    const js = mockClient.evaluate.mock.calls[0][0] as string;
+    expect(js).toContain('"say \\"hi\\" \\\\ there"');
+  });
+
+  test('keypress maps HID code to WebKit key and calls press', async () => {
+    await backend.keypress(DEVICE, '40'); // Enter
+    expect(mockClient.press).toHaveBeenCalledWith('Enter');
+  });
+
+  test('keypress throws for unknown HID code', async () => {
+    await expect(backend.keypress(DEVICE, '999')).rejects.toThrow(
+      'Unknown HID key code "999"',
+    );
+  });
+
+  test('sendKey maps named key and calls press', async () => {
+    await backend.sendKey(DEVICE, 'Return');
+    expect(mockClient.press).toHaveBeenCalledWith('Enter');
+  });
+
+  test('sendKey passes through unmapped key names', async () => {
+    await backend.sendKey(DEVICE, 'ArrowDown');
+    expect(mockClient.press).toHaveBeenCalledWith('ArrowDown');
+  });
+});
+
+// ── WebKit key mappings ──────────────────────────────────────────────────
+
+describe('WebKit key mappings', () => {
+  test('HID_TO_WEBKIT_KEY covers standard keys', () => {
+    expect(HID_TO_WEBKIT_KEY['40']).toBe('Enter');
+    expect(HID_TO_WEBKIT_KEY['41']).toBe('Escape');
+    expect(HID_TO_WEBKIT_KEY['42']).toBe('Backspace');
+    expect(HID_TO_WEBKIT_KEY['43']).toBe('Tab');
+    expect(HID_TO_WEBKIT_KEY['44']).toBe('Space');
+    expect(HID_TO_WEBKIT_KEY['79']).toBe('ArrowRight');
+    expect(HID_TO_WEBKIT_KEY['80']).toBe('ArrowLeft');
+    expect(HID_TO_WEBKIT_KEY['81']).toBe('ArrowDown');
+    expect(HID_TO_WEBKIT_KEY['82']).toBe('ArrowUp');
+  });
+
+  test('SENDKEY_TO_WEBKIT_KEY covers named keys', () => {
+    expect(SENDKEY_TO_WEBKIT_KEY.Return).toBe('Enter');
+    expect(SENDKEY_TO_WEBKIT_KEY.Escape).toBe('Escape');
+    expect(SENDKEY_TO_WEBKIT_KEY.Tab).toBe('Tab');
+    expect(SENDKEY_TO_WEBKIT_KEY.Space).toBe('Space');
+    expect(SENDKEY_TO_WEBKIT_KEY.Delete).toBe('Backspace');
+  });
+});
+
+// ── Auto-detection (3-tier fallback) ─────────────────────────────────────
 
 describe('getInputBackend', () => {
   beforeEach(() => {
@@ -313,13 +442,40 @@ describe('getInputBackend', () => {
     );
   });
 
-  test('returns AppleScriptInputBackend when simctl io input fails', async () => {
+  test('returns SimctlInputBackend even when webkitClient is provided (tier 1 wins)', async () => {
+    execMock.mockResolvedValueOnce('');
+    const mockClient = { isConnected: () => true } as any;
+    const backend = await getInputBackend(DEVICE, mockClient);
+    expect(backend).toBeInstanceOf(SimctlInputBackend);
+  });
+
+  test('returns WebKitInputBackend when simctl fails but webkitClient is connected', async () => {
+    execMock.mockRejectedValueOnce(new Error('not supported'));
+    const mockClient = { isConnected: () => true } as any;
+    const backend = await getInputBackend(DEVICE, mockClient);
+    expect(backend).toBeInstanceOf(WebKitInputBackend);
+  });
+
+  test('returns AppleScriptInputBackend when simctl fails and no webkitClient', async () => {
     execMock.mockRejectedValueOnce(new Error('not supported'));
     const backend = await getInputBackend(DEVICE);
     expect(backend).toBeInstanceOf(AppleScriptInputBackend);
   });
 
-  test('caches the detected backend', async () => {
+  test('returns AppleScriptInputBackend when webkitClient is disconnected', async () => {
+    execMock.mockRejectedValueOnce(new Error('not supported'));
+    const mockClient = { isConnected: () => false } as any;
+    const backend = await getInputBackend(DEVICE, mockClient);
+    expect(backend).toBeInstanceOf(AppleScriptInputBackend);
+  });
+
+  test('returns AppleScriptInputBackend when webkitClient is null', async () => {
+    execMock.mockRejectedValueOnce(new Error('not supported'));
+    const backend = await getInputBackend(DEVICE, null);
+    expect(backend).toBeInstanceOf(AppleScriptInputBackend);
+  });
+
+  test('caches the simctl detection result', async () => {
     execMock.mockResolvedValueOnce('');
     const first = await getInputBackend(DEVICE);
     const second = await getInputBackend(DEVICE);
@@ -335,5 +491,15 @@ describe('getInputBackend', () => {
     await getInputBackend(DEVICE);
     // Should probe twice (once before reset, once after)
     expect(execMock).toHaveBeenCalledTimes(2);
+  });
+
+  test('WebKitInputBackend is created fresh per call (not cached)', async () => {
+    execMock.mockRejectedValueOnce(new Error('not supported'));
+    const mockClient = { isConnected: () => true } as any;
+    const first = await getInputBackend(DEVICE, mockClient);
+    const second = await getInputBackend(DEVICE, mockClient);
+    expect(first).toBeInstanceOf(WebKitInputBackend);
+    expect(second).toBeInstanceOf(WebKitInputBackend);
+    expect(first).not.toBe(second); // Not cached — client state can change
   });
 });

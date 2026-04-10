@@ -4,7 +4,7 @@
  * Sends two rapid taps at the same location with a short inter-tap delay.
  */
 
-import { MCPServer } from '../mcp-server';
+import { MCPServer, getWebKitClient } from '../mcp-server';
 import { resolveDeviceId, getInputBackend } from './native-input-utils';
 
 /** Delay between the two taps (ms). 50 ms matches typical double-tap cadence. */
@@ -51,7 +51,7 @@ export function registerAppDoubleTapTool(server: MCPServer): void {
           };
         }
 
-        const backend = await getInputBackend(deviceId);
+        const backend = await getInputBackend(deviceId, getWebKitClient(deviceId));
 
         // First tap
         await backend.tap(deviceId, x, y);
