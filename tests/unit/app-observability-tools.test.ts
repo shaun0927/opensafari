@@ -41,7 +41,6 @@ describe('native-observability-utils', () => {
         bootedAt: Date.now(),
         lastActivity: Date.now(),
       });
-      sm.setActiveDevice('ACTIVE-001');
       expect(resolveDeviceId({})).toBe('ACTIVE-001');
       sm.removeSimulator('ACTIVE-001');
     });
@@ -49,7 +48,7 @@ describe('native-observability-utils', () => {
     test('throws when no device available', () => {
       // Ensure no active device
       const sm = getSessionManager();
-      const activeId = sm.getActiveDeviceId();
+      const activeId = sm.getSoleDeviceId();
       if (activeId) sm.removeSimulator(activeId);
       expect(() => resolveDeviceId({})).toThrow('No device specified');
     });
@@ -131,7 +130,7 @@ describe('app_screenshot_native tool', () => {
 
   test('returns error when no device available', async () => {
     const sm = getSessionManager();
-    const activeId = sm.getActiveDeviceId();
+    const activeId = sm.getSoleDeviceId();
     if (activeId) sm.removeSimulator(activeId);
 
     const handler = server.getToolHandler('app_screenshot_native')!;
@@ -155,7 +154,7 @@ describe('app_logs tool', () => {
 
   test('returns error when no device available', async () => {
     const sm = getSessionManager();
-    const activeId = sm.getActiveDeviceId();
+    const activeId = sm.getSoleDeviceId();
     if (activeId) sm.removeSimulator(activeId);
 
     const handler = server.getToolHandler('app_logs')!;
@@ -174,7 +173,6 @@ describe('app_logs tool', () => {
       bootedAt: Date.now(),
       lastActivity: Date.now(),
     });
-    sm.setActiveDevice('LOG-DEV');
 
     const handler = server.getToolHandler('app_logs')!;
     const result = await handler('test', { since: 'invalid' });
@@ -199,7 +197,7 @@ describe('app_crash_reports tool', () => {
 
   test('returns error when no device available', async () => {
     const sm = getSessionManager();
-    const activeId = sm.getActiveDeviceId();
+    const activeId = sm.getSoleDeviceId();
     if (activeId) sm.removeSimulator(activeId);
 
     const handler = server.getToolHandler('app_crash_reports')!;
@@ -227,7 +225,7 @@ describe('app_record_video tool', () => {
 
   test('returns error when no device available', async () => {
     const sm = getSessionManager();
-    const activeId = sm.getActiveDeviceId();
+    const activeId = sm.getSoleDeviceId();
     if (activeId) sm.removeSimulator(activeId);
 
     const handler = server.getToolHandler('app_record_video')!;
@@ -246,7 +244,6 @@ describe('app_record_video tool', () => {
       bootedAt: Date.now(),
       lastActivity: Date.now(),
     });
-    sm.setActiveDevice('VID-DEV');
 
     const handler = server.getToolHandler('app_record_video')!;
     const result = await handler('test', { action: 'stop', deviceId: 'VID-DEV' });
@@ -275,7 +272,6 @@ describe('app_record_video tool', () => {
       bootedAt: Date.now(),
       lastActivity: Date.now(),
     });
-    sm.setActiveDevice('DUP-DEV');
 
     const handler = server.getToolHandler('app_record_video')!;
     const result = await handler('test', { action: 'start', deviceId: 'DUP-DEV' });

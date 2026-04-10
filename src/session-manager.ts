@@ -5,7 +5,12 @@ import { BrowserBackend } from './types/browser-backend';
  * Session Manager — Simulator & Safari Connection Tracking
  *
  * Maps booted simulators to WebKit Protocol connections (BrowserBackend instances).
- * Manages active device, workers, and connection lifecycle.
+ * Manages workers and connection lifecycle.
+ *
+ * Phase 3 of #408 removed the `activeDeviceId` global field. Tools that do not
+ * specify a deviceId fall back to the unique booted device (if exactly one is
+ * connected) instead of a process-wide "active" pointer that two concurrent
+ * sessions could silently overwrite.
  */
 
 export interface SimulatorInfo {
@@ -46,26 +51,17 @@ export class SessionManager extends EventEmitter {
   private connections: Map<string, BrowserBackend> = new Map();
   private workers: Map<string, WorkerInfo> = new Map();
   private tabSessions: Map<string, TabSessionInfo> = new Map();
-  private activeDeviceId: string | null = null;
 
   // Simulator tracking
   addSimulator(deviceId: string, info: SimulatorInfo): void {
     this.simulators.set(deviceId, info);
     this.emit('simulator:added', { deviceId, info });
-    if (!this.activeDeviceId) {
-      this.activeDeviceId = deviceId;
-    }
   }
 
   removeSimulator(deviceId: string): void {
     this.simulators.delete(deviceId);
     this.connections.delete(deviceId);
     this.emit('simulator:removed', { deviceId });
-    if (this.activeDeviceId === deviceId) {
-      this.activeDeviceId = this.simulators.size > 0
-        ? this.simulators.keys().next().value ?? null
-        : null;
-    }
   }
 
   getSimulator(deviceId: string): SimulatorInfo | null {
@@ -82,10 +78,47 @@ export class SessionManager extends EventEmitter {
     this.emit('connection:established', { deviceId });
   }
 
+  /**
+   * Look up a registered BrowserBackend connection.
+   *
+   * Resolution rules (Phase 3 of #408 — `activeDeviceId` has been removed):
+   *   - If `deviceId` is supplied, return the connection for that device (or null).
+   *   - If `deviceId` is omitted AND exactly one device is connected, return
+   *     that sole connection — this preserves the single-device workflow
+   *     without any global state.
+   *   - Otherwise (zero or multiple connections), return null. Callers that
+   *     need an explicit choice in multi-device scenarios should use
+   *     `listConnections()` and pick one themselves, or surface a structured
+   *     error listing available devices.
+   */
   getConnection(deviceId?: string): BrowserBackend | null {
-    const id = deviceId ?? this.activeDeviceId;
-    if (!id) return null;
-    return this.connections.get(id) ?? null;
+    if (deviceId) {
+      return this.connections.get(deviceId) ?? null;
+    }
+    if (this.connections.size === 1) {
+      const sole = this.connections.values().next().value;
+      return sole ?? null;
+    }
+    return null;
+  }
+
+  /**
+   * Return the sole device id when the session is in unambiguous single-device
+   * mode. Prefers the unique WebKit connection (so Safari tools work as soon
+   * as device_boot finishes), then falls back to the unique registered
+   * simulator (so native app tools work even before a WebKit connection is
+   * established). Returns null whenever zero or multiple devices are present
+   * — callers that need to pick in multi-device scenarios must ask the
+   * caller for an explicit `deviceId`.
+   */
+  getSoleDeviceId(): string | null {
+    if (this.connections.size === 1) {
+      return this.connections.keys().next().value ?? null;
+    }
+    if (this.simulators.size === 1) {
+      return this.simulators.keys().next().value ?? null;
+    }
+    return null;
   }
 
   removeConnection(deviceId: string): void {
@@ -99,19 +132,6 @@ export class SessionManager extends EventEmitter {
 
   listConnections(): Array<{ deviceId: string; client: BrowserBackend }> {
     return Array.from(this.connections.entries()).map(([deviceId, client]) => ({ deviceId, client }));
-  }
-
-  // Active device
-  setActiveDevice(deviceId: string): void {
-    if (!this.simulators.has(deviceId)) {
-      throw new Error(`Device ${deviceId} not found in session`);
-    }
-    this.activeDeviceId = deviceId;
-    this.emit('device:active', { deviceId });
-  }
-
-  getActiveDeviceId(): string | null {
-    return this.activeDeviceId;
   }
 
   markActivity(deviceId: string): void {
@@ -216,7 +236,6 @@ export class SessionManager extends EventEmitter {
     this.connections.clear();
     this.simulators.clear();
     this.workers.clear();
-    this.activeDeviceId = null;
     this.emit('session:shutdown');
   }
 }

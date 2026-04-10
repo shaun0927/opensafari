@@ -98,7 +98,7 @@ export function registerDeviceBootTool(server: MCPServer): void {
           const client = new WebKitClient({ host: 'localhost', port: proxy.port });
           await client.connect({ retries: 5, retryDelay: 2000 });
 
-          // Register in SessionManager — tracks connection and sets as active device
+          // Register in SessionManager — tracks the connection by deviceId
           const preset = Object.entries(DEVICE_PRESETS).find(([, p]) => p.name === device.name);
           sm.addSimulator(device.udid, {
             deviceId: device.udid,
@@ -109,7 +109,6 @@ export function registerDeviceBootTool(server: MCPServer): void {
             lastActivity: Date.now(),
           });
           sm.setConnection(device.udid, client);
-          sm.setActiveDevice(device.udid);
         } catch (err) {
           console.error(`[device_boot] WebKit connection failed (proxy running, tools may not work): ${err}`);
         }

@@ -16,7 +16,7 @@ jest.mock('../../src/simulator', () => ({
 
 jest.mock('../../src/session-manager', () => ({
   getSessionManager: jest.fn().mockReturnValue({
-    getActiveDeviceId: jest.fn().mockReturnValue('TEST-UDID-1234'),
+    getSoleDeviceId: jest.fn().mockReturnValue('TEST-UDID-1234'),
   }),
 }));
 
@@ -66,7 +66,7 @@ describe('app_switch_app tool', () => {
   });
 
   test('returns error when no device booted', async () => {
-    mockedGetSessionManager.mockReturnValueOnce({ getActiveDeviceId: () => null } as ReturnType<typeof getSessionManager>);
+    mockedGetSessionManager.mockReturnValueOnce({ getSoleDeviceId: () => null } as ReturnType<typeof getSessionManager>);
     MockedSimulatorManager.mockImplementationOnce(() => ({
       listBooted: jest.fn().mockResolvedValue([]),
       launchApp: mockLaunchApp,

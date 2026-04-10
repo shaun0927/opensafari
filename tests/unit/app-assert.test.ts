@@ -23,7 +23,7 @@ jest.mock('../../src/simulator', () => {
 jest.mock('../../src/session-manager', () => {
   return {
     getSessionManager: jest.fn().mockReturnValue({
-      getActiveDeviceId: jest.fn().mockReturnValue(null),
+      getSoleDeviceId: jest.fn().mockReturnValue(null),
     }),
   };
 });
@@ -40,7 +40,7 @@ const DEVICE_ID = 'test-device-udid-123';
 
 function setupDeviceId(deviceId: string = DEVICE_ID): void {
   mockGetSessionManager.mockReturnValue({
-    getActiveDeviceId: jest.fn().mockReturnValue(deviceId),
+    getSoleDeviceId: jest.fn().mockReturnValue(deviceId),
   } as any);
 }
 
@@ -333,7 +333,7 @@ describe('app_assert tool', () => {
   describe('device resolution', () => {
     test('returns error result when no device available', async () => {
       mockGetSessionManager.mockReturnValue({
-        getActiveDeviceId: jest.fn().mockReturnValue(null),
+        getSoleDeviceId: jest.fn().mockReturnValue(null),
       } as any);
       MockSimulatorManager.mockImplementation(() => ({
         listBooted: jest.fn().mockResolvedValue([]),

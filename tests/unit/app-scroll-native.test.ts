@@ -17,10 +17,10 @@ jest.mock('../../src/simulator', () => ({
   })),
 }));
 
-const getActiveDeviceIdMock = jest.fn();
+const getSoleDeviceIdMock = jest.fn();
 jest.mock('../../src/session-manager', () => ({
   getSessionManager: () => ({
-    getActiveDeviceId: getActiveDeviceIdMock,
+    getSoleDeviceId: getSoleDeviceIdMock,
   }),
 }));
 
@@ -44,7 +44,7 @@ describe('app_scroll_native', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     listBootedMock.mockResolvedValue([{ udid: DEVICE_ID }]);
-    getActiveDeviceIdMock.mockReturnValue(null);
+    getSoleDeviceIdMock.mockReturnValue(null);
     execMock.mockResolvedValue('');
 
     const fakeServer = { registerTool: registerToolMock } as unknown;
@@ -129,7 +129,7 @@ describe('app_scroll_native', () => {
 
   it('uses active device from session manager', async () => {
     const activeDevice = 'ACTIVE-DEVICE';
-    getActiveDeviceIdMock.mockReturnValue(activeDevice);
+    getSoleDeviceIdMock.mockReturnValue(activeDevice);
     await toolHandler('s1', { direction: 'down' });
     expect(execMock).toHaveBeenCalledWith(
       expect.arrayContaining(['io', activeDevice, 'input', 'swipe']),
@@ -140,7 +140,7 @@ describe('app_scroll_native', () => {
 
   it('returns error when no device is available', async () => {
     listBootedMock.mockResolvedValue([]);
-    getActiveDeviceIdMock.mockReturnValue(null);
+    getSoleDeviceIdMock.mockReturnValue(null);
     const result = await toolHandler('s1', { direction: 'up' }) as { isError: boolean; content: { text: string }[] };
     expect(result.isError).toBe(true);
     const body = JSON.parse(result.content[0].text);

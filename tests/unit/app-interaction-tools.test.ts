@@ -78,7 +78,7 @@ jest.mock('../../src/tools/native-input-backend', () => ({
 
 jest.mock('../../src/session-manager', () => ({
   getSessionManager: () => ({
-    getActiveDeviceId: () => 'MOCK-DEVICE-UDID',
+    getSoleDeviceId: () => 'MOCK-DEVICE-UDID',
   }),
 }));
 

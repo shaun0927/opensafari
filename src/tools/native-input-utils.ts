@@ -24,7 +24,7 @@ export type { InputBackend, InputBackendKind } from './native-input-backend';
 export function resolveDeviceId(params: Record<string, unknown>): string {
   const deviceId =
     (params.deviceId as string | undefined) ||
-    getSessionManager().getActiveDeviceId();
+    getSessionManager().getSoleDeviceId();
   if (!deviceId) {
     throw new Error(
       'No device specified and no active device. Boot a simulator first with device_boot.',

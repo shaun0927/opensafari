@@ -64,11 +64,10 @@ export function setWebKitClient(client: BrowserBackend | null, deviceId?: string
       });
     }
     sm.setConnection(id, client);
-    sm.setActiveDevice(id);
   } else {
-    // Clear: remove the specified or active device's connection
-    const activeId = sm.getActiveDeviceId();
-    const targetId = deviceId ?? activeId;
+    // Clear: remove the specified or sole device's connection
+    const soleId = sm.getSoleDeviceId();
+    const targetId = deviceId ?? soleId;
     if (targetId) {
       sm.removeConnection(targetId);
       sm.removeSimulator(targetId);

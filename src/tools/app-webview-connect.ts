@@ -52,7 +52,7 @@ export function registerAppWebviewConnectTool(server: MCPServer): void {
 
       // Resolve device ID
       const resolvedDeviceId =
-        deviceId ?? getSessionManager().getActiveDeviceId() ?? DEFAULT_PROXY_HOST;
+        deviceId ?? getSessionManager().getSoleDeviceId() ?? DEFAULT_PROXY_HOST;
 
       // Get or create a WebKit client
       let client = getWebKitClient(deviceId);

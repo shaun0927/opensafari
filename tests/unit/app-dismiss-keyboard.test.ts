@@ -32,7 +32,7 @@ let mockActiveDeviceId: string | null = null;
 
 jest.mock('../../src/session-manager', () => ({
   getSessionManager: () => ({
-    getActiveDeviceId: () => mockActiveDeviceId,
+    getSoleDeviceId: () => mockActiveDeviceId,
   }),
 }));
 

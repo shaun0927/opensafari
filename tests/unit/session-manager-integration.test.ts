@@ -100,14 +100,16 @@ describe('SessionManager Integration', () => {
       });
       sm.setConnection('udid-B', clientB);
 
-      // First registered becomes active
-      expect(getWebKitClient()).toBe(clientA);
-      // Specific device retrieval
+      // With two connections, ambient lookup is ambiguous — tools must pass an
+      // explicit deviceId (Phase 3 of #408 removed the activeDeviceId fallback).
+      expect(getWebKitClient()).toBeNull();
+      expect(sm.getSoleDeviceId()).toBeNull();
+      // Specific device retrieval still works
       expect(getWebKitClient('udid-A')).toBe(clientA);
       expect(getWebKitClient('udid-B')).toBe(clientB);
     });
 
-    it('should switch active device', () => {
+    it('requires explicit deviceId when multiple devices are connected', () => {
       const sm = getSessionManager();
       const clientA = createMockClient('device-A');
       const clientB = createMockClient('device-B');
@@ -124,18 +126,14 @@ describe('SessionManager Integration', () => {
       });
       sm.setConnection('udid-B', clientB);
 
-      // Default is first device
-      expect(getWebKitClient()).toBe(clientA);
-
-      // Switch active
-      sm.setActiveDevice('udid-B');
-      expect(getWebKitClient()).toBe(clientB);
-
-      // Specific retrieval still works
+      // Ambiguous ambient lookup returns null
+      expect(getWebKitClient()).toBeNull();
+      // Explicit retrieval returns the correct client
       expect(getWebKitClient('udid-A')).toBe(clientA);
+      expect(getWebKitClient('udid-B')).toBe(clientB);
     });
 
-    it('should fallback to next device when active is removed', () => {
+    it('returns the sole remaining device after one is removed', () => {
       const sm = getSessionManager();
       const clientA = createMockClient('device-A');
       const clientB = createMockClient('device-B');
@@ -152,12 +150,13 @@ describe('SessionManager Integration', () => {
       });
       sm.setConnection('udid-B', clientB);
 
-      expect(getWebKitClient()).toBe(clientA);
+      // Two devices → ambiguous
+      expect(getWebKitClient()).toBeNull();
 
-      // Remove active device → should fallback to udid-B
+      // Remove one → the remaining device becomes the sole connection
       sm.removeSimulator('udid-A');
       expect(getWebKitClient()).toBe(clientB);
-      expect(sm.getActiveDeviceId()).toBe('udid-B');
+      expect(sm.getSoleDeviceId()).toBe('udid-B');
     });
 
     it('should return null when all devices removed', () => {
@@ -172,7 +171,7 @@ describe('SessionManager Integration', () => {
 
       sm.removeSimulator('udid-1');
       expect(getWebKitClient()).toBeNull();
-      expect(sm.getActiveDeviceId()).toBeNull();
+      expect(sm.getSoleDeviceId()).toBeNull();
     });
   });
 

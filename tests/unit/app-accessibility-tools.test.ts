@@ -12,7 +12,7 @@ jest.mock('../../src/session-manager', () => {
   let activeDeviceId: string | null = 'MOCK-DEVICE-UUID';
   return {
     getSessionManager: () => ({
-      getActiveDeviceId: () => activeDeviceId,
+      getSoleDeviceId: () => activeDeviceId,
       _setActiveDeviceId: (id: string | null) => { activeDeviceId = id; },
     }),
   };

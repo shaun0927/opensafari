@@ -18,7 +18,7 @@ jest.mock('../../src/simulator/simctl', () => ({
 // Mock session manager to return a device ID
 jest.mock('../../src/session-manager', () => ({
   getSessionManager: jest.fn().mockReturnValue({
-    getActiveDeviceId: jest.fn().mockReturnValue('MOCK-DEVICE-UUID'),
+    getSoleDeviceId: jest.fn().mockReturnValue('MOCK-DEVICE-UUID'),
   }),
 }));
 

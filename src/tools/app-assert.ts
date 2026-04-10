@@ -24,7 +24,7 @@ export interface AppAssertResult {
 async function resolveDeviceId(deviceId?: string): Promise<string> {
   if (deviceId) return deviceId;
 
-  const active = getSessionManager().getActiveDeviceId();
+  const active = getSessionManager().getSoleDeviceId();
   if (active) return active;
 
   const manager = new SimulatorManager();
