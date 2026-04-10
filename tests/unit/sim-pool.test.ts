@@ -245,4 +245,138 @@ describe('SimPool', () => {
       expect(list.map((p) => p.udid).sort()).toEqual([a.udid, b.udid].sort());
     });
   });
+
+  // ── Custom master UDID support (Phase 4.2 of #408) ──────────────────────
+
+  describe('custom master UDID', () => {
+    const CUSTOM_MASTER = 'CUSTOM-MASTER-1234567890AB';
+
+    function attachCustomMaster(managerStub: any, masterUdid: string) {
+      // Extend the stub so `getDevice(masterUdid)` returns a valid device
+      // instead of falling back to the default clone stub.
+      const originalGetDevice = managerStub.getDevice;
+      managerStub.getDevice = jest.fn(async (udid: string) => {
+        if (udid === masterUdid) {
+          return {
+            udid: masterUdid,
+            name: 'Pre-Configured Master',
+            state: 'Shutdown',
+            isAvailable: true,
+            runtime: 'com.apple.CoreSimulator.SimRuntime.iOS-17-0',
+            runtimeVersion: '17.0',
+          };
+        }
+        return originalGetDevice(udid);
+      });
+    }
+
+    test('setMaster + getMaster round-trip', () => {
+      const simctl = makeStubSimctl();
+      const { manager } = makeStubManager();
+      const pool = new SimPool({ simctl, manager });
+
+      expect(pool.getMaster(PRESET)).toBeNull();
+      pool.setMaster(PRESET, CUSTOM_MASTER);
+      expect(pool.getMaster(PRESET)).toBe(CUSTOM_MASTER);
+      pool.setMaster(PRESET, null);
+      expect(pool.getMaster(PRESET)).toBeNull();
+    });
+
+    test('acquire uses the registered master instead of preset lookup', async () => {
+      const simctl = makeStubSimctl();
+      const { manager } = makeStubManager();
+      attachCustomMaster(manager, CUSTOM_MASTER);
+      const pool = new SimPool({ simctl, manager });
+      pool.setMaster(PRESET, CUSTOM_MASTER);
+
+      await pool.acquire(PRESET);
+
+      // resolveDevice should NOT be called — we went straight to getDevice
+      expect(manager.resolveDevice).not.toHaveBeenCalled();
+      // Clone source must be our custom master UDID
+      const cloneCall = simctl.calls.find((c: any) => c.args[0] === 'clone')!;
+      expect(cloneCall.args[1]).toBe(CUSTOM_MASTER);
+    });
+
+    test('per-call masterUdid overrides setMaster for that one call', async () => {
+      const simctl = makeStubSimctl();
+      const { manager } = makeStubManager();
+      const OTHER_MASTER = 'OTHER-MASTER-0000000001AB';
+      attachCustomMaster(manager, CUSTOM_MASTER);
+      attachCustomMaster(manager, OTHER_MASTER);
+      const pool = new SimPool({ simctl, manager });
+      pool.setMaster(PRESET, CUSTOM_MASTER);
+
+      // Explicit per-call override
+      await pool.acquire(PRESET, { masterUdid: OTHER_MASTER });
+
+      const cloneCall = simctl.calls.find((c: any) => c.args[0] === 'clone')!;
+      expect(cloneCall.args[1]).toBe(OTHER_MASTER);
+
+      // The pool-level setMaster is untouched for subsequent acquires
+      simctl.calls.length = 0;
+      await pool.acquire(PRESET);
+      const secondClone = simctl.calls.find((c: any) => c.args[0] === 'clone')!;
+      expect(secondClone.args[1]).toBe(CUSTOM_MASTER);
+    });
+
+    test('acquire without setMaster falls back to preset lookup', async () => {
+      const simctl = makeStubSimctl();
+      const { manager } = makeStubManager();
+      const pool = new SimPool({ simctl, manager });
+
+      await pool.acquire(PRESET);
+
+      expect(manager.resolveDevice).toHaveBeenCalledWith(PRESET);
+      const cloneCall = simctl.calls.find((c: any) => c.args[0] === 'clone')!;
+      expect(cloneCall.args[1]).toBe(MASTER_UDID);
+    });
+
+    test('throws when the explicit master UDID does not exist', async () => {
+      const simctl = makeStubSimctl();
+      const { manager } = makeStubManager();
+      // getDevice returns null for unknown UDIDs
+      manager.getDevice = jest.fn(async (udid: string) => {
+        if (udid === 'GHOST-MASTER') return null;
+        return { udid, name: 'x', state: 'Booted', isAvailable: true, runtime: '', runtimeVersion: '' };
+      });
+      const pool = new SimPool({ simctl, manager });
+      pool.setMaster(PRESET, 'GHOST-MASTER');
+
+      await expect(pool.acquire(PRESET)).rejects.toThrow(/master UDID "GHOST-MASTER" not found/);
+    });
+
+    test('a booted custom master is shut down before cloning', async () => {
+      const simctl = makeStubSimctl();
+      const { manager, shutdownCalls } = makeStubManager();
+      // Custom master is currently Booted
+      manager.getDevice = jest.fn(async (udid: string) => {
+        if (udid === CUSTOM_MASTER) {
+          return {
+            udid: CUSTOM_MASTER,
+            name: 'Pre-Configured Master',
+            state: 'Booted',
+            isAvailable: true,
+            runtime: 'com.apple.CoreSimulator.SimRuntime.iOS-17-0',
+            runtimeVersion: '17.0',
+          };
+        }
+        // Clones default to Booted
+        return {
+          udid,
+          name: 'clone',
+          state: 'Booted',
+          isAvailable: true,
+          runtime: '',
+          runtimeVersion: '',
+        };
+      });
+      const pool = new SimPool({ simctl, manager });
+      pool.setMaster(PRESET, CUSTOM_MASTER);
+
+      await pool.acquire(PRESET);
+
+      expect(shutdownCalls).toContain(CUSTOM_MASTER);
+    });
+  });
 });

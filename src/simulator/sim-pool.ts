@@ -90,6 +90,16 @@ export class SimPool {
   private readonly disableServices: boolean;
   private readonly clones: Map<string, PooledSimulator> = new Map();
   private readonly perPresetLocks: Map<string, AsyncMutex> = new Map();
+  /**
+   * Per-preset override for the master UDID to clone from. When a preset
+   * key is mapped here, `acquire(preset)` will clone that explicit UDID
+   * instead of letting `resolveDevice(preset)` pick the first match.
+   *
+   * Use `setMaster(preset, udid)` to pre-configure a master simulator with
+   * cookies, logins, permissions, or installed apps, and every clone
+   * derived from it will inherit that state (APFS copy-on-write).
+   */
+  private readonly masterOverrides: Map<string, string> = new Map();
 
   constructor(options?: SimPoolOptions) {
     this.simctl = options?.simctl ?? new SimctlExecutor();
@@ -112,11 +122,44 @@ export class SimPool {
   }
 
   /**
+   * Register a specific simulator UDID as the master for a preset. Every
+   * subsequent `acquire(preset)` will clone from this UDID instead of
+   * whichever simulator `resolveDevice(preset)` happens to pick first.
+   *
+   * Use this when you have a pre-configured simulator with cookies,
+   * logins, permissions, or installed apps that every clone should
+   * inherit. Each clone gets an APFS copy-on-write snapshot of the
+   * master's filesystem, so the inherited state is identical.
+   *
+   * Passing `null` clears the override and falls back to preset lookup.
+   */
+  setMaster(preset: string, masterUdid: string | null): void {
+    if (masterUdid === null) {
+      this.masterOverrides.delete(preset);
+    } else {
+      this.masterOverrides.set(preset, masterUdid);
+    }
+  }
+
+  /** Return the registered master UDID for a preset, or null if none. */
+  getMaster(preset: string): string | null {
+    return this.masterOverrides.get(preset) ?? null;
+  }
+
+  /**
    * Acquire a new simulator from the pool by cloning a master of the
    * requested preset. Returns a fully booted `PooledSimulator`. If the
    * maxClones cap would be exceeded, throws a descriptive error.
+   *
+   * Master selection order:
+   *   1. `options.masterUdid` (explicit per-call override)
+   *   2. `setMaster(preset, udid)` (pool-level override)
+   *   3. `SimulatorManager.resolveDevice(preset)` (default preset lookup)
    */
-  async acquire(preset: string, options?: { keepOnRelease?: boolean }): Promise<PooledSimulator> {
+  async acquire(
+    preset: string,
+    options?: { keepOnRelease?: boolean; masterUdid?: string },
+  ): Promise<PooledSimulator> {
     if (this.clones.size >= this.maxClones) {
       throw new Error(
         `SimPool: max clones reached (${this.clones.size}/${this.maxClones}). ` +
@@ -130,7 +173,17 @@ export class SimPool {
     let cloneUdid: string | null = null;
     try {
       // 1. Resolve the master device for the preset.
-      const master = await this.manager.resolveDevice(preset);
+      //    Per-call masterUdid beats pool-level setMaster beats preset lookup.
+      const explicitMaster = options?.masterUdid ?? this.masterOverrides.get(preset);
+      const master = explicitMaster
+        ? await this.manager.getDevice(explicitMaster)
+        : await this.manager.resolveDevice(preset);
+      if (!master) {
+        throw new Error(
+          `SimPool: master UDID "${explicitMaster}" not found. ` +
+            `Use xcrun simctl list devices to verify it exists.`,
+        );
+      }
 
       // 2. simctl clone requires the source to be Shutdown.
       if (master.state === 'Booted') {
