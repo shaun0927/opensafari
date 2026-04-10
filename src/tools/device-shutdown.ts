@@ -2,6 +2,7 @@ import { MCPServer } from '../mcp-server';
 import { SimulatorManager } from '../simulator';
 import { getSharedProxy } from '../simulator/proxy';
 import { getSessionManager } from '../session-manager';
+import { disposeDevice } from './tab-manager';
 
 export function registerDeviceShutdownTool(server: MCPServer): void {
   server.registerTool(
@@ -23,6 +24,14 @@ export function registerDeviceShutdownTool(server: MCPServer): void {
       const deviceId = (params.deviceId as string) ?? sm.getActiveDeviceId() ?? booted[0]?.udid;
       if (!deviceId) {
         return { content: [{ type: 'text' as const, text: 'Error: no booted device found' }], isError: true };
+      }
+
+      // Close any active tab sessions for this device before tearing down
+      // the underlying WebKitClient (#408 Phase 2A)
+      try {
+        await disposeDevice(deviceId);
+      } catch (err) {
+        console.error(`[device_shutdown] Tab session cleanup failed: ${err}`);
       }
 
       // Disconnect and remove the WebKitClient via SessionManager

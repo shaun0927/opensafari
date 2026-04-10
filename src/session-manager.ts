@@ -27,10 +27,25 @@ export interface WorkerInfo {
   error?: string;
 }
 
+/**
+ * A single QA session mapped to an isolated Safari tab within a simulator.
+ * Multiple sessions can target the same simulator but different tabs, enabling
+ * parallel QA without the memory cost of booting multiple simulators.
+ */
+export interface TabSessionInfo {
+  sessionId: string;
+  deviceId: string;
+  targetId: string;
+  url: string;
+  client: BrowserBackend;
+  createdAt: number;
+}
+
 export class SessionManager extends EventEmitter {
   private simulators: Map<string, SimulatorInfo> = new Map();
   private connections: Map<string, BrowserBackend> = new Map();
   private workers: Map<string, WorkerInfo> = new Map();
+  private tabSessions: Map<string, TabSessionInfo> = new Map();
   private activeDeviceId: string | null = null;
 
   // Simulator tracking
@@ -106,6 +121,43 @@ export class SessionManager extends EventEmitter {
     }
   }
 
+  // Tab session management (Phase 2A of #408)
+
+  /**
+   * Register a new tab-scoped QA session. Each session is a Safari tab on a
+   * simulator, addressable by a unique sessionId. Tools can route calls to a
+   * specific session instead of the device's default connection.
+   */
+  addTabSession(info: TabSessionInfo): void {
+    this.tabSessions.set(info.sessionId, info);
+    this.emit('tab-session:added', { sessionId: info.sessionId, deviceId: info.deviceId });
+  }
+
+  /**
+   * Look up a tab session's BrowserBackend by sessionId.
+   */
+  getTabSession(sessionId: string): TabSessionInfo | null {
+    return this.tabSessions.get(sessionId) ?? null;
+  }
+
+  /**
+   * Remove a tab session from the registry. Does NOT close the tab or
+   * disconnect the client — callers must do that first.
+   */
+  removeTabSession(sessionId: string): void {
+    if (this.tabSessions.delete(sessionId)) {
+      this.emit('tab-session:removed', { sessionId });
+    }
+  }
+
+  /**
+   * List all active tab sessions, optionally filtered by deviceId.
+   */
+  listTabSessions(deviceId?: string): TabSessionInfo[] {
+    const all = Array.from(this.tabSessions.values());
+    return deviceId ? all.filter((s) => s.deviceId === deviceId) : all;
+  }
+
   // Worker management (for Phase 2 orchestration)
   createWorker(name: string, deviceId: string): WorkerInfo {
     const worker: WorkerInfo = {
@@ -146,6 +198,14 @@ export class SessionManager extends EventEmitter {
 
   // Cleanup
   async shutdown(): Promise<void> {
+    for (const session of this.tabSessions.values()) {
+      try {
+        await session.client.disconnect();
+      } catch {
+        // Best effort
+      }
+    }
+    this.tabSessions.clear();
     for (const [, client] of this.connections) {
       try {
         await client.disconnect();
