@@ -4,11 +4,17 @@
  * Provides three backends (selected via auto-detection):
  *   1. SimctlInputBackend   — `xcrun simctl io <device> input` (Xcode 15–16)
  *   2. WebKitInputBackend   — JavaScript touch events via WebKit protocol (Xcode 26+, Safari)
- *   3. AppleScriptInputBackend — osascript + CGEvent (fallback, requires window focus)
+ *   3. AppleScriptInputBackend — osascript + CGEvent (opt-in only, requires window focus)
  *
  * On Xcode 26+ where `simctl io input` was removed, the WebKit backend provides
- * focus-free touch injection for Safari web content.  The AppleScript backend is
- * the last resort and requires the Simulator window to be in the foreground.
+ * focus-free touch injection for Safari web content.
+ *
+ * The AppleScript backend is **default-deny**: it is only instantiated when the
+ * caller explicitly opts in via the `OPENSAFARI_ALLOW_FOCUS_INPUT=1` environment
+ * variable. Without the opt-in, `getInputBackend()` throws
+ * `HeadlessInputUnavailableError` with actionable remediation guidance. This
+ * prevents the surprising focus-theft / mouse-movement behavior that motivated
+ * issues #403 and #405.
  */
 
 import { execFile } from 'child_process';
@@ -418,12 +424,61 @@ export class WebKitInputBackend implements InputBackend {
   }
 }
 
+// ── HeadlessInputUnavailableError ────────────────────────────────────────────
+
+/**
+ * Environment variable that opts in to the focus-stealing AppleScript / CGEvent
+ * input backend. When unset (the default), `getInputBackend()` refuses to
+ * instantiate `AppleScriptInputBackend` and throws `HeadlessInputUnavailableError`
+ * instead, preventing silent focus theft.
+ */
+export const OPENSAFARI_ALLOW_FOCUS_INPUT_ENV = 'OPENSAFARI_ALLOW_FOCUS_INPUT';
+
+function isFocusInputAllowed(): boolean {
+  const value = process.env[OPENSAFARI_ALLOW_FOCUS_INPUT_ENV];
+  return value === '1' || value === 'true';
+}
+
+/**
+ * Thrown by `getInputBackend()` when no headless input method is available and
+ * the caller has not opted in to the focus-stealing fallback. The error carries
+ * structured fields so MCP clients can surface actionable remediation to users
+ * without parsing the human-readable message.
+ */
+export class HeadlessInputUnavailableError extends Error {
+  readonly name = 'HeadlessInputUnavailableError' as const;
+  readonly deviceId: string;
+  readonly reason: 'no-simctl' | 'no-webkit' | 'webkit-disconnected';
+  readonly remediation: readonly string[];
+
+  constructor(
+    deviceId: string,
+    reason: HeadlessInputUnavailableError['reason'],
+  ) {
+    const remediation = [
+      "Safari QA: call `set_active_context({ context: 'safari' })` to enable WebKitInputBackend",
+      `Native apps: opt in to the CGEvent fallback by setting ${OPENSAFARI_ALLOW_FOCUS_INPUT_ENV}=1 ` +
+        '(WARNING: will move the mouse cursor and bring Simulator.app to the foreground)',
+    ] as const;
+    const message =
+      `No headless input backend available for device ${deviceId} (reason: ${reason}).\n` +
+      remediation.map((line) => `  - ${line}`).join('\n');
+    super(message);
+    this.deviceId = deviceId;
+    this.reason = reason;
+    this.remediation = remediation;
+    // Preserve prototype chain across the TypeScript down-compile
+    Object.setPrototypeOf(this, HeadlessInputUnavailableError.prototype);
+  }
+}
+
 // ── Backend detection & singleton ────────────────────────────────────────────
 
 let simctlAvailable: boolean | null = null;
 let detectionPromise: Promise<boolean> | null = null;
 let cachedSimctlBackend: SimctlInputBackend | null = null;
 let cachedAppleScriptBackend: AppleScriptInputBackend | null = null;
+let focusInputOptInWarned = false;
 
 /**
  * Probe whether `simctl io input` is available by attempting a no-op tap at (0,0).
@@ -443,17 +498,43 @@ async function probeSimctlInput(deviceId: string): Promise<boolean> {
 }
 
 /**
- * Get the input backend using a 3-tier fallback strategy:
+ * Attempt a single WebKit reconnect for a client that exists but reports
+ * `isConnected() === false`. Returns true if the client is usable after the
+ * attempt. Never throws — transient failures fall through to Tier 3.
+ */
+async function tryReconnectWebKit(client: BrowserBackend): Promise<boolean> {
+  try {
+    await client.connect();
+    return client.isConnected();
+  } catch (err) {
+    console.error(
+      `[input-backend] WebKit reconnect attempt failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return false;
+  }
+}
+
+/**
+ * Get the input backend using a 3-tier fallback strategy with default-deny
+ * hardening for the focus-stealing path:
  *
  *   1. **SimctlInputBackend** — `simctl io input` (headless, any app, Xcode ≤16)
- *   2. **WebKitInputBackend** — JS touch events via WebKit protocol (headless, Safari only)
- *   3. **AppleScriptInputBackend** — CGEvent mouse synthesis (requires Simulator focus)
+ *   2. **WebKitInputBackend** — JS touch events via WebKit protocol (headless,
+ *      Safari only). If the supplied client exists but reports disconnected,
+ *      one reconnect attempt is made before giving up.
+ *   3. **AppleScriptInputBackend** — CGEvent mouse synthesis, requires
+ *      Simulator window focus. **Default-deny**: only instantiated when
+ *      `OPENSAFARI_ALLOW_FOCUS_INPUT=1` (or `true`) is set in the environment.
+ *      Without opt-in, this function throws `HeadlessInputUnavailableError`
+ *      instead of silently stealing focus.
  *
- * The simctl probe result is cached for the process lifetime.
- * WebKit availability is checked on each call (connection state can change).
+ * The simctl probe result is cached for the process lifetime. WebKit
+ * availability is checked on each call (connection state can change).
  *
- * @param deviceId   Simulator UDID
- * @param webkitClient  Optional active WebKit/Safari connection for Tier 2
+ * @param deviceId      Simulator UDID
+ * @param webkitClient  Optional WebKit/Safari connection for Tier 2
+ * @throws {HeadlessInputUnavailableError} When no headless method is available
+ *         and `OPENSAFARI_ALLOW_FOCUS_INPUT` is not set
  */
 export async function getInputBackend(
   deviceId: string,
@@ -478,18 +559,41 @@ export async function getInputBackend(
     return cachedSimctlBackend;
   }
 
-  // Tier 2: WebKit JS touch injection (headless, Safari web content only)
-  if (webkitClient && webkitClient.isConnected()) {
-    return new WebKitInputBackend(webkitClient);
+  // Tier 2: WebKit JS touch injection (headless, Safari web content only).
+  // If the client is present but disconnected, try a one-shot reconnect so
+  // transient drops (proxy restart, tab churn) do not flip us to Tier 3.
+  if (webkitClient) {
+    if (webkitClient.isConnected()) {
+      return new WebKitInputBackend(webkitClient);
+    }
+    const reconnected = await tryReconnectWebKit(webkitClient);
+    if (reconnected) {
+      return new WebKitInputBackend(webkitClient);
+    }
   }
 
-  // Tier 3: AppleScript/CGEvent fallback (requires Simulator window focus)
-  if (!cachedAppleScriptBackend) {
+  // Tier 3: AppleScript/CGEvent fallback — DEFAULT-DENY.
+  // Without explicit opt-in, refuse to return a backend that would move the
+  // mouse cursor or steal Simulator focus. See issue #405.
+  if (!isFocusInputAllowed()) {
+    const reason: HeadlessInputUnavailableError['reason'] = !webkitClient
+      ? 'no-webkit'
+      : 'webkit-disconnected';
+    const err = new HeadlessInputUnavailableError(deviceId, reason);
+    console.error(`[input-backend] ${err.message}`);
+    throw err;
+  }
+
+  if (!focusInputOptInWarned) {
     console.error(
-      '[input-backend] No headless input method available — ' +
-      'using AppleScript/CGEvent fallback (requires Simulator window focus). ' +
-      'Connect to Safari for focus-free operation on Xcode 26+.',
+      `[input-backend] ${OPENSAFARI_ALLOW_FOCUS_INPUT_ENV}=1 is set — ` +
+        'AppleScript/CGEvent backend is enabled. ' +
+        'This will move the physical mouse cursor and activate Simulator.app.',
     );
+    focusInputOptInWarned = true;
+  }
+
+  if (!cachedAppleScriptBackend) {
     cachedAppleScriptBackend = new AppleScriptInputBackend();
   }
   return cachedAppleScriptBackend;
@@ -501,6 +605,7 @@ export function resetInputBackend(): void {
   detectionPromise = null;
   cachedSimctlBackend = null;
   cachedAppleScriptBackend = null;
+  focusInputOptInWarned = false;
 }
 
 // Re-export for convenience
