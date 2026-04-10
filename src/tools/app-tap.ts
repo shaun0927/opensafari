@@ -6,7 +6,7 @@
  * just Safari.
  */
 
-import { MCPServer } from '../mcp-server';
+import { MCPServer, getWebKitClient } from '../mcp-server';
 import { resolveDeviceId, getInputBackend } from './native-input-utils';
 
 export function registerAppTapTool(server: MCPServer): void {
@@ -52,7 +52,7 @@ export function registerAppTapTool(server: MCPServer): void {
           };
         }
 
-        const backend = await getInputBackend(deviceId);
+        const backend = await getInputBackend(deviceId, getWebKitClient(deviceId));
         await backend.tap(deviceId, x, y, duration > 0 ? duration : undefined);
 
         return {

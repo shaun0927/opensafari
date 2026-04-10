@@ -5,7 +5,7 @@
  * via `xcrun simctl io <device> input keypress`.
  */
 
-import { MCPServer } from '../mcp-server';
+import { MCPServer, getWebKitClient } from '../mcp-server';
 import { resolveDeviceId, getInputBackend, KEY_MAP } from './native-input-utils';
 
 export function registerAppKeyInputTool(server: MCPServer): void {
@@ -49,7 +49,7 @@ export function registerAppKeyInputTool(server: MCPServer): void {
           };
         }
 
-        const backend = await getInputBackend(deviceId);
+        const backend = await getInputBackend(deviceId, getWebKitClient(deviceId));
         await backend.keypress(deviceId, keyCode);
 
         return {

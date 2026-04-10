@@ -6,7 +6,7 @@
  * fallback for older Xcode versions).
  */
 
-import { MCPServer } from '../mcp-server';
+import { MCPServer, getWebKitClient } from '../mcp-server';
 import { resolveDeviceId, getInputBackend } from './native-input-utils';
 
 /** Default swipe distance in points. */
@@ -105,7 +105,7 @@ export function registerAppSwipeNativeTool(server: MCPServer): void {
         }
 
         const { endX, endY } = calculateEndpoint(startX, startY, direction, distance);
-        const backend = await getInputBackend(deviceId);
+        const backend = await getInputBackend(deviceId, getWebKitClient(deviceId));
         await backend.swipe(deviceId, startX, startY, endX, endY, duration);
 
         return {

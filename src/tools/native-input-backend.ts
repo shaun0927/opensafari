@@ -1,16 +1,20 @@
 /**
  * NativeInputBackend — Abstraction layer for sending input events to iOS Simulator.
  *
- * Provides two backends:
- *   1. SimctlInputBackend  — uses `xcrun simctl io <device> input` (Xcode 15–16)
- *   2. AppleScriptInputBackend — uses osascript + CGEvent (Xcode 26+)
+ * Provides three backends (selected via auto-detection):
+ *   1. SimctlInputBackend   — `xcrun simctl io <device> input` (Xcode 15–16)
+ *   2. WebKitInputBackend   — JavaScript touch events via WebKit protocol (Xcode 26+, Safari)
+ *   3. AppleScriptInputBackend — osascript + CGEvent (fallback, requires window focus)
  *
- * Auto-detects which backend to use at first invocation and caches the result.
+ * On Xcode 26+ where `simctl io input` was removed, the WebKit backend provides
+ * focus-free touch injection for Safari web content.  The AppleScript backend is
+ * the last resort and requires the Simulator window to be in the foreground.
  */
 
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { SimctlExecutor } from '../simulator/simctl';
+import type { BrowserBackend } from '../types/browser-backend';
 
 const execFileAsync = promisify(execFile);
 
@@ -271,49 +275,233 @@ export class AppleScriptInputBackend implements InputBackend {
   }
 }
 
+// ── WebKitInputBackend ──────────────────────────────────────────────────
+
+/**
+ * HID key-code → standard key name mapping for WebKit `press()`.
+ */
+const HID_TO_WEBKIT_KEY: Record<string, string> = {
+  '40': 'Enter',
+  '41': 'Escape',
+  '42': 'Backspace',
+  '43': 'Tab',
+  '44': 'Space',
+  '74': 'Home',
+  '79': 'ArrowRight',
+  '80': 'ArrowLeft',
+  '81': 'ArrowDown',
+  '82': 'ArrowUp',
+};
+
+/**
+ * Named key → WebKit `press()` key name mapping.
+ */
+const SENDKEY_TO_WEBKIT_KEY: Record<string, string> = {
+  Return: 'Enter',
+  Escape: 'Escape',
+  Tab: 'Tab',
+  Space: 'Space',
+  Delete: 'Backspace',
+  Home: 'Home',
+};
+
+/**
+ * Uses WebKit Remote Debugging Protocol (JavaScript touch events) for input.
+ * Completely focus-free — communicates over a TCP socket, so the Simulator
+ * window does not need to be in the foreground.
+ *
+ * Limitations:
+ *   - Only works when Safari/WebView is connected via WebKit protocol
+ *   - Touch events dispatched via JS have `isTrusted: false`, so native
+ *     scroll is supplemented with an explicit `window.scrollBy()` call
+ */
+export class WebKitInputBackend implements InputBackend {
+  constructor(private client: BrowserBackend) {}
+
+  async tap(_deviceId: string, x: number, y: number, duration?: number): Promise<void> {
+    if (duration && duration > 0) {
+      // Long press via touch events with delay
+      await this.client.evaluate(`
+        (async function(x, y, duration) {
+          var el = document.elementFromPoint(x, y);
+          if (!el) return;
+          var touch = document.createTouch(window, el, 1, x, y, x, y);
+          var touchList = document.createTouchList(touch);
+          el.dispatchEvent(new TouchEvent('touchstart', { touches: touchList, changedTouches: touchList, bubbles: true }));
+          await new Promise(function(r) { setTimeout(r, duration); });
+          var emptyList = document.createTouchList();
+          el.dispatchEvent(new TouchEvent('touchend', { touches: emptyList, changedTouches: touchList, bubbles: true }));
+        })(${x}, ${y}, ${duration * 1000})
+      `);
+    } else {
+      // Normal tap — delegate to BrowserBackend.click() which dispatches
+      // touchstart → touchend → click with emulateUserGesture
+      await this.client.click({ x, y });
+    }
+  }
+
+  async swipe(
+    _deviceId: string,
+    startX: number, startY: number,
+    endX: number, endY: number,
+    duration?: number,
+  ): Promise<void> {
+    const scrollX = startX - endX;
+    const scrollY = startY - endY;
+    const steps = 20;
+    const stepDelay = ((duration ?? 0.5) * 1000) / steps;
+
+    // Two-pronged: window.scrollBy for native scroll + touch events for JS handlers
+    await this.client.evaluate(`
+      (async function(sx, sy, ex, ey, scrollX, scrollY, steps, stepDelay) {
+        window.scrollBy(scrollX, scrollY);
+
+        var el = document.elementFromPoint(sx, sy);
+        if (!el) el = document.body;
+        var makeTouch = function(x, y) { return document.createTouch(window, el, 1, x, y, x, y); };
+        var startTouch = makeTouch(sx, sy);
+        var startList = document.createTouchList(startTouch);
+        el.dispatchEvent(new TouchEvent('touchstart', { touches: startList, changedTouches: startList, bubbles: true }));
+        for (var i = 1; i <= steps; i++) {
+          var x = sx + (ex - sx) * (i / steps);
+          var y = sy + (ey - sy) * (i / steps);
+          var moveTouch = makeTouch(x, y);
+          var moveList = document.createTouchList(moveTouch);
+          el.dispatchEvent(new TouchEvent('touchmove', { touches: moveList, changedTouches: moveList, bubbles: true }));
+          await new Promise(function(r) { setTimeout(r, stepDelay); });
+        }
+        var endTouch = makeTouch(ex, ey);
+        var endList = document.createTouchList(endTouch);
+        var emptyList = document.createTouchList();
+        el.dispatchEvent(new TouchEvent('touchend', { touches: emptyList, changedTouches: endList, bubbles: true }));
+      })(${startX}, ${startY}, ${endX}, ${endY}, ${scrollX}, ${scrollY}, ${steps}, ${stepDelay})
+    `);
+  }
+
+  async typeText(_deviceId: string, text: string): Promise<void> {
+    const escaped = JSON.stringify(text);
+    await this.client.evaluate(`
+      (function() {
+        var el = document.activeElement;
+        if (!el || el === document.body) return;
+        var p = Object.getPrototypeOf(el);
+        while (p && !Object.getOwnPropertyDescriptor(p, 'value')) {
+          p = Object.getPrototypeOf(p);
+        }
+        var desc = p ? Object.getOwnPropertyDescriptor(p, 'value') : null;
+        var cur = (desc && desc.get) ? desc.get.call(el) : (el.value || '');
+        if (desc && desc.set) {
+          desc.set.call(el, cur + ${escaped});
+        } else if ('value' in el) {
+          el.value = cur + ${escaped};
+        }
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+      })()
+    `);
+  }
+
+  async keypress(_deviceId: string, keyCode: string): Promise<void> {
+    const keyName = HID_TO_WEBKIT_KEY[keyCode];
+    if (!keyName) {
+      throw new Error(
+        `Unknown HID key code "${keyCode}" for WebKit backend. ` +
+        `Supported: ${Object.keys(HID_TO_WEBKIT_KEY).join(', ')}`,
+      );
+    }
+    await this.client.press(keyName);
+  }
+
+  async sendKey(_deviceId: string, keyName: string): Promise<void> {
+    const mapped = SENDKEY_TO_WEBKIT_KEY[keyName] ?? keyName;
+    await this.client.press(mapped);
+  }
+}
+
 // ── Backend detection & singleton ────────────────────────────────────────────
 
-let cachedBackend: InputBackend | null = null;
-let detectionPromise: Promise<InputBackend> | null = null;
+let simctlAvailable: boolean | null = null;
+let detectionPromise: Promise<boolean> | null = null;
+let cachedSimctlBackend: SimctlInputBackend | null = null;
+let cachedAppleScriptBackend: AppleScriptInputBackend | null = null;
 
 /**
  * Probe whether `simctl io input` is available by attempting a no-op tap at (0,0).
+ * On Xcode 26+ this subcommand was removed and returns exit code 117.
  */
-async function detectBackend(deviceId: string): Promise<InputBackend> {
+async function probeSimctlInput(deviceId: string): Promise<boolean> {
   const simctl = new SimctlExecutor();
   try {
     await simctl.exec(['io', deviceId, 'input', 'tap', '0', '0'], { timeout: 5000 });
-    return new SimctlInputBackend(simctl);
+    return true;
   } catch {
     console.error(
-      '[input-backend] simctl io input unavailable — using AppleScript/CGEvent fallback',
+      '[input-backend] simctl io input unavailable (likely Xcode 26+ where this subcommand was removed)',
     );
-    return new AppleScriptInputBackend();
+    return false;
   }
 }
 
 /**
- * Get the input backend, auto-detecting on first call.
- * The result is cached for the process lifetime.
+ * Get the input backend using a 3-tier fallback strategy:
+ *
+ *   1. **SimctlInputBackend** — `simctl io input` (headless, any app, Xcode ≤16)
+ *   2. **WebKitInputBackend** — JS touch events via WebKit protocol (headless, Safari only)
+ *   3. **AppleScriptInputBackend** — CGEvent mouse synthesis (requires Simulator focus)
+ *
+ * The simctl probe result is cached for the process lifetime.
+ * WebKit availability is checked on each call (connection state can change).
+ *
+ * @param deviceId   Simulator UDID
+ * @param webkitClient  Optional active WebKit/Safari connection for Tier 2
  */
-export async function getInputBackend(deviceId: string): Promise<InputBackend> {
-  if (cachedBackend) return cachedBackend;
-
-  if (!detectionPromise) {
-    detectionPromise = detectBackend(deviceId).then((backend) => {
-      cachedBackend = backend;
-      return backend;
-    });
+export async function getInputBackend(
+  deviceId: string,
+  webkitClient?: BrowserBackend | null,
+): Promise<InputBackend> {
+  // Probe simctl once and cache the result
+  if (simctlAvailable === null) {
+    if (!detectionPromise) {
+      detectionPromise = probeSimctlInput(deviceId).then((available) => {
+        simctlAvailable = available;
+        return available;
+      });
+    }
+    await detectionPromise;
   }
 
-  return detectionPromise;
+  // Tier 1: simctl io input (headless, works with any app — Xcode ≤16)
+  if (simctlAvailable) {
+    if (!cachedSimctlBackend) {
+      cachedSimctlBackend = new SimctlInputBackend();
+    }
+    return cachedSimctlBackend;
+  }
+
+  // Tier 2: WebKit JS touch injection (headless, Safari web content only)
+  if (webkitClient && webkitClient.isConnected()) {
+    return new WebKitInputBackend(webkitClient);
+  }
+
+  // Tier 3: AppleScript/CGEvent fallback (requires Simulator window focus)
+  if (!cachedAppleScriptBackend) {
+    console.error(
+      '[input-backend] No headless input method available — ' +
+      'using AppleScript/CGEvent fallback (requires Simulator window focus). ' +
+      'Connect to Safari for focus-free operation on Xcode 26+.',
+    );
+    cachedAppleScriptBackend = new AppleScriptInputBackend();
+  }
+  return cachedAppleScriptBackend;
 }
 
-/** Reset the cached backend. Exported for testing only. */
+/** Reset the cached backend state. Exported for testing only. */
 export function resetInputBackend(): void {
-  cachedBackend = null;
+  simctlAvailable = null;
   detectionPromise = null;
+  cachedSimctlBackend = null;
+  cachedAppleScriptBackend = null;
 }
 
 // Re-export for convenience
-export { HID_TO_APPLESCRIPT, SENDKEY_TO_APPLESCRIPT };
+export { HID_TO_APPLESCRIPT, SENDKEY_TO_APPLESCRIPT, HID_TO_WEBKIT_KEY, SENDKEY_TO_WEBKIT_KEY };
