@@ -11,6 +11,8 @@ import {
   WebKitInputBackend,
   getInputBackend,
   resetInputBackend,
+  HeadlessInputUnavailableError,
+  OPENSAFARI_ALLOW_FOCUS_INPUT_ENV,
   HID_TO_APPLESCRIPT,
   SENDKEY_TO_APPLESCRIPT,
   HID_TO_WEBKIT_KEY,
@@ -427,9 +429,20 @@ describe('WebKit key mappings', () => {
 // ── Auto-detection (3-tier fallback) ─────────────────────────────────────
 
 describe('getInputBackend', () => {
+  const originalEnv = process.env[OPENSAFARI_ALLOW_FOCUS_INPUT_ENV];
+
   beforeEach(() => {
     execMock.mockClear();
     resetInputBackend();
+    delete process.env[OPENSAFARI_ALLOW_FOCUS_INPUT_ENV];
+  });
+
+  afterEach(() => {
+    if (originalEnv === undefined) {
+      delete process.env[OPENSAFARI_ALLOW_FOCUS_INPUT_ENV];
+    } else {
+      process.env[OPENSAFARI_ALLOW_FOCUS_INPUT_ENV] = originalEnv;
+    }
   });
 
   test('returns SimctlInputBackend when simctl io input succeeds', async () => {
@@ -456,24 +469,124 @@ describe('getInputBackend', () => {
     expect(backend).toBeInstanceOf(WebKitInputBackend);
   });
 
-  test('returns AppleScriptInputBackend when simctl fails and no webkitClient', async () => {
+  // ── Default-deny behavior (issue #405) ──────────────────────────────────
+
+  test('throws HeadlessInputUnavailableError when simctl fails and no webkitClient', async () => {
     execMock.mockRejectedValueOnce(new Error('not supported'));
+    await expect(getInputBackend(DEVICE)).rejects.toBeInstanceOf(
+      HeadlessInputUnavailableError,
+    );
+  });
+
+  test('throws HeadlessInputUnavailableError when webkitClient is null', async () => {
+    execMock.mockRejectedValueOnce(new Error('not supported'));
+    await expect(getInputBackend(DEVICE, null)).rejects.toBeInstanceOf(
+      HeadlessInputUnavailableError,
+    );
+  });
+
+  test('throws HeadlessInputUnavailableError reason=no-webkit when no client is supplied', async () => {
+    execMock.mockRejectedValueOnce(new Error('not supported'));
+    try {
+      await getInputBackend(DEVICE);
+      fail('expected HeadlessInputUnavailableError');
+    } catch (err) {
+      expect(err).toBeInstanceOf(HeadlessInputUnavailableError);
+      const hErr = err as HeadlessInputUnavailableError;
+      expect(hErr.reason).toBe('no-webkit');
+      expect(hErr.deviceId).toBe(DEVICE);
+    }
+  });
+
+  test('thrown error message includes both remediation options', async () => {
+    execMock.mockRejectedValueOnce(new Error('not supported'));
+    try {
+      await getInputBackend(DEVICE);
+      fail('expected HeadlessInputUnavailableError');
+    } catch (err) {
+      const hErr = err as HeadlessInputUnavailableError;
+      expect(hErr.message).toContain("set_active_context({ context: 'safari' })");
+      expect(hErr.message).toContain('OPENSAFARI_ALLOW_FOCUS_INPUT=1');
+      expect(hErr.remediation).toHaveLength(2);
+    }
+  });
+
+  // ── WebKit reconnect retry (issue #405) ─────────────────────────────────
+
+  test('attempts a one-shot WebKit reconnect when client is disconnected', async () => {
+    execMock.mockRejectedValueOnce(new Error('not supported'));
+    const isConnected = jest
+      .fn()
+      .mockReturnValueOnce(false) // initial check
+      .mockReturnValueOnce(true); // after reconnect succeeds
+    const connect = jest.fn().mockResolvedValue(undefined);
+    const mockClient = { isConnected, connect } as any;
+
+    const backend = await getInputBackend(DEVICE, mockClient);
+    expect(connect).toHaveBeenCalledTimes(1);
+    expect(backend).toBeInstanceOf(WebKitInputBackend);
+  });
+
+  test('falls through to strict guard when WebKit reconnect fails', async () => {
+    execMock.mockRejectedValueOnce(new Error('not supported'));
+    const isConnected = jest.fn().mockReturnValue(false);
+    const connect = jest.fn().mockRejectedValue(new Error('proxy dead'));
+    const mockClient = { isConnected, connect } as any;
+
+    await expect(getInputBackend(DEVICE, mockClient)).rejects.toBeInstanceOf(
+      HeadlessInputUnavailableError,
+    );
+    expect(connect).toHaveBeenCalledTimes(1);
+  });
+
+  test('reconnect error reason is webkit-disconnected', async () => {
+    execMock.mockRejectedValueOnce(new Error('not supported'));
+    const mockClient = {
+      isConnected: jest.fn().mockReturnValue(false),
+      connect: jest.fn().mockRejectedValue(new Error('proxy dead')),
+    } as any;
+    try {
+      await getInputBackend(DEVICE, mockClient);
+      fail('expected HeadlessInputUnavailableError');
+    } catch (err) {
+      expect((err as HeadlessInputUnavailableError).reason).toBe(
+        'webkit-disconnected',
+      );
+    }
+  });
+
+  // ── Env var opt-in (issue #405) ─────────────────────────────────────────
+
+  test('returns AppleScriptInputBackend when OPENSAFARI_ALLOW_FOCUS_INPUT=1', async () => {
+    execMock.mockRejectedValueOnce(new Error('not supported'));
+    process.env[OPENSAFARI_ALLOW_FOCUS_INPUT_ENV] = '1';
     const backend = await getInputBackend(DEVICE);
     expect(backend).toBeInstanceOf(AppleScriptInputBackend);
   });
 
-  test('returns AppleScriptInputBackend when webkitClient is disconnected', async () => {
+  test('returns AppleScriptInputBackend when OPENSAFARI_ALLOW_FOCUS_INPUT=true', async () => {
     execMock.mockRejectedValueOnce(new Error('not supported'));
-    const mockClient = { isConnected: () => false } as any;
-    const backend = await getInputBackend(DEVICE, mockClient);
+    process.env[OPENSAFARI_ALLOW_FOCUS_INPUT_ENV] = 'true';
+    const backend = await getInputBackend(DEVICE);
     expect(backend).toBeInstanceOf(AppleScriptInputBackend);
   });
 
-  test('returns AppleScriptInputBackend when webkitClient is null', async () => {
+  test('ignores opt-in values other than "1" or "true"', async () => {
     execMock.mockRejectedValueOnce(new Error('not supported'));
+    process.env[OPENSAFARI_ALLOW_FOCUS_INPUT_ENV] = 'yes';
+    await expect(getInputBackend(DEVICE)).rejects.toBeInstanceOf(
+      HeadlessInputUnavailableError,
+    );
+  });
+
+  test('opt-in also works when webkitClient is null', async () => {
+    execMock.mockRejectedValueOnce(new Error('not supported'));
+    process.env[OPENSAFARI_ALLOW_FOCUS_INPUT_ENV] = '1';
     const backend = await getInputBackend(DEVICE, null);
     expect(backend).toBeInstanceOf(AppleScriptInputBackend);
   });
+
+  // ── Caching / identity ──────────────────────────────────────────────────
 
   test('caches the simctl detection result', async () => {
     execMock.mockResolvedValueOnce('');

@@ -9,7 +9,12 @@ import { getSessionManager } from '../session-manager';
 import { SimctlExecutor } from '../simulator/simctl';
 
 // Re-export input backend for tool files
-export { getInputBackend, resetInputBackend } from './native-input-backend';
+export {
+  getInputBackend,
+  resetInputBackend,
+  HeadlessInputUnavailableError,
+  OPENSAFARI_ALLOW_FOCUS_INPUT_ENV,
+} from './native-input-backend';
 export type { InputBackend } from './native-input-backend';
 
 /**
