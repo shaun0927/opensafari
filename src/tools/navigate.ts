@@ -1,5 +1,6 @@
-import { MCPServer, getWebKitClient } from '../mcp-server';
+import { MCPServer } from '../mcp-server';
 import { assertDomainAllowed } from '../security/domain-guard';
+import { resolveClient, sessionNotFoundError, noClientError } from './client-resolver';
 
 export function registerNavigateTool(server: MCPServer): void {
   server.registerTool(
@@ -15,6 +16,14 @@ export function registerNavigateTool(server: MCPServer): void {
             enum: ['load', 'domcontentloaded', 'networkidle'],
             description: 'Wait strategy',
           },
+          sessionId: {
+            type: 'string',
+            description: 'Optional QA session id from qa_session_create. Routes the call to that specific Safari tab.',
+          },
+          deviceId: {
+            type: 'string',
+            description: 'Optional simulator UDID. Ignored when sessionId is provided.',
+          },
         },
         required: ['url'],
       },
@@ -22,10 +31,16 @@ export function registerNavigateTool(server: MCPServer): void {
     async (_sessionId: string, params: Record<string, unknown>) => {
       const url = params.url as string;
       assertDomainAllowed(url);
-      const client = getWebKitClient();
-      if (!client)
-        return { content: [{ type: 'text' as const, text: 'Error: Safari not connected' }], isError: true };
-      const result = await client.navigate({ url, waitUntil: params.waitUntil as any });
+
+      const resolved = resolveClient(params);
+      if (resolved.source === 'none' && resolved.sessionId) {
+        return sessionNotFoundError(resolved.sessionId);
+      }
+      if (!resolved.client) {
+        return noClientError();
+      }
+
+      const result = await resolved.client.navigate({ url, waitUntil: params.waitUntil as any });
       return { content: [{ type: 'text' as const, text: JSON.stringify(result) }] };
     },
   );
