@@ -1,5 +1,6 @@
-import { MCPServer, getWebKitClient } from '../mcp-server';
+import { MCPServer } from '../mcp-server';
 import { SimulatorManager } from '../simulator';
+import { resolveClient, sessionNotFoundError, noClientError } from './client-resolver';
 
 export function registerScreenshotTool(server: MCPServer): void {
   server.registerTool(
@@ -11,14 +12,27 @@ export function registerScreenshotTool(server: MCPServer): void {
         properties: {
           format: { type: 'string', enum: ['png'], description: 'Image format' },
           fullPage: { type: 'boolean', description: 'Capture full page' },
+          sessionId: {
+            type: 'string',
+            description: 'Optional QA session id from qa_session_create. Routes the call to that specific Safari tab.',
+          },
+          deviceId: {
+            type: 'string',
+            description: 'Optional simulator UDID. Ignored when sessionId is provided.',
+          },
         },
         required: [],
       },
     },
     async (_sessionId: string, params: Record<string, unknown>) => {
-      const client = getWebKitClient();
-      if (!client)
-        return { content: [{ type: 'text' as const, text: 'Error: Safari not connected' }], isError: true };
+      const resolved = resolveClient(params);
+      if (resolved.source === 'none' && resolved.sessionId) {
+        return sessionNotFoundError(resolved.sessionId);
+      }
+      const client = resolved.client;
+      if (!client) {
+        return noClientError();
+      }
 
       // Try WebKit protocol screenshot first, fall back to simctl
       let buffer: Buffer;
