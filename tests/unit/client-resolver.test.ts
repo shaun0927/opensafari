@@ -13,11 +13,11 @@ jest.mock('../../src/mcp-server', () => {
 
 // Mock session-manager so we can control getTabSession + active device
 const mockGetTabSession = jest.fn();
-const mockGetActiveDeviceId = jest.fn();
+const mockGetSoleDeviceId = jest.fn();
 jest.mock('../../src/session-manager', () => ({
   getSessionManager: () => ({
     getTabSession: mockGetTabSession,
-    getActiveDeviceId: mockGetActiveDeviceId,
+    getSoleDeviceId: mockGetSoleDeviceId,
   }),
 }));
 
@@ -30,7 +30,7 @@ describe('resolveClient', () => {
   beforeEach(() => {
     mockGetWebKitClient.mockReset();
     mockGetTabSession.mockReset();
-    mockGetActiveDeviceId.mockReset().mockReturnValue(null);
+    mockGetSoleDeviceId.mockReset().mockReturnValue(null);
   });
 
   test('returns the session client when sessionId matches', () => {
@@ -93,7 +93,7 @@ describe('resolveClient', () => {
 
   test('carries the active device id in the fallback result when one exists', () => {
     mockGetWebKitClient.mockReturnValue(fakeDeviceClient);
-    mockGetActiveDeviceId.mockReturnValue('active-dev');
+    mockGetSoleDeviceId.mockReturnValue('active-dev');
 
     const result = resolveClient({});
 

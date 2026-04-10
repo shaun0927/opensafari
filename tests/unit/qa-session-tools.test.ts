@@ -25,7 +25,7 @@ jest.mock('../../src/mcp-server', () => {
 
 jest.mock('../../src/session-manager', () => ({
   getSessionManager: () => ({
-    getActiveDeviceId: () => 'ACTIVE-DEVICE',
+    getSoleDeviceId: () => 'ACTIVE-DEVICE',
   }),
 }));
 
