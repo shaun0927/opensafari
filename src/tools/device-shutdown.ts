@@ -1,6 +1,6 @@
 import { MCPServer } from '../mcp-server';
 import { SimulatorManager } from '../simulator';
-import { getSharedProxy } from '../simulator/proxy';
+import { stopProxyForDevice } from '../simulator/proxy-manager';
 import { getSessionManager } from '../session-manager';
 import { disposeDevice } from './tab-manager';
 
@@ -48,16 +48,14 @@ export function registerDeviceShutdownTool(server: MCPServer): void {
       // Remove simulator from SessionManager (also clears connection, updates active device)
       sm.removeSimulator(deviceId);
 
-      // Stop the WebInspector proxy if no more connections remain
-      const proxy = getSharedProxy();
+      // Stop this device's dedicated WebInspector proxy (other devices'
+      // proxies are untouched). #408 Phase 2B.1
       let proxyStopped = false;
-      if (proxy.running && sm.listConnections().length === 0) {
-        try {
-          await proxy.stop();
-          proxyStopped = true;
-        } catch (err) {
-          console.error(`[device_shutdown] Failed to stop proxy: ${err}`);
-        }
+      try {
+        await stopProxyForDevice(deviceId);
+        proxyStopped = true;
+      } catch (err) {
+        console.error(`[device_shutdown] Failed to stop proxy for ${deviceId}: ${err}`);
       }
 
       await manager.shutdown(deviceId);
