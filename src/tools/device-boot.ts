@@ -31,7 +31,7 @@ export function registerDeviceBootTool(server: MCPServer): void {
       let proxyStatus: { running: boolean; pid: number | null } = { running: false, pid: null };
       try {
         const proxy = getSharedProxy();
-        await proxy.start();
+        await proxy.start({ targetUdid: device.udid });
         proxyStatus = { running: proxy.running, pid: proxy.pid };
 
         // Open Safari so it registers with WebInspector, then connect WebKitClient
