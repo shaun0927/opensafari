@@ -1,10 +1,13 @@
 import { MCPServer } from '../mcp-server';
 import { SimulatorManager } from '../simulator';
+import { SimctlExecutor } from '../simulator/simctl';
 import { getSharedProxy } from '../simulator/proxy';
 import { WebKitClient } from '../webkit/client';
 import { addManagedDevice } from '../reliability/zombie-cleanup';
 import { getSessionManager } from '../session-manager';
 import { DEVICE_PRESETS } from '../simulator/presets';
+import { disableBackgroundServices } from '../simulator/post-boot-optimize';
+import { DEFAULT_MAX_SIMULATORS } from '../config/defaults';
 
 export function registerDeviceBootTool(server: MCPServer): void {
   server.registerTool(
@@ -21,11 +24,41 @@ export function registerDeviceBootTool(server: MCPServer): void {
     },
     async (_sessionId: string, params: Record<string, unknown>) => {
       const manager = new SimulatorManager();
+
+      // Enforce max-simulator concurrency limit before attempting boot
+      const maxSims = parseInt(process.env.OPENSAFARI_MAX_SIMULATORS ?? '', 10) || DEFAULT_MAX_SIMULATORS;
+      const booted = await manager.listBooted();
+      const alreadyBooted = booted.some(
+        (d) => d.name === (params.device as string) || d.udid === (params.device as string),
+      );
+      if (!alreadyBooted && booted.length >= maxSims) {
+        return {
+          content: [{
+            type: 'text' as const,
+            text: JSON.stringify({
+              error: 'MAX_SIMULATORS_REACHED',
+              message: `Cannot boot another simulator: ${booted.length}/${maxSims} already running. ` +
+                `Set OPENSAFARI_MAX_SIMULATORS to increase the limit, or shut down an existing device.`,
+              running: booted.map((d) => ({ udid: d.udid, name: d.name })),
+            }),
+          }],
+          isError: true,
+        };
+      }
+
       const device = await manager.boot(params.device as string);
 
       // Register the booted device in the shared zombie cleanup registry so
       // other MCP sessions' periodic cleanup won't shut it down as an orphan.
       addManagedDevice(device.udid);
+
+      // Disable unnecessary background services to reduce RAM usage (~400-800 MB savings)
+      try {
+        const simctl = new SimctlExecutor();
+        await disableBackgroundServices(simctl, device.udid);
+      } catch (err) {
+        console.error(`[device_boot] Post-boot optimization failed (non-fatal): ${err}`);
+      }
 
       // Auto-start the WebInspector proxy so WebKit debugging is available
       let proxyStatus: { running: boolean; pid: number | null } = { running: false, pid: null };
