@@ -83,6 +83,13 @@ describe('flutter_toggle_debug_paint', () => {
     expect(result.isError).toBe(true);
   });
 
+  it('rejects dilation_factor above upper bound (> 1000)', async () => {
+    const result = await handler('s', { mode: 'time_dilation', dilation_factor: 5000 });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('<= 1000');
+    expect(mockCallServiceExtension).not.toHaveBeenCalled();
+  });
+
   it('rejects missing enable flag for size/baseline/repaint_rainbow', async () => {
     const result = await handler('s', { mode: 'size' });
     expect(result.isError).toBe(true);
@@ -103,6 +110,35 @@ describe('flutter_toggle_debug_paint', () => {
     const timeDilationCall = mockCallServiceExtension.mock.calls.find((c) => c[0] === 'timeDilation');
     expect(timeDilationCall?.[1]).toEqual({ timeDilation: '1.0' });
     expect(body.applied).toHaveLength(4);
+    expect(body.status).toBe('ok');
+    expect(body.failures).toBeUndefined();
+    expect(body.applied.every((a: { ok: boolean }) => a.ok === true)).toBe(true);
+  });
+
+  it('all_off tolerates partial failure and reports status="partial" with per-extension errors', async () => {
+    // Third call (repaintRainbow) rejects; the other three must still execute
+    // and the tool must return status: "partial" with one ok:false entry.
+    let call = 0;
+    mockCallServiceExtension.mockImplementation(async () => {
+      call += 1;
+      if (call === 3) throw new Error('extension not registered');
+      return {};
+    });
+
+    const result = await handler('s', { mode: 'all_off' });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(result.isError).toBeUndefined();
+    expect(body.status).toBe('partial');
+    expect(body.failures).toBe(1);
+    expect(body.applied).toHaveLength(4);
+
+    const ok = body.applied.filter((a: { ok: boolean }) => a.ok);
+    const failed = body.applied.filter((a: { ok: boolean }) => !a.ok);
+    expect(ok).toHaveLength(3);
+    expect(failed).toHaveLength(1);
+    expect(failed[0].extension).toBe('ext.flutter.repaintRainbow');
+    expect(failed[0].error).toContain('extension not registered');
   });
 
   it('errors when not connected', async () => {

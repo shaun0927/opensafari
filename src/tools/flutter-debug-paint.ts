@@ -85,28 +85,46 @@ export function registerFlutterDebugPaintTool(server: MCPServer): void {
           throw new Error('Not connected to Flutter VM Service. Run flutter_connect first.');
         }
 
-        const results: Array<{ extension: string; params: Record<string, unknown> }> = [];
+        type Applied = { extension: string; params: Record<string, unknown>; ok: true };
+        type Failure = { extension: string; params: Record<string, unknown>; ok: false; error: string };
+        const applied: Array<Applied | Failure> = [];
 
         if (mode === 'all_off') {
-          // Reset every flag we know about.
-          await client.callServiceExtension('debugPaint', { enabled: 'false' });
-          results.push({ extension: 'ext.flutter.debugPaint', params: { enabled: 'false' } });
+          // Reset every known flag. Use Promise.allSettled so one broken
+          // extension does not leave the app in a half-toggled state —
+          // the caller sees exactly which resets succeeded.
+          const resets: Array<{ ext: string; payload: Record<string, unknown> }> = [
+            { ext: 'debugPaint',                 payload: { enabled: 'false' } },
+            { ext: 'debugPaintBaselinesEnabled', payload: { enabled: 'false' } },
+            { ext: 'repaintRainbow',             payload: { enabled: 'false' } },
+            { ext: 'timeDilation',               payload: { timeDilation: '1.0' } },
+          ];
 
-          await client.callServiceExtension('debugPaintBaselinesEnabled', { enabled: 'false' });
-          results.push({ extension: 'ext.flutter.debugPaintBaselinesEnabled', params: { enabled: 'false' } });
+          const settled = await Promise.allSettled(
+            resets.map((r) => client.callServiceExtension(r.ext, r.payload)),
+          );
 
-          await client.callServiceExtension('repaintRainbow', { enabled: 'false' });
-          results.push({ extension: 'ext.flutter.repaintRainbow', params: { enabled: 'false' } });
-
-          await client.callServiceExtension('timeDilation', { timeDilation: '1.0' });
-          results.push({ extension: 'ext.flutter.timeDilation', params: { timeDilation: '1.0' } });
+          settled.forEach((s, idx) => {
+            const { ext, payload } = resets[idx];
+            if (s.status === 'fulfilled') {
+              applied.push({ extension: `ext.flutter.${ext}`, params: payload, ok: true });
+            } else {
+              const message = s.reason instanceof Error ? s.reason.message : String(s.reason);
+              applied.push({ extension: `ext.flutter.${ext}`, params: payload, ok: false, error: message });
+            }
+          });
         } else if (mode === 'time_dilation') {
           const factor = params.dilation_factor;
           if (typeof factor !== 'number' || !Number.isFinite(factor) || factor <= 0) {
             throw new Error('dilation_factor must be a positive number (1.0 = normal)');
           }
+          if (factor > 1000) {
+            // Upper bound: very large dilation effectively freezes animations
+            // and makes the UI unusable without benefit.
+            throw new Error('dilation_factor must be <= 1000 (larger values freeze the UI)');
+          }
           await client.callServiceExtension('timeDilation', { timeDilation: String(factor) });
-          results.push({ extension: 'ext.flutter.timeDilation', params: { timeDilation: String(factor) } });
+          applied.push({ extension: 'ext.flutter.timeDilation', params: { timeDilation: String(factor) }, ok: true });
         } else {
           const enable = params.enable;
           if (typeof enable !== 'boolean') {
@@ -115,16 +133,19 @@ export function registerFlutterDebugPaintTool(server: MCPServer): void {
           const extensionName = MODE_TO_EXTENSION[mode];
           const payload = { enabled: enable ? 'true' : 'false' };
           await client.callServiceExtension(extensionName, payload);
-          results.push({ extension: `ext.flutter.${extensionName}`, params: payload });
+          applied.push({ extension: `ext.flutter.${extensionName}`, params: payload, ok: true });
         }
+
+        const failures = applied.filter((a): a is Failure => a.ok === false);
 
         return {
           content: [{
             type: 'text' as const,
             text: JSON.stringify({
-              status: 'ok',
+              status: failures.length === 0 ? 'ok' : 'partial',
               mode,
-              applied: results,
+              applied,
+              failures: failures.length === 0 ? undefined : failures.length,
               deviceId,
               hint: 'Call app_screenshot_native to capture the updated overlay, then all_off to restore.',
             }, null, 2),
