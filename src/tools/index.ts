@@ -88,6 +88,7 @@ import { registerFlutterWidgetTreeTool } from './flutter-widget-tree';
 import { registerFlutterHotReloadTool } from './flutter-hot-reload';
 import { registerFlutterLogsTool } from './flutter-logs';
 import { registerFlutterNetworkTool } from './flutter-network';
+import { registerAppTapElementTool } from './app-tap-element';
 
 export { setWorkflowEngine } from './orchestration-tools';
 export { setBarrier } from './barrier-tools';
@@ -245,4 +246,7 @@ export function registerAllTools(server: MCPServer): void {
 
   // Tier 2: Flutter Network Monitoring
   registerFlutterNetworkTool(server);
+
+  // Tier 2: Native App — Semantic Interaction (Flutter-compatible)
+  registerAppTapElementTool(server);
 }
