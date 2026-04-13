@@ -114,6 +114,9 @@ export const TOOL_TIERS: Record<string, number> = {
   // Tier 2: Flutter Build Mode Detector (issue #442)
   flutter_build_mode: 2,
 
+  // Tier 2: Flutter Debug Paint Overlays (issue #437)
+  flutter_toggle_debug_paint: 2,
+
   // Tier 2: Native App — Semantic Interaction (Flutter-compatible)
   app_tap_element: 2,
   // Tier 2: Native App — Semantic Wait & Assert (Flutter-compatible)
