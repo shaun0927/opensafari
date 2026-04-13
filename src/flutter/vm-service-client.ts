@@ -220,6 +220,67 @@ export class FlutterVMClient {
     });
   }
 
+  // ── Expression Evaluation (issue #434) ──────────────────────────────────
+
+  /**
+   * Evaluate a Dart expression against the main isolate's root library.
+   *
+   * Parameters:
+   *   expression — any Dart expression (e.g. "1 + 1", "DateTime.now()")
+   *   options.isolateId — override the main isolate (optional)
+   *   options.targetId — override the root-library target (optional)
+   *
+   * Returns the raw `@Instance` / `@Error` / `Sentinel` result from the VM.
+   */
+  async evaluate(
+    expression: string,
+    options?: { isolateId?: string; targetId?: string },
+  ): Promise<Record<string, unknown>> {
+    const isolateId = options?.isolateId ?? this.state?.mainIsolateId;
+    if (!isolateId) {
+      throw new FlutterVMError('No main isolate found', 'NO_ISOLATE');
+    }
+
+    let targetId = options?.targetId;
+    if (!targetId) {
+      const isolate = await this.callMethod('getIsolate', { isolateId });
+      const rootLib = (isolate as { rootLib?: { id?: string } }).rootLib;
+      if (!rootLib?.id) {
+        throw new FlutterVMError(
+          'Cannot evaluate: isolate has no rootLib (is the app fully initialised?)',
+          'NO_ROOT_LIB',
+        );
+      }
+      targetId = rootLib.id;
+    }
+
+    return this.callMethod('evaluate', {
+      isolateId,
+      targetId,
+      expression,
+    });
+  }
+
+  /**
+   * Evaluate a Dart expression inside a specific stack frame. Only meaningful
+   * while the isolate is paused at a breakpoint (future work — issue #435).
+   */
+  async evaluateInFrame(
+    frameIndex: number,
+    expression: string,
+    options?: { isolateId?: string },
+  ): Promise<Record<string, unknown>> {
+    const isolateId = options?.isolateId ?? this.state?.mainIsolateId;
+    if (!isolateId) {
+      throw new FlutterVMError('No main isolate found', 'NO_ISOLATE');
+    }
+    return this.callMethod('evaluateInFrame', {
+      isolateId,
+      frameIndex,
+      expression,
+    });
+  }
+
   // ── Event Streaming ─────────────────────────────────────────────────────
 
   /** Subscribe to a VM Service event stream */
