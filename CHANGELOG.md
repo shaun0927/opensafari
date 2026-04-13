@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.1] - 2026-04-13
+
+### Security / Behavior change
+
+- **Default-deny AppleScript/CGEvent input backend** (#405): The focus-stealing `AppleScriptInputBackend` is no longer instantiated automatically on Xcode 26+. When no headless input method is available, `getInputBackend()` throws `HeadlessInputUnavailableError` with actionable remediation guidance instead of silently moving the physical mouse cursor and activating `Simulator.app`.
+  - To re-enable the legacy fallback, set `OPENSAFARI_ALLOW_FOCUS_INPUT=1` in the environment.
+  - All affected tools (`app_tap`, `app_swipe_native`, `app_scroll_native`, `app_double_tap`, `app_type_text`, `app_key_input`) surface the error as a structured MCP tool error.
+  - Tool results now include a `backend` field (`simctl` / `webkit` / `applescript`) for audit/observability.
+
+### Added
+
+- **WebKit reconnect retry**: When a WebKit client exists but reports disconnected, `getInputBackend()` attempts a one-shot reconnect before falling through, reducing false positives from transient proxy/tab drops.
+- **`HeadlessInputUnavailableError`** class with structured fields (`deviceId`, `reason`, `remediation[]`) exported from the public barrel for typed error handling by MCP clients.
+
+## [0.3.0] - 2026-04-13
+
+### Added
+
+- **Flutter app QA automation**: 12 new MCP tools for automating and testing Flutter apps on iOS Simulator, including Dart VM Service bridge, widget tree inspection, hot reload, and network traffic capture.
+- **Semantic element targeting**: `app_tap_element`, `app_wait_for`, `app_assert_element` — interact with UI elements by label/identifier instead of fragile x,y coordinates.
+- **Flutter QA detectors**: Automated checks for tap target sizes (`qa_flutter_touch_targets`), accessibility coverage (`qa_flutter_semantics`), and dark mode rendering (`qa_flutter_dark_mode`).
+- **Flutter network monitoring**: HTTP proxy-based traffic capture for any app including Flutter.
+
 ## [0.2.1] - 2026-04-05
 
 ### Added
