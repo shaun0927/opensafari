@@ -83,6 +83,10 @@ import { registerAppPermissionTools } from './app-permission';
 import { registerQaFlutterTouchTargetsTool } from './qa-flutter-touch-targets';
 import { registerQaFlutterSemanticsTool } from './qa-flutter-semantics';
 import { registerQaFlutterDarkModeTool } from './qa-flutter-dark-mode';
+import { registerFlutterConnectTool } from './flutter-connect';
+import { registerFlutterWidgetTreeTool } from './flutter-widget-tree';
+import { registerFlutterHotReloadTool } from './flutter-hot-reload';
+import { registerFlutterLogsTool } from './flutter-logs';
 
 export { setWorkflowEngine } from './orchestration-tools';
 export { setBarrier } from './barrier-tools';
@@ -231,4 +235,10 @@ export function registerAllTools(server: MCPServer): void {
   registerQaFlutterTouchTargetsTool(server);
   registerQaFlutterSemanticsTool(server);
   registerQaFlutterDarkModeTool(server);
+
+  // Tier 2: Flutter VM Service (debug/profile builds only)
+  registerFlutterConnectTool(server);
+  registerFlutterWidgetTreeTool(server);
+  registerFlutterHotReloadTool(server);
+  registerFlutterLogsTool(server);
 }
