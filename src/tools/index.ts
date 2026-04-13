@@ -80,6 +80,9 @@ import { registerAppAssertTool } from './app-assert';
 import { registerAppWebviewConnectTool } from './app-webview-connect';
 import { registerSetActiveContextTool } from './set-active-context';
 import { registerAppPermissionTools } from './app-permission';
+import { registerQaFlutterTouchTargetsTool } from './qa-flutter-touch-targets';
+import { registerQaFlutterSemanticsTool } from './qa-flutter-semantics';
+import { registerQaFlutterDarkModeTool } from './qa-flutter-dark-mode';
 
 export { setWorkflowEngine } from './orchestration-tools';
 export { setBarrier } from './barrier-tools';
@@ -223,4 +226,9 @@ export function registerAllTools(server: MCPServer): void {
   registerSetActiveContextTool(server);
   // Tier 2: Native App — System Surfaces
   registerAppPermissionTools(server);
+
+  // Tier 2: Flutter QA Detectors
+  registerQaFlutterTouchTargetsTool(server);
+  registerQaFlutterSemanticsTool(server);
+  registerQaFlutterDarkModeTool(server);
 }
