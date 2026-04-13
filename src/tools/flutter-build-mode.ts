@@ -94,26 +94,35 @@ export async function detectBuildMode(
   }
 
   // Slow path: look for a VM Service URL in the simulator logs.
+  let discoveryError: string | null = null;
   try {
     const url = await discoverVMServiceUrl(deviceId, {
       bundleId: options?.bundleId,
       timeout: options?.timeout ?? 5000,
     });
     if (url) {
+      // Discovery tells us VM Service is live but not whether it is debug
+      // or profile — `ext.flutter.reassemble` is the authoritative signal
+      // and is only observable via a live WebSocket connection. Leave the
+      // mode as "unknown" so callers know to run flutter_connect for an
+      // exact answer.
       return {
-        mode: 'debug', // conservative — could also be profile, prefer debug until connected
+        mode: 'unknown',
         vmServiceAvailable: true,
-        details: `VM Service URL discovered in logs: ${url}`,
+        details: `VM Service URL discovered in logs (${url}); run flutter_connect to distinguish debug vs profile.`,
       };
     }
-  } catch {
-    // fall through to release heuristic
+  } catch (err) {
+    discoveryError = err instanceof Error ? err.message : String(err);
+    console.error(`[flutter_build_mode] discovery error: ${discoveryError}`);
   }
 
   return {
     mode: 'release',
     vmServiceAvailable: false,
-    details: 'No VM Service URL in recent logs — likely release build or app not running.',
+    details: discoveryError
+      ? `Log search failed (${discoveryError}) — reporting release as a fallback, but this may be transient.`
+      : 'No VM Service URL in recent logs — likely release build or app not running.',
   };
 }
 

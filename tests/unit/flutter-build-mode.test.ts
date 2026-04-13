@@ -96,16 +96,31 @@ describe('flutter_build_mode', () => {
     expect(body.capabilities.network_proxy).toBe(true);
   });
 
-  it('reports debug mode when a VM Service URL is discoverable but no client connected yet', async () => {
+  it('reports unknown mode when a VM Service URL is discoverable but no client connected yet', async () => {
     mockIsConnected.mockReturnValue(false);
     mockDiscoverVMServiceUrl.mockResolvedValue('http://127.0.0.1:55555/abc=/');
 
     const result = await handler('s', {});
     const body = JSON.parse(result.content[0].text);
 
-    expect(body.mode).toBe('debug');
+    // URL alone cannot distinguish debug from profile — caller should connect.
+    expect(body.mode).toBe('unknown');
     expect(body.vm_service_available).toBe(true);
     expect(body.details).toContain('127.0.0.1');
+    expect(body.details).toContain('flutter_connect');
+  });
+
+  it('surfaces discovery errors in details and still reports release as fallback', async () => {
+    mockIsConnected.mockReturnValue(false);
+    mockDiscoverVMServiceUrl.mockRejectedValue(new Error('log predicate blew up'));
+
+    const result = await handler('s', {});
+    const body = JSON.parse(result.content[0].text);
+
+    expect(body.mode).toBe('release');
+    expect(body.vm_service_available).toBe(false);
+    expect(body.details).toContain('log predicate blew up');
+    expect(body.details.toLowerCase()).toContain('transient');
   });
 
   it('forwards bundle_id and timeout_ms to discovery', async () => {
