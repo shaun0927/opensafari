@@ -97,6 +97,11 @@ export const TOOL_TIERS: Record<string, number> = {
   compare_devices: 3,
   app_assert: 2,
 
+  // Tier 2: Flutter QA Detectors
+  qa_flutter_touch_targets: 2,
+  qa_flutter_semantics: 2,
+  qa_flutter_dark_mode: 2,
+
   // Tier 2: Hybrid context switching
   app_webview_connect: 2,
   set_active_context: 2,
