@@ -30,7 +30,11 @@ export function registerFlutterEvaluateTool(server: MCPServer): void {
         'Defaults to evaluating against the main isolate\'s root library. ' +
         'Use scope="frame" with a frame_index to evaluate inside a paused stack frame ' +
         '(requires a breakpoint hit; future feature). ' +
-        'Works only on debug / profile builds — run flutter_connect first.',
+        'Works only on debug / profile builds — run flutter_connect first. ' +
+        'SECURITY: this tool executes arbitrary Dart code inside the connected app ' +
+        'process, including access to Process, File, Socket, HttpClient, and Isolate.spawn. ' +
+        'Never pass user- or model-derived input verbatim; treat it as equivalent to ' +
+        'eval() on the developer machine. Every invocation is logged to stderr for audit.',
       inputSchema: {
         type: 'object' as const,
         properties: {
@@ -57,10 +61,16 @@ export function registerFlutterEvaluateTool(server: MCPServer): void {
     },
     async (_sessionId: string, params: Record<string, unknown>) => {
       try {
-        const expression = params.expression as string | undefined;
-        if (!expression || typeof expression !== 'string') {
-          throw new Error('expression is required (string)');
+        const rawExpression = params.expression;
+        if (typeof rawExpression !== 'string' || rawExpression.trim().length === 0) {
+          throw new Error('expression is required (non-empty, non-whitespace string)');
         }
+        const expression = rawExpression;
+
+        // Security audit: log every evaluate call. Truncated to avoid
+        // huge payloads in the transport log.
+        const preview = expression.length > 200 ? `${expression.slice(0, 200)}…` : expression;
+        console.error(`[flutter_evaluate] audit: evaluating expression (len=${expression.length}): ${preview}`);
 
         const scope: EvalScope = (params.scope as EvalScope | undefined) ?? 'root';
         if (scope !== 'root' && scope !== 'frame') {
@@ -128,8 +138,11 @@ export function shapeResult(raw: Record<string, unknown>): Record<string, unknow
   const classRef = (raw['class'] as { name?: string } | undefined)?.name;
   const valueAsString = typeof raw.valueAsString === 'string' ? raw.valueAsString : undefined;
 
-  // Error envelope (kind: "Error" or type: "@Error")
-  if (kind === 'Error' || type === '@Error' || type === 'Error') {
+  // Error envelope: real VM Service @Error envelopes use type: "@Error"
+  // with kind being one of UnhandledException / LanguageError / etc.
+  // The `kind === 'Error'` branch below is defensive against older/custom
+  // shapes and is intentionally not exercised by the VM today.
+  if (type === '@Error' || type === 'Error' || kind === 'Error') {
     return {
       kind: 'Error',
       message: typeof raw.message === 'string' ? raw.message : valueAsString,
@@ -146,8 +159,15 @@ export function shapeResult(raw: Record<string, unknown>): Record<string, unknow
     };
   }
 
-  // Primitive instances carry a valueAsString.
-  if (valueAsString !== undefined && kind && ['Int', 'Double', 'Bool', 'String', 'Null'].includes(kind)) {
+  // Null instances: the VM may or may not populate `valueAsString`.
+  // Guarantee a consistent shape so callers do not have to treat this
+  // specially.
+  if (kind === 'Null') {
+    return { kind: 'Null', classRef, valueAsString: valueAsString ?? 'null' };
+  }
+
+  // Other primitive instances always carry a valueAsString.
+  if (valueAsString !== undefined && kind && ['Int', 'Double', 'Bool', 'String'].includes(kind)) {
     return { kind, classRef, valueAsString };
   }
 

@@ -61,6 +61,29 @@ describe('shapeResult', () => {
     expect(shaped.fields).toEqual(['name', 'age']);
   });
 
+  it('shapes a Null instance with valueAsString', () => {
+    const shaped = shapeResult({
+      type: '@Instance',
+      kind: 'Null',
+      class: { name: 'Null' },
+      valueAsString: 'null',
+    });
+    expect(shaped).toEqual({ kind: 'Null', classRef: 'Null', valueAsString: 'null' });
+  });
+
+  it('shapes a Null instance even without valueAsString', () => {
+    // VM occasionally omits valueAsString for Null; we must still return
+    // a consistent shape with kind: "Null".
+    const shaped = shapeResult({
+      type: '@Instance',
+      kind: 'Null',
+      class: { name: 'Null' },
+    });
+    expect(shaped.kind).toBe('Null');
+    expect(shaped.valueAsString).toBe('null');
+    expect(shaped.fields).toBeUndefined();
+  });
+
   it('shapes a Sentinel', () => {
     const shaped = shapeResult({
       type: 'Sentinel',
@@ -162,6 +185,27 @@ describe('flutter_evaluate handler', () => {
     const result = await handler('s', {});
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain('expression is required');
+  });
+
+  it('rejects whitespace-only expression', async () => {
+    const result = await handler('s', { expression: '   \t\n  ' });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('non-whitespace');
+    expect(mockEvaluate).not.toHaveBeenCalled();
+  });
+
+  it('logs an audit message for every evaluate invocation', async () => {
+    const spy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    mockEvaluate.mockResolvedValue({
+      type: '@Instance', kind: 'Int', class: { name: 'int' }, valueAsString: '42',
+    });
+
+    await handler('s', { expression: 'ref.read(authProvider)' });
+
+    const auditCall = spy.mock.calls.find((c) => String(c[0]).includes('audit'));
+    expect(auditCall).toBeDefined();
+    expect(String(auditCall?.[0])).toContain('ref.read(authProvider)');
+    spy.mockRestore();
   });
 
   it('rejects unknown scope value', async () => {
