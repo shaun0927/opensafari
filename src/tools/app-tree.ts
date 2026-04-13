@@ -1,5 +1,5 @@
 import { MCPServer } from '../mcp-server';
-import { getAccessibilityBridge } from '../native';
+import { getAccessibilityBridge, ensureSemanticsActive } from '../native';
 import { getSessionManager } from '../session-manager';
 
 export function registerAppTreeTool(server: MCPServer): void {
@@ -28,6 +28,12 @@ export function registerAppTreeTool(server: MCPServer): void {
         const maxDepth = params.max_depth as number | undefined;
 
         const bridge = getAccessibilityBridge();
+
+        // Ensure Flutter semantics are activated before reading the tree
+        if (deviceId) {
+          await ensureSemanticsActive(deviceId);
+        }
+
         const tree = await bridge.dumpTree({ deviceId, maxDepth });
 
         return {

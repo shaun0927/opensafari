@@ -1,5 +1,5 @@
 import { MCPServer } from '../mcp-server';
-import { getAccessibilityBridge } from '../native';
+import { getAccessibilityBridge, ensureSemanticsActive } from '../native';
 import { getSessionManager } from '../session-manager';
 
 export function registerAppQueryTool(server: MCPServer): void {
@@ -59,6 +59,12 @@ export function registerAppQueryTool(server: MCPServer): void {
         const maxResults = params.max_results as number | undefined;
 
         const bridge = getAccessibilityBridge();
+
+        // Ensure Flutter semantics are activated before querying
+        if (deviceId) {
+          await ensureSemanticsActive(deviceId);
+        }
+
         const result = await bridge.query(
           { identifier, label, text, role },
           { deviceId, maxResults },
