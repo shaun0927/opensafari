@@ -1,0 +1,11 @@
+export { FlutterVMClient, FlutterVMError, getFlutterVMClient, removeFlutterVMClient } from './vm-service-client';
+export { discoverVMServiceUrl, httpToWsUrl, isValidVMServiceUrl } from './vm-service-discovery';
+export type {
+  FlutterConnectionState,
+  FlutterConnectOptions,
+  VMInfo,
+  VMIsolateRef,
+  VMServiceRequest,
+  VMServiceResponse,
+  VMServiceEvent,
+} from './flutter-types';

@@ -102,6 +102,12 @@ export const TOOL_TIERS: Record<string, number> = {
   qa_flutter_semantics: 2,
   qa_flutter_dark_mode: 2,
 
+  // Tier 2: Flutter VM Service (debug/profile builds only)
+  flutter_connect: 2,
+  flutter_widget_tree: 2,
+  flutter_hot_reload: 2,
+  flutter_logs: 2,
+
   // Tier 2: Hybrid context switching
   app_webview_connect: 2,
   set_active_context: 2,
