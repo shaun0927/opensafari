@@ -87,6 +87,7 @@ import { registerFlutterConnectTool } from './flutter-connect';
 import { registerFlutterWidgetTreeTool } from './flutter-widget-tree';
 import { registerFlutterHotReloadTool } from './flutter-hot-reload';
 import { registerFlutterLogsTool } from './flutter-logs';
+import { registerFlutterNetworkTool } from './flutter-network';
 
 export { setWorkflowEngine } from './orchestration-tools';
 export { setBarrier } from './barrier-tools';
@@ -241,4 +242,7 @@ export function registerAllTools(server: MCPServer): void {
   registerFlutterWidgetTreeTool(server);
   registerFlutterHotReloadTool(server);
   registerFlutterLogsTool(server);
+
+  // Tier 2: Flutter Network Monitoring
+  registerFlutterNetworkTool(server);
 }
