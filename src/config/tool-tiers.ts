@@ -111,6 +111,9 @@ export const TOOL_TIERS: Record<string, number> = {
   // Tier 2: Flutter Network Monitoring
   flutter_network: 2,
 
+  // Tier 2: Native App — Semantic Interaction (Flutter-compatible)
+  app_tap_element: 2,
+
   // Tier 2: Hybrid context switching
   app_webview_connect: 2,
   set_active_context: 2,
