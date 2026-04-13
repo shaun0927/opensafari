@@ -50,12 +50,10 @@ describe('vm-service-discovery', () => {
 
 describe('FlutterVMClient', () => {
   let FlutterVMClient: typeof import('../../src/flutter/vm-service-client').FlutterVMClient;
-  let FlutterVMError: typeof import('../../src/flutter/vm-service-client').FlutterVMError;
 
   beforeAll(async () => {
     const mod = await import('../../src/flutter/vm-service-client');
     FlutterVMClient = mod.FlutterVMClient;
-    FlutterVMError = mod.FlutterVMError;
   });
 
   it('starts disconnected', () => {
@@ -104,6 +102,7 @@ describe('FlutterVMClient', () => {
 
 describe('FlutterVMError', () => {
   it('has correct name and code', () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { FlutterVMError } = require('../../src/flutter/vm-service-client');
     const err = new FlutterVMError('test error', 'TEST_CODE');
     expect(err.name).toBe('FlutterVMError');
@@ -131,24 +130,28 @@ describe('Flutter tool registration', () => {
   });
 
   it('registers flutter_connect', () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { registerFlutterConnectTool } = require('../../src/tools/flutter-connect');
     registerFlutterConnectTool(mockServer);
     expect(mockServer.registerTool).toHaveBeenCalledTimes(1);
   });
 
   it('registers flutter_widget_tree', () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { registerFlutterWidgetTreeTool } = require('../../src/tools/flutter-widget-tree');
     registerFlutterWidgetTreeTool(mockServer);
     expect(mockServer.registerTool).toHaveBeenCalledTimes(1);
   });
 
   it('registers flutter_hot_reload', () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { registerFlutterHotReloadTool } = require('../../src/tools/flutter-hot-reload');
     registerFlutterHotReloadTool(mockServer);
     expect(mockServer.registerTool).toHaveBeenCalledTimes(1);
   });
 
   it('registers flutter_logs', () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { registerFlutterLogsTool } = require('../../src/tools/flutter-logs');
     registerFlutterLogsTool(mockServer);
     expect(mockServer.registerTool).toHaveBeenCalledTimes(1);
@@ -180,6 +183,7 @@ describe('flutter_widget_tree handler', () => {
 
   beforeAll(() => {
     const server = { registerTool: jest.fn() };
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { registerFlutterWidgetTreeTool } = require('../../src/tools/flutter-widget-tree');
     registerFlutterWidgetTreeTool(server);
     handler = server.registerTool.mock.calls[0][1];
@@ -223,6 +227,7 @@ describe('flutter_hot_reload handler', () => {
 
   beforeAll(() => {
     const server = { registerTool: jest.fn() };
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { registerFlutterHotReloadTool } = require('../../src/tools/flutter-hot-reload');
     registerFlutterHotReloadTool(server);
     handler = server.registerTool.mock.calls[0][1];

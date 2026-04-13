@@ -4,8 +4,6 @@ export type {
   FlutterConnectionState,
   FlutterConnectOptions,
   VMInfo,
-  VMIsolateRef,
   VMServiceRequest,
-  VMServiceResponse,
   VMServiceEvent,
 } from './flutter-types';
