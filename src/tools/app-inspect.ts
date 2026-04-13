@@ -1,5 +1,5 @@
 import { MCPServer } from '../mcp-server';
-import { getAccessibilityBridge } from '../native';
+import { getAccessibilityBridge, ensureSemanticsActive } from '../native';
 import { getSessionManager } from '../session-manager';
 
 export function registerAppInspectTool(server: MCPServer): void {
@@ -38,6 +38,12 @@ export function registerAppInspectTool(server: MCPServer): void {
         const deviceId = (params.device_id as string) ?? getSessionManager().getSoleDeviceId() ?? undefined;
 
         const bridge = getAccessibilityBridge();
+
+        // Ensure Flutter semantics are activated before inspecting
+        if (deviceId) {
+          await ensureSemanticsActive(deviceId);
+        }
+
         const node = await bridge.inspect(elementPath, deviceId);
 
         return {
