@@ -89,6 +89,8 @@ import { registerFlutterHotReloadTool } from './flutter-hot-reload';
 import { registerFlutterLogsTool } from './flutter-logs';
 import { registerFlutterNetworkTool } from './flutter-network';
 import { registerAppTapElementTool } from './app-tap-element';
+import { registerAppWaitForNativeTool } from './app-wait-for';
+import { registerAppAssertElementTool } from './app-assert-element';
 
 export { setWorkflowEngine } from './orchestration-tools';
 export { setBarrier } from './barrier-tools';
@@ -249,4 +251,7 @@ export function registerAllTools(server: MCPServer): void {
 
   // Tier 2: Native App — Semantic Interaction (Flutter-compatible)
   registerAppTapElementTool(server);
+  // Tier 2: Native App — Semantic Wait & Assert (Flutter-compatible)
+  registerAppWaitForNativeTool(server);
+  registerAppAssertElementTool(server);
 }

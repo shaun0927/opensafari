@@ -1,0 +1,192 @@
+/**
+ * app_wait_for — Wait for a native UI element to appear in the accessibility tree.
+ *
+ * Polls the accessibility tree at intervals until an element matching the
+ * query appears (or disappears), or timeout is reached. Essential for
+ * reliable automation after navigation, animations, or async data loading.
+ */
+
+import { MCPServer } from '../mcp-server';
+import { getAccessibilityBridge, ensureSemanticsActive } from '../native';
+import type { AXNode } from '../native';
+import { getSessionManager } from '../session-manager';
+
+const DEFAULT_TIMEOUT_MS = 10000;
+const DEFAULT_INTERVAL_MS = 500;
+
+type WaitCondition = 'exists' | 'not_exists' | 'visible' | 'enabled';
+
+export function registerAppWaitForNativeTool(server: MCPServer): void {
+  server.registerTool(
+    {
+      name: 'app_wait_for',
+      description:
+        'Wait for a native app UI element matching an accessibility query to appear (or disappear). ' +
+        'Polls the accessibility tree until the condition is met or timeout is reached. ' +
+        'Essential for waiting after navigation, animations, or async data loading in any app including Flutter.',
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          identifier: {
+            type: 'string',
+            description: 'Accessibility identifier to wait for (exact match)',
+          },
+          label: {
+            type: 'string',
+            description: 'Accessibility label to wait for (case-insensitive substring)',
+          },
+          text: {
+            type: 'string',
+            description: 'Text content to wait for in value or label',
+          },
+          role: {
+            type: 'string',
+            description: 'Accessibility role to wait for (e.g. "AXButton")',
+          },
+          condition: {
+            type: 'string',
+            enum: ['exists', 'not_exists', 'visible', 'enabled'],
+            description: 'What condition to wait for (default: "exists")',
+          },
+          timeout: {
+            type: 'number',
+            description: 'Max wait time in ms (default: 10000)',
+          },
+          interval: {
+            type: 'number',
+            description: 'Poll interval in ms (default: 500)',
+          },
+          device_id: {
+            type: 'string',
+            description: 'Simulator UDID (uses active device if omitted)',
+          },
+        },
+        required: [],
+      },
+    },
+    async (_sessionId: string, params: Record<string, unknown>) => {
+      const identifier = params.identifier as string | undefined;
+      const label = params.label as string | undefined;
+      const text = params.text as string | undefined;
+      const role = params.role as string | undefined;
+
+      if (!identifier && !label && !text && !role) {
+        return {
+          content: [{
+            type: 'text' as const,
+            text: JSON.stringify({
+              error: 'At least one query parameter (identifier, label, text, or role) is required',
+            }),
+          }],
+          isError: true,
+        };
+      }
+
+      try {
+        const deviceId =
+          (params.device_id as string | undefined) ??
+          getSessionManager().getSoleDeviceId();
+        if (!deviceId) {
+          throw new Error(
+            'No device specified and no active device. Boot a simulator first with device_boot.',
+          );
+        }
+
+        const condition = (params.condition as WaitCondition | undefined) ?? 'exists';
+        const timeout = (params.timeout as number | undefined) ?? DEFAULT_TIMEOUT_MS;
+        const interval = (params.interval as number | undefined) ?? DEFAULT_INTERVAL_MS;
+        const query = { identifier, label, text, role };
+
+        // Ensure Flutter semantics are active
+        await ensureSemanticsActive(deviceId);
+
+        const bridge = getAccessibilityBridge();
+        const startTime = Date.now();
+        const deadline = startTime + timeout;
+        let pollCount = 0;
+
+        while (Date.now() < deadline) {
+          pollCount++;
+          try {
+            const result = await bridge.query(query, { deviceId });
+            const met = checkCondition(result.matches, condition);
+
+            if (met) {
+              const elapsed = Date.now() - startTime;
+              return {
+                content: [{
+                  type: 'text' as const,
+                  text: JSON.stringify({
+                    status: 'found',
+                    condition,
+                    elapsed,
+                    polls: pollCount,
+                    element: condition !== 'not_exists' && result.matches.length > 0
+                      ? {
+                        role: result.matches[0].role,
+                        label: result.matches[0].label,
+                        identifier: result.matches[0].identifier,
+                        frame: result.matches[0].frame,
+                        path: result.matches[0].path,
+                      }
+                      : null,
+                  }),
+                }],
+              };
+            }
+          } catch {
+            // Query error during polling — continue to next attempt
+          }
+
+          // Don't sleep past deadline
+          const remaining = deadline - Date.now();
+          if (remaining <= 0) break;
+          await sleep(Math.min(interval, remaining));
+        }
+
+        // Timeout
+        const elapsed = Date.now() - startTime;
+        return {
+          content: [{
+            type: 'text' as const,
+            text: JSON.stringify({
+              error: 'Timeout waiting for element',
+              condition,
+              query,
+              timeout,
+              elapsed,
+              polls: pollCount,
+            }),
+          }],
+          isError: true,
+        };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error(`[app_wait_for] ${message}`);
+        return {
+          content: [{ type: 'text' as const, text: JSON.stringify({ error: message }) }],
+          isError: true,
+        };
+      }
+    },
+  );
+}
+
+function checkCondition(matches: AXNode[], condition: WaitCondition): boolean {
+  switch (condition) {
+    case 'exists':
+      return matches.length > 0;
+    case 'not_exists':
+      return matches.length === 0;
+    case 'visible':
+      return matches.some((m) => m.visible);
+    case 'enabled':
+      return matches.some((m) => m.enabled);
+    default:
+      return matches.length > 0;
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
