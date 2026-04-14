@@ -218,7 +218,16 @@ export function registerFlutterInspectSelectionTool(server: MCPServer): void {
         });
 
         const node = (raw.result ?? raw) as Record<string, unknown>;
-        const hasSelection = !!(node.type || node.valueId || node.description);
+        // isWidgetSelection rejects VM Service metadata-only responses (e.g. type="_extensionType"
+        // or "Sentinel") that the VM returns when no widget is actually selected.
+        const isWidgetSelection = (n: Record<string, unknown>): boolean => {
+          if (typeof n.valueId === 'string' && n.valueId.length > 0) return true;
+          const t = typeof n.type === 'string' ? n.type : '';
+          // Reject VM Service metadata-only responses
+          if (t.startsWith('_extension') || t === 'Sentinel') return false;
+          return !!(t || n.description);
+        };
+        const hasSelection = isWidgetSelection(node);
         const selection = hasSelection ? summariseNode(node, 0) : null;
 
         return {

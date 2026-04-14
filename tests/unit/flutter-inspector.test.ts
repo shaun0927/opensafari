@@ -252,6 +252,27 @@ describe('flutter_inspect_selection', () => {
     }));
   });
 
+  it('returns status=empty when VM responds with _extensionType only (no real selection)', async () => {
+    // VM Service returns {type: "_extensionType"} when getSelectedSummaryWidget is called
+    // with nothing selected — this is metadata, not a real widget.
+    mockGetSelectedWidget.mockResolvedValue({ type: '_extensionType' });
+    const result = await handler('s', {});
+    const body = JSON.parse(result.content[0].text);
+    expect(body.status).toBe('empty');
+    expect(body.selection).toBeNull();
+    expect(body.hint).toContain('show=true');
+  });
+
+  it('returns status=ok for a response with only valueId (real widget, no type/description yet)', async () => {
+    // Real widgets always carry a valueId (inspector node ID), even if type/description
+    // are absent; a valueId alone is sufficient to treat this as a real selection.
+    mockGetSelectedWidget.mockResolvedValue({ valueId: 'inspector-99' });
+    const result = await handler('s', {});
+    const body = JSON.parse(result.content[0].text);
+    expect(body.status).toBe('ok');
+    expect(body.selection).not.toBeNull();
+  });
+
   it('errors when not connected', async () => {
     mockIsConnected.mockReturnValue(false);
     const result = await handler('s', {});
