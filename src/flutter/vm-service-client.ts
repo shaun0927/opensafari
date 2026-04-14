@@ -194,6 +194,51 @@ export class FlutterVMClient {
     return (result as { result?: string }).result ?? JSON.stringify(result);
   }
 
+  /**
+   * Get the root widget summary tree via the Flutter Inspector
+   * (`ext.flutter.inspector.getRootWidgetSummaryTreeWithPreviews`).
+   *
+   * Returns a structured JSON node with `type`, `description`, and
+   * `creationLocation` (file:line:column) per widget. `objectGroup` is
+   * a Flutter-Inspector lifetime scope — a stable group name is fine for
+   * LLM-driven introspection; DevTools rotates groups per request to
+   * manage memory but for one-shot MCP calls the default is safe.
+   */
+  async getRootWidgetSummaryTree(
+    options?: { objectGroup?: string },
+  ): Promise<Record<string, unknown>> {
+    return this.callServiceExtension('inspector.getRootWidgetSummaryTreeWithPreviews', {
+      objectGroup: options?.objectGroup ?? 'opensafari-root',
+    });
+  }
+
+  /**
+   * Get the currently selected widget via the Flutter Inspector
+   * (`ext.flutter.inspector.getSelectedSummaryWidget`). The selection is
+   * normally set by toggling the in-app inspector overlay (`ext.flutter.inspector.show`)
+   * and tapping a widget, or by a follow-up `setSelectionById` tool.
+   */
+  async getSelectedWidget(
+    options?: { objectGroup?: string; previousSelectionId?: string },
+  ): Promise<Record<string, unknown>> {
+    return this.callServiceExtension('inspector.getSelectedSummaryWidget', {
+      objectGroup: options?.objectGroup ?? 'opensafari-selection',
+      ...(options?.previousSelectionId ? { previousSelectionId: options.previousSelectionId } : {}),
+    });
+  }
+
+  /**
+   * Toggle the in-app widget inspector overlay
+   * (`ext.flutter.inspector.show`). When true, taps on the running app
+   * select widgets instead of dispatching to handlers — pair with
+   * `getSelectedWidget` to implement coord→widget lookup.
+   */
+  async setInspectorShow(enabled: boolean): Promise<Record<string, unknown>> {
+    return this.callServiceExtension('inspector.show', {
+      enabled: enabled ? 'true' : 'false',
+    });
+  }
+
   /** Trigger a hot reload */
   async hotReload(): Promise<Record<string, unknown>> {
     const isolateId = this.state?.mainIsolateId;

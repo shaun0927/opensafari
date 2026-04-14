@@ -95,6 +95,10 @@ import {
   registerFlutterCallServiceExtensionTool,
 } from './flutter-service-extensions';
 import { registerFlutterEvaluateTool } from './flutter-evaluate';
+import {
+  registerFlutterRootWidgetTool,
+  registerFlutterInspectSelectionTool,
+} from './flutter-inspector';
 import { registerAppTapElementTool } from './app-tap-element';
 import { registerAppWaitForNativeTool } from './app-wait-for';
 import { registerAppAssertElementTool } from './app-assert-element';
@@ -266,6 +270,9 @@ export function registerAllTools(server: MCPServer): void {
   registerFlutterCallServiceExtensionTool(server);
   // Tier 2: Flutter Expression Evaluation (issue #434)
   registerFlutterEvaluateTool(server);
+  // Tier 2: Flutter Inspector (issue #436)
+  registerFlutterRootWidgetTool(server);
+  registerFlutterInspectSelectionTool(server);
 
   // Tier 2: Native App — Semantic Interaction (Flutter-compatible)
   registerAppTapElementTool(server);
