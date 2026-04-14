@@ -155,3 +155,5 @@ describe('flutter_toggle_debug_paint', () => {
     expect(result.content[0].text).toContain('mode is required');
   });
 });
+
+export {};
