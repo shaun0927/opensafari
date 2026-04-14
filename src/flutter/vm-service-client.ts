@@ -9,10 +9,8 @@
 import WebSocket from 'ws';
 import type {
   VMServiceRequest,
-  VMServiceResponse,
   VMServiceEvent,
   VMInfo,
-  VMIsolateRef,
   FlutterConnectionState,
   FlutterConnectOptions,
 } from './flutter-types';
