@@ -283,34 +283,47 @@ export function registerFlutterTimelineCaptureTool(server: MCPServer): void {
         await client.callMethod('setVMTimelineFlags', { recordedStreams: streams });
 
         const started = Date.now();
-        await sleep(durationMs);
 
-        const raw = await client.callMethod('getVMTimeline');
-        const traceEvents = (raw as { traceEvents?: unknown[] }).traceEvents ?? [];
+        // Anything past this point must restore timeline flags before returning —
+        // a disk-full / permission-denied / RPC failure after enabling would
+        // otherwise leave the VM recording streams indefinitely, growing its
+        // internal timeline buffer and skewing every subsequent capture.
+        try {
+          await sleep(durationMs);
 
-        // Chrome Trace Format: top-level object with traceEvents array.
-        const chromeTrace = JSON.stringify({ traceEvents, displayTimeUnit: 'ms' });
+          const raw = await client.callMethod('getVMTimeline');
+          const traceEvents = (raw as { traceEvents?: unknown[] }).traceEvents ?? [];
 
-        const absolute = path.isAbsolute(outputPath) ? outputPath : path.resolve(process.cwd(), outputPath);
-        await fs.mkdir(path.dirname(absolute), { recursive: true });
-        await fs.writeFile(absolute, chromeTrace, 'utf8');
+          // Chrome Trace Format: top-level object with traceEvents array.
+          const chromeTrace = JSON.stringify({ traceEvents, displayTimeUnit: 'ms' });
 
-        return {
-          content: [{
-            type: 'text' as const,
-            text: JSON.stringify({
-              status: 'ok',
-              deviceId,
-              duration_ms: durationMs,
-              streams,
-              output_path: absolute,
-              size_bytes: Buffer.byteLength(chromeTrace, 'utf8'),
-              event_count: Array.isArray(traceEvents) ? traceEvents.length : 0,
-              elapsed_ms: Date.now() - started,
-              hint: 'Open this file in chrome://tracing or import into Perfetto.',
-            }, null, 2),
-          }],
-        };
+          const absolute = path.isAbsolute(outputPath) ? outputPath : path.resolve(process.cwd(), outputPath);
+          await fs.mkdir(path.dirname(absolute), { recursive: true });
+          await fs.writeFile(absolute, chromeTrace, 'utf8');
+
+          return {
+            content: [{
+              type: 'text' as const,
+              text: JSON.stringify({
+                status: 'ok',
+                deviceId,
+                duration_ms: durationMs,
+                streams,
+                output_path: absolute,
+                size_bytes: Buffer.byteLength(chromeTrace, 'utf8'),
+                event_count: Array.isArray(traceEvents) ? traceEvents.length : 0,
+                elapsed_ms: Date.now() - started,
+                hint: 'Open this file in chrome://tracing or import into Perfetto.',
+              }, null, 2),
+            }],
+          };
+        } finally {
+          try {
+            await client.callMethod('setVMTimelineFlags', { recordedStreams: [] });
+          } catch (resetErr) {
+            console.error(`[flutter_timeline_capture] failed to reset timeline flags: ${resetErr instanceof Error ? resetErr.message : String(resetErr)}`);
+          }
+        }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         console.error(`[flutter_timeline_capture] ${message}`);

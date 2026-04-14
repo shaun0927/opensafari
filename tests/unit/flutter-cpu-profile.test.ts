@@ -287,4 +287,24 @@ describe('flutter_timeline_capture handler', () => {
     const result = await handler('s', { duration_ms: 10, output_path: '/tmp/x.json' });
     expect(result.isError).toBe(true);
   });
+
+  it('resets timeline flags when writeFile fails (P1 regression)', async () => {
+    const unwritable = '/proc/0/should-not-work/trace.json';
+
+    const calls: Array<{ method: string; params: Record<string, unknown> | undefined }> = [];
+    mockCallMethod.mockImplementation(async (method: string, params?: Record<string, unknown>) => {
+      calls.push({ method, params });
+      if (method === 'getVMTimeline') return { traceEvents: [] };
+      return {};
+    });
+
+    const result = await handler('s', { duration_ms: 10, output_path: unwritable });
+    expect(result.isError).toBe(true);
+
+    // setVMTimelineFlags must have been called twice: once to enable, once to reset.
+    const setCalls = calls.filter((c) => c.method === 'setVMTimelineFlags');
+    expect(setCalls.length).toBe(2);
+    expect(setCalls[0].params).toEqual({ recordedStreams: ['Dart', 'GC', 'Embedder'] });
+    expect(setCalls[1].params).toEqual({ recordedStreams: [] });
+  });
 });
