@@ -265,6 +265,65 @@ OpenSafari shares battle-tested infrastructure with [OpenChrome](https://github.
 
 ---
 
+## Flutter QA Workflow
+
+OpenSafari drives Flutter apps running in the iOS Simulator using the same native-app tools used for UIKit/SwiftUI. The only wrinkle is that **Flutter's accessibility tree is lazy** — it only populates when an assistive technology (VoiceOver, XCTest) connects. OpenSafari auto-activates it so widget labels are queryable.
+
+### Auto-activation (no app changes required)
+
+`app_tree`, `app_query`, `app_inspect`, `app_tap_element`, `app_wait_for`, and `app_assert_element` all call `ensureSemanticsActive()` before reading the accessibility tree. The activator:
+
+1. Quick-checks the tree — if it already has ≥5 nodes, semantics is already active.
+2. Toggles `com.apple.Accessibility.AccessibilityEnabled` via `xcrun simctl spawn defaults write` — this triggers Flutter's `SemanticsBinding` without enabling VoiceOver spoken feedback.
+3. Polls the tree (up to 3s) until it populates, or falls back gracefully if activation never succeeds.
+
+### Recommended workflow
+
+```ts
+// 1. Boot simulator and launch the Flutter app
+await device_boot('iPhone 16');
+await app_launch({ bundleId: 'com.example.flutterApp' });
+
+// 2. Terminate Safari if it's running — its background elements can
+//    dominate the macOS AX tree and hide Flutter widgets.
+await app_terminate({ bundleId: 'com.apple.mobilesafari' });
+await app_switch_app({ bundleId: 'com.example.flutterApp' });
+
+// 3. Read the tree — Flutter Semantics nodes appear automatically.
+const tree = await app_tree({ max_depth: 5 });
+
+// 4. Query widgets by label, identifier, or role.
+const button = await app_query({ label: 'Login' });
+const email  = await app_query({ identifier: 'email-field' });
+```
+
+### Making widgets queryable
+
+| Flutter API | Queryable via | Notes |
+|-------------|----------------|-------|
+| `Semantics(label: 'Login')` | `app_query({ label: 'Login' })` | Preferred for human-readable labels |
+| `Semantics(identifier: 'login-btn')` | `app_query({ identifier: 'login-btn' })` | Flutter 3.19+ — stable selector for tests |
+| Plain `Text('Counter: 42')` | `app_query({ text: 'Counter' })` | Works when the text widget auto-synthesizes semantics |
+| `Key('login-btn')` | **Not queryable** | Keys are a Flutter-internal reference — they do **not** surface to the native AX tree |
+
+### Release builds
+
+Approach A (simctl defaults write) works for both debug and release builds. If a release app still reports an empty tree, add the explicit opt-in to `main.dart`:
+
+```dart
+void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+  SemanticsBinding.instance.ensureSemantics(); // enable for OpenSafari QA
+  runApp(const MyApp());
+}
+```
+
+For debug/profile builds, `flutter_connect` + `flutter_widget_tree` additionally expose the Dart VM Service, which returns the full Flutter widget hierarchy (including render-tree nodes that never reach the native AX bridge).
+
+See [docs/troubleshooting.md](docs/troubleshooting.md) for common failure modes (empty trees, missing labels, Safari shadowing).
+
+---
+
 ## Quick Start
 
 ```bash
