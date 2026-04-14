@@ -4,11 +4,66 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-### Added
+## [0.4.4] - 2026-04-15
 
-- **Flutter version branching for inspector service extensions** (#436): `FlutterVMClient` now captures the Dart VM `version` string at `flutter_connect` time, parses it via the exported `parseDartVersion` helper, and branches `getRootWidgetSummaryTree` by Flutter major. Flutter 3.x sessions try `ext.flutter.inspector.getRootWidgetSummaryTreeWithPreviews` first (falling back to `getRootWidgetSummaryTree` on VM Service error -32000), Flutter 2.x sessions skip the `WithPreviews` variant entirely, and unknown versions preserve the historical try/catch fallback. `flutter_connect` responses now include `dartVersion` and `flutterMajor` so downstream tools can gate behaviour per major. New accessors: `FlutterVMClient.getDartVersion()` / `getFlutterMajor()`.
-- **`flutter_widget_at_point`** (#436): New MCP tool that maps a physical-pixel coordinate (matching simulator screenshots) to the topmost Flutter widget at that point. Reads `devicePixelRatio` live from `FlutterView`, converts to logical pixels, drives a Dart-side hit-test via `flutter_evaluate` (`renderView.hitTest`), selects the topmost `RenderObject`'s Element via `WidgetInspectorService.setSelection` (scoped to the `widget_inspector.dart` library so the symbols are in lexical scope on any app), and reads back the summary. Returns `{widget_type, description, creation_location, widget_id, ancestor_chain}` where `ancestor_chain` is pulled from `ext.flutter.inspector.getParentChain` and filtered to user-defined widgets (framework files dropped). Out-of-bounds coordinates return `{widget_type: null, reason: "out-of-bounds"}` without erroring; in-bounds misses return `reason: "no-hit"`. `objectGroup` is strictly validated against `[A-Za-z0-9_-]+` before interpolation to block Dart injection.
-- **`FlutterVMClient.selectWidgetAtPoint` / `getParentChain`**: New VM-client helpers wrapping the hit-test evaluate expression and `ext.flutter.inspector.getParentChain`.
+### Added — Flutter widget-at-point mapping and release-constraint branching
+
+- **`flutter_widget_at_point`** (#436, #471): New MCP tool that maps a physical-pixel coordinate — matching the frame produced by `app_screenshot_native` — to the topmost Flutter widget at that point. The tool reads `devicePixelRatio` live from `FlutterView.platformDispatcher`, converts the physical (x, y) to logical pixels, drives a Dart-side hit-test via `renderView.hitTest(HitTestResult(), position: Offset(…))`, walks `HitTestResult.path` for the topmost `RenderObject` with a `DebugCreator`, selects the owning Element via `WidgetInspectorService.instance.setSelection`, then reads back the selected widget through `getSelectedSummaryWidget`.
+  - Returns `{widget_type, description, creation_location, widget_id, ancestor_chain}`. The `ancestor_chain` is pulled from `ext.flutter.inspector.getParentChain` and filtered to user-defined widgets (anything under `package:flutter/`, `package:flutter_localizations/`, or an absolute `flutter/packages/flutter/…` SDK checkout is dropped) so LLM consumers see only the app's own widget hierarchy.
+  - Out-of-bounds coordinates (x < 0, x ≥ width, y < 0, y ≥ height) short-circuit to `{widget_type: null, reason: "out-of-bounds"}` without paying a VM Service round-trip. In-bounds misses return `{widget_type: null, reason: "no-hit"}`. Best-effort `ancestor_chain` — a failure in `getParentChain` still yields the topmost widget with `ancestor_chain: []` plus a stderr audit entry.
+  - The Dart hit-test expression references `DebugCreator`, `WidgetInspectorService`, `RenderView`, and `HitTestResult` — symbols that live in `package:flutter/src/widgets/widget_inspector.dart` and are NOT re-exported through `flutter/material.dart`. To avoid "Undefined name" failures on user apps that only import material, the evaluate call is now scoped to the inspector library by resolving it via `getIsolate → libraries` and passing its `id` as `targetId`. Throws a dedicated `FlutterVMError('NO_INSPECTOR_LIB')` if the library is not loaded in the isolate.
+  - `objectGroup` (the Flutter Inspector lifetime scope) is validated against `/^[A-Za-z0-9_-]+$/` before interpolation into the Dart source literal, blocking Dart injection via a quote-escaped payload. Invalid values raise `FlutterVMError('INVALID_OBJECT_GROUP')`.
+- **`FlutterVMClient.selectWidgetAtPoint` / `getParentChain`**: New public VM-client helpers wrapping the hit-test evaluate expression and `ext.flutter.inspector.getParentChain`. Exported so downstream tooling can reuse the coord→widget pipeline without re-implementing the hit-test Dart expression.
+- **Flutter version branching for inspector service extensions** (#436, #472): `FlutterVMClient` now captures the Dart VM `version` string at `flutter_connect` time, parses it via the exported `parseDartVersion` helper, and branches `getRootWidgetSummaryTree` calls by Flutter major.
+  - Flutter 3.x sessions try `ext.flutter.inspector.getRootWidgetSummaryTreeWithPreviews` first and fall back to `getRootWidgetSummaryTree` on VM Service error -32000 (seen on early 3.x releases that have the extension stub but no implementation).
+  - Flutter 2.x sessions skip the `WithPreviews` variant entirely — it does not exist on 2.x, and attempting the call was a guaranteed -32601 ("method not found") round-trip on every call.
+  - Unknown / unparseable versions preserve the historical try/catch fallback so the client stays forwards-compatible with future Flutter majors.
+  - `flutter_connect` responses now include `dartVersion` (structured `{raw, major, minor, patch, channel}`) and `flutterMajor` so downstream tools can gate behaviour per major. New accessors: `FlutterVMClient.getDartVersion()` / `getFlutterMajor()`.
+- **`parseDartVersion` helper** (#472): Pure, exported helper that extracts `{major, minor, patch, channel?, raw}` from a Dart VM version string. Null-safe and whitespace-tolerant.
+
+### Added — Live verification harness for #422 / #423
+
+- **Flutter QA fixture app** (#422, #476): Added a dedicated Flutter fixture under `tests/fixtures/flutter-qa-app/`. The fixture exercises the surfaces #422 depends on:
+  - `Semantics(label: 'Login')` + `Semantics(identifier: 'login-btn')` wrapping an `ElevatedButton` so `app_query` can be driven by both label and identifier.
+  - A `TextField` wrapped in `Semantics(identifier: 'email-field')` so `app_query({identifier: 'email-field'})` and `app_type_element` can be verified against a live editable region.
+  - A live `Counter: $n` text that increments on each button tap so downstream suites can assert state changes.
+  - `build.sh` helper that runs `flutter pub get`, `flutter build ios --simulator --debug`, and an optional `xcrun simctl install` so reviewers can bring the fixture up with a single command.
+  - Bundle id `com.opensafari.fixtures.flutterQaApp` — avoids collision with Flutter's `com.example.*` sample prefix on shared simulators.
+- **Live Flutter integration suite** (#423, #473): New opt-in Jest suite at `tests/integration/issue-423-flutter.live.test.ts` that drives a booted simulator against a running Flutter app and proves `app_query` + `app_tap_element` resolve and interact with Flutter Semantics nodes (label, identifier, index, and ambiguous-match cases). Gated behind `jest.config.js` `testPathIgnorePatterns` so the default `npm test` stays headless.
+- **Native (non-Flutter) integration suite** (#423, #474): `tests/integration/issue-423-native.live.test.ts` walks `com.apple.Preferences` (Settings → General → About) to prove the shared `AccessibilityBridge` path works identically on UIKit apps — no Flutter-specific branching exists in the bridge, so Settings.app is sufficient to demonstrate parity.
+- **Performance harness** (#423, #475): `tests/integration/issue-423-perf.live.test.ts` measures `app_query` / `app_tap_element` round-trip time and asserts an RSS budget (≤ 50 MB over a 100-iteration loop under `--expose-gc`) so regressions surface as perf failures rather than silent slowdowns.
+- **Fixture release-constraint integration test** (#422, #478, replaces #477): `tests/integration/flutter-fixture-ax.test.ts` builds the QA fixture above, installs it on a booted simulator, and verifies:
+  1. `app_tree` populates even when `useVMServiceFallback: false` — the simctl-path activation must succeed standalone, proving parity with a real Flutter release build (where the Dart VM Service is stripped).
+  2. `app_query({identifier: 'login-btn'})` and `app_query({identifier: 'email-field'})` return the expected `Semantics(identifier:)` nodes with correct role (`AXButton` / `AXGenericElement`), visibility, and enabled flags.
+  - Honours `FLUTTER_BIN` env override with a `flutter`-on-PATH fallback so the suite runs uniformly on Apple Silicon brew, Intel brew, asdf, and nix installs.
+  - `console.error` SKIP log suppressed when `process.env.CI` is set so the always-skipped-in-CI suite stops spamming shared CI output.
+
+### Changed
+
+- `FlutterVMClient.getDartVersion()` now returns the structured `DartVersion` type (exported from `src/flutter/flutter-types.ts`) — additive to the prior `null | undefined` shape for callers that were only checking truthiness. `getFlutterMajor()` normalises all absent-version states to `null` for consistent consumer code.
+
+### Security
+
+- **Dart injection hardening for `flutter_widget_at_point`** (#471): `objectGroup` is now rejected before interpolation when it contains any character outside `[A-Za-z0-9_-]`. The prior implementation concatenated the raw caller-provided string into a Dart source literal via `'${objectGroup}'`, which a malicious caller could have used to break out of the quoted context and execute arbitrary Dart on the target device. Local MCP is a trusted-caller context, but defence-in-depth is cheap.
+
+### Fixed
+
+- Removed stale `flutter create` boilerplate `widget_test.dart` from the QA fixture (#476 review P1). The stub asserted `find.byIcon(Icons.add)` and a counter starting at `"0"`, but the fixture's `main.dart` was rewritten to render Semantics + TextField + `Counter: $n`; `flutter test` inside the fixture would have failed immediately, undermining the "fixture is stable" contract.
+- Dropped the Apple-Silicon-only hardcoded `/opt/homebrew/bin/flutter` probe from the fixture integration test (#477/#478 review P1) in favour of a `FLUTTER_BIN` env override with a `flutter`-on-PATH fallback. The prior probe always threw on Intel Macs, nix, and asdf before the fallback ran.
+- Tightened the `selectWidgetAtPoint` hit-result parsing: dropped the tautological `kind === 'Bool' && valueAsString === 'true'` disjunct that was subsumed by the primary `valueAsString === 'true'` check.
+
+### Tests
+
+- 1395+ tests / 97+ suites pass on `npm test` (the default headless run). New gated integration suites under `tests/integration/**` are excluded from the default run and exercised manually by reviewers with a booted simulator.
+- 25 new unit tests in `tests/unit/flutter-widget-at-point.test.ts` cover: DPR=2/3 conversion, out-of-bounds short-circuit, no-hit path, successful hit with ancestor-chain filtering, not-connected errors, non-finite coordinate rejection, `objectGroup` sanitization, missing `widget_inspector` library handling, and best-effort `getParentChain` failure.
+- 11 new unit tests in `tests/unit/flutter-version-branching.test.ts` cover: Dart version parsing (happy / whitespace / invalid / missing channel), 3.x happy path / 3.x WithPreviews fallback / 2.x direct call / unknown-version try/catch fallback, and `getDartVersion` / `getFlutterMajor` pre- and post-connect state.
+
+### Release metadata
+
+- npm: [`opensafari-mcp@0.4.4`](https://www.npmjs.com/package/opensafari-mcp/v/0.4.4)
+- git tag: `v0.4.4`
+- compare: [`v0.4.3…v0.4.4`](https://github.com/shaun0927/opensafari/compare/v0.4.3...v0.4.4)
+- merged PRs: #471, #472, #473, #474, #475, #476, #478
 
 ## [0.4.0] - 2026-04-14
 
