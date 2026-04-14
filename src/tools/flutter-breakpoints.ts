@@ -52,14 +52,52 @@ export interface DeviceBreakpointState {
   deviceId: string;
   subscribed: boolean;
   listener?: (ev: FlutterEvent) => void;
+  /**
+   * mainIsolateId at the time the Debug stream was subscribed. A changed
+   * isolateId between calls signals a VM reconnect (flutter_connect after
+   * disconnect, or hot restart with a fresh isolate); we then tear down
+   * and re-subscribe.
+   */
+  subscribedForIsolateId?: string;
   pause: PauseState;
   breakpoints: Map<string, BreakpointInfo>;
 }
 
 const managers = new Map<string, DeviceBreakpointState>();
 
+function unsubscribeIfSubscribed(state: DeviceBreakpointState): void {
+  if (state.subscribed && state.listener) {
+    try {
+      // Use the singleton client for this device; offEvent is a no-op if the
+      // client has already been torn down.
+      getFlutterVMClient(state.deviceId).offEvent('Debug', state.listener);
+    } catch {
+      // ignore — the client may be disconnected or reinitialised.
+    }
+  }
+  state.subscribed = false;
+  state.listener = undefined;
+  state.subscribedForIsolateId = undefined;
+}
+
+/**
+ * Test / diagnostic helper — drop every manager AND offEvent their live
+ * Debug listeners so repeated setup/teardown cannot leak handlers on the
+ * shared VM client.
+ */
 export function _resetBreakpointManagers(): void {
+  for (const state of managers.values()) {
+    unsubscribeIfSubscribed(state);
+  }
   managers.clear();
+}
+
+/** Public: drop the manager for a specific device (e.g. on flutter_connect). */
+export function forgetBreakpointManager(deviceId: string): void {
+  const state = managers.get(deviceId);
+  if (!state) return;
+  unsubscribeIfSubscribed(state);
+  managers.delete(deviceId);
 }
 
 function ensureManager(deviceId: string): DeviceBreakpointState {
@@ -85,9 +123,26 @@ async function ensureDebugSubscription(
   client: {
     streamListen: (streamId: string) => Promise<void>;
     onEvent: (streamId: string, cb: (ev: FlutterEvent) => void) => void;
+    offEvent?: (streamId: string, cb: (ev: FlutterEvent) => void) => void;
+    getState?: () => { mainIsolateId?: string } | null;
   },
   state: DeviceBreakpointState,
 ): Promise<void> {
+  // Detect reconnect: if the live isolate id no longer matches the one we
+  // subscribed against, the VM session has restarted and the underlying
+  // client has cleared its event listeners in disconnect(). Tear down and
+  // re-subscribe so we do not leak "dead" subscribed=true state.
+  const currentIsolateId = client.getState?.()?.mainIsolateId;
+  if (state.subscribed && state.subscribedForIsolateId && currentIsolateId && state.subscribedForIsolateId !== currentIsolateId) {
+    if (state.listener && client.offEvent) {
+      try { client.offEvent('Debug', state.listener); } catch { /* ignore */ }
+    }
+    state.subscribed = false;
+    state.listener = undefined;
+    state.subscribedForIsolateId = undefined;
+    state.pause = { paused: false };
+  }
+
   if (state.subscribed) return;
 
   const listener = (ev: FlutterEvent) => {
@@ -110,6 +165,7 @@ async function ensureDebugSubscription(
     client.onEvent('Debug', listener);
     state.listener = listener;
     state.subscribed = true;
+    state.subscribedForIsolateId = currentIsolateId;
   } catch (err) {
     // Keep subscribed=false so next call retries.
     throw err;

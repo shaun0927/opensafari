@@ -5,6 +5,7 @@
 import {
   resumeModeToStep,
   summariseFrame,
+  forgetBreakpointManager,
   _resetBreakpointManagers,
 } from '../../src/tools/flutter-breakpoints';
 
@@ -335,5 +336,80 @@ describe('flutter_wait_for_pause handler', () => {
     const body = JSON.parse(result.content[0].text);
     expect(body.status).toBe('paused');
     expect(body.reason).toBe('PauseBreakpoint');
+  });
+});
+
+// ── BreakpointManager lifecycle regressions ─────────────────────────────────
+
+describe('BreakpointManager lifecycle', () => {
+  // Shared handler for these lifecycle tests.
+  let waitHandler: (s: string, p: Record<string, unknown>) => Promise<ToolResult>;
+  let setBpHandler: (s: string, p: Record<string, unknown>) => Promise<ToolResult>;
+
+  beforeAll(() => {
+    const server = { registerTool: jest.fn() };
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const mod = require('../../src/tools/flutter-breakpoints');
+    mod.registerFlutterWaitForPauseTool(server);
+    mod.registerFlutterSetBreakpointTool(server);
+    waitHandler = server.registerTool.mock.calls[0][1];
+    setBpHandler = server.registerTool.mock.calls[1][1];
+  });
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    _resetBreakpointManagers();
+    mockIsConnected.mockReturnValue(true);
+    mockStreamListen.mockResolvedValue(undefined);
+  });
+
+  it('_resetBreakpointManagers calls offEvent on active Debug listeners (P1)', async () => {
+    mockGetState.mockReturnValue({ mainIsolateId: 'iso-1' });
+    mockCallMethod.mockResolvedValue({ id: 'bp/1' });
+
+    // Subscribe by setting a breakpoint (which calls ensureDebugSubscription).
+    await setBpHandler('s', { script_uri: 'package:a/b.dart', line: 1 });
+    expect(mockOnEvent).toHaveBeenCalledWith('Debug', expect.any(Function));
+
+    // _resetBreakpointManagers must tear down the listener, not just drop state.
+    _resetBreakpointManagers();
+    expect(mockOffEvent).toHaveBeenCalledWith('Debug', expect.any(Function));
+  });
+
+  it('forgetBreakpointManager tears down and re-subscribes cleanly on next call', async () => {
+    mockGetState.mockReturnValue({ mainIsolateId: 'iso-1' });
+    mockCallMethod.mockResolvedValue({ id: 'bp/1' });
+
+    await setBpHandler('s', { script_uri: 'package:a/b.dart', line: 1 });
+    const offCallsBefore = mockOffEvent.mock.calls.length;
+
+    forgetBreakpointManager('test-device-id');
+    expect(mockOffEvent.mock.calls.length).toBeGreaterThan(offCallsBefore);
+
+    // A follow-up wait should cleanly re-subscribe — no "already subscribed" short-circuit.
+    const waitPromise = waitHandler('s', { timeout_ms: 30, poll_interval_ms: 10 });
+    const result = await waitPromise;
+    expect(JSON.parse(result.content[0].text).status).toBe('timeout');
+    // streamListen called at least twice: original subscribe + post-forget re-subscribe.
+    expect(mockStreamListen.mock.calls.filter((c) => c[0] === 'Debug').length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('auto-resubscribes when mainIsolateId changes (reconnect / hot restart)', async () => {
+    mockGetState.mockReturnValue({ mainIsolateId: 'iso-1' });
+    mockCallMethod.mockResolvedValue({ id: 'bp/1' });
+
+    await setBpHandler('s', { script_uri: 'package:a/b.dart', line: 1 });
+    const firstOnEventCount = mockOnEvent.mock.calls.filter((c) => c[0] === 'Debug').length;
+
+    // Simulate a reconnect: VM client now reports a different isolate id.
+    mockGetState.mockReturnValue({ mainIsolateId: 'iso-2' });
+
+    await setBpHandler('s', { script_uri: 'package:a/b.dart', line: 2 });
+
+    // onEvent must have been called a second time with the new listener.
+    const newOnEventCount = mockOnEvent.mock.calls.filter((c) => c[0] === 'Debug').length;
+    expect(newOnEventCount).toBe(firstOnEventCount + 1);
+    // offEvent should have been called to detach the stale listener.
+    expect(mockOffEvent).toHaveBeenCalledWith('Debug', expect.any(Function));
   });
 });
