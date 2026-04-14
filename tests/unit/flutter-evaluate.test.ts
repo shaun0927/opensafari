@@ -284,3 +284,5 @@ describe('FlutterVMClient.evaluate', () => {
     });
   });
 });
+
+export {};
