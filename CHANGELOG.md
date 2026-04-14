@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- **Flutter version branching for inspector service extensions** (#436): `FlutterVMClient` now captures the Dart VM `version` string at `flutter_connect` time, parses it via the exported `parseDartVersion` helper, and branches `getRootWidgetSummaryTree` by Flutter major. Flutter 3.x sessions try `ext.flutter.inspector.getRootWidgetSummaryTreeWithPreviews` first (falling back to `getRootWidgetSummaryTree` on VM Service error -32000), Flutter 2.x sessions skip the `WithPreviews` variant entirely, and unknown versions preserve the historical try/catch fallback. `flutter_connect` responses now include `dartVersion` and `flutterMajor` so downstream tools can gate behaviour per major. New accessors: `FlutterVMClient.getDartVersion()` / `getFlutterMajor()`.
+
 ## [0.4.0] - 2026-04-14
 
 ### Added — Flutter Advanced Debugging & Profiling

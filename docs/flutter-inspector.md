@@ -11,11 +11,29 @@ Both tools require an active Flutter VM Service connection via `flutter_connect`
 
 ## Flutter Compatibility Matrix
 
-| Flutter version | `flutter_root_widget` | `flutter_inspect_selection` | Notes |
-| --- | --- | --- | --- |
-| 3.0 – 3.10 | ✅ | ✅ | Uses `getRootWidgetSummaryTree` fallback when `WithPreviews` variant unavailable |
-| 3.11+ | ✅ | ✅ | Verified against Flutter 3.11.3 on iOS simulator |
-| 2.x | ⚠️ | ⚠️ | Best-effort; inspector extension surface differs — file an issue if you hit errors |
+| Flutter version | `flutter_root_widget` | `flutter_inspect_selection` | Inspector method chosen | Notes |
+| --- | --- | --- | --- | --- |
+| 3.11+ | ✅ | ✅ | `getRootWidgetSummaryTreeWithPreviews` (falls back on error) | Verified against Flutter 3.11.3 on iOS simulator |
+| 3.0 – 3.10 | ✅ | ✅ | `getRootWidgetSummaryTreeWithPreviews` first, falls back to `getRootWidgetSummaryTree` on VM Service error -32000 | |
+| 2.x | ✅ | ⚠️ | `getRootWidgetSummaryTree` directly (skips `WithPreviews`) | 2.x inspector surface does not expose the `WithPreviews` variant reliably — `flutter_inspect_selection` remains best-effort |
+| Unknown | ✅ | ✅ | `getRootWidgetSummaryTreeWithPreviews` first, falls back on any error | Used when `vm.version` cannot be parsed — preserves historical behaviour |
+
+### How the client picks the inspector method
+
+`FlutterVMClient` captures the Dart VM `version` string at `flutter_connect`
+time and parses it into `{major, minor, patch}` (see
+`parseDartVersion` in `src/flutter/vm-service-client.ts`). Because the Dart
+SDK major correlates 1:1 with the Flutter release line (Dart 3.x ships with
+Flutter 3.x, Dart 2.x ships with Flutter 2.x), the client branches on
+`dartVersion.major`:
+
+- **Dart major ≥ 3** → try `ext.flutter.inspector.getRootWidgetSummaryTreeWithPreviews` first, fall back to `getRootWidgetSummaryTree` on any error. This preserves the richer preview metadata on modern Flutter while tolerating the occasional 3.0/3.1 build that omits the extension.
+- **Dart major < 3** → call `ext.flutter.inspector.getRootWidgetSummaryTree` directly. Skipping `WithPreviews` avoids a guaranteed round-trip to a -32601 / -32000 error on Flutter 2.x.
+- **Version unknown** (unparsable `vm.version`) → use the historical try/catch fallback so no callers regress.
+
+Captured version data is also surfaced in the `flutter_connect` response as
+`dartVersion` and `flutterMajor` so downstream tools can gate behaviour on
+the running Flutter major.
 
 ## Usage
 
