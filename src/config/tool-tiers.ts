@@ -132,6 +132,12 @@ export const TOOL_TIERS: Record<string, number> = {
   // Tier 2: Flutter Memory Profiling (issue #440)
   flutter_allocation_profile: 2,
   flutter_heap_snapshot: 2,
+  // Tier 2: Flutter Breakpoint / Step Debugging (issue #435)
+  flutter_set_breakpoint: 2,
+  flutter_remove_breakpoint: 2,
+  flutter_resume: 2,
+  flutter_get_stack: 2,
+  flutter_wait_for_pause: 2,
 
   // Tier 2: Native App — Semantic Interaction (Flutter-compatible)
   app_tap_element: 2,
