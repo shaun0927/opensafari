@@ -6,6 +6,7 @@ import {
   parseAllocationProfile,
   diffAllocationEntries,
   collectHeapSnapshot,
+  forgetAllocationHistory,
   _resetAllocationHistory,
   type AllocationEntry,
 } from '../../src/tools/flutter-memory-profile';
@@ -191,6 +192,23 @@ describe('flutter_allocation_profile', () => {
     const result = await handler('s', {});
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain('Not connected');
+  });
+
+  it('forgetAllocationHistory drops the per-device baseline', async () => {
+    mockCallMethod.mockResolvedValueOnce({
+      members: [{ class: { name: 'X' }, instancesCurrent: 1, bytesCurrent: 10 }],
+    });
+    await handler('s', { diff_against_previous: true });
+
+    forgetAllocationHistory('test-device-id');
+
+    mockCallMethod.mockResolvedValueOnce({
+      members: [{ class: { name: 'X' }, instancesCurrent: 5, bytesCurrent: 50 }],
+    });
+    const result = await handler('s', { diff_against_previous: true });
+    const body = JSON.parse(result.content[0].text);
+    expect(body.previous_taken_at).toBeUndefined();
+    expect(body.entries[0].delta_instances).toBe(5); // full delta (no baseline)
   });
 });
 

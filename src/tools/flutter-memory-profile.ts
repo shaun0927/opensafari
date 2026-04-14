@@ -56,10 +56,34 @@ interface AllocationSnapshot {
   entries: Map<string, AllocationEntry>;
 }
 
+/**
+ * Per-device diff baselines. Bounded to MAX_DEVICES entries via LRU
+ * eviction so that long-lived sessions with rotating simulator UDIDs
+ * cannot leak memory. When a caller is done with a device they should
+ * also call `forgetAllocationHistory(deviceId)` explicitly.
+ */
+const MAX_DEVICES = 16;
 const previousSnapshots = new Map<string, AllocationSnapshot>();
+
+function rememberSnapshot(deviceId: string, snapshot: AllocationSnapshot): void {
+  // Re-insert to refresh LRU position.
+  if (previousSnapshots.has(deviceId)) previousSnapshots.delete(deviceId);
+  previousSnapshots.set(deviceId, snapshot);
+
+  while (previousSnapshots.size > MAX_DEVICES) {
+    const oldestKey = previousSnapshots.keys().next().value;
+    if (oldestKey === undefined) break;
+    previousSnapshots.delete(oldestKey);
+  }
+}
 
 export function _resetAllocationHistory(): void {
   previousSnapshots.clear();
+}
+
+/** Public: drop the diff baseline for a specific device (e.g. on disconnect). */
+export function forgetAllocationHistory(deviceId: string): void {
+  previousSnapshots.delete(deviceId);
 }
 
 /** Normalise a raw `AllocationProfile` response into the flat shape we expose. */
@@ -179,10 +203,12 @@ export function registerFlutterAllocationProfileTool(server: MCPServer): void {
           }
         }
 
-        // Store the current snapshot unconditionally so a later diff has a baseline.
+        // Store the current snapshot unconditionally so a later diff has a
+        // baseline. rememberSnapshot enforces the MAX_DEVICES LRU cap so the
+        // Map cannot grow without bound across long-running sessions.
         const asMap = new Map<string, AllocationEntry>();
         for (const e of entries) asMap.set(e.class, e);
-        previousSnapshots.set(deviceId, { takenAt: Date.now(), entries: asMap });
+        rememberSnapshot(deviceId, { takenAt: Date.now(), entries: asMap });
 
         shaped.sort((a, b) =>
           diff
