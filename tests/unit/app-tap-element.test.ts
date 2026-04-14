@@ -221,4 +221,114 @@ describe('app_tap_element', () => {
     expect(body.backend).toBe('simctl');
     expect(body.deviceId).toBe('test-device-id');
   });
+
+  it('taps element found by text parameter', async () => {
+    const node = makeNode({
+      label: 'Submit form',
+      frame: { x: 10, y: 20, width: 100, height: 50 },
+    });
+    mockQuery.mockResolvedValue(makeQueryResult([node]));
+
+    const result = await handler('session', { text: 'Submit', timeout: 0 });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(body.status).toBe('tapped');
+    expect(body.coordinates).toEqual({ x: 60, y: 45 });
+    expect(mockQuery).toHaveBeenCalledWith(
+      expect.objectContaining({ text: 'Submit' }),
+      expect.anything(),
+    );
+  });
+
+  it('passes compound query (role + label) to the accessibility bridge', async () => {
+    const node = makeNode({
+      role: 'AXButton',
+      label: 'Login',
+      frame: { x: 100, y: 200, width: 200, height: 44 },
+    });
+    mockQuery.mockResolvedValue(makeQueryResult([node]));
+
+    const result = await handler('session', {
+      role: 'AXButton',
+      label: 'Login',
+      timeout: 0,
+    });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(body.status).toBe('tapped');
+    expect(mockQuery).toHaveBeenCalledWith(
+      expect.objectContaining({ role: 'AXButton', label: 'Login' }),
+      expect.anything(),
+    );
+  });
+
+  it('calculates correct center for frames with odd width/height', async () => {
+    // Odd dimensions produce non-integer centers — we preserve precision
+    // rather than rounding because simctl / WebKit tap accept floats and
+    // rounding halves can bias away from the true center by up to 0.5pt.
+    const node = makeNode({ frame: { x: 100, y: 200, width: 73, height: 45 } });
+    mockQuery.mockResolvedValue(makeQueryResult([node]));
+
+    const result = await handler('session', { label: 'Odd', timeout: 0 });
+    const body = JSON.parse(result.content[0].text);
+
+    // Center: 100 + 73/2 = 136.5, 200 + 45/2 = 222.5
+    expect(body.coordinates).toEqual({ x: 136.5, y: 222.5 });
+    expect(mockTap).toHaveBeenCalledWith('test-device-id', 136.5, 222.5, undefined);
+  });
+
+  it('calculates correct center for fractional frame origins', async () => {
+    // Flutter reports sub-pixel coordinates (e.g. 93.666…) on scaled displays.
+    const node = makeNode({
+      frame: { x: 93.66666666666663, y: 550.6666666666666, width: 140, height: 48 },
+    });
+    mockQuery.mockResolvedValue(makeQueryResult([node]));
+
+    const result = await handler('session', { label: 'Fractional', timeout: 0 });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(body.coordinates.x).toBeCloseTo(163.6667, 3);
+    expect(body.coordinates.y).toBeCloseTo(574.6667, 3);
+  });
+
+  it('treats empty string query params as absent (rejects request)', async () => {
+    // All-empty params should be treated the same as no params provided —
+    // the tool should reject rather than sending a match-everything query
+    // to the bridge.
+    const result = await handler('session', {
+      identifier: '',
+      label: '',
+      text: '',
+      role: '',
+    });
+
+    expect(result.isError).toBe(true);
+    const body = JSON.parse(result.content[0].text);
+    expect(body.error).toContain('At least one query parameter');
+  });
+
+  it('empty label falls back to other non-empty query params', async () => {
+    // When a caller passes label: '' alongside a real query (e.g. role),
+    // the tool should proceed using the non-empty params rather than
+    // rejecting or short-circuiting.
+    const node = makeNode({
+      role: 'AXButton',
+      label: 'Continue',
+      frame: { x: 0, y: 0, width: 200, height: 44 },
+    });
+    mockQuery.mockResolvedValue(makeQueryResult([node]));
+
+    const result = await handler('session', {
+      label: '',
+      role: 'AXButton',
+      timeout: 0,
+    });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(body.status).toBe('tapped');
+    expect(mockQuery).toHaveBeenCalledWith(
+      expect.objectContaining({ role: 'AXButton' }),
+      expect.anything(),
+    );
+  });
 });
