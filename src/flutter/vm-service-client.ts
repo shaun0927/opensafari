@@ -203,13 +203,26 @@ export class FlutterVMClient {
    * a Flutter-Inspector lifetime scope — a stable group name is fine for
    * LLM-driven introspection; DevTools rotates groups per request to
    * manage memory but for one-shot MCP calls the default is safe.
+   *
+   * Falls back to `getRootWidgetSummaryTree` (without previews) if the
+   * WithPreviews variant fails (e.g. VM Service error -32000 on older
+   * Flutter versions). If both fail, the original error is rethrown.
    */
   async getRootWidgetSummaryTree(
     options?: { objectGroup?: string },
   ): Promise<Record<string, unknown>> {
-    return this.callServiceExtension('inspector.getRootWidgetSummaryTreeWithPreviews', {
-      objectGroup: options?.objectGroup ?? 'opensafari-root',
-    });
+    const params = { objectGroup: options?.objectGroup ?? 'opensafari-root' };
+    let originalError: unknown;
+    try {
+      return await this.callServiceExtension('inspector.getRootWidgetSummaryTreeWithPreviews', params);
+    } catch (err) {
+      originalError = err;
+    }
+    try {
+      return await this.callServiceExtension('inspector.getRootWidgetSummaryTree', params);
+    } catch {
+      throw originalError;
+    }
   }
 
   /**
