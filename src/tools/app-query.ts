@@ -6,7 +6,7 @@ export function registerAppQueryTool(server: MCPServer): void {
   server.registerTool(
     {
       name: 'app_query',
-      description: 'Query native app UI elements by accessibility identifier, label, text, or role. Returns matching elements with metadata. Reports ambiguity when an identifier matches multiple elements.',
+      description: 'Query native app UI elements by accessibility identifier, label, text, or role. Returns matching elements with metadata. Reports ambiguity when an identifier matches multiple elements. Compatible with Flutter apps — the tool auto-activates Flutter\'s lazy Semantics tree so `Semantics(label:/identifier:)` widgets are queryable.',
       inputSchema: {
         type: 'object' as const,
         properties: {

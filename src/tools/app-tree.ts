@@ -6,7 +6,7 @@ export function registerAppTreeTool(server: MCPServer): void {
   server.registerTool(
     {
       name: 'app_tree',
-      description: 'Dump the native accessibility tree of the foreground app in iOS Simulator. Returns a structured JSON snapshot of the UI hierarchy including roles, labels, identifiers, traits, frames, and visibility state.',
+      description: 'Dump the native accessibility tree of the foreground app in iOS Simulator. Returns a structured JSON snapshot of the UI hierarchy including roles, labels, identifiers, traits, frames, and visibility state. Compatible with Flutter apps — the tool auto-activates Flutter\'s lazy Semantics tree before reading so widget labels/text appear as accessibility nodes.',
       inputSchema: {
         type: 'object' as const,
         properties: {

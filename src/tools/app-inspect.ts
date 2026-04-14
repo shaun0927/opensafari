@@ -6,7 +6,7 @@ export function registerAppInspectTool(server: MCPServer): void {
   server.registerTool(
     {
       name: 'app_inspect',
-      description: 'Inspect a specific native UI element by its index path (from app_tree or app_query results). Returns detailed metadata including role, label, value, identifier, traits, frame, visibility, enabled, and focused state.',
+      description: 'Inspect a specific native UI element by its index path (from app_tree or app_query results). Returns detailed metadata including role, label, value, identifier, traits, frame, visibility, enabled, and focused state. Compatible with Flutter apps — the tool auto-activates Flutter\'s lazy Semantics tree before inspection.',
       inputSchema: {
         type: 'object' as const,
         properties: {
