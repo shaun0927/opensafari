@@ -2,6 +2,45 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.0] - 2026-04-14
+
+### Added — Flutter Advanced Debugging & Profiling
+
+- **`flutter_build_mode`** (#442): New MCP tool that detects the Flutter build mode (debug / profile / release) of the running app and reports which opensafari tools are usable in that mode. Use it when `flutter_connect` fails to distinguish between a release build (VM Service disabled by design) and a configuration issue. Returns a `capabilities` map plus a `fallback_tools` list for release builds.
+- **`flutter_toggle_debug_paint`** (#437): New MCP tool that flips Flutter's debug paint overlays (`size`, `baseline`, `repaint_rainbow`) and `time_dilation`, plus an `all_off` reset mode. Backed by `ext.flutter.debugPaint` / `ext.flutter.debugPaintBaselinesEnabled` / `ext.flutter.repaintRainbow` / `ext.flutter.timeDilation`. Useful for diagnosing overflow, padding, and repaint issues via `app_screenshot_native`.
+- **`flutter_list_service_extensions`** (#441): Enumerates every VM Service extension registered by the running Flutter app — including third-party ones (`ext.riverpod.*`, `ext.isar.*`, BLoC observers) — with an optional `prefix` filter. Groups results by namespace for easy LLM consumption.
+- **`flutter_call_service_extension`** (#441): Generic invoker for any service extension. Auto-injects `isolateId`, enforces an `ext.` prefix, validates `args` is an object, audit-logs every call to stderr. Covers Riverpod / BLoC / Isar / etc. without shipping per-library wrappers (Option B from the issue).
+- **`flutter_evaluate`** (#434): New MCP tool that evaluates arbitrary Dart expressions against a running Flutter app's main isolate via the VM Service `evaluate` / `evaluateInFrame` RPCs. Default scope is the main isolate's root library; `scope="frame"` with `frame_index` targets a paused stack frame (future-compatible with breakpoint support in #435). Results are normalised into a compact shape — primitives return `valueAsString`, composites expose 1-depth `fields`. Debug/profile builds only.
+- **`FlutterVMClient.evaluate` / `evaluateInFrame`**: New public VM-client helpers that auto-resolve the root library target and surface typed errors (`NO_ISOLATE`, `NO_ROOT_LIB`).
+- **`flutter_root_widget`** (#436): Dumps the running Flutter app's widget summary tree via `ext.flutter.inspector.getRootWidgetSummaryTreeWithPreviews`. Each node includes `type`, `description`, and `creationLocation` (file:line:column) so callers can jump straight to the source.
+- **`flutter_inspect_selection`** (#436): Returns the currently selected widget via `ext.flutter.inspector.getSelectedSummaryWidget`, with an optional `show` flag that toggles the in-app inspector overlay (`ext.flutter.inspector.show`) to arm coordinate-based selection. Empty selection returns `status: "empty"` with a usage hint.
+- **`FlutterVMClient.getRootWidgetSummaryTree` / `getSelectedWidget` / `setInspectorShow`**: New VM-client helpers wrapping the Flutter Inspector service extensions.
+- **`flutter_cpu_profile`** (#439): Samples the Dart VM CPU profiler via `getCpuSamples` for a configurable window (max 120s) and returns a top-N list of `{function, self_us, total_us, samples}`. Pure `aggregateCpuSamples` helper exported for testing.
+- **`flutter_timeline_capture`** (#439): Enables VM timeline streams (default `["Dart", "GC", "Embedder"]`), waits a window, fetches `getVMTimeline`, and writes Chrome Trace Event JSON loadable in `chrome://tracing` or Perfetto.
+- **`flutter_track_rebuilds`** (#438): Drives the Flutter dirty-widget rebuild tracker. `start` / `report` / `stop` actions, optional `duration_ms` auto-stop, capped at 10,000 events per tracker.
+- **`flutter_allocation_profile`** (#440): Per-class allocation profile via `getAllocationProfile`. Supports `gc_before` and `diff_against_previous` for the standard leak-hunt pattern (baseline → action → diff).
+- **`flutter_heap_snapshot`** (#440): Full Dart heap snapshot via `requestHeapSnapshot`, written as binary importable by Flutter DevTools' Memory tab. Configurable `timeout_ms` (default 60s, max 10min).
+- **Breakpoint / step debugging** (#435): Five new MCP tools that drive the Dart VM Service debugger end-to-end.
+  - `flutter_set_breakpoint({ script_uri, line, column? })` — wraps `addBreakpointWithScriptUri`
+  - `flutter_remove_breakpoint({ breakpoint_id })` — wraps `removeBreakpoint`
+  - `flutter_resume({ mode: "continue" | "step_into" | "step_over" | "step_out" })` — wraps `resume` with the matching `step` token
+  - `flutter_get_stack({ limit? })` — wraps `getStack` with a compact per-frame summary (`function`, `location: {script_uri, line}`, `vars`)
+  - `flutter_wait_for_pause({ timeout_ms?, poll_interval_ms? })` — polls for pause state, mirroring `app_wait_for`; returns `{timeout: true}` on timeout
+- Per-device `BreakpointManager` lazily subscribes to the `Debug` stream and tracks pause state + active breakpoints. Pure helpers `resumeModeToStep`, `summariseFrame`, `_resetBreakpointManagers` exported for testability.
+
+### Fixed
+
+- **Breakpoint manager** (#435): Cleans listeners on disconnect and detects VM reconnect to avoid stale state.
+- **Memory profiler** (#440): LRU cap on `previousSnapshots` prevents unbounded memory growth; `forgetAllocationHistory` exposed.
+- **Track rebuilds** (#438): Rolls back listener registration if `track_rebuilds start` fails mid-setup.
+- **CPU profiler** (#439): Resets timeline flags on capture failure to avoid leaving streams enabled.
+- **Widget inspector** (#436): Clamps `max_depth` and adds cycle guard to `summariseNode`.
+- **Evaluate** (#434): Security docstring, audit log, Null handling, whitespace guard.
+- **Service extensions** (#441): Caller cannot silently retarget `isolateId`.
+- **Debug paint** (#437): `all_off` tolerates partial failure and caps dilation.
+- **Build mode** (#442): Reports `'unknown'` when URL discovered without connect.
+- **Lint** (#452): Fixed 12 pre-existing lint errors blocking CI on feature branches.
+
 ## [0.3.1] - 2026-04-13
 
 ### Security / Behavior change

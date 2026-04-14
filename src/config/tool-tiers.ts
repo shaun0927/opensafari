@@ -111,6 +111,34 @@ export const TOOL_TIERS: Record<string, number> = {
   // Tier 2: Flutter Network Monitoring
   flutter_network: 2,
 
+  // Tier 2: Flutter Build Mode Detector (issue #442)
+  flutter_build_mode: 2,
+
+  // Tier 2: Flutter Debug Paint Overlays (issue #437)
+  flutter_toggle_debug_paint: 2,
+  // Tier 2: Flutter Service Extensions (issue #441)
+  flutter_list_service_extensions: 2,
+  flutter_call_service_extension: 2,
+  // Tier 2: Flutter Expression Evaluation (issue #434)
+  flutter_evaluate: 2,
+  // Tier 2: Flutter Inspector (issue #436)
+  flutter_root_widget: 2,
+  flutter_inspect_selection: 2,
+  // Tier 2: Flutter Performance Profiling (issue #439)
+  flutter_cpu_profile: 2,
+  flutter_timeline_capture: 2,
+  // Tier 2: Flutter Rebuild Tracking (issue #438)
+  flutter_track_rebuilds: 2,
+  // Tier 2: Flutter Memory Profiling (issue #440)
+  flutter_allocation_profile: 2,
+  flutter_heap_snapshot: 2,
+  // Tier 2: Flutter Breakpoint / Step Debugging (issue #435)
+  flutter_set_breakpoint: 2,
+  flutter_remove_breakpoint: 2,
+  flutter_resume: 2,
+  flutter_get_stack: 2,
+  flutter_wait_for_pause: 2,
+
   // Tier 2: Native App — Semantic Interaction (Flutter-compatible)
   app_tap_element: 2,
   // Tier 2: Native App — Semantic Wait & Assert (Flutter-compatible)

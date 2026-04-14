@@ -88,6 +88,33 @@ import { registerFlutterWidgetTreeTool } from './flutter-widget-tree';
 import { registerFlutterHotReloadTool } from './flutter-hot-reload';
 import { registerFlutterLogsTool } from './flutter-logs';
 import { registerFlutterNetworkTool } from './flutter-network';
+import { registerFlutterBuildModeTool } from './flutter-build-mode';
+import { registerFlutterDebugPaintTool } from './flutter-debug-paint';
+import {
+  registerFlutterListServiceExtensionsTool,
+  registerFlutterCallServiceExtensionTool,
+} from './flutter-service-extensions';
+import { registerFlutterEvaluateTool } from './flutter-evaluate';
+import {
+  registerFlutterRootWidgetTool,
+  registerFlutterInspectSelectionTool,
+} from './flutter-inspector';
+import {
+  registerFlutterCpuProfileTool,
+  registerFlutterTimelineCaptureTool,
+} from './flutter-cpu-profile';
+import { registerFlutterTrackRebuildsTool } from './flutter-track-rebuilds';
+import {
+  registerFlutterAllocationProfileTool,
+  registerFlutterHeapSnapshotTool,
+} from './flutter-memory-profile';
+import {
+  registerFlutterSetBreakpointTool,
+  registerFlutterRemoveBreakpointTool,
+  registerFlutterResumeTool,
+  registerFlutterGetStackTool,
+  registerFlutterWaitForPauseTool,
+} from './flutter-breakpoints';
 import { registerAppTapElementTool } from './app-tap-element';
 import { registerAppWaitForNativeTool } from './app-wait-for';
 import { registerAppAssertElementTool } from './app-assert-element';
@@ -248,6 +275,34 @@ export function registerAllTools(server: MCPServer): void {
 
   // Tier 2: Flutter Network Monitoring
   registerFlutterNetworkTool(server);
+
+  // Tier 2: Flutter Build Mode Detector (issue #442)
+  registerFlutterBuildModeTool(server);
+
+  // Tier 2: Flutter Debug Paint Overlays (issue #437)
+  registerFlutterDebugPaintTool(server);
+  // Tier 2: Flutter Service Extensions (issue #441)
+  registerFlutterListServiceExtensionsTool(server);
+  registerFlutterCallServiceExtensionTool(server);
+  // Tier 2: Flutter Expression Evaluation (issue #434)
+  registerFlutterEvaluateTool(server);
+  // Tier 2: Flutter Inspector (issue #436)
+  registerFlutterRootWidgetTool(server);
+  registerFlutterInspectSelectionTool(server);
+  // Tier 2: Flutter Performance Profiling (issue #439)
+  registerFlutterCpuProfileTool(server);
+  registerFlutterTimelineCaptureTool(server);
+  // Tier 2: Flutter Rebuild Tracking (issue #438)
+  registerFlutterTrackRebuildsTool(server);
+  // Tier 2: Flutter Memory Profiling (issue #440)
+  registerFlutterAllocationProfileTool(server);
+  registerFlutterHeapSnapshotTool(server);
+  // Tier 2: Flutter Breakpoint / Step Debugging (issue #435)
+  registerFlutterSetBreakpointTool(server);
+  registerFlutterRemoveBreakpointTool(server);
+  registerFlutterResumeTool(server);
+  registerFlutterGetStackTool(server);
+  registerFlutterWaitForPauseTool(server);
 
   // Tier 2: Native App — Semantic Interaction (Flutter-compatible)
   registerAppTapElementTool(server);

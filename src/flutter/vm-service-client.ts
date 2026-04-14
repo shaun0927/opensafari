@@ -194,6 +194,51 @@ export class FlutterVMClient {
     return (result as { result?: string }).result ?? JSON.stringify(result);
   }
 
+  /**
+   * Get the root widget summary tree via the Flutter Inspector
+   * (`ext.flutter.inspector.getRootWidgetSummaryTreeWithPreviews`).
+   *
+   * Returns a structured JSON node with `type`, `description`, and
+   * `creationLocation` (file:line:column) per widget. `objectGroup` is
+   * a Flutter-Inspector lifetime scope — a stable group name is fine for
+   * LLM-driven introspection; DevTools rotates groups per request to
+   * manage memory but for one-shot MCP calls the default is safe.
+   */
+  async getRootWidgetSummaryTree(
+    options?: { objectGroup?: string },
+  ): Promise<Record<string, unknown>> {
+    return this.callServiceExtension('inspector.getRootWidgetSummaryTreeWithPreviews', {
+      objectGroup: options?.objectGroup ?? 'opensafari-root',
+    });
+  }
+
+  /**
+   * Get the currently selected widget via the Flutter Inspector
+   * (`ext.flutter.inspector.getSelectedSummaryWidget`). The selection is
+   * normally set by toggling the in-app inspector overlay (`ext.flutter.inspector.show`)
+   * and tapping a widget, or by a follow-up `setSelectionById` tool.
+   */
+  async getSelectedWidget(
+    options?: { objectGroup?: string; previousSelectionId?: string },
+  ): Promise<Record<string, unknown>> {
+    return this.callServiceExtension('inspector.getSelectedSummaryWidget', {
+      objectGroup: options?.objectGroup ?? 'opensafari-selection',
+      ...(options?.previousSelectionId ? { previousSelectionId: options.previousSelectionId } : {}),
+    });
+  }
+
+  /**
+   * Toggle the in-app widget inspector overlay
+   * (`ext.flutter.inspector.show`). When true, taps on the running app
+   * select widgets instead of dispatching to handlers — pair with
+   * `getSelectedWidget` to implement coord→widget lookup.
+   */
+  async setInspectorShow(enabled: boolean): Promise<Record<string, unknown>> {
+    return this.callServiceExtension('inspector.show', {
+      enabled: enabled ? 'true' : 'false',
+    });
+  }
+
   /** Trigger a hot reload */
   async hotReload(): Promise<Record<string, unknown>> {
     const isolateId = this.state?.mainIsolateId;
@@ -217,6 +262,67 @@ export class FlutterVMClient {
   async toggleDebugBanner(enabled: boolean): Promise<Record<string, unknown>> {
     return this.callServiceExtension('debugAllowBanner', {
       enabled: enabled ? 'true' : 'false',
+    });
+  }
+
+  // ── Expression Evaluation (issue #434) ──────────────────────────────────
+
+  /**
+   * Evaluate a Dart expression against the main isolate's root library.
+   *
+   * Parameters:
+   *   expression — any Dart expression (e.g. "1 + 1", "DateTime.now()")
+   *   options.isolateId — override the main isolate (optional)
+   *   options.targetId — override the root-library target (optional)
+   *
+   * Returns the raw `@Instance` / `@Error` / `Sentinel` result from the VM.
+   */
+  async evaluate(
+    expression: string,
+    options?: { isolateId?: string; targetId?: string },
+  ): Promise<Record<string, unknown>> {
+    const isolateId = options?.isolateId ?? this.state?.mainIsolateId;
+    if (!isolateId) {
+      throw new FlutterVMError('No main isolate found', 'NO_ISOLATE');
+    }
+
+    let targetId = options?.targetId;
+    if (!targetId) {
+      const isolate = await this.callMethod('getIsolate', { isolateId });
+      const rootLib = (isolate as { rootLib?: { id?: string } }).rootLib;
+      if (!rootLib?.id) {
+        throw new FlutterVMError(
+          'Cannot evaluate: isolate has no rootLib (is the app fully initialised?)',
+          'NO_ROOT_LIB',
+        );
+      }
+      targetId = rootLib.id;
+    }
+
+    return this.callMethod('evaluate', {
+      isolateId,
+      targetId,
+      expression,
+    });
+  }
+
+  /**
+   * Evaluate a Dart expression inside a specific stack frame. Only meaningful
+   * while the isolate is paused at a breakpoint (future work — issue #435).
+   */
+  async evaluateInFrame(
+    frameIndex: number,
+    expression: string,
+    options?: { isolateId?: string },
+  ): Promise<Record<string, unknown>> {
+    const isolateId = options?.isolateId ?? this.state?.mainIsolateId;
+    if (!isolateId) {
+      throw new FlutterVMError('No main isolate found', 'NO_ISOLATE');
+    }
+    return this.callMethod('evaluateInFrame', {
+      isolateId,
+      frameIndex,
+      expression,
     });
   }
 
