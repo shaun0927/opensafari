@@ -13,6 +13,7 @@ import type {
   VMInfo,
   FlutterConnectionState,
   FlutterConnectOptions,
+  DartVersion,
 } from './flutter-types';
 import { discoverVMServiceUrl, httpToWsUrl, isValidVMServiceUrl } from './vm-service-discovery';
 
@@ -20,6 +21,26 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 10000;
 const DEFAULT_CONNECT_TIMEOUT_MS = 5000;
 
 type EventCallback = (event: VMServiceEvent['params']['event']) => void;
+
+/**
+ * Parse a Dart VM `version` string (e.g. "3.11.3 (stable) ... on \"ios_arm64\"")
+ * into its semver components. Returns `null` when the string does not begin
+ * with a recognisable `MAJOR.MINOR.PATCH` sequence.
+ *
+ * The Dart SDK major correlates 1:1 with the Flutter major release line:
+ * Dart 3.x ships with Flutter 3.x, Dart 2.x ships with Flutter 2.x.
+ */
+export function parseDartVersion(versionString: string | undefined | null): DartVersion | null {
+  if (!versionString || typeof versionString !== 'string') return null;
+  const match = versionString.trim().match(/^(\d+)\.(\d+)\.(\d+)/);
+  if (!match) return null;
+  const [, major, minor, patch] = match;
+  return {
+    major: Number(major),
+    minor: Number(minor),
+    patch: Number(patch),
+  };
+}
 
 export class FlutterVMClient {
   private ws: WebSocket | null = null;
@@ -79,6 +100,7 @@ export class FlutterVMClient {
     // Get VM info and find main isolate
     const vmInfo = await this.getVM();
     const mainIsolate = vmInfo.isolates.find((i) => i.name === 'main') ?? vmInfo.isolates[0];
+    const dartVersion = parseDartVersion(vmInfo.version);
 
     this.state = {
       httpUrl,
@@ -88,9 +110,28 @@ export class FlutterVMClient {
       deviceId: options.deviceId,
       vmInfo,
       mainIsolateId: mainIsolate?.id,
+      dartVersionString: vmInfo.version,
+      dartVersion,
     };
 
     return this.state;
+  }
+
+  /**
+   * Parsed Dart SDK version captured at connect time. `null` when the VM
+   * version string was unparsable; `undefined` before `connect()` completes.
+   */
+  getDartVersion(): DartVersion | null | undefined {
+    return this.state?.dartVersion;
+  }
+
+  /**
+   * Approximate Flutter major based on the Dart SDK major (Dart 3.x → Flutter
+   * 3.x, Dart 2.x → Flutter 2.x). Returns `null` when the version is unknown.
+   */
+  getFlutterMajor(): number | null {
+    const v = this.state?.dartVersion;
+    return v ? v.major : null;
   }
 
   /** Disconnect from the VM Service */
@@ -195,23 +236,38 @@ export class FlutterVMClient {
   }
 
   /**
-   * Get the root widget summary tree via the Flutter Inspector
-   * (`ext.flutter.inspector.getRootWidgetSummaryTreeWithPreviews`).
+   * Get the root widget summary tree via the Flutter Inspector.
+   *
+   * Version-aware branching (issue #436):
+   * - Flutter 3.x (Dart major >= 3): try
+   *   `ext.flutter.inspector.getRootWidgetSummaryTreeWithPreviews` first, fall
+   *   back to `getRootWidgetSummaryTree` on VM Service error -32000 (or any
+   *   error — older 3.0/3.1 builds occasionally omit WithPreviews too).
+   * - Flutter 2.x (Dart major < 3): skip `WithPreviews` entirely and call
+   *   `getRootWidgetSummaryTree` directly; the preview variant is unreliable
+   *   or absent on 2.x inspector surfaces.
+   * - Unknown version (no `vm.version` parsed yet): preserve the historical
+   *   try/catch behaviour — attempt `WithPreviews` first, fall back on any
+   *   error.
    *
    * Returns a structured JSON node with `type`, `description`, and
-   * `creationLocation` (file:line:column) per widget. `objectGroup` is
-   * a Flutter-Inspector lifetime scope — a stable group name is fine for
-   * LLM-driven introspection; DevTools rotates groups per request to
-   * manage memory but for one-shot MCP calls the default is safe.
-   *
-   * Falls back to `getRootWidgetSummaryTree` (without previews) if the
-   * WithPreviews variant fails (e.g. VM Service error -32000 on older
-   * Flutter versions). If both fail, the original error is rethrown.
+   * `creationLocation` (file:line:column) per widget. `objectGroup` is a
+   * Flutter-Inspector lifetime scope — a stable group name is fine for
+   * LLM-driven introspection; DevTools rotates groups per request to manage
+   * memory but for one-shot MCP calls the default is safe.
    */
   async getRootWidgetSummaryTree(
     options?: { objectGroup?: string },
   ): Promise<Record<string, unknown>> {
     const params = { objectGroup: options?.objectGroup ?? 'opensafari-root' };
+    const dartVersion = this.state?.dartVersion;
+
+    // Flutter 2.x: skip WithPreviews entirely.
+    if (dartVersion && dartVersion.major < 3) {
+      return this.callServiceExtension('inspector.getRootWidgetSummaryTree', params);
+    }
+
+    // Flutter 3.x or unknown: try WithPreviews first, fall back on error.
     let originalError: unknown;
     try {
       return await this.callServiceExtension('inspector.getRootWidgetSummaryTreeWithPreviews', params);
