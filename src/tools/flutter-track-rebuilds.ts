@@ -5,7 +5,7 @@
  * of Flutter performance regressions and are invisible from screenshots
  * alone. The Flutter framework already tracks dirty-widget rebuilds when
  * asked via `ext.flutter.inspector.trackRebuildDirtyWidgets(true)` and
- * publishes `Flutter.RebuildWidgets` events on the `Extension` stream.
+ * publishes `Flutter.RebuiltWidgets` events on the `Extension` stream.
  *
  * This tool wraps the full lifecycle (start → events accumulate →
  * report or stop → disable tracking) behind a single MCP tool so LLMs
@@ -61,7 +61,7 @@ export function _resetTrackers(): void {
 // ── Event parsing ───────────────────────────────────────────────────────────
 
 /**
- * Shape of a Flutter.RebuildWidgets event payload. Events come encoded as a
+ * Shape of a Flutter.RebuiltWidgets event payload. Events come encoded as a
  * flat `[locationId, count, locationId, count, ...]` array in recent Flutter
  * versions, or as `[[locId, count], ...]` pairs in older ones — we handle both.
  * Locations are a compact map of id → {file, line, column, name} where name
@@ -149,7 +149,7 @@ async function startTracking(
 
   state.listener = (ev: FlutterEvent) => {
     const extensionKind = (ev as unknown as Record<string, unknown>).extensionKind;
-    if (extensionKind !== 'Flutter.RebuildWidgets') return;
+    if (extensionKind !== 'Flutter.RebuiltWidgets') return;
     if (state.eventCount >= MAX_EVENTS_PER_TRACKER) return;
     mergeRebuildEvent(state, (ev as unknown as Record<string, unknown>).extensionData);
   };
@@ -249,7 +249,7 @@ export function registerFlutterTrackRebuildsTool(server: MCPServer): void {
       description:
         'Track widget rebuild counts in a running Flutter app. ' +
         'action="start" enables ext.flutter.inspector.trackRebuildDirtyWidgets and ' +
-        'subscribes to Flutter.RebuildWidgets events; action="report" returns a ' +
+        'subscribes to Flutter.RebuiltWidgets events; action="report" returns a ' +
         'top-N list of {widget, file:line, rebuild_count}; action="stop" disables ' +
         'tracking and clears state. Use duration_ms on "start" to auto-stop after ' +
         'a fixed window. Requires an active flutter_connect session (debug build).',

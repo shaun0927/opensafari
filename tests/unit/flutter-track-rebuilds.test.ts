@@ -195,14 +195,14 @@ describe('flutter_track_rebuilds handler', () => {
     const registeredListener = mockOnEvent.mock.calls[0][1] as (ev: unknown) => void;
 
     registeredListener({
-      extensionKind: 'Flutter.RebuildWidgets',
+      extensionKind: 'Flutter.RebuiltWidgets',
       extensionData: {
         events: [1, 10, 2, 1],
         locations: { '1': { file: 'hot.dart', line: 5, name: 'Hot' } },
       },
     });
     registeredListener({
-      extensionKind: 'Flutter.RebuildWidgets',
+      extensionKind: 'Flutter.RebuiltWidgets',
       extensionData: { events: [1, 2], locations: {} },
     });
     // Unrelated extension events must be ignored

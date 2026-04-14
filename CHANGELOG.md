@@ -33,6 +33,7 @@ All notable changes to this project will be documented in this file.
 - **Breakpoint manager** (#435): Cleans listeners on disconnect and detects VM reconnect to avoid stale state.
 - **Memory profiler** (#440): LRU cap on `previousSnapshots` prevents unbounded memory growth; `forgetAllocationHistory` exposed.
 - **Track rebuilds** (#438): Rolls back listener registration if `track_rebuilds start` fails mid-setup.
+- **Track rebuilds event name** (#438): Fixed filter to match `Flutter.RebuiltWidgets` (past tense, the actual event name Flutter emits from `widget_inspector.dart:2538`) instead of `Flutter.RebuildWidgets`. Without this fix, no rebuild events were captured in live apps.
 - **CPU profiler** (#439): Resets timeline flags on capture failure to avoid leaving streams enabled.
 - **Widget inspector** (#436): Clamps `max_depth` and adds cycle guard to `summariseNode`.
 - **Evaluate** (#434): Security docstring, audit log, Null handling, whitespace guard.
