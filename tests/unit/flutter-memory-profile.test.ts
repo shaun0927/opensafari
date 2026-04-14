@@ -324,3 +324,5 @@ describe('flutter_heap_snapshot handler', () => {
     }
   });
 });
+
+export {};
