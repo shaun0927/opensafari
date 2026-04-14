@@ -20,16 +20,12 @@ const BUILD_SCRIPT = path.resolve(__dirname, '../fixtures/flutter-qa-app/build.s
 // ---------------------------------------------------------------------------
 
 function flutterOnPath(): boolean {
+  const bin = process.env.FLUTTER_BIN ?? 'flutter';
   try {
-    execFileSync('/opt/homebrew/bin/flutter', ['--version'], { stdio: 'ignore', timeout: 5000 });
+    execFileSync(bin, ['--version'], { stdio: 'ignore', timeout: 5000 });
     return true;
   } catch {
-    try {
-      execFileSync('flutter', ['--version'], { stdio: 'ignore', timeout: 5000 });
-      return true;
-    } catch {
-      return false;
-    }
+    return false;
   }
 }
 
@@ -54,9 +50,11 @@ const hasFlutter = flutterOnPath();
 const resolvedDeviceId = resolveBootedDeviceId();
 const shouldRun = hasFlutter && resolvedDeviceId !== null;
 
-if (!shouldRun) {
+if (!shouldRun && !process.env.CI) {
   if (!hasFlutter) {
-    console.error('[flutter-fixture-ax] SKIP: flutter not found on PATH');
+    console.error(
+      '[flutter-fixture-ax] SKIP: flutter not found on PATH (set FLUTTER_BIN to override)',
+    );
   } else {
     console.error(
       '[flutter-fixture-ax] SKIP: no booted iOS simulator found and FIXTURE_DEVICE_ID is not set',
