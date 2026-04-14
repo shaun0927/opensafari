@@ -90,6 +90,10 @@ import { registerFlutterLogsTool } from './flutter-logs';
 import { registerFlutterNetworkTool } from './flutter-network';
 import { registerFlutterBuildModeTool } from './flutter-build-mode';
 import { registerFlutterDebugPaintTool } from './flutter-debug-paint';
+import {
+  registerFlutterListServiceExtensionsTool,
+  registerFlutterCallServiceExtensionTool,
+} from './flutter-service-extensions';
 import { registerAppTapElementTool } from './app-tap-element';
 import { registerAppWaitForNativeTool } from './app-wait-for';
 import { registerAppAssertElementTool } from './app-assert-element';
@@ -256,6 +260,9 @@ export function registerAllTools(server: MCPServer): void {
 
   // Tier 2: Flutter Debug Paint Overlays (issue #437)
   registerFlutterDebugPaintTool(server);
+  // Tier 2: Flutter Service Extensions (issue #441)
+  registerFlutterListServiceExtensionsTool(server);
+  registerFlutterCallServiceExtensionTool(server);
 
   // Tier 2: Native App — Semantic Interaction (Flutter-compatible)
   registerAppTapElementTool(server);
