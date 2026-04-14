@@ -124,6 +124,9 @@ export const TOOL_TIERS: Record<string, number> = {
   // Tier 2: Flutter Inspector (issue #436)
   flutter_root_widget: 2,
   flutter_inspect_selection: 2,
+  // Tier 2: Flutter Performance Profiling (issue #439)
+  flutter_cpu_profile: 2,
+  flutter_timeline_capture: 2,
 
   // Tier 2: Native App — Semantic Interaction (Flutter-compatible)
   app_tap_element: 2,
