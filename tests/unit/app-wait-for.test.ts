@@ -67,7 +67,7 @@ let assertHandler: ToolHandler;
 
 beforeAll(() => {
   const mockServer = {
-    registerTool: jest.fn((schema: unknown, fn: unknown) => {}),
+    registerTool: jest.fn((_schema: unknown, _fn: unknown) => {}),
   } as unknown as MCPServer;
 
   // Capture wait_for handler
