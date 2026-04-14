@@ -413,3 +413,5 @@ describe('BreakpointManager lifecycle', () => {
     expect(mockOffEvent).toHaveBeenCalledWith('Debug', expect.any(Function));
   });
 });
+
+export {};
