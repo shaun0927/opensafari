@@ -21,6 +21,7 @@ jest.mock('../../src/session-manager', () => ({
   }),
 }));
 
+import * as net from 'net';
 import { MCPServer } from '../../src/mcp-server';
 import { registerFlutterNetworkTool } from '../../src/tools/flutter-network';
 
@@ -148,4 +149,66 @@ describe('flutter_network', () => {
 
     expect(body.error).toMatch(/No proxy/i);
   });
+
+  it('captures WebSocket upgrade requests as entries with is_upgrade=true', async () => {
+    // Spin up a local TCP server that responds to upgrade with 101
+    const upstream = await new Promise<net.Server>((resolve) => {
+      const srv = net.createServer((sock) => {
+        sock.once('data', () => {
+          sock.write(
+            'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n',
+          );
+        });
+      });
+      srv.listen(0, '127.0.0.1', () => resolve(srv));
+    });
+
+    const upstreamPort = (upstream.address() as net.AddressInfo).port;
+
+    try {
+      await handler('s', { action: 'start', port: 18894 });
+
+      // Open raw TCP to the proxy and send a WebSocket upgrade request
+      await new Promise<void>((resolve, reject) => {
+        const client = net.createConnection(18894, '127.0.0.1', () => {
+          const req = [
+            `GET http://127.0.0.1:${upstreamPort}/ws HTTP/1.1`,
+            `Host: 127.0.0.1:${upstreamPort}`,
+            'Upgrade: websocket',
+            'Connection: Upgrade',
+            'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==',
+            'Sec-WebSocket-Version: 13',
+            '',
+            '',
+          ].join('\r\n');
+          client.write(req);
+        });
+
+        client.once('data', () => {
+          client.destroy();
+          resolve();
+        });
+
+        client.on('error', reject);
+        setTimeout(() => { client.destroy(); resolve(); }, 5000);
+      });
+
+      // Wait for async addEntry to run
+      await new Promise((r) => setTimeout(r, 200));
+
+      const logResult = await handler('s', { action: 'log' });
+      const logBody = JSON.parse(logResult.content[0].text);
+
+      const upgradeEntry = logBody.entries.find(
+        (e: Record<string, unknown>) => e.is_upgrade === true,
+      );
+
+      expect(upgradeEntry).toBeDefined();
+      expect(upgradeEntry.status).toBe(101);
+      expect(upgradeEntry.method).toBe('GET');
+    } finally {
+      await handler('s', { action: 'stop' });
+      await new Promise<void>((resolve) => upstream.close(() => resolve()));
+    }
+  }, 15000);
 });
