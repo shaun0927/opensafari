@@ -49,8 +49,21 @@ export interface WidgetSummary {
   children?: WidgetSummary[];
 }
 
-export function summariseNode(node: unknown, maxDepth = 8): WidgetSummary | null {
+const MAX_DEPTH_CAP = 64;
+
+export function summariseNode(
+  node: unknown,
+  maxDepth = 8,
+  visited?: WeakSet<object>,
+): WidgetSummary | null {
   if (!node || typeof node !== 'object') return null;
+  const seen = visited ?? new WeakSet<object>();
+  if (seen.has(node as object)) {
+    // Defensive cycle guard. Summary trees should be DAGs, but a malformed
+    // payload or future Flutter change could introduce one.
+    return { type: 'CycleDetected' };
+  }
+  seen.add(node as object);
   const n = node as Record<string, unknown>;
 
   const type = typeof n.type === 'string' ? n.type : (typeof n.description === 'string' ? n.description : 'Unknown');
@@ -79,7 +92,7 @@ export function summariseNode(node: unknown, maxDepth = 8): WidgetSummary | null
 
   if (maxDepth > 0 && Array.isArray(n.children)) {
     summary.children = (n.children as unknown[])
-      .map((c) => summariseNode(c, maxDepth - 1))
+      .map((c) => summariseNode(c, maxDepth - 1, seen))
       .filter((c): c is WidgetSummary => c !== null);
   }
 
@@ -119,9 +132,12 @@ export function registerFlutterRootWidgetTool(server: MCPServer): void {
     async (_sessionId: string, params: Record<string, unknown>) => {
       try {
         const { deviceId, client } = await resolveClient(params.device_id);
-        const maxDepth = typeof params.max_depth === 'number' && params.max_depth >= 0
-          ? Math.floor(params.max_depth)
-          : 8;
+        // Clamp to [0, MAX_DEPTH_CAP] with NaN / Infinity rejected.
+        const rawDepth = params.max_depth;
+        const maxDepth =
+          typeof rawDepth === 'number' && Number.isFinite(rawDepth) && rawDepth >= 0
+            ? Math.min(Math.floor(rawDepth), MAX_DEPTH_CAP)
+            : 8;
 
         const raw = await client.getRootWidgetSummaryTree({
           objectGroup: typeof params.object_group === 'string' ? params.object_group : undefined,

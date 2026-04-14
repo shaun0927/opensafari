@@ -79,6 +79,17 @@ describe('summariseNode', () => {
     const s = summariseNode({ type: 'A', children: [{ type: 'B' }] }, 0);
     expect(s?.children).toBeUndefined();
   });
+
+  it('detects cycles defensively', () => {
+    const a: Record<string, unknown> = { type: 'A' };
+    const b: Record<string, unknown> = { type: 'B', children: [a] };
+    a.children = [b];
+
+    const s = summariseNode(a, 10);
+    expect(s?.type).toBe('A');
+    expect(s?.children?.[0]?.type).toBe('B');
+    expect(s?.children?.[0]?.children?.[0]?.type).toBe('CycleDetected');
+  });
 });
 
 // ── flutter_root_widget handler ─────────────────────────────────────────────
@@ -128,6 +139,17 @@ describe('flutter_root_widget', () => {
     expect(body.tree.type).toBe('MaterialApp');
     expect(body.tree.children[0].type).toBe('Scaffold');
     expect(body.tree.children[0].creationLocation.file).toBe('a.dart');
+  });
+
+  it('clamps max_depth upper bound and rejects NaN/Infinity', async () => {
+    mockGetRootWidgetSummaryTree.mockResolvedValue({ type: 'A' });
+
+    // Infinity and NaN should fall back to the default (8), not recurse forever.
+    await handler('s', { max_depth: Infinity });
+    await handler('s', { max_depth: Number.NaN });
+    await handler('s', { max_depth: 1e9 }); // clamped to 64
+
+    expect(mockGetRootWidgetSummaryTree).toHaveBeenCalledTimes(3);
   });
 
   it('forwards object_group to the VM client', async () => {
