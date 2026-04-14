@@ -18,9 +18,6 @@ import { Buffer } from 'buffer';
 import { MCPServer } from '../mcp-server';
 import { getFlutterVMClient, FlutterVMError } from '../flutter';
 import { getSessionManager } from '../session-manager';
-import type { VMServiceEvent } from '../flutter/flutter-types';
-
-type FlutterEvent = VMServiceEvent['params']['event'];
 
 // ── Shared helpers ──────────────────────────────────────────────────────────
 
