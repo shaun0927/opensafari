@@ -104,6 +104,10 @@ import {
   registerFlutterTimelineCaptureTool,
 } from './flutter-cpu-profile';
 import { registerFlutterTrackRebuildsTool } from './flutter-track-rebuilds';
+import {
+  registerFlutterAllocationProfileTool,
+  registerFlutterHeapSnapshotTool,
+} from './flutter-memory-profile';
 import { registerAppTapElementTool } from './app-tap-element';
 import { registerAppWaitForNativeTool } from './app-wait-for';
 import { registerAppAssertElementTool } from './app-assert-element';
@@ -283,6 +287,9 @@ export function registerAllTools(server: MCPServer): void {
   registerFlutterTimelineCaptureTool(server);
   // Tier 2: Flutter Rebuild Tracking (issue #438)
   registerFlutterTrackRebuildsTool(server);
+  // Tier 2: Flutter Memory Profiling (issue #440)
+  registerFlutterAllocationProfileTool(server);
+  registerFlutterHeapSnapshotTool(server);
 
   // Tier 2: Native App — Semantic Interaction (Flutter-compatible)
   registerAppTapElementTool(server);
