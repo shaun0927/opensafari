@@ -298,3 +298,5 @@ describe('flutter_track_rebuilds handler', () => {
     expect(result.content[0].text).toContain('Not connected');
   });
 });
+
+export {};
