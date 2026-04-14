@@ -258,3 +258,5 @@ describe('flutter_inspect_selection', () => {
     expect(result.isError).toBe(true);
   });
 });
+
+export {};
