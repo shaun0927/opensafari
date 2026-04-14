@@ -308,6 +308,133 @@ export class FlutterVMClient {
     });
   }
 
+  /**
+   * Perform a Dart-side hit-test at a physical-pixel coordinate, then select
+   * the topmost RenderBox's Element via `WidgetInspectorService`, and return
+   * the selected summary widget.
+   *
+   * Flutter 3.11 does NOT expose `ext.flutter.inspector.screenToSummaryTree`
+   * (verified on the live extension list for iPhone 16 simulator). Instead,
+   * we drive the hit-test via `evaluate` against the root library:
+   *
+   *   1. Convert physical (x,y) to logical pixels using `devicePixelRatio`.
+   *   2. Call `WidgetsBinding.instance.renderViewElement` /
+   *      `renderView.hitTest(HitTestResult(), position: Offset(...))`.
+   *   3. Walk `HitTestResult.path` for the topmost `RenderBox` whose
+   *      `debugCreator` points at an Element, then feed that Element to
+   *      `WidgetInspectorService.instance.setSelection`.
+   *   4. Read back via `getSelectedSummaryWidget`.
+   *
+   * Returns the raw inspector selection payload (same shape as
+   * `getSelectedWidget`), or an object `{ hit: false }` if no widget was hit.
+   */
+  async selectWidgetAtPoint(options: {
+    physicalX: number;
+    physicalY: number;
+    devicePixelRatio: number;
+    objectGroup?: string;
+  }): Promise<Record<string, unknown>> {
+    const { physicalX, physicalY, devicePixelRatio } = options;
+    const objectGroup = options.objectGroup ?? 'opensafari-hit';
+
+    if (!Number.isFinite(devicePixelRatio) || devicePixelRatio <= 0) {
+      throw new FlutterVMError(
+        `Invalid devicePixelRatio: ${devicePixelRatio}`,
+        'INVALID_DPR',
+      );
+    }
+
+    // The objectGroup is interpolated into a Dart string literal below, so
+    // reject anything that could break out of the quoted context. The VM
+    // Service only uses this as an inspector lifetime scope — a conservative
+    // identifier alphabet is enough.
+    if (!/^[A-Za-z0-9_-]+$/.test(objectGroup)) {
+      throw new FlutterVMError(
+        `Invalid objectGroup: ${objectGroup}`,
+        'INVALID_OBJECT_GROUP',
+      );
+    }
+
+    const logicalX = physicalX / devicePixelRatio;
+    const logicalY = physicalY / devicePixelRatio;
+
+    // Dart expression: drive the hit-test and select the topmost RenderBox's
+    // Element via WidgetInspectorService. Returns true if something was hit,
+    // false otherwise. After this runs, getSelectedSummaryWidget reflects the
+    // selection.
+    const expression =
+      '(() {' +
+      '  final binding = WidgetsBinding.instance;' +
+      '  final rv = binding.renderViewElement?.renderObject as RenderView?;' +
+      '  if (rv == null) return false;' +
+      `  final result = HitTestResult();` +
+      `  rv.hitTest(result, position: Offset(${logicalX}, ${logicalY}));` +
+      '  Element? hitElement;' +
+      '  for (final entry in result.path) {' +
+      '    final target = entry.target;' +
+      '    if (target is RenderObject) {' +
+      '      final creator = target.debugCreator;' +
+      '      if (creator is DebugCreator) {' +
+      '        hitElement = creator.element;' +
+      '        break;' +
+      '      }' +
+      '    }' +
+      '  }' +
+      '  if (hitElement == null) return false;' +
+      `  WidgetInspectorService.instance.setSelection(hitElement, '${objectGroup}');` +
+      '  return true;' +
+      '})()';
+
+    // The expression references DebugCreator and WidgetInspectorService,
+    // which live in package:flutter/src/widgets/widget_inspector.dart and
+    // are NOT re-exported through flutter/material.dart. Evaluating against
+    // the user app's rootLib would fail with "Undefined name" on any app
+    // that only imports material. Resolve the inspector library and scope
+    // the evaluate to it so the symbols are always in lexical scope.
+    const isolateId = this.state?.mainIsolateId;
+    if (!isolateId) {
+      throw new FlutterVMError('No main isolate', 'NO_ISOLATE');
+    }
+    const isolate = await this.callMethod('getIsolate', { isolateId });
+    const libs =
+      (isolate as { libraries?: Array<{ uri?: string; id?: string }> }).libraries ?? [];
+    const inspectorLib = libs.find(
+      (l) => l.uri === 'package:flutter/src/widgets/widget_inspector.dart',
+    );
+    if (!inspectorLib?.id) {
+      throw new FlutterVMError(
+        'widget_inspector library not loaded in isolate',
+        'NO_INSPECTOR_LIB',
+      );
+    }
+
+    const hitResult = await this.evaluate(expression, { targetId: inspectorLib.id });
+    const hitInstance = hitResult as { valueAsString?: string; kind?: string };
+    const hit = hitInstance.valueAsString === 'true';
+
+    if (!hit) {
+      return { hit: false };
+    }
+
+    const selection = await this.getSelectedWidget({ objectGroup });
+    return { hit: true, selection };
+  }
+
+  /**
+   * Walk the parent chain of an inspector widget
+   * (`ext.flutter.inspector.getParentChain`). Returns the raw inspector
+   * response — caller is responsible for filtering/summarising the chain.
+   */
+  async getParentChain(options: {
+    inspectorRef: string;
+    objectGroup?: string;
+  }): Promise<Record<string, unknown>> {
+    return this.callServiceExtension('inspector.getParentChain', {
+      arg: options.inspectorRef,
+      objectGroup: options.objectGroup ?? 'opensafari-parent-chain',
+    });
+  }
+
   /** Trigger a hot reload */
   async hotReload(): Promise<Record<string, unknown>> {
     const isolateId = this.state?.mainIsolateId;
