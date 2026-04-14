@@ -30,6 +30,10 @@ export function registerAppQueryTool(server: MCPServer): void {
             type: 'string',
             description: 'Simulator device UDID (defaults to active device)',
           },
+          bundle_id: {
+            type: 'string',
+            description: 'Target Flutter app bundle ID. Only used to disambiguate Dart VM Service discovery when multiple Flutter apps run on the same simulator.',
+          },
           max_results: {
             type: 'number',
             description: 'Maximum number of results (default: 50)',
@@ -56,13 +60,14 @@ export function registerAppQueryTool(server: MCPServer): void {
 
       try {
         const deviceId = (params.device_id as string) ?? getSessionManager().getSoleDeviceId() ?? undefined;
+        const bundleId = params.bundle_id as string | undefined;
         const maxResults = params.max_results as number | undefined;
 
         const bridge = getAccessibilityBridge();
 
         // Ensure Flutter semantics are activated before querying
         if (deviceId) {
-          await ensureSemanticsActive(deviceId);
+          await ensureSemanticsActive(deviceId, { bundleId });
         }
 
         const result = await bridge.query(
