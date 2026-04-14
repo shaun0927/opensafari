@@ -308,3 +308,5 @@ describe('flutter_timeline_capture handler', () => {
     expect(setCalls[1].params).toEqual({ recordedStreams: [] });
   });
 });
+
+export {};
