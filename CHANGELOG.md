@@ -20,6 +20,13 @@ All notable changes to this project will be documented in this file.
 - **`flutter_track_rebuilds`** (#438): New MCP tool that drives the Flutter framework's dirty-widget rebuild tracker. `action: "start"` enables `ext.flutter.inspector.trackRebuildDirtyWidgets` and subscribes to `Flutter.RebuildWidgets` events on the `Extension` stream; `action: "report"` returns a top-N list of `{widget, file:line, rebuild_count}`; `action: "stop"` disables tracking and cleans up. Optional `duration_ms` on `start` arms an auto-stop. Aggregation is capped at 10,000 events per tracker to prevent memory growth.
 - **`flutter_allocation_profile`** (#440): Captures a per-class allocation profile via VM Service `getAllocationProfile`. Supports `gc_before` to force a major GC before sampling, and `diff_against_previous` to return `delta_instances` / `delta_bytes` against the prior call on the same device — the standard leak-hunt pattern (baseline → action → diff). Drops zero-instance rows, sorts descending by live bytes (or absolute delta in diff mode).
 - **`flutter_heap_snapshot`** (#440): Requests a full Dart heap snapshot via `requestHeapSnapshot`, drains `HeapSnapshot` stream chunks to a Buffer, and writes the result to `output_path` as a binary file importable by Flutter DevTools' Memory tab. Configurable `timeout_ms` (default 60s, max 10min).
+- **Breakpoint / step debugging** (#435): Five new MCP tools that drive the Dart VM Service debugger end-to-end.
+  - `flutter_set_breakpoint({ script_uri, line, column? })` — wraps `addBreakpointWithScriptUri`
+  - `flutter_remove_breakpoint({ breakpoint_id })` — wraps `removeBreakpoint`
+  - `flutter_resume({ mode: "continue" | "step_into" | "step_over" | "step_out" })` — wraps `resume` with the matching `step` token
+  - `flutter_get_stack({ limit? })` — wraps `getStack` with a compact per-frame summary (`function`, `location: {script_uri, line}`, `vars`)
+  - `flutter_wait_for_pause({ timeout_ms?, poll_interval_ms? })` — polls for pause state, mirroring `app_wait_for`; returns `{timeout: true}` on timeout
+- Per-device `BreakpointManager` lazily subscribes to the `Debug` stream and tracks pause state + active breakpoints. Pure helpers `resumeModeToStep`, `summariseFrame`, `_resetBreakpointManagers` exported for testability.
 
 ## [0.2.1] - 2026-04-05
 
