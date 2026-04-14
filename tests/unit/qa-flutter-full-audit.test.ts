@@ -10,6 +10,7 @@ jest.mock('../../src/mcp-server', () => {
   return { ...actual, getWebKitClient: jest.fn().mockReturnValue(null) };
 });
 
+import * as fs from 'fs';
 import { MCPServer } from '../../src/mcp-server';
 import { registerQaFlutterFullAuditTool } from '../../src/tools/qa-flutter-full-audit';
 import type { AXNode } from '../../src/native/ax-types';
@@ -84,9 +85,7 @@ function setupDarkModeMock(sizeDiffPercent: number): void {
   const lightSize = 100000;
   const darkSize = lightSize + Math.round(lightSize * (sizeDiffPercent / 100));
 
-  let screenshotCall = 0;
-  const fsModule = require('fs');
-  (fsModule.statSync as jest.Mock).mockImplementation((filePath: string) => {
+  (fs.statSync as jest.Mock).mockImplementation((filePath: string) => {
     if (typeof filePath === 'string' && filePath.includes('light')) {
       return { size: lightSize };
     }
@@ -373,38 +372,43 @@ describe('qa_flutter_full_audit', () => {
   // ── Test 5: Parallel execution pattern works ───────────────────────────
 
   it('executes tree-based checks and dark mode in parallel', async () => {
-    let treeDumpTime = 0;
-    let darkModeStartTime = 0;
+    let treeDumpStartedAt = 0;
+    let darkModeStartedAt = 0;
 
     mockDumpTree.mockImplementation(async () => {
-      treeDumpTime = Date.now();
+      treeDumpStartedAt = treeDumpStartedAt || Date.now();
+      // Slow tree dump so dark-mode has a real chance to start before it
+      // completes, letting us verify the two lanes actually interleave.
       await new Promise((r) => setTimeout(r, 50));
       return makeNode({
         children: [makeButton('Login', 200, 48, '0')],
       });
     });
 
-    const originalExec = mockSimctlExec;
     mockSimctlExec.mockImplementation(async (args: string[]) => {
       if (args[0] === 'ui' && args.length === 3) {
-        darkModeStartTime = Date.now();
+        darkModeStartedAt = darkModeStartedAt || Date.now();
         return 'light';
       }
       return '';
     });
 
     // Reset the fs mock for this test
-    const fsModule = require('fs');
-    (fsModule.statSync as jest.Mock).mockReturnValue({ size: 100000 });
+    (fs.statSync as jest.Mock).mockReturnValue({ size: 100000 });
 
     const result = await handler('s', {});
     const body = JSON.parse(result.content[0].text);
 
     expect(body.total_detectors).toBe(3);
-
-    // Both should have started (we can't guarantee exact timing, but they
-    // should both have run since we got results for all 3)
     expect(body.results).toHaveLength(3);
+
+    // Both lanes must have been reached.
+    expect(treeDumpStartedAt).toBeGreaterThan(0);
+    expect(darkModeStartedAt).toBeGreaterThan(0);
+    // If the orchestrator serialized the lanes, dark-mode would only
+    // start after tree-dump finished (≥50ms later). Allow generous
+    // scheduler slack and only fail on clearly-sequential timing.
+    expect(Math.abs(darkModeStartedAt - treeDumpStartedAt)).toBeLessThan(40);
   });
 
   // ── Additional edge cases ──────────────────────────────────────────────

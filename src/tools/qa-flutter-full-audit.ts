@@ -321,8 +321,6 @@ export function registerQaFlutterFullAuditTool(server: MCPServer): void {
         const minSize = (params.min_size as number | undefined) ?? DEFAULT_MIN_SIZE;
         const minCoverage = (params.min_coverage as number | undefined) ?? DEFAULT_MIN_COVERAGE;
 
-        const detectorNames = ['touch_targets', 'semantics', 'dark_mode'];
-
         // Run detectors in parallel:
         //   Group 1: tree-based checks (share one tree dump)
         //   Group 2: dark mode check (independent, uses simctl)
