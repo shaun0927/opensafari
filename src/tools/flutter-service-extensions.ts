@@ -162,9 +162,19 @@ export function registerFlutterCallServiceExtensionTool(server: MCPServer): void
           throw new Error('No main isolate available.');
         }
 
+        // Defensive: strip any caller-supplied `isolateId` before spreading,
+        // then add the auto-injected one. This guarantees the tool's promised
+        // "isolateId is injected for you" contract — a caller that passes
+        // {args: {isolateId: "other"}} cannot silently retarget the RPC.
+        const callerArgs = (args as Record<string, unknown> | undefined) ?? {};
+        if (Object.prototype.hasOwnProperty.call(callerArgs, 'isolateId')) {
+          console.error(`[flutter_call_service_extension] warning: caller-supplied isolateId ignored (auto-injected ${isolateId})`);
+        }
+        const { isolateId: _ignored, ...safeArgs } = callerArgs;
+        void _ignored;
         const result = await client.callMethod(extension, {
+          ...safeArgs,
           isolateId,
-          ...(args as Record<string, unknown> | undefined ?? {}),
         });
 
         return {

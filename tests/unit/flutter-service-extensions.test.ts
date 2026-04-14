@@ -205,6 +205,25 @@ describe('flutter_call_service_extension', () => {
     spy.mockRestore();
   });
 
+  it('ignores caller-supplied isolateId in args and warns', async () => {
+    const spy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    mockCallMethod.mockResolvedValue({});
+
+    await handler('s', {
+      extension: 'ext.foo',
+      args: { isolateId: 'attacker-chosen', scope: 'global' },
+    });
+
+    // Auto-injected isolateId must win, and scope must still be forwarded.
+    expect(mockCallMethod).toHaveBeenCalledWith('ext.foo', {
+      scope: 'global',
+      isolateId: 'iso-1',
+    });
+    const warning = spy.mock.calls.find((c) => String(c[0]).includes('isolateId ignored'));
+    expect(warning).toBeDefined();
+    spy.mockRestore();
+  });
+
   it('propagates RPC errors as tool errors', async () => {
     mockCallMethod.mockRejectedValue(new Error('RPC_ERROR: extension not registered'));
     const result = await handler('s', { extension: 'ext.unknown' });
