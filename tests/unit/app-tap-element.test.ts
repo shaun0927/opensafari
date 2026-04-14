@@ -11,7 +11,7 @@ jest.mock('../../src/mcp-server', () => {
 });
 
 import { MCPServer } from '../../src/mcp-server';
-import { registerAppTapElementTool } from '../../src/tools/app-tap-element';
+import { registerAppTapElementTool, sanitizeTapTarget } from '../../src/tools/app-tap-element';
 import type { AXNode, AXQueryResult } from '../../src/native/ax-types';
 
 // ── Mocks ──────────────────────────────────────────────────────────────────
@@ -393,5 +393,116 @@ describe('app_tap_element', () => {
     );
 
     warnSpy.mockRestore();
+  });
+
+  it('clamps a negative tap target to the device coordinate plane', async () => {
+    // Element reported at (-4, -2) with 20x20 size → raw center is
+    // (6, 8) which is fine; but shift it so center actually goes
+    // negative: frame (-20, -20, 10, 10) → center (-15, -15).
+    const node = makeNode({ frame: { x: -20, y: -20, width: 10, height: 10 } });
+    mockQuery.mockResolvedValue(makeQueryResult([node]));
+    const warnSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = await handler('session', { label: 'Edge', timeout: 0 });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(body.status).toBe('tapped');
+    expect(body.coordinates).toEqual({ x: 0, y: 0 });
+    expect(body.clampedFrom).toEqual({ x: -15, y: -15 });
+    expect(body.warning).toContain('clamped');
+    expect(mockTap).toHaveBeenCalledWith('test-device-id', 0, 0, undefined);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringMatching(/\[app_tap_element\].*outside the device coordinate plane/),
+    );
+
+    warnSpy.mockRestore();
+  });
+
+  it('clamps only the negative axis when the other is valid', async () => {
+    // frame (-10, 100, 4, 40) → center (-8, 120). Only x needs clamp.
+    const node = makeNode({ frame: { x: -10, y: 100, width: 4, height: 40 } });
+    mockQuery.mockResolvedValue(makeQueryResult([node]));
+    const warnSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = await handler('session', { label: 'LeftEdge', timeout: 0 });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(body.status).toBe('tapped');
+    expect(body.coordinates).toEqual({ x: 0, y: 120 });
+    expect(body.clampedFrom).toEqual({ x: -8, y: 120 });
+    expect(mockTap).toHaveBeenCalledWith('test-device-id', 0, 120, undefined);
+
+    warnSpy.mockRestore();
+  });
+
+  it('does not surface clampedFrom or warning on an in-bounds tap', async () => {
+    const node = makeNode({ frame: { x: 50, y: 100, width: 100, height: 40 } });
+    mockQuery.mockResolvedValue(makeQueryResult([node]));
+
+    const result = await handler('session', { label: 'Normal', timeout: 0 });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(body.coordinates).toEqual({ x: 100, y: 120 });
+    expect(body.clampedFrom).toBeUndefined();
+    expect(body.warning).toBeUndefined();
+  });
+
+  it('returns error when the element frame produces non-finite coordinates', async () => {
+    // A broken AX payload: Infinity width yields Infinity center.
+    const node = makeNode({ frame: { x: 0, y: 0, width: Infinity, height: 10 } });
+    mockQuery.mockResolvedValue(makeQueryResult([node]));
+
+    const result = await handler('session', { label: 'Broken', timeout: 0 });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(result.isError).toBe(true);
+    expect(body.error).toMatch(/finite/);
+    // Infinity does not round-trip through JSON (→ null), so we just
+    // confirm the element payload is surfaced with a width that is
+    // no longer a usable finite number.
+    expect(body.element).toMatchObject({ frame: { height: 10 } });
+    expect(body.element.frame.width).toBeNull();
+    expect(mockTap).not.toHaveBeenCalled();
+  });
+});
+
+describe('sanitizeTapTarget', () => {
+  it('returns coordinates unchanged when both are non-negative finite numbers', () => {
+    expect(sanitizeTapTarget(100, 200)).toEqual({ x: 100, y: 200 });
+    expect(sanitizeTapTarget(0, 0)).toEqual({ x: 0, y: 0 });
+    expect(sanitizeTapTarget(136.5, 222.5)).toEqual({ x: 136.5, y: 222.5 });
+  });
+
+  it('clamps negative x to 0 and records the original', () => {
+    const r = sanitizeTapTarget(-3, 200);
+    expect(r.x).toBe(0);
+    expect(r.y).toBe(200);
+    expect(r.clampedFrom).toEqual({ x: -3, y: 200 });
+  });
+
+  it('clamps negative y to 0 and records the original', () => {
+    const r = sanitizeTapTarget(50, -1);
+    expect(r.x).toBe(50);
+    expect(r.y).toBe(0);
+    expect(r.clampedFrom).toEqual({ x: 50, y: -1 });
+  });
+
+  it('clamps both axes when both are negative', () => {
+    const r = sanitizeTapTarget(-5, -10);
+    expect(r).toEqual({
+      x: 0,
+      y: 0,
+      clampedFrom: { x: -5, y: -10 },
+    });
+  });
+
+  it('throws on NaN', () => {
+    expect(() => sanitizeTapTarget(NaN, 100)).toThrow(/finite/);
+    expect(() => sanitizeTapTarget(100, NaN)).toThrow(/finite/);
+  });
+
+  it('throws on Infinity', () => {
+    expect(() => sanitizeTapTarget(Infinity, 100)).toThrow(/finite/);
+    expect(() => sanitizeTapTarget(100, -Infinity)).toThrow(/finite/);
   });
 });
