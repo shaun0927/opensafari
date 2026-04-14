@@ -13,6 +13,7 @@ import type {
   VMInfo,
   FlutterConnectionState,
   FlutterConnectOptions,
+  DartVersion,
 } from './flutter-types';
 import { discoverVMServiceUrl, httpToWsUrl, isValidVMServiceUrl } from './vm-service-discovery';
 
@@ -20,6 +21,26 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 10000;
 const DEFAULT_CONNECT_TIMEOUT_MS = 5000;
 
 type EventCallback = (event: VMServiceEvent['params']['event']) => void;
+
+/**
+ * Parse a Dart VM `version` string (e.g. "3.11.3 (stable) ... on \"ios_arm64\"")
+ * into its semver components. Returns `null` when the string does not begin
+ * with a recognisable `MAJOR.MINOR.PATCH` sequence.
+ *
+ * The Dart SDK major correlates 1:1 with the Flutter major release line:
+ * Dart 3.x ships with Flutter 3.x, Dart 2.x ships with Flutter 2.x.
+ */
+export function parseDartVersion(versionString: string | undefined | null): DartVersion | null {
+  if (!versionString || typeof versionString !== 'string') return null;
+  const match = versionString.trim().match(/^(\d+)\.(\d+)\.(\d+)/);
+  if (!match) return null;
+  const [, major, minor, patch] = match;
+  return {
+    major: Number(major),
+    minor: Number(minor),
+    patch: Number(patch),
+  };
+}
 
 export class FlutterVMClient {
   private ws: WebSocket | null = null;
@@ -79,6 +100,7 @@ export class FlutterVMClient {
     // Get VM info and find main isolate
     const vmInfo = await this.getVM();
     const mainIsolate = vmInfo.isolates.find((i) => i.name === 'main') ?? vmInfo.isolates[0];
+    const dartVersion = parseDartVersion(vmInfo.version);
 
     this.state = {
       httpUrl,
@@ -88,9 +110,28 @@ export class FlutterVMClient {
       deviceId: options.deviceId,
       vmInfo,
       mainIsolateId: mainIsolate?.id,
+      dartVersionString: vmInfo.version,
+      dartVersion,
     };
 
     return this.state;
+  }
+
+  /**
+   * Parsed Dart SDK version captured at connect time. `null` when the VM
+   * version string was unparsable; `undefined` before `connect()` completes.
+   */
+  getDartVersion(): DartVersion | null | undefined {
+    return this.state?.dartVersion;
+  }
+
+  /**
+   * Approximate Flutter major based on the Dart SDK major (Dart 3.x → Flutter
+   * 3.x, Dart 2.x → Flutter 2.x). Returns `null` when the version is unknown.
+   */
+  getFlutterMajor(): number | null {
+    const v = this.state?.dartVersion;
+    return v ? v.major : null;
   }
 
   /** Disconnect from the VM Service */
@@ -195,23 +236,38 @@ export class FlutterVMClient {
   }
 
   /**
-   * Get the root widget summary tree via the Flutter Inspector
-   * (`ext.flutter.inspector.getRootWidgetSummaryTreeWithPreviews`).
+   * Get the root widget summary tree via the Flutter Inspector.
+   *
+   * Version-aware branching (issue #436):
+   * - Flutter 3.x (Dart major >= 3): try
+   *   `ext.flutter.inspector.getRootWidgetSummaryTreeWithPreviews` first, fall
+   *   back to `getRootWidgetSummaryTree` on VM Service error -32000 (or any
+   *   error — older 3.0/3.1 builds occasionally omit WithPreviews too).
+   * - Flutter 2.x (Dart major < 3): skip `WithPreviews` entirely and call
+   *   `getRootWidgetSummaryTree` directly; the preview variant is unreliable
+   *   or absent on 2.x inspector surfaces.
+   * - Unknown version (no `vm.version` parsed yet): preserve the historical
+   *   try/catch behaviour — attempt `WithPreviews` first, fall back on any
+   *   error.
    *
    * Returns a structured JSON node with `type`, `description`, and
-   * `creationLocation` (file:line:column) per widget. `objectGroup` is
-   * a Flutter-Inspector lifetime scope — a stable group name is fine for
-   * LLM-driven introspection; DevTools rotates groups per request to
-   * manage memory but for one-shot MCP calls the default is safe.
-   *
-   * Falls back to `getRootWidgetSummaryTree` (without previews) if the
-   * WithPreviews variant fails (e.g. VM Service error -32000 on older
-   * Flutter versions). If both fail, the original error is rethrown.
+   * `creationLocation` (file:line:column) per widget. `objectGroup` is a
+   * Flutter-Inspector lifetime scope — a stable group name is fine for
+   * LLM-driven introspection; DevTools rotates groups per request to manage
+   * memory but for one-shot MCP calls the default is safe.
    */
   async getRootWidgetSummaryTree(
     options?: { objectGroup?: string },
   ): Promise<Record<string, unknown>> {
     const params = { objectGroup: options?.objectGroup ?? 'opensafari-root' };
+    const dartVersion = this.state?.dartVersion;
+
+    // Flutter 2.x: skip WithPreviews entirely.
+    if (dartVersion && dartVersion.major < 3) {
+      return this.callServiceExtension('inspector.getRootWidgetSummaryTree', params);
+    }
+
+    // Flutter 3.x or unknown: try WithPreviews first, fall back on error.
     let originalError: unknown;
     try {
       return await this.callServiceExtension('inspector.getRootWidgetSummaryTreeWithPreviews', params);
@@ -249,6 +305,133 @@ export class FlutterVMClient {
   async setInspectorShow(enabled: boolean): Promise<Record<string, unknown>> {
     return this.callServiceExtension('inspector.show', {
       enabled: enabled ? 'true' : 'false',
+    });
+  }
+
+  /**
+   * Perform a Dart-side hit-test at a physical-pixel coordinate, then select
+   * the topmost RenderBox's Element via `WidgetInspectorService`, and return
+   * the selected summary widget.
+   *
+   * Flutter 3.11 does NOT expose `ext.flutter.inspector.screenToSummaryTree`
+   * (verified on the live extension list for iPhone 16 simulator). Instead,
+   * we drive the hit-test via `evaluate` against the root library:
+   *
+   *   1. Convert physical (x,y) to logical pixels using `devicePixelRatio`.
+   *   2. Call `WidgetsBinding.instance.renderViewElement` /
+   *      `renderView.hitTest(HitTestResult(), position: Offset(...))`.
+   *   3. Walk `HitTestResult.path` for the topmost `RenderBox` whose
+   *      `debugCreator` points at an Element, then feed that Element to
+   *      `WidgetInspectorService.instance.setSelection`.
+   *   4. Read back via `getSelectedSummaryWidget`.
+   *
+   * Returns the raw inspector selection payload (same shape as
+   * `getSelectedWidget`), or an object `{ hit: false }` if no widget was hit.
+   */
+  async selectWidgetAtPoint(options: {
+    physicalX: number;
+    physicalY: number;
+    devicePixelRatio: number;
+    objectGroup?: string;
+  }): Promise<Record<string, unknown>> {
+    const { physicalX, physicalY, devicePixelRatio } = options;
+    const objectGroup = options.objectGroup ?? 'opensafari-hit';
+
+    if (!Number.isFinite(devicePixelRatio) || devicePixelRatio <= 0) {
+      throw new FlutterVMError(
+        `Invalid devicePixelRatio: ${devicePixelRatio}`,
+        'INVALID_DPR',
+      );
+    }
+
+    // The objectGroup is interpolated into a Dart string literal below, so
+    // reject anything that could break out of the quoted context. The VM
+    // Service only uses this as an inspector lifetime scope — a conservative
+    // identifier alphabet is enough.
+    if (!/^[A-Za-z0-9_-]+$/.test(objectGroup)) {
+      throw new FlutterVMError(
+        `Invalid objectGroup: ${objectGroup}`,
+        'INVALID_OBJECT_GROUP',
+      );
+    }
+
+    const logicalX = physicalX / devicePixelRatio;
+    const logicalY = physicalY / devicePixelRatio;
+
+    // Dart expression: drive the hit-test and select the topmost RenderBox's
+    // Element via WidgetInspectorService. Returns true if something was hit,
+    // false otherwise. After this runs, getSelectedSummaryWidget reflects the
+    // selection.
+    const expression =
+      '(() {' +
+      '  final binding = WidgetsBinding.instance;' +
+      '  final rv = binding.renderViewElement?.renderObject as RenderView?;' +
+      '  if (rv == null) return false;' +
+      `  final result = HitTestResult();` +
+      `  rv.hitTest(result, position: Offset(${logicalX}, ${logicalY}));` +
+      '  Element? hitElement;' +
+      '  for (final entry in result.path) {' +
+      '    final target = entry.target;' +
+      '    if (target is RenderObject) {' +
+      '      final creator = target.debugCreator;' +
+      '      if (creator is DebugCreator) {' +
+      '        hitElement = creator.element;' +
+      '        break;' +
+      '      }' +
+      '    }' +
+      '  }' +
+      '  if (hitElement == null) return false;' +
+      `  WidgetInspectorService.instance.setSelection(hitElement, '${objectGroup}');` +
+      '  return true;' +
+      '})()';
+
+    // The expression references DebugCreator and WidgetInspectorService,
+    // which live in package:flutter/src/widgets/widget_inspector.dart and
+    // are NOT re-exported through flutter/material.dart. Evaluating against
+    // the user app's rootLib would fail with "Undefined name" on any app
+    // that only imports material. Resolve the inspector library and scope
+    // the evaluate to it so the symbols are always in lexical scope.
+    const isolateId = this.state?.mainIsolateId;
+    if (!isolateId) {
+      throw new FlutterVMError('No main isolate', 'NO_ISOLATE');
+    }
+    const isolate = await this.callMethod('getIsolate', { isolateId });
+    const libs =
+      (isolate as { libraries?: Array<{ uri?: string; id?: string }> }).libraries ?? [];
+    const inspectorLib = libs.find(
+      (l) => l.uri === 'package:flutter/src/widgets/widget_inspector.dart',
+    );
+    if (!inspectorLib?.id) {
+      throw new FlutterVMError(
+        'widget_inspector library not loaded in isolate',
+        'NO_INSPECTOR_LIB',
+      );
+    }
+
+    const hitResult = await this.evaluate(expression, { targetId: inspectorLib.id });
+    const hitInstance = hitResult as { valueAsString?: string; kind?: string };
+    const hit = hitInstance.valueAsString === 'true';
+
+    if (!hit) {
+      return { hit: false };
+    }
+
+    const selection = await this.getSelectedWidget({ objectGroup });
+    return { hit: true, selection };
+  }
+
+  /**
+   * Walk the parent chain of an inspector widget
+   * (`ext.flutter.inspector.getParentChain`). Returns the raw inspector
+   * response — caller is responsible for filtering/summarising the chain.
+   */
+  async getParentChain(options: {
+    inspectorRef: string;
+    objectGroup?: string;
+  }): Promise<Record<string, unknown>> {
+    return this.callServiceExtension('inspector.getParentChain', {
+      arg: options.inspectorRef,
+      objectGroup: options.objectGroup ?? 'opensafari-parent-chain',
     });
   }
 

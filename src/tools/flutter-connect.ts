@@ -79,6 +79,8 @@ export function registerFlutterConnectTool(server: MCPServer): void {
                 isolates: state.vmInfo.isolates.map((i) => ({ id: i.id, name: i.name })),
               } : null,
               mainIsolateId: state.mainIsolateId,
+              dartVersion: state.dartVersion ?? null,
+              flutterMajor: state.dartVersion?.major ?? null,
             }, null, 2),
           }],
         };

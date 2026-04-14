@@ -102,6 +102,7 @@ import {
   registerFlutterRootWidgetTool,
   registerFlutterInspectSelectionTool,
 } from './flutter-inspector';
+import { registerFlutterWidgetAtPointTool } from './flutter-widget-at-point';
 import {
   registerFlutterCpuProfileTool,
   registerFlutterTimelineCaptureTool,
@@ -298,6 +299,7 @@ export function registerAllTools(server: MCPServer): void {
   // Tier 2: Flutter Inspector (issue #436)
   registerFlutterRootWidgetTool(server);
   registerFlutterInspectSelectionTool(server);
+  registerFlutterWidgetAtPointTool(server);
   // Tier 2: Flutter Performance Profiling (issue #439)
   registerFlutterCpuProfileTool(server);
   registerFlutterTimelineCaptureTool(server);

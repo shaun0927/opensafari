@@ -61,6 +61,13 @@ export interface VMInfo {
   isolateGroups?: Array<{ type: string; id: string; name: string }>;
 }
 
+/** Parsed Dart SDK version (correlates 1:1 with Flutter major: Dart 3.x → Flutter 3.x). */
+export interface DartVersion {
+  major: number;
+  minor: number;
+  patch: number;
+}
+
 /** Connection state for a Flutter VM Service session */
 export interface FlutterConnectionState {
   /** The HTTP URL of the Dart VM Service (e.g. http://127.0.0.1:50642/abc=/) */
@@ -77,6 +84,10 @@ export interface FlutterConnectionState {
   vmInfo?: VMInfo;
   /** The main isolate ID */
   mainIsolateId?: string;
+  /** Raw Dart VM version string (e.g. "3.11.3 (stable) ..."). */
+  dartVersionString?: string;
+  /** Parsed Dart SDK version — null when the version string is unparsable. */
+  dartVersion?: DartVersion | null;
 }
 
 /** Options for connecting to a Flutter app */
