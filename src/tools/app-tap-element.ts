@@ -153,8 +153,47 @@ export function registerAppTapElementTool(server: MCPServer): void {
         }
 
         // Calculate center of element
-        const centerX = match.frame.x + match.frame.width / 2;
-        const centerY = match.frame.y + match.frame.height / 2;
+        const rawCenterX = match.frame.x + match.frame.width / 2;
+        const rawCenterY = match.frame.y + match.frame.height / 2;
+
+        // Sanitize the tap target. An accessibility tree that reports a
+        // `visible: true` element with a frame whose center lands outside
+        // the device coordinate plane has already given us broken data;
+        // the tool still tries to rescue the tap by clamping to the
+        // nearest non-negative coordinate so edge-aligned elements remain
+        // tappable, but it refuses to forward NaN / Infinity which cannot
+        // be interpreted by any input backend.
+        let centerX: number;
+        let centerY: number;
+        let clampedFrom: { x: number; y: number } | undefined;
+        try {
+          ({ x: centerX, y: centerY, clampedFrom } = sanitizeTapTarget(rawCenterX, rawCenterY));
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          return {
+            content: [{
+              type: 'text' as const,
+              text: JSON.stringify({
+                error: message,
+                element: {
+                  role: match.role,
+                  label: match.label,
+                  identifier: match.identifier,
+                  frame: match.frame,
+                },
+              }),
+            }],
+            isError: true,
+          };
+        }
+
+        if (clampedFrom) {
+          console.error(
+            `[app_tap_element] tap coordinates (${clampedFrom.x}, ${clampedFrom.y}) fell outside the ` +
+              `device coordinate plane; clamped to (${centerX}, ${centerY}). ` +
+              `This usually indicates a stale or misreported accessibility frame.`,
+          );
+        }
 
         // Tap via input backend
         const backend = await getInputBackend(deviceId, getWebKitClient(deviceId));
@@ -186,8 +225,22 @@ export function registerAppTapElementTool(server: MCPServer): void {
           deviceId,
           totalMatches,
         };
+        if (clampedFrom) {
+          response.clampedFrom = clampedFrom;
+        }
+        const warnings: string[] = [];
+        if (clampedFrom) {
+          warnings.push(
+            `tap coordinates clamped to screen bounds from (${clampedFrom.x}, ${clampedFrom.y})`,
+          );
+        }
         if (implicitAmbiguity) {
-          response.warning = `ambiguous: ${totalMatches} elements matched; tapped index ${index}`;
+          warnings.push(
+            `ambiguous: ${totalMatches} elements matched; tapped index ${index}`,
+          );
+        }
+        if (warnings.length > 0) {
+          response.warning = warnings.join('; ');
         }
 
         return {
@@ -207,4 +260,38 @@ export function registerAppTapElementTool(server: MCPServer): void {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Clamp a computed tap target to the device coordinate plane.
+ *
+ * Negative coordinates are clamped to 0 — this preserves taps on
+ * elements pinned to the left / top edge whose center calculation
+ * under-shoots by a sub-pixel due to AX frame rounding, rather than
+ * silently dropping them. Non-finite inputs (NaN, ±Infinity) throw,
+ * because no input backend can faithfully forward them.
+ *
+ * An explicit upper bound is deliberately omitted: resolving a
+ * per-device screen size on every tap would require a simctl
+ * round-trip, and false-positive clamping against a stale upper bound
+ * is more dangerous than letting simctl itself drop out-of-range taps.
+ */
+export function sanitizeTapTarget(
+  x: number,
+  y: number,
+): { x: number; y: number; clampedFrom?: { x: number; y: number } } {
+  if (!Number.isFinite(x) || !Number.isFinite(y)) {
+    throw new Error(
+      `Invalid tap coordinates (${x}, ${y}): expected finite numbers. The ` +
+        `element\u2019s frame is malformed; try refreshing the accessibility tree.`,
+    );
+  }
+  if (x < 0 || y < 0) {
+    return {
+      x: Math.max(0, x),
+      y: Math.max(0, y),
+      clampedFrom: { x, y },
+    };
+  }
+  return { x, y };
 }
