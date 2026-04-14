@@ -154,13 +154,22 @@ async function startTracking(
     mergeRebuildEvent(state, (ev as unknown as Record<string, unknown>).extensionData);
   };
 
+  // Subscribe + enable in a single transactional unit. If any step fails
+  // we roll back so no listener is left registered against a client that
+  // the caller no longer thinks is tracking (code-review P1).
   await client.streamListen('Extension');
   client.onEvent('Extension', state.listener);
   state.subscribed = true;
 
-  await client.callServiceExtension('inspector.trackRebuildDirtyWidgets', {
-    enabled: 'true',
-  });
+  try {
+    await client.callServiceExtension('inspector.trackRebuildDirtyWidgets', {
+      enabled: 'true',
+    });
+  } catch (err) {
+    client.offEvent('Extension', state.listener);
+    state.subscribed = false;
+    throw err;
+  }
 
   trackers.set(deviceId, state);
 
@@ -271,8 +280,11 @@ export function registerFlutterTrackRebuildsTool(server: MCPServer): void {
     async (_sessionId: string, params: Record<string, unknown>) => {
       try {
         const action = params.action as Action | undefined;
-        if (!action || !['start', 'stop', 'report'].includes(action)) {
-          throw new Error('action is required (start | stop | report)');
+        if (!action) {
+          throw new Error('action is required (one of: start | stop | report)');
+        }
+        if (!['start', 'stop', 'report'].includes(action)) {
+          throw new Error(`action must be one of: start | stop | report (got "${action}")`);
         }
 
         const deviceId =

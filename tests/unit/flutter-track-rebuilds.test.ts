@@ -262,10 +262,33 @@ describe('flutter_track_rebuilds handler', () => {
     }
   });
 
-  it('errors when action is unknown', async () => {
+  it('errors when action is unknown with a helpful message', async () => {
     const result = await handler('s', { action: 'purge' });
     expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('action must be one of');
+    expect(result.content[0].text).toContain('purge');
+  });
+
+  it('errors when action is missing', async () => {
+    const result = await handler('s', {});
+    expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain('action is required');
+  });
+
+  it('start rolls back listener registration if enabling the extension fails (P1 listener-leak regression)', async () => {
+    mockCallServiceExtension.mockRejectedValueOnce(new Error('extension not registered'));
+
+    const result = await handler('s', { action: 'start' });
+    expect(result.isError).toBe(true);
+
+    // offEvent must have been called to undo the listener registration.
+    expect(mockOffEvent).toHaveBeenCalledWith('Extension', expect.any(Function));
+
+    // And no tracker entry should have been persisted — a follow-up start must succeed.
+    mockCallServiceExtension.mockResolvedValueOnce({});
+    const retry = await handler('s', { action: 'start' });
+    const body = JSON.parse(retry.content[0].text);
+    expect(body.status).toBe('started');
   });
 
   it('errors when not connected', async () => {
