@@ -20,6 +20,7 @@ import { TOOL_TIERS, getToolTier } from './config/tool-tiers';
 import { BrowserBackend } from './types/browser-backend';
 import { logAuditEntry } from './security/audit-logger';
 import { getSessionManager } from './session-manager';
+import { getVersion } from './version';
 
 // Re-export so callers can use canonical names without knowing the internal alias
 export type { MCPToolDefinition as ToolDefinition, ToolHandler };
@@ -226,7 +227,7 @@ export class MCPServer {
         },
         serverInfo: {
           name: 'opensafari-mcp',
-          version: '0.0.1',
+          version: getVersion(),
         },
       },
     };

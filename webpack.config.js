@@ -22,6 +22,11 @@ module.exports = [
       rules: [{ test: /\.ts$/, use: 'ts-loader', exclude: /node_modules/ }],
     },
     externals: [nodeExternals()],
+    plugins: [
+      new webpack.DefinePlugin({
+        '__OPENSAFARI_VERSION__': JSON.stringify(require('./package.json').version),
+      }),
+    ],
   },
   // CLI bundle
   {
@@ -47,6 +52,9 @@ module.exports = [
     externals: [nodeExternals()],
     plugins: [
       new webpack.BannerPlugin({ banner: '#!/usr/bin/env node', raw: true }),
+      new webpack.DefinePlugin({
+        '__OPENSAFARI_VERSION__': JSON.stringify(require('./package.json').version),
+      }),
     ],
   },
 ];
