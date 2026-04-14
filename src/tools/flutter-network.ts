@@ -33,6 +33,7 @@ interface ProxyState {
   entries: NetworkEntry[];
   entryId: number;
   deviceId: string;
+  throttleMs: number;
 }
 
 // Per-device proxy state
@@ -46,13 +47,14 @@ export function registerFlutterNetworkTool(server: MCPServer): void {
       description:
         'Capture HTTP network traffic from Flutter/native apps via a local proxy. ' +
         'Actions: "start" begins capture, "log" returns captured requests, ' +
-        '"har" exports as HAR format, "stop" stops capture and cleans up.',
+        '"har" exports as HAR format, "stop" stops capture and cleans up, ' +
+        '"throttle" updates the response delay.',
       inputSchema: {
         type: 'object' as const,
         properties: {
           action: {
             type: 'string',
-            enum: ['start', 'log', 'har', 'stop'],
+            enum: ['start', 'log', 'har', 'stop', 'throttle'],
             description: 'Action to perform (default: "log")',
           },
           port: {
@@ -74,6 +76,10 @@ export function registerFlutterNetworkTool(server: MCPServer): void {
           device_id: {
             type: 'string',
             description: 'Simulator UDID (uses active device if omitted)',
+          },
+          throttle_ms: {
+            type: 'number',
+            description: 'Delay each proxied response by this many milliseconds (default: 0 = no delay). Settable at start and updatable via action "throttle".',
           },
         },
         required: [],
@@ -99,6 +105,8 @@ export function registerFlutterNetworkTool(server: MCPServer): void {
             return handleHar(deviceId);
           case 'stop':
             return await handleStop(deviceId);
+          case 'throttle':
+            return handleThrottle(deviceId, params);
           default:
             throw new Error(`Unknown action: ${action}`);
         }
@@ -123,6 +131,10 @@ async function handleStart(
   }
 
   const port = (params.port as number | undefined) ?? 8888;
+  const throttleMs = (params.throttle_ms as number | undefined) ?? 0;
+  if (!isFinite(throttleMs) || throttleMs < 0) {
+    throw new Error('throttle_ms must be a non-negative finite number.');
+  }
 
   // Create HTTP proxy server
   const proxyServer = http.createServer((clientReq, clientRes) => {
@@ -172,8 +184,16 @@ async function handleStart(
             addEntry(state, entry);
           });
 
-          clientRes.writeHead(proxyRes.statusCode ?? 502, proxyRes.headers);
-          proxyRes.pipe(clientRes, { end: true });
+          proxyRes.pause();
+          const sendResponse = () => {
+            clientRes.writeHead(proxyRes.statusCode ?? 502, proxyRes.headers);
+            proxyRes.pipe(clientRes, { end: true });
+          };
+          if (state.throttleMs > 0) {
+            setTimeout(sendResponse, state.throttleMs);
+          } else {
+            sendResponse();
+          }
         },
       );
 
@@ -208,6 +228,7 @@ async function handleStart(
     entries: [],
     entryId: 0,
     deviceId,
+    throttleMs,
   });
 
   // Configure simulator to use proxy
@@ -231,6 +252,7 @@ async function handleStart(
         status: 'started',
         port,
         deviceId,
+        throttle_ms: throttleMs,
         message: `HTTP proxy listening on 127.0.0.1:${port}. Configure your Flutter app to use this proxy or set NSGlobalDomain proxy settings.`,
       }),
     }],
@@ -394,6 +416,39 @@ async function handleStop(
         status: 'stopped',
         deviceId,
         entries_captured: entriesCount,
+      }),
+    }],
+  };
+}
+
+function handleThrottle(
+  deviceId: string,
+  params: Record<string, unknown>,
+) {
+  const state = proxies.get(deviceId);
+  if (!state) {
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify({ error: 'No proxy running for this device.' }),
+      }],
+    };
+  }
+
+  const throttleMs = (params.throttle_ms as number | undefined) ?? 0;
+  if (!isFinite(throttleMs) || throttleMs < 0) {
+    throw new Error('throttle_ms must be a non-negative finite number.');
+  }
+
+  state.throttleMs = throttleMs;
+
+  return {
+    content: [{
+      type: 'text' as const,
+      text: JSON.stringify({
+        status: 'updated',
+        deviceId,
+        throttle_ms: throttleMs,
       }),
     }],
   };
