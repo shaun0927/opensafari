@@ -104,6 +104,9 @@ export const TOOL_TIERS: Record<string, number> = {
   qa_flutter_orientation: 2,
   qa_flutter_keyboard_overlap: 2,
 
+  // Tier 3: Flutter QA Audit (Orchestrator)
+  qa_flutter_full_audit: 3,
+
   // Tier 2: Flutter VM Service (debug/profile builds only)
   flutter_connect: 2,
   flutter_widget_tree: 2,
