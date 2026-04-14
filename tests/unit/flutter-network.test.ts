@@ -111,4 +111,41 @@ describe('flutter_network', () => {
 
     await handler('s', { action: 'stop' });
   });
+
+  it('accepts throttle_ms on start', async () => {
+    const result = await handler('s', { action: 'start', port: 18900, throttle_ms: 150 });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(body.status).toBe('started');
+    expect(body.throttle_ms).toBe(150);
+
+    await handler('s', { action: 'stop' });
+  });
+
+  it('rejects negative throttle_ms', async () => {
+    const result = await handler('s', { action: 'start', port: 18901, throttle_ms: -5 });
+
+    expect(result.isError).toBe(true);
+    const body = JSON.parse(result.content[0].text);
+    expect(body.error).toMatch(/throttle_ms|negative/i);
+  });
+
+  it('updates throttle via throttle action', async () => {
+    await handler('s', { action: 'start', port: 18902 });
+
+    const result = await handler('s', { action: 'throttle', throttle_ms: 250 });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(body.status).toBe('updated');
+    expect(body.throttle_ms).toBe(250);
+
+    await handler('s', { action: 'stop' });
+  });
+
+  it('returns error when throttle action called without proxy', async () => {
+    const result = await handler('s', { action: 'throttle', throttle_ms: 100 });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(body.error).toMatch(/No proxy/i);
+  });
 });
