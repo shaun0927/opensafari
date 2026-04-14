@@ -7,11 +7,17 @@
  * `app_tree`, `app_query`, and `app_inspect` return a populated tree for
  * Flutter apps.
  *
- * Strategy:
- * 1. Quick-check: if the tree already has enough nodes, skip activation.
- * 2. Enable the Accessibility Inspector flag via `simctl spawn defaults write`
- *    — this triggers Flutter's semantics without full VoiceOver side effects.
- * 3. Poll until the tree populates or timeout.
+ * Strategy (ordered by cost and reliability):
+ *   A. Quick-check: if the tree already has enough nodes, skip activation.
+ *   B. Simctl activation: enable the macOS Accessibility Inspector flag via
+ *      `xcrun simctl spawn defaults write`. This triggers Flutter's
+ *      `SemanticsBinding` without full VoiceOver side effects.
+ *   C. Dart VM Service fallback (debug/profile builds only): connect to the
+ *      app's VM Service and call `debugDumpSemanticsTreeInTraversalOrder`,
+ *      which forces Flutter to materialise the semantics tree even when the
+ *      native accessibility flag did not propagate (e.g. when the activation
+ *      flag was already set by a previous session and no rebuild fired).
+ *   D. Graceful timeout: return `false` and let the caller decide.
  */
 
 import { getAccessibilityBridge } from './accessibility-bridge';
@@ -20,6 +26,23 @@ import type { AXNode } from './ax-types';
 const DEFAULT_TIMEOUT_MS = 3000;
 const POLL_INTERVAL_MS = 300;
 const MIN_NODE_THRESHOLD = 5;
+const VM_SERVICE_DISCOVERY_TIMEOUT_MS = 3000;
+const VM_SERVICE_CONNECT_TIMEOUT_MS = 3000;
+
+export interface EnsureSemanticsOptions {
+  /** Total budget for the activation attempt (default 3000ms). */
+  timeout?: number;
+  /** Minimum node count that signals an active tree (default 5). */
+  minNodes?: number;
+  /** Bundle ID of the target app — helps Dart VM Service discovery. */
+  bundleId?: string;
+  /**
+   * Enable the Dart VM Service fallback for debug/profile builds.
+   * Defaults to `true`; callers can disable when they know the app is a
+   * release build or when VM Service discovery is known to be unavailable.
+   */
+  useVMServiceFallback?: boolean;
+}
 
 /**
  * Count all nodes in an accessibility tree (recursive).
@@ -45,25 +68,76 @@ export function countNodes(node: AXNode): number {
  */
 export async function ensureSemanticsActive(
   deviceId: string,
-  options?: { timeout?: number; minNodes?: number },
+  options?: EnsureSemanticsOptions,
 ): Promise<boolean> {
   const timeout = options?.timeout ?? DEFAULT_TIMEOUT_MS;
   const minNodes = options?.minNodes ?? MIN_NODE_THRESHOLD;
+  const useVMServiceFallback = options?.useVMServiceFallback ?? true;
   const bridge = getAccessibilityBridge();
+  const deadline = Date.now() + timeout;
 
-  // Quick check: if tree already has enough nodes, semantics is active
-  try {
-    const tree = await bridge.dumpTree({ deviceId, maxDepth: 4 });
-    if (countNodes(tree) >= minNodes) {
-      return true;
-    }
-  } catch {
-    // Tree dump failed — device may not be ready, continue with activation attempt
+  // A. Quick check — tree already populated?
+  if (await treeIsPopulated(bridge, deviceId, minNodes)) {
+    return true;
   }
 
-  // Activate accessibility inspection via simctl defaults write.
-  // This sets the flag that triggers Flutter's SemanticsBinding to populate
-  // the semantics tree, without enabling full VoiceOver spoken feedback.
+  // B. Simctl activation (cheap, works for debug + release).
+  await tryActivateViaSimctl(deviceId);
+
+  // Split the remaining budget: reserve roughly half for the simctl path,
+  // leave the other half for a VM Service round-trip. This way we don't
+  // block the full timeout on a Flutter app that refuses to populate via
+  // defaults write alone.
+  const simctlDeadline = useVMServiceFallback
+    ? Date.now() + Math.max(POLL_INTERVAL_MS, Math.floor(timeout / 2))
+    : deadline;
+
+  if (await pollUntilPopulated(bridge, deviceId, minNodes, simctlDeadline)) {
+    return true;
+  }
+
+  // C. Dart VM Service fallback — debug/profile builds only.
+  if (useVMServiceFallback && Date.now() < deadline) {
+    await tryActivateViaVMService(deviceId, options?.bundleId);
+    if (await pollUntilPopulated(bridge, deviceId, minNodes, deadline)) {
+      return true;
+    }
+  }
+
+  // D. Give up gracefully.
+  return false;
+}
+
+/** Poll the AX bridge until the tree has `minNodes` nodes or the deadline passes. */
+async function pollUntilPopulated(
+  bridge: ReturnType<typeof getAccessibilityBridge>,
+  deviceId: string,
+  minNodes: number,
+  deadline: number,
+): Promise<boolean> {
+  while (Date.now() < deadline) {
+    await sleep(POLL_INTERVAL_MS);
+    if (await treeIsPopulated(bridge, deviceId, minNodes)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+async function treeIsPopulated(
+  bridge: ReturnType<typeof getAccessibilityBridge>,
+  deviceId: string,
+  minNodes: number,
+): Promise<boolean> {
+  try {
+    const tree = await bridge.dumpTree({ deviceId, maxDepth: 4 });
+    return countNodes(tree) >= minNodes;
+  } catch {
+    return false;
+  }
+}
+
+async function tryActivateViaSimctl(deviceId: string): Promise<void> {
   try {
     const { execFile } = await import('child_process');
     const { promisify } = await import('util');
@@ -75,25 +149,52 @@ export async function ensureSemanticsActive(
       'AccessibilityEnabled', '-bool', 'YES',
     ], { timeout: 5000 });
   } catch {
-    // If defaults write fails, still try polling — maybe semantics will populate naturally
+    // Fall through — caller will decide whether to keep polling or escalate
+    // to the VM Service path.
   }
+}
 
-  // Poll until tree populates or timeout
-  const deadline = Date.now() + timeout;
-  while (Date.now() < deadline) {
-    await sleep(POLL_INTERVAL_MS);
-    try {
-      const tree = await bridge.dumpTree({ deviceId, maxDepth: 4 });
-      if (countNodes(tree) >= minNodes) {
-        return true;
-      }
-    } catch {
-      // Continue polling
+/**
+ * Try to materialise Flutter's semantics tree by talking to the Dart VM
+ * Service directly. Only works for debug/profile builds (release builds
+ * strip the VM Service). Silent on any failure — the caller treats this
+ * as best-effort.
+ */
+async function tryActivateViaVMService(
+  deviceId: string,
+  bundleId: string | undefined,
+): Promise<void> {
+  let client: { disconnect: () => Promise<void> } | undefined;
+  try {
+    const { discoverVMServiceUrl } = await import('../flutter/vm-service-discovery');
+    const vmServiceUrl = await discoverVMServiceUrl(deviceId, {
+      bundleId,
+      timeout: VM_SERVICE_DISCOVERY_TIMEOUT_MS,
+    });
+    if (!vmServiceUrl) return;
+
+    const { FlutterVMClient } = await import('../flutter/vm-service-client');
+    const vmClient = new FlutterVMClient();
+    client = vmClient;
+
+    await vmClient.connect({
+      vmServiceUrl,
+      deviceId,
+      bundleId,
+      timeout: VM_SERVICE_CONNECT_TIMEOUT_MS,
+    });
+
+    // Dumping the semantics tree forces Flutter to materialise it. The
+    // native AX bridge should then see populated nodes on the next read.
+    await vmClient.getSemanticsTree();
+  } catch {
+    // Debug/profile VM Service may be unavailable (release build, URL
+    // rotated, WebSocket refused, etc.). Fall through silently.
+  } finally {
+    if (client) {
+      try { await client.disconnect(); } catch { /* ignore */ }
     }
   }
-
-  // Timeout — semantics may not be available (release build without Semantics widgets)
-  return false;
 }
 
 function sleep(ms: number): Promise<void> {

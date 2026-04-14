@@ -12,6 +12,10 @@ import type { AXNode } from '../../src/native/ax-types';
 
 const mockDumpTree = jest.fn();
 const mockExecFile = jest.fn();
+const mockDiscoverVMServiceUrl = jest.fn();
+const mockVMConnect = jest.fn();
+const mockVMGetSemanticsTree = jest.fn();
+const mockVMDisconnect = jest.fn();
 
 jest.mock('../../src/native/accessibility-bridge', () => ({
   getAccessibilityBridge: () => ({
@@ -25,6 +29,18 @@ jest.mock('child_process', () => ({
 
 jest.mock('util', () => ({
   promisify: (fn: unknown) => fn,
+}));
+
+jest.mock('../../src/flutter/vm-service-discovery', () => ({
+  discoverVMServiceUrl: (...args: unknown[]) => mockDiscoverVMServiceUrl(...args),
+}));
+
+jest.mock('../../src/flutter/vm-service-client', () => ({
+  FlutterVMClient: jest.fn().mockImplementation(() => ({
+    connect: (...args: unknown[]) => mockVMConnect(...args),
+    getSemanticsTree: (...args: unknown[]) => mockVMGetSemanticsTree(...args),
+    disconnect: (...args: unknown[]) => mockVMDisconnect(...args),
+  })),
 }));
 
 // Import after mocks
@@ -118,6 +134,11 @@ describe('ensureSemanticsActive', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     jest.useFakeTimers();
+    // Default: VM Service is unavailable (release build or discovery misses)
+    mockDiscoverVMServiceUrl.mockResolvedValue(null);
+    mockVMConnect.mockResolvedValue({ connected: true });
+    mockVMGetSemanticsTree.mockResolvedValue('populated');
+    mockVMDisconnect.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -132,6 +153,7 @@ describe('ensureSemanticsActive', () => {
     expect(result).toBe(true);
     // Should not call execFile (no activation needed)
     expect(mockExecFile).not.toHaveBeenCalled();
+    expect(mockDiscoverVMServiceUrl).not.toHaveBeenCalled();
   });
 
   it('returns true immediately when tree has exactly minNodes', async () => {
@@ -167,11 +189,15 @@ describe('ensureSemanticsActive', () => {
         'AccessibilityEnabled', '-bool', 'YES'],
       expect.objectContaining({ timeout: 5000 }),
     );
+    // simctl succeeded — VM Service fallback must not have been invoked
+    expect(mockDiscoverVMServiceUrl).not.toHaveBeenCalled();
   });
 
   it('returns false on timeout when tree never populates', async () => {
     mockDumpTree.mockResolvedValue(makeTree(2));
     mockExecFile.mockResolvedValue({ stdout: '', stderr: '' });
+    // VM Service also unavailable — covers release-build scenario
+    mockDiscoverVMServiceUrl.mockResolvedValue(null);
 
     const promise = ensureSemanticsActive('test-device-id', { timeout: 600 });
 
@@ -218,5 +244,75 @@ describe('ensureSemanticsActive', () => {
 
     expect(result).toBe(true);
     expect(mockExecFile).not.toHaveBeenCalled();
+  });
+
+  it('falls back to VM Service when simctl path does not populate the tree', async () => {
+    // Tree stays sparse across simctl poll window, populates after VM Service
+    // fallback forces `getSemanticsTree()`.
+    let semanticsDumped = false;
+    mockDumpTree.mockImplementation(async () =>
+      semanticsDumped ? makeTree(10) : makeTree(2),
+    );
+    mockExecFile.mockResolvedValue({ stdout: '', stderr: '' });
+    mockDiscoverVMServiceUrl.mockResolvedValue('http://127.0.0.1:50001/abc=/');
+    mockVMConnect.mockResolvedValue({ connected: true });
+    mockVMGetSemanticsTree.mockImplementation(async () => {
+      semanticsDumped = true;
+      return 'populated';
+    });
+
+    const promise = ensureSemanticsActive('test-device-id', {
+      timeout: 2000,
+      bundleId: 'com.example.flutterApp',
+    });
+
+    await jest.advanceTimersByTimeAsync(2100);
+    const result = await promise;
+
+    expect(result).toBe(true);
+    expect(mockDiscoverVMServiceUrl).toHaveBeenCalledWith(
+      'test-device-id',
+      expect.objectContaining({ bundleId: 'com.example.flutterApp' }),
+    );
+    expect(mockVMConnect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        vmServiceUrl: 'http://127.0.0.1:50001/abc=/',
+        deviceId: 'test-device-id',
+        bundleId: 'com.example.flutterApp',
+      }),
+    );
+    expect(mockVMGetSemanticsTree).toHaveBeenCalled();
+    expect(mockVMDisconnect).toHaveBeenCalled();
+  });
+
+  it('skips VM Service fallback when useVMServiceFallback is false', async () => {
+    mockDumpTree.mockResolvedValue(makeTree(2));
+    mockExecFile.mockResolvedValue({ stdout: '', stderr: '' });
+
+    const promise = ensureSemanticsActive('test-device-id', {
+      timeout: 600,
+      useVMServiceFallback: false,
+    });
+
+    await jest.advanceTimersByTimeAsync(1000);
+    const result = await promise;
+
+    expect(result).toBe(false);
+    expect(mockDiscoverVMServiceUrl).not.toHaveBeenCalled();
+  });
+
+  it('swallows VM Service connect errors and still returns false gracefully', async () => {
+    mockDumpTree.mockResolvedValue(makeTree(2));
+    mockExecFile.mockResolvedValue({ stdout: '', stderr: '' });
+    mockDiscoverVMServiceUrl.mockResolvedValue('http://127.0.0.1:50001/abc=/');
+    mockVMConnect.mockRejectedValue(new Error('ECONNREFUSED'));
+
+    const promise = ensureSemanticsActive('test-device-id', { timeout: 1200 });
+    await jest.advanceTimersByTimeAsync(1500);
+    const result = await promise;
+
+    expect(result).toBe(false);
+    // disconnect() should still be attempted in the finally block
+    expect(mockVMDisconnect).toHaveBeenCalled();
   });
 });
