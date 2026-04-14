@@ -141,6 +141,7 @@ export const TOOL_TIERS: Record<string, number> = {
 
   // Tier 2: Native App — Semantic Interaction (Flutter-compatible)
   app_tap_element: 2,
+  app_type_element: 2,
   // Tier 2: Native App — Semantic Wait & Assert (Flutter-compatible)
   app_wait_for_element: 2,
   app_assert_element: 2,

@@ -116,6 +116,7 @@ import {
   registerFlutterWaitForPauseTool,
 } from './flutter-breakpoints';
 import { registerAppTapElementTool } from './app-tap-element';
+import { registerAppTypeElementTool } from './app-type-element';
 import { registerAppWaitForNativeTool } from './app-wait-for';
 import { registerAppAssertElementTool } from './app-assert-element';
 
@@ -306,6 +307,7 @@ export function registerAllTools(server: MCPServer): void {
 
   // Tier 2: Native App — Semantic Interaction (Flutter-compatible)
   registerAppTapElementTool(server);
+  registerAppTypeElementTool(server);
   // Tier 2: Native App — Semantic Wait & Assert (Flutter-compatible)
   registerAppWaitForNativeTool(server);
   registerAppAssertElementTool(server);
