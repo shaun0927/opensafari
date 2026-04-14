@@ -84,6 +84,7 @@ import { registerQaFlutterTouchTargetsTool } from './qa-flutter-touch-targets';
 import { registerQaFlutterSemanticsTool } from './qa-flutter-semantics';
 import { registerQaFlutterDarkModeTool } from './qa-flutter-dark-mode';
 import { registerQaFlutterOrientationTool } from './qa-flutter-orientation';
+import { registerQaFlutterKeyboardOverlapTool } from './qa-flutter-keyboard-overlap';
 import { registerFlutterConnectTool } from './flutter-connect';
 import { registerFlutterWidgetTreeTool } from './flutter-widget-tree';
 import { registerFlutterHotReloadTool } from './flutter-hot-reload';
@@ -269,6 +270,7 @@ export function registerAllTools(server: MCPServer): void {
   registerQaFlutterSemanticsTool(server);
   registerQaFlutterDarkModeTool(server);
   registerQaFlutterOrientationTool(server);
+  registerQaFlutterKeyboardOverlapTool(server);
 
   // Tier 2: Flutter VM Service (debug/profile builds only)
   registerFlutterConnectTool(server);
