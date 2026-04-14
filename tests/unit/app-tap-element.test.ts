@@ -331,4 +331,67 @@ describe('app_tap_element', () => {
       expect.anything(),
     );
   });
+
+  it('surfaces totalMatches on a single-match tap', async () => {
+    const node = makeNode({ frame: { x: 0, y: 0, width: 100, height: 50 } });
+    mockQuery.mockResolvedValue(makeQueryResult([node]));
+
+    const result = await handler('session', { label: 'Login', timeout: 0 });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(body.totalMatches).toBe(1);
+    expect(body.warning).toBeUndefined();
+  });
+
+  it('warns on implicit ambiguity when no index is provided', async () => {
+    // Three candidates, caller did NOT pass an explicit `index` — we
+    // still tap the first, but the response must flag the ambiguity.
+    const nodes = [
+      makeNode({ label: 'Item A', frame: { x: 0, y: 100, width: 100, height: 44 } }),
+      makeNode({ label: 'Item B', frame: { x: 0, y: 200, width: 100, height: 44 } }),
+      makeNode({ label: 'Item C', frame: { x: 0, y: 300, width: 100, height: 44 } }),
+    ];
+    mockQuery.mockResolvedValue(makeQueryResult(nodes, true));
+    const warnSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = await handler('session', { role: 'AXButton', timeout: 0 });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(body.status).toBe('tapped');
+    expect(body.totalMatches).toBe(3);
+    expect(body.warning).toContain('ambiguous');
+    expect(body.warning).toContain('3');
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringMatching(/\[app_tap_element\].*ambiguous/),
+    );
+    // First match is tapped when no index is supplied
+    expect(body.coordinates).toEqual({ x: 50, y: 122 });
+
+    warnSpy.mockRestore();
+  });
+
+  it('does not warn when caller disambiguates with explicit index', async () => {
+    const nodes = [
+      makeNode({ label: 'Item A', frame: { x: 0, y: 100, width: 100, height: 44 } }),
+      makeNode({ label: 'Item B', frame: { x: 0, y: 200, width: 100, height: 44 } }),
+    ];
+    mockQuery.mockResolvedValue(makeQueryResult(nodes, true));
+    const warnSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = await handler('session', {
+      role: 'AXButton',
+      index: 1,
+      timeout: 0,
+    });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(body.status).toBe('tapped');
+    expect(body.totalMatches).toBe(2);
+    expect(body.warning).toBeUndefined();
+    expect(warnSpy).not.toHaveBeenCalledWith(
+      expect.stringMatching(/\[app_tap_element\].*ambiguous/),
+    );
+
+    warnSpy.mockRestore();
+  });
 });

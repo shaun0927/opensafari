@@ -78,6 +78,7 @@ export function registerAppTapElementTool(server: MCPServer): void {
 
       try {
         const deviceId = resolveDeviceId(params);
+        const indexProvided = typeof params.index === 'number';
         const index = (params.index as number | undefined) ?? 0;
         const timeout = (params.timeout as number | undefined) ?? 5000;
         const duration = (params.duration as number | undefined) ?? 0;
@@ -88,12 +89,19 @@ export function registerAppTapElementTool(server: MCPServer): void {
         const bridge = getAccessibilityBridge();
         const query = { identifier, label, text, role };
 
-        // Wait for element to appear (with timeout)
+        // Wait for element to appear (with timeout). We also track the
+        // total number of matches and the bridge's ambiguity flag so the
+        // caller can tell when a single match was expected but several
+        // candidates existed.
         let match: AXNode | undefined;
+        let totalMatches = 0;
+        let ambiguous = false;
         if (timeout > 0) {
           const deadline = Date.now() + timeout;
           while (Date.now() < deadline) {
             const result = await bridge.query(query, { deviceId });
+            totalMatches = result.matches.length;
+            ambiguous = result.ambiguous;
             if (result.matches.length > index) {
               match = result.matches[index];
               break;
@@ -102,6 +110,8 @@ export function registerAppTapElementTool(server: MCPServer): void {
           }
         } else {
           const result = await bridge.query(query, { deviceId });
+          totalMatches = result.matches.length;
+          ambiguous = result.ambiguous;
           if (result.matches.length > index) {
             match = result.matches[index];
           }
@@ -150,22 +160,38 @@ export function registerAppTapElementTool(server: MCPServer): void {
         const backend = await getInputBackend(deviceId, getWebKitClient(deviceId));
         await backend.tap(deviceId, centerX, centerY, duration > 0 ? duration : undefined);
 
+        // Flag an implicit ambiguous tap: several candidates matched but
+        // the caller did not disambiguate via `index`. We still tap the
+        // first match (prior behavior) but surface a warning so the
+        // caller can tighten the query or pass an explicit index.
+        const implicitAmbiguity = !indexProvided && (ambiguous || totalMatches > 1);
+
+        if (implicitAmbiguity) {
+          console.error(
+            `[app_tap_element] ambiguous query matched ${totalMatches} elements; tapping index ${index}. ` +
+              `Pass a narrower query or an explicit index to silence this warning.`,
+          );
+        }
+
+        const response: Record<string, unknown> = {
+          status: 'tapped',
+          element: {
+            role: match.role,
+            label: match.label,
+            identifier: match.identifier,
+            path: match.path,
+          },
+          coordinates: { x: centerX, y: centerY },
+          backend: backend.kind,
+          deviceId,
+          totalMatches,
+        };
+        if (implicitAmbiguity) {
+          response.warning = `ambiguous: ${totalMatches} elements matched; tapped index ${index}`;
+        }
+
         return {
-          content: [{
-            type: 'text' as const,
-            text: JSON.stringify({
-              status: 'tapped',
-              element: {
-                role: match.role,
-                label: match.label,
-                identifier: match.identifier,
-                path: match.path,
-              },
-              coordinates: { x: centerX, y: centerY },
-              backend: backend.kind,
-              deviceId,
-            }),
-          }],
+          content: [{ type: 'text' as const, text: JSON.stringify(response) }],
         };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
