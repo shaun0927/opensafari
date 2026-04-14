@@ -344,6 +344,17 @@ export class FlutterVMClient {
       );
     }
 
+    // The objectGroup is interpolated into a Dart string literal below, so
+    // reject anything that could break out of the quoted context. The VM
+    // Service only uses this as an inspector lifetime scope — a conservative
+    // identifier alphabet is enough.
+    if (!/^[A-Za-z0-9_-]+$/.test(objectGroup)) {
+      throw new FlutterVMError(
+        `Invalid objectGroup: ${objectGroup}`,
+        'INVALID_OBJECT_GROUP',
+      );
+    }
+
     const logicalX = physicalX / devicePixelRatio;
     const logicalY = physicalY / devicePixelRatio;
 
@@ -374,11 +385,32 @@ export class FlutterVMClient {
       '  return true;' +
       '})()';
 
-    const hitResult = await this.evaluate(expression);
+    // The expression references DebugCreator and WidgetInspectorService,
+    // which live in package:flutter/src/widgets/widget_inspector.dart and
+    // are NOT re-exported through flutter/material.dart. Evaluating against
+    // the user app's rootLib would fail with "Undefined name" on any app
+    // that only imports material. Resolve the inspector library and scope
+    // the evaluate to it so the symbols are always in lexical scope.
+    const isolateId = this.state?.mainIsolateId;
+    if (!isolateId) {
+      throw new FlutterVMError('No main isolate', 'NO_ISOLATE');
+    }
+    const isolate = await this.callMethod('getIsolate', { isolateId });
+    const libs =
+      (isolate as { libraries?: Array<{ uri?: string; id?: string }> }).libraries ?? [];
+    const inspectorLib = libs.find(
+      (l) => l.uri === 'package:flutter/src/widgets/widget_inspector.dart',
+    );
+    if (!inspectorLib?.id) {
+      throw new FlutterVMError(
+        'widget_inspector library not loaded in isolate',
+        'NO_INSPECTOR_LIB',
+      );
+    }
+
+    const hitResult = await this.evaluate(expression, { targetId: inspectorLib.id });
     const hitInstance = hitResult as { valueAsString?: string; kind?: string };
-    const hit =
-      hitInstance.valueAsString === 'true' ||
-      (hitInstance.kind === 'Bool' && hitInstance.valueAsString === 'true');
+    const hit = hitInstance.valueAsString === 'true';
 
     if (!hit) {
       return { hit: false };

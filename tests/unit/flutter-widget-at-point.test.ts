@@ -113,12 +113,27 @@ describe('FlutterVMClient.selectWidgetAtPoint', () => {
   let client: FlutterVMClient;
   let evaluateSpy: jest.SpyInstance;
   let getSelectedSpy: jest.SpyInstance;
+  let callMethodSpy: jest.SpyInstance;
 
   beforeEach(() => {
     client = new FlutterVMClient();
     (client as unknown as Record<string, unknown>)['state'] = { mainIsolateId: 'isolate-1' };
     evaluateSpy = jest.spyOn(client, 'evaluate');
     getSelectedSpy = jest.spyOn(client, 'getSelectedWidget');
+    callMethodSpy = jest.spyOn(
+      client as unknown as { callMethod: (...args: unknown[]) => Promise<unknown> },
+      'callMethod',
+    );
+    // Default: return an isolate that advertises the widget_inspector library
+    // so selectWidgetAtPoint can resolve a targetId for the evaluate call.
+    callMethodSpy.mockResolvedValue({
+      libraries: [
+        {
+          uri: 'package:flutter/src/widgets/widget_inspector.dart',
+          id: 'lib-inspector',
+        },
+      ],
+    });
   });
 
   afterEach(() => {
@@ -138,8 +153,10 @@ describe('FlutterVMClient.selectWidgetAtPoint', () => {
 
     expect(evaluateSpy).toHaveBeenCalledTimes(1);
     const expr = evaluateSpy.mock.calls[0][0] as string;
+    const opts = evaluateSpy.mock.calls[0][1] as { targetId?: string } | undefined;
     expect(expr).toContain('Offset(100, 200)');
     expect(expr).toContain("'g1'");
+    expect(opts?.targetId).toBe('lib-inspector');
   });
 
   it('converts physical→logical using DPR=3 with fractional results', async () => {
@@ -177,6 +194,32 @@ describe('FlutterVMClient.selectWidgetAtPoint', () => {
     await expect(client.selectWidgetAtPoint({
       physicalX: 10, physicalY: 20, devicePixelRatio: Number.NaN,
     })).rejects.toThrow(/Invalid devicePixelRatio/);
+    expect(evaluateSpy).not.toHaveBeenCalled();
+  });
+
+  it('rejects objectGroup with characters that could break the Dart literal', async () => {
+    // A quote-plus-injection payload should be refused before we ever build
+    // the Dart expression.
+    await expect(
+      client.selectWidgetAtPoint({
+        physicalX: 10,
+        physicalY: 20,
+        devicePixelRatio: 2,
+        objectGroup: "x'); malicious('",
+      }),
+    ).rejects.toThrow(/Invalid objectGroup/);
+    expect(evaluateSpy).not.toHaveBeenCalled();
+  });
+
+  it('throws when the widget_inspector library is not loaded', async () => {
+    callMethodSpy.mockResolvedValueOnce({ libraries: [] });
+    await expect(
+      client.selectWidgetAtPoint({
+        physicalX: 10,
+        physicalY: 20,
+        devicePixelRatio: 2,
+      }),
+    ).rejects.toThrow(/widget_inspector library not loaded/);
     expect(evaluateSpy).not.toHaveBeenCalled();
   });
 });
