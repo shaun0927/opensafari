@@ -231,3 +231,5 @@ describe('flutter_call_service_extension', () => {
     expect(result.content[0].text).toContain('not registered');
   });
 });
+
+export {};
