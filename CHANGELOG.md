@@ -15,6 +15,8 @@ All notable changes to this project will be documented in this file.
 - **`flutter_root_widget`** (#436): Dumps the running Flutter app's widget summary tree via `ext.flutter.inspector.getRootWidgetSummaryTreeWithPreviews`. Each node includes `type`, `description`, and `creationLocation` (file:line:column) so callers can jump straight to the source.
 - **`flutter_inspect_selection`** (#436): Returns the currently selected widget via `ext.flutter.inspector.getSelectedSummaryWidget`, with an optional `show` flag that toggles the in-app inspector overlay (`ext.flutter.inspector.show`) to arm coordinate-based selection. Empty selection returns `status: "empty"` with a usage hint.
 - **`FlutterVMClient.getRootWidgetSummaryTree` / `getSelectedWidget` / `setInspectorShow`**: New VM-client helpers wrapping the Flutter Inspector service extensions. The coordinate→widget tool (`flutter_widget_at_point`) is deferred to a follow-up issue — it requires a toggle/tap/read sequence coupled to `app_tap`.
+- **`flutter_cpu_profile`** (#439): Samples the Dart VM CPU profiler via `getCpuSamples` for a configurable window (max 120s) and returns a top-N list of `{function, self_us, total_us, samples}`. Pure `aggregateCpuSamples` helper is exported for independent unit testing — it counts self-samples (top-of-stack only) vs total-samples (anywhere in stack) and converts both to microseconds via the payload's `samplePeriod`.
+- **`flutter_timeline_capture`** (#439): Enables VM timeline streams (default `["Dart", "GC", "Embedder"]`), waits a window, fetches `getVMTimeline`, and writes the result to `output_path` as Chrome Trace Event JSON — loadable in `chrome://tracing` or Perfetto. Unknown stream names are rejected before any VM call.
 
 ## [0.2.1] - 2026-04-05
 

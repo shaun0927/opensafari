@@ -99,6 +99,10 @@ import {
   registerFlutterRootWidgetTool,
   registerFlutterInspectSelectionTool,
 } from './flutter-inspector';
+import {
+  registerFlutterCpuProfileTool,
+  registerFlutterTimelineCaptureTool,
+} from './flutter-cpu-profile';
 import { registerAppTapElementTool } from './app-tap-element';
 import { registerAppWaitForNativeTool } from './app-wait-for';
 import { registerAppAssertElementTool } from './app-assert-element';
@@ -273,6 +277,9 @@ export function registerAllTools(server: MCPServer): void {
   // Tier 2: Flutter Inspector (issue #436)
   registerFlutterRootWidgetTool(server);
   registerFlutterInspectSelectionTool(server);
+  // Tier 2: Flutter Performance Profiling (issue #439)
+  registerFlutterCpuProfileTool(server);
+  registerFlutterTimelineCaptureTool(server);
 
   // Tier 2: Native App — Semantic Interaction (Flutter-compatible)
   registerAppTapElementTool(server);
