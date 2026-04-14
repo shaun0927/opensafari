@@ -8,6 +8,7 @@
 
 import * as http from 'http';
 import * as https from 'https';
+import * as net from 'net';
 import * as url from 'url';
 import { MCPServer } from '../mcp-server';
 import { getSessionManager } from '../session-manager';
@@ -25,6 +26,7 @@ interface NetworkEntry {
   responseSize: number;
   duration?: number;
   error?: string;
+  isUpgrade?: boolean;
 }
 
 interface ProxyState {
@@ -48,7 +50,8 @@ export function registerFlutterNetworkTool(server: MCPServer): void {
         'Capture HTTP network traffic from Flutter/native apps via a local proxy. ' +
         'Actions: "start" begins capture, "log" returns captured requests, ' +
         '"har" exports as HAR format, "stop" stops capture and cleans up, ' +
-        '"throttle" updates the response delay.',
+        '"throttle" updates the response delay. ' +
+        'WebSocket and other HTTP upgrade requests are captured as entries with is_upgrade=true.',
       inputSchema: {
         type: 'object' as const,
         properties: {
@@ -214,6 +217,96 @@ async function handleStart(
     }
   });
 
+  // Handle WebSocket and other HTTP upgrade requests
+  proxyServer.on('upgrade', (clientReq: http.IncomingMessage, clientSocket: net.Socket, head: Buffer) => {
+    try {
+      const state = proxies.get(deviceId);
+      if (!state) {
+        clientSocket.destroy();
+        return;
+      }
+
+      const reqUrl = clientReq.url ?? '/';
+      const entry: NetworkEntry = {
+        id: ++state.entryId,
+        timestamp: Date.now(),
+        method: clientReq.method ?? 'GET',
+        url: reqUrl,
+        requestHeaders: clientReq.headers as Record<string, string | string[] | undefined>,
+        requestSize: head.length,
+        responseSize: 0,
+        isUpgrade: true,
+      };
+
+      // Parse target from absolute URL or Host header
+      const parsed = url.parse(reqUrl);
+      const host = parsed.hostname ?? (clientReq.headers.host ?? '').split(':')[0];
+      const port = parsed.port
+        ? parseInt(parsed.port, 10)
+        : parsed.protocol === 'https:' ? 443 : 80;
+
+      const upstream = net.connect(port, host, () => {
+        // Reconstruct the upgrade request line + headers + head
+        const requestLine = `${clientReq.method ?? 'GET'} ${parsed.path ?? '/'} HTTP/1.1\r\n`;
+        const headers = Object.entries(clientReq.headers)
+          .map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(', ') : v}`)
+          .join('\r\n');
+        upstream.write(requestLine + headers + '\r\n\r\n');
+        if (head.length > 0) {
+          upstream.write(head);
+        }
+      });
+
+      let entryAdded = false;
+
+      upstream.on('data', (chunk: Buffer) => {
+        if (!entryAdded) {
+          // Parse status code from first response line
+          const firstLine = chunk.toString('utf8', 0, Math.min(chunk.length, 64));
+          const match = firstLine.match(/^HTTP\/1\.[01]\s+(\d{3})/);
+          if (match) {
+            entry.statusCode = parseInt(match[1], 10);
+          }
+          entry.duration = Date.now() - entry.timestamp;
+          addEntry(state, entry);
+          entryAdded = true;
+        }
+        entry.responseSize += chunk.length;
+      });
+
+      clientSocket.on('data', (chunk: Buffer) => {
+        entry.requestSize += chunk.length;
+      });
+
+      upstream.on('error', (err) => {
+        if (!entryAdded) {
+          entry.error = err.message;
+          entry.duration = Date.now() - entry.timestamp;
+          addEntry(state, entry);
+          entryAdded = true;
+        }
+        clientSocket.destroy();
+      });
+
+      clientSocket.on('error', (err) => {
+        if (!entryAdded) {
+          entry.error = err.message;
+          entry.duration = Date.now() - entry.timestamp;
+          addEntry(state, entry);
+          entryAdded = true;
+        }
+        upstream.destroy();
+      });
+
+      // Bidirectionally pipe the sockets
+      upstream.pipe(clientSocket);
+      clientSocket.pipe(upstream);
+    } catch (err) {
+      console.error(`[flutter_network] upgrade handler error: ${err instanceof Error ? err.message : String(err)}`);
+      clientSocket.destroy();
+    }
+  });
+
   // Start listening
   await new Promise<void>((resolve, reject) => {
     proxyServer.on('error', (err) => {
@@ -309,6 +402,7 @@ function handleLog(
           request_size: e.requestSize,
           response_size: e.responseSize,
           error: e.error,
+          is_upgrade: e.isUpgrade,
         })),
       }, null, 2),
     }],
