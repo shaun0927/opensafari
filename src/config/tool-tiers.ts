@@ -101,6 +101,7 @@ export const TOOL_TIERS: Record<string, number> = {
   qa_flutter_touch_targets: 2,
   qa_flutter_semantics: 2,
   qa_flutter_dark_mode: 2,
+  qa_flutter_orientation: 2,
 
   // Tier 2: Flutter VM Service (debug/profile builds only)
   flutter_connect: 2,
