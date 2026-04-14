@@ -18,9 +18,9 @@ const INTERACTIVE_ROLES = [
   'AXPopUpButton', 'AXMenuItem', 'AXTab',
 ];
 
-// Default screen dimensions for iPhone 16 (points)
-const PORTRAIT_WIDTH = 393;
-const PORTRAIT_HEIGHT = 852;
+// Default landscape screen dimensions for iPhone 16 (points).
+// Overflow is only checked in landscape — portrait is the app's natural
+// layout, so any portrait overflow would be caught by other QA passes.
 const LANDSCAPE_WIDTH = 852;
 const LANDSCAPE_HEIGHT = 393;
 
