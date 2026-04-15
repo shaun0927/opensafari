@@ -640,6 +640,64 @@ describe('getInputBackend', () => {
     }
   });
 
+  // ── simhid-gated reason (issue #491) ────────────────────────────────────
+  //
+  // When the Tier-1 SimHID probe succeeds but the return path in
+  // `getInputBackend()` is commented out (see TODO(#491) referencing the
+  // Xcode 26+ screen-lock regression), the thrown error should surface the
+  // #491 link instead of the WebKit-oriented 'no-webkit' reason. We drive
+  // the probe to a non-null backend by enabling the Swift-source candidate
+  // path — that affordance is already gated behind
+  // OPENSAFARI_ALLOW_SWIFT_INTERPRETER=1 and resolves to the in-tree
+  // `src/native/sim-hid-bridge.swift`, so no build step is required.
+
+  describe('simhid-gated reason (issue #491)', () => {
+    const ALLOW_SWIFT = 'OPENSAFARI_ALLOW_SWIFT_INTERPRETER';
+    let originalAllowSwift: string | undefined;
+
+    beforeEach(() => {
+      originalAllowSwift = process.env[ALLOW_SWIFT];
+      process.env[ALLOW_SWIFT] = '1';
+      resetInputBackend();
+    });
+
+    afterEach(() => {
+      if (originalAllowSwift === undefined) {
+        delete process.env[ALLOW_SWIFT];
+      } else {
+        process.env[ALLOW_SWIFT] = originalAllowSwift;
+      }
+      resetInputBackend();
+    });
+
+    test('reason is simhid-gated when SimHID probe succeeds and no webkitClient', async () => {
+      execMock.mockRejectedValueOnce(new Error('not supported'));
+      try {
+        await getInputBackend(DEVICE);
+        fail('expected HeadlessInputUnavailableError');
+      } catch (err) {
+        const hErr = err as HeadlessInputUnavailableError;
+        expect(hErr.reason).toBe('simhid-gated');
+      }
+    });
+
+    test('remediation references issue #491 and mentions the ALLOW_FOCUS_INPUT workaround', async () => {
+      execMock.mockRejectedValueOnce(new Error('not supported'));
+      try {
+        await getInputBackend(DEVICE);
+        fail('expected HeadlessInputUnavailableError');
+      } catch (err) {
+        const hErr = err as HeadlessInputUnavailableError;
+        expect(hErr.message).toContain('#491');
+        expect(hErr.message).toContain('IndigoHIDMessageForMouseNSEvent');
+        expect(hErr.message).toContain(OPENSAFARI_ALLOW_FOCUS_INPUT_ENV);
+        // The simhid-gated remediation is deliberately longer than the
+        // two-line webkit fallback; assert the minimum shape.
+        expect(hErr.remediation.length).toBeGreaterThanOrEqual(4);
+      }
+    });
+  });
+
   // ── WebKit reconnect retry (issue #405) ─────────────────────────────────
 
   test('attempts a one-shot WebKit reconnect when client is disconnected', async () => {
