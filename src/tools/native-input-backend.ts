@@ -595,7 +595,12 @@ function isHeadlessOnly(): boolean {
 export class HeadlessInputUnavailableError extends Error {
   readonly name = 'HeadlessInputUnavailableError' as const;
   readonly deviceId: string;
-  readonly reason: 'no-simctl' | 'no-webkit' | 'webkit-disconnected' | 'headless-only';
+  readonly reason:
+    | 'no-simctl'
+    | 'no-webkit'
+    | 'webkit-disconnected'
+    | 'headless-only'
+    | 'simhid-gated';
   readonly remediation: readonly string[];
 
   constructor(
@@ -609,11 +614,23 @@ export class HeadlessInputUnavailableError extends Error {
             'Ensure a headless backend (simctl, webkit, flutter-vm, simhid) is available.',
             `To allow focus-stealing input, unset ${OPENSAFARI_HEADLESS_ONLY_ENV}.`,
           ] as const)
-        : ([
-            "Safari QA: call `set_active_context({ context: 'safari' })` to enable WebKitInputBackend",
-            `Native apps: opt in to the CGEvent fallback by setting ${OPENSAFARI_ALLOW_FOCUS_INPUT_ENV}=1 ` +
-              '(WARNING: will move the mouse cursor and bring Simulator.app to the foreground)',
-          ] as const);
+        : reason === 'simhid-gated'
+          ? ([
+              'SimulatorKitHID (Tier 1) is probed and cached on this host, but the ' +
+                'tap/swipe return path in `getInputBackend()` is commented out while ' +
+                'issue #491 fixes `IndigoHIDMessageForMouseNSEvent` locking the Simulator ' +
+                'screen on Xcode 26+.',
+              'Track progress: https://github.com/shaun0927/opensafari/issues/491',
+              'Hardware buttons and keyboard input via simhid are unaffected — only ' +
+                'tap/swipe are gated.',
+              `Temporary workaround: set ${OPENSAFARI_ALLOW_FOCUS_INPUT_ENV}=1 to route ` +
+                'tap/swipe through the focus-stealing AppleScript/CGEvent backend until #491 ships.',
+            ] as const)
+          : ([
+              "Safari QA: call `set_active_context({ context: 'safari' })` to enable WebKitInputBackend",
+              `Native apps: opt in to the CGEvent fallback by setting ${OPENSAFARI_ALLOW_FOCUS_INPUT_ENV}=1 ` +
+                '(WARNING: will move the mouse cursor and bring Simulator.app to the foreground)',
+            ] as const);
     const message =
       `No headless input backend available for device ${deviceId} (reason: ${reason}).\n` +
       remediation.map((line) => `  - ${line}`).join('\n');
@@ -852,9 +869,8 @@ export async function getInputBackend(
     }
   }
   // SimHID tap/swipe broken on Xcode 26+ (locks screen). TODO(#491): re-enable.
-  // Read guard — the cache is kept populated so re-activation is a one-line
-  // change; without the read, eslint flags the probe as dead code.
-  void cachedSimHidBackend;
+  // `cachedSimHidBackend` is read below when picking the error reason, so the
+  // probe is not dead code even while the return path is commented out.
   // if (cachedSimHidBackend) {
   //   return cachedSimHidBackend;
   // }
@@ -899,9 +915,17 @@ export async function getInputBackend(
   // Without explicit opt-in, refuse to return a backend that would move the
   // mouse cursor or steal Simulator focus. See issue #405.
   if (!isFocusInputAllowed()) {
-    const reason: HeadlessInputUnavailableError['reason'] = !webkitClient
-      ? 'no-webkit'
-      : 'webkit-disconnected';
+    // Prefer the 'simhid-gated' reason when the Tier-1 probe succeeded on
+    // this host — pointing users at #491 is more actionable than the
+    // WebKit-oriented 'no-webkit' reason for a native-app call site.
+    let reason: HeadlessInputUnavailableError['reason'];
+    if (cachedSimHidBackend) {
+      reason = 'simhid-gated';
+    } else if (!webkitClient) {
+      reason = 'no-webkit';
+    } else {
+      reason = 'webkit-disconnected';
+    }
     const err = new HeadlessInputUnavailableError(deviceId, reason);
     console.error(`[input-backend] ${err.message}`);
     throw err;
