@@ -8,7 +8,8 @@
 
 import { MCPServer, getWebKitClient } from '../mcp-server';
 import { getAccessibilityBridge, ensureSemanticsActive } from '../native';
-import type { AXNode } from '../native';
+import type { AXNode, AXPressResponse } from '../native';
+import type { AccessibilityBridge } from '../native/accessibility-bridge';
 import { resolveDeviceId, getInputBackend, runInputOp } from './native-input-utils';
 
 export function registerAppTapElementTool(server: MCPServer): void {
@@ -195,6 +196,51 @@ export function registerAppTapElementTool(server: MCPServer): void {
           );
         }
 
+        // Tier 1.5 — AX press: drive interaction through the macOS AX API
+        // instead of synthesising OS-level input. Works on every Xcode
+        // version (including Xcode 26+ where SimHID tap/swipe is disabled
+        // by #537) and never moves the user's mouse. Only applicable for
+        // simple taps — long-press (`duration > 0`) still flows through
+        // the coordinate-based backend chain below because AXPress has no
+        // duration semantics.
+        const axPressDisabled =
+          process.env.OPENSAFARI_DISABLE_AX_PRESS === '1' ||
+          process.env.OPENSAFARI_DISABLE_AX_PRESS === 'true';
+        if (duration === 0 && match.path && !axPressDisabled) {
+          const pressResponse = await tryPress(bridge, match.path, deviceId);
+          if (pressResponse?.ok) {
+            const response = buildAXPressResponse({
+              match,
+              centerX,
+              centerY,
+              deviceId,
+              totalMatches,
+              indexProvided,
+              index,
+              ambiguous,
+              clampedFrom,
+              pressActions: pressResponse.actions,
+            });
+            return {
+              content: [{ type: 'text' as const, text: JSON.stringify(response) }],
+            };
+          }
+          if (pressResponse && pressResponse.code === 'PRESS_NOT_ACTIONABLE') {
+            console.error(
+              `[app_tap_element] AX press not actionable for path ${match.path} ` +
+                `(role=${match.role}, id=${match.identifier ?? '-'}, ` +
+                `actions=${JSON.stringify(pressResponse.actions)}); ` +
+                `falling back to coordinate tap.`,
+            );
+          } else if (pressResponse && pressResponse.code === 'PRESS_FAILED') {
+            console.error(
+              `[app_tap_element] AXPress action fired but returned non-success ` +
+                `(axErrorCode=${pressResponse.axErrorCode}, path=${match.path}); ` +
+                `falling back to coordinate tap.`,
+            );
+          }
+        }
+
         // Tap via input backend
         const backend = await getInputBackend(deviceId, getWebKitClient(deviceId));
         const { meta } = await runInputOp(backend, deviceId, () =>
@@ -297,4 +343,117 @@ export function sanitizeTapTarget(
     };
   }
   return { x, y };
+}
+
+/**
+ * Invoke the Tier 1.5 AX press and turn all recoverable failures into a
+ * structured `PressResponse` so the caller can branch cleanly. Bridge-level
+ * errors (permission denied, simulator not running, element not found)
+ * still propagate — they indicate a setup problem that AX press cannot
+ * paper over by falling through to a coordinate tap.
+ *
+ * Returns `null` when the press path encountered a best-effort failure
+ * (e.g., the bridge binary did not resolve). Returns the full response
+ * otherwise, including the `PRESS_NOT_ACTIONABLE` case which the caller
+ * uses to fall back.
+ */
+export async function tryPress(
+  bridge: AccessibilityBridge,
+  elementPath: string,
+  deviceId: string,
+): Promise<AXPressResponse | null> {
+  try {
+    return await bridge.press(elementPath, deviceId);
+  } catch (err) {
+    const code = (err as { code?: string } | null)?.code;
+    const message = err instanceof Error ? err.message : String(err);
+    if (
+      code === 'BRIDGE_NOT_FOUND' ||
+      code === 'BRIDGE_EXEC_FAILED' ||
+      code === 'AX_TIMEOUT'
+    ) {
+      console.error(
+        `[app_tap_element] AX press bridge unavailable (${code}); ` +
+          `falling back to coordinate tap. Reason: ${message}`,
+      );
+      return null;
+    }
+    throw err;
+  }
+}
+
+/**
+ * Build the MCP response envelope for a successful AX press — shape matches
+ * the coordinate-tap response so callers do not need to branch on `backend`
+ * to locate `element` / `coordinates` / `_meta`.
+ */
+export function buildAXPressResponse(args: {
+  match: AXNode;
+  centerX: number;
+  centerY: number;
+  deviceId: string;
+  totalMatches: number;
+  indexProvided: boolean;
+  index: number;
+  ambiguous: boolean;
+  clampedFrom?: { x: number; y: number };
+  pressActions: string[];
+}): Record<string, unknown> {
+  const {
+    match,
+    centerX,
+    centerY,
+    deviceId,
+    totalMatches,
+    indexProvided,
+    index,
+    ambiguous,
+    clampedFrom,
+    pressActions,
+  } = args;
+  const response: Record<string, unknown> = {
+    status: 'tapped',
+    element: {
+      role: match.role,
+      label: match.label,
+      identifier: match.identifier,
+      path: match.path,
+    },
+    coordinates: { x: centerX, y: centerY },
+    backend: 'ax-press',
+    deviceId,
+    totalMatches,
+    _meta: {
+      backendKind: 'ax-press',
+      headless: true,
+      deviceId,
+      axActions: pressActions,
+    },
+  };
+  const implicitAmbiguity = !indexProvided && (ambiguous || totalMatches > 1);
+  const warnings: string[] = [];
+  if (clampedFrom) {
+    response.clampedFrom = clampedFrom;
+    // AX press uses the element path rather than `clampedFrom` coordinates,
+    // but we still record the clamp for observability — a frame whose
+    // center fell outside the device plane is usually a symptom even if
+    // this particular tap succeeded.
+    warnings.push(
+      `tap coordinates clamped to screen bounds from (${clampedFrom.x}, ${clampedFrom.y}); ` +
+        `AX press used the element path so the clamp is advisory`,
+    );
+  }
+  if (implicitAmbiguity) {
+    warnings.push(
+      `ambiguous: ${totalMatches} elements matched; pressed index ${index}`,
+    );
+    console.error(
+      `[app_tap_element] ambiguous query matched ${totalMatches} elements; pressed index ${index}. ` +
+        `Pass a narrower query or an explicit index to silence this warning.`,
+    );
+  }
+  if (warnings.length > 0) {
+    response.warning = warnings.join('; ');
+  }
+  return response;
 }
