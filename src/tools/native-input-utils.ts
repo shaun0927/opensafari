@@ -29,6 +29,12 @@ export {
   OPENSAFARI_INPUT_TELEMETRY_META_ENV,
 } from '../metrics/input-telemetry';
 export type { InputTelemetryEvent } from '../metrics/input-telemetry';
+export {
+  getInputTelemetryRollup,
+  resetInputTelemetryRollup,
+  OPENSAFARI_INPUT_TELEMETRY_ROLLUP_ENV,
+} from '../metrics/input-telemetry-rollup';
+export type { InputTelemetryRollup } from '../metrics/input-telemetry-rollup';
 
 /**
  * Compact telemetry projection for the `_meta._telemetry` response field.
