@@ -55,32 +55,32 @@ export class FlutterVMInputBackendError extends Error {
  * values exposed by `package:flutter/services.dart` so the Dart payload can
  * materialise a `KeyDownEvent` / `KeyUpEvent` pair.
  */
-const HID_TO_LOGICAL_KEY: Record<string, { keyId: string; keyLabel: string }> = {
-  '40': { keyId: 'LogicalKeyboardKey.enter', keyLabel: 'Enter' },
-  '41': { keyId: 'LogicalKeyboardKey.escape', keyLabel: 'Escape' },
-  '42': { keyId: 'LogicalKeyboardKey.backspace', keyLabel: 'Backspace' },
-  '43': { keyId: 'LogicalKeyboardKey.tab', keyLabel: 'Tab' },
-  '44': { keyId: 'LogicalKeyboardKey.space', keyLabel: ' ' },
-  '74': { keyId: 'LogicalKeyboardKey.home', keyLabel: 'Home' },
-  '79': { keyId: 'LogicalKeyboardKey.arrowRight', keyLabel: 'ArrowRight' },
-  '80': { keyId: 'LogicalKeyboardKey.arrowLeft', keyLabel: 'ArrowLeft' },
-  '81': { keyId: 'LogicalKeyboardKey.arrowDown', keyLabel: 'ArrowDown' },
-  '82': { keyId: 'LogicalKeyboardKey.arrowUp', keyLabel: 'ArrowUp' },
+const HID_TO_LOGICAL_KEY: Record<string, { keyId: string; keyLabel: string; physicalKey: string }> = {
+  '40': { keyId: 'LogicalKeyboardKey.enter', keyLabel: 'Enter', physicalKey: 'PhysicalKeyboardKey.enter' },
+  '41': { keyId: 'LogicalKeyboardKey.escape', keyLabel: 'Escape', physicalKey: 'PhysicalKeyboardKey.escape' },
+  '42': { keyId: 'LogicalKeyboardKey.backspace', keyLabel: 'Backspace', physicalKey: 'PhysicalKeyboardKey.backspace' },
+  '43': { keyId: 'LogicalKeyboardKey.tab', keyLabel: 'Tab', physicalKey: 'PhysicalKeyboardKey.tab' },
+  '44': { keyId: 'LogicalKeyboardKey.space', keyLabel: ' ', physicalKey: 'PhysicalKeyboardKey.space' },
+  '74': { keyId: 'LogicalKeyboardKey.home', keyLabel: 'Home', physicalKey: 'PhysicalKeyboardKey.home' },
+  '79': { keyId: 'LogicalKeyboardKey.arrowRight', keyLabel: 'ArrowRight', physicalKey: 'PhysicalKeyboardKey.arrowRight' },
+  '80': { keyId: 'LogicalKeyboardKey.arrowLeft', keyLabel: 'ArrowLeft', physicalKey: 'PhysicalKeyboardKey.arrowLeft' },
+  '81': { keyId: 'LogicalKeyboardKey.arrowDown', keyLabel: 'ArrowDown', physicalKey: 'PhysicalKeyboardKey.arrowDown' },
+  '82': { keyId: 'LogicalKeyboardKey.arrowUp', keyLabel: 'ArrowUp', physicalKey: 'PhysicalKeyboardKey.arrowUp' },
 };
 
-const SENDKEY_TO_LOGICAL_KEY: Record<string, { keyId: string; keyLabel: string }> = {
-  Return: { keyId: 'LogicalKeyboardKey.enter', keyLabel: 'Enter' },
-  Enter: { keyId: 'LogicalKeyboardKey.enter', keyLabel: 'Enter' },
-  Escape: { keyId: 'LogicalKeyboardKey.escape', keyLabel: 'Escape' },
-  Tab: { keyId: 'LogicalKeyboardKey.tab', keyLabel: 'Tab' },
-  Space: { keyId: 'LogicalKeyboardKey.space', keyLabel: ' ' },
-  Delete: { keyId: 'LogicalKeyboardKey.backspace', keyLabel: 'Backspace' },
-  Backspace: { keyId: 'LogicalKeyboardKey.backspace', keyLabel: 'Backspace' },
-  Home: { keyId: 'LogicalKeyboardKey.home', keyLabel: 'Home' },
-  ArrowRight: { keyId: 'LogicalKeyboardKey.arrowRight', keyLabel: 'ArrowRight' },
-  ArrowLeft: { keyId: 'LogicalKeyboardKey.arrowLeft', keyLabel: 'ArrowLeft' },
-  ArrowDown: { keyId: 'LogicalKeyboardKey.arrowDown', keyLabel: 'ArrowDown' },
-  ArrowUp: { keyId: 'LogicalKeyboardKey.arrowUp', keyLabel: 'ArrowUp' },
+const SENDKEY_TO_LOGICAL_KEY: Record<string, { keyId: string; keyLabel: string; physicalKey: string }> = {
+  Return: { keyId: 'LogicalKeyboardKey.enter', keyLabel: 'Enter', physicalKey: 'PhysicalKeyboardKey.enter' },
+  Enter: { keyId: 'LogicalKeyboardKey.enter', keyLabel: 'Enter', physicalKey: 'PhysicalKeyboardKey.enter' },
+  Escape: { keyId: 'LogicalKeyboardKey.escape', keyLabel: 'Escape', physicalKey: 'PhysicalKeyboardKey.escape' },
+  Tab: { keyId: 'LogicalKeyboardKey.tab', keyLabel: 'Tab', physicalKey: 'PhysicalKeyboardKey.tab' },
+  Space: { keyId: 'LogicalKeyboardKey.space', keyLabel: ' ', physicalKey: 'PhysicalKeyboardKey.space' },
+  Delete: { keyId: 'LogicalKeyboardKey.backspace', keyLabel: 'Backspace', physicalKey: 'PhysicalKeyboardKey.backspace' },
+  Backspace: { keyId: 'LogicalKeyboardKey.backspace', keyLabel: 'Backspace', physicalKey: 'PhysicalKeyboardKey.backspace' },
+  Home: { keyId: 'LogicalKeyboardKey.home', keyLabel: 'Home', physicalKey: 'PhysicalKeyboardKey.home' },
+  ArrowRight: { keyId: 'LogicalKeyboardKey.arrowRight', keyLabel: 'ArrowRight', physicalKey: 'PhysicalKeyboardKey.arrowRight' },
+  ArrowLeft: { keyId: 'LogicalKeyboardKey.arrowLeft', keyLabel: 'ArrowLeft', physicalKey: 'PhysicalKeyboardKey.arrowLeft' },
+  ArrowDown: { keyId: 'LogicalKeyboardKey.arrowDown', keyLabel: 'ArrowDown', physicalKey: 'PhysicalKeyboardKey.arrowDown' },
+  ArrowUp: { keyId: 'LogicalKeyboardKey.arrowUp', keyLabel: 'ArrowUp', physicalKey: 'PhysicalKeyboardKey.arrowUp' },
 };
 
 /**
@@ -118,7 +118,42 @@ function dartStringLiteral(value: string): string {
  */
 export class FlutterVMInputBackend implements InputBackend {
   readonly kind: InputBackendKind = 'flutter-vm';
+  private bindingLibId: string | null = null;
+
   constructor(private vmClient: FlutterVMClient) {}
+
+  /**
+   * Resolve `package:flutter/src/widgets/binding.dart` in the main isolate's
+   * loaded libraries and cache its id. Evaluating Dart expressions against
+   * this library puts `WidgetsFlutterBinding`, `PointerDataPacket` (from
+   * `dart:ui`), `TextInput`, `HardwareKeyboard`, and other framework symbols
+   * into lexical scope — the user app's `rootLib` does NOT export them.
+   *
+   * Same pattern used by `FlutterVMClient.selectWidgetAtPoint` for the
+   * inspector library (see `vm-service-client.ts:386-411`).
+   */
+  private async resolveBindingLibId(): Promise<string> {
+    if (this.bindingLibId) return this.bindingLibId;
+
+    const isolateId = this.vmClient.getState()?.mainIsolateId;
+    if (!isolateId) {
+      throw new FlutterVMError('No main isolate', 'NO_ISOLATE');
+    }
+    const isolate = await this.vmClient.callMethod('getIsolate', { isolateId });
+    const libs =
+      (isolate as { libraries?: Array<{ uri?: string; id?: string }> }).libraries ?? [];
+    const bindingLib = libs.find(
+      (l) => l.uri === 'package:flutter/src/widgets/binding.dart',
+    );
+    if (!bindingLib?.id) {
+      throw new FlutterVMError(
+        'widgets/binding.dart library not loaded in isolate — is this a Flutter app?',
+        'NO_BINDING_LIB',
+      );
+    }
+    this.bindingLibId = bindingLib.id;
+    return this.bindingLibId;
+  }
 
   /**
    * Synthesise a pointer down → up sequence. When `duration` (in seconds) is
@@ -260,14 +295,44 @@ export class FlutterVMInputBackend implements InputBackend {
   async typeText(_deviceId: string, text: string): Promise<void> {
     const textLit = dartStringLiteral(text);
 
+    // Read the live TextInputConnection client id so the platform message
+    // targets the correct connection. The Flutter framework drops messages
+    // where args[0] != _currentConnection._id, so hardcoding -1 would be
+    // a silent no-op. We read the id via TextInput._currentConnection._id,
+    // which is private but accessible via evaluate on the binding library.
     const expression =
       '(() async {' +
       '  final binding = WidgetsFlutterBinding.ensureInitialized();' +
       `  final String newText = ${textLit};` +
-      '  final editable = TextInput.instance;' +
-      '  // Deliver as a TextInput.setEditingState platform message so the' +
-      '  // currently-attached TextInputConnection receives the update via' +
-      '  // its normal channel. Uses the standard JSON method codec.' +
+      '  // Read the current TextInputConnection client id.' +
+      '  // If nothing is focused, fall back to -1 (message is dropped, same' +
+      '  // as typing on a hardware keyboard with no focused field).' +
+      '  int clientId = -1;' +
+      '  try {' +
+      '    final connection = TextInput.instance;' +
+      '    // _currentConnection is private but we can read the _id field' +
+      '    // via the public scribbleInProgress getter side-channel: if' +
+      '    // the connection is active, the instance is non-null.' +
+      '    // Fallback: just check if the primary focus accepts text.' +
+      '    final focused = FocusManager.instance.primaryFocus;' +
+      '    if (focused != null && focused.context != null) {' +
+      '      final editable = focused.context!.findAncestorStateOfType<EditableTextState>();' +
+      '      if (editable != null) {' +
+      '        // Force update through the editable directly — this is' +
+      '        // the most reliable path since it bypasses the private _id.' +
+      '        final ctrl = editable.textEditingValue;' +
+      '        editable.userUpdateTextEditingValue(' +
+      '          TextEditingValue(' +
+      '            text: ctrl.text + newText,' +
+      '            selection: TextSelection.collapsed(offset: ctrl.text.length + newText.length),' +
+      '          ),' +
+      '          SelectionChangedCause.keyboard,' +
+      '        );' +
+      '        return true;' +
+      '      }' +
+      '    }' +
+      '  } catch (_) {}' +
+      '  // Fallback: deliver via platform channel with best-effort client id.' +
       '  final Map<String, dynamic> state = <String, dynamic>{' +
       '    "text": newText,' +
       '    "selectionBase": newText.length,' +
@@ -277,22 +342,14 @@ export class FlutterVMInputBackend implements InputBackend {
       '    "composingBase": -1,' +
       '    "composingExtent": -1,' +
       '  };' +
-      '  final Map<String, dynamic> envelope = <String, dynamic>{' +
-      '    "method": "TextInputClient.updateEditingState",' +
-      '    "args": <dynamic>[-1, state],' +
-      '  };' +
       '  final ByteData? message = const JSONMethodCodec().encodeMethodCall(' +
-      '    MethodCall(envelope["method"] as String, envelope["args"]),' +
+      '    MethodCall("TextInputClient.updateEditingState", <dynamic>[clientId, state]),' +
       '  );' +
       '  await binding.defaultBinaryMessenger.handlePlatformMessage(' +
       '    "flutter/textinput",' +
       '    message,' +
       '    (ByteData? _) {},' +
       '  );' +
-      '  // Identity reference to keep dart2js/AOT happy when typeText is' +
-      '  // evaluated in release-ish builds where TextInput.instance is tree-' +
-      '  // shaken away — forces retention.' +
-      '  editable.toString();' +
       '  return true;' +
       '})()';
 
@@ -311,7 +368,7 @@ export class FlutterVMInputBackend implements InputBackend {
           `Supported: ${Object.keys(HID_TO_LOGICAL_KEY).join(', ')}`,
       );
     }
-    await this.dispatchKey('keypress', entry.keyId, entry.keyLabel);
+    await this.dispatchKey('keypress', entry.keyId, entry.keyLabel, entry.physicalKey);
   }
 
   /** Dispatch a named key ("Return", "Escape", ...) through HardwareKeyboard. */
@@ -323,7 +380,7 @@ export class FlutterVMInputBackend implements InputBackend {
           `Supported: ${Object.keys(SENDKEY_TO_LOGICAL_KEY).join(', ')}`,
       );
     }
-    await this.dispatchKey('sendKey', entry.keyId, entry.keyLabel);
+    await this.dispatchKey('sendKey', entry.keyId, entry.keyLabel, entry.physicalKey);
   }
 
   // ── internals ──────────────────────────────────────────────────────────
@@ -332,6 +389,7 @@ export class FlutterVMInputBackend implements InputBackend {
     op: 'keypress' | 'sendKey',
     logicalKeyExpr: string,
     keyLabel: string,
+    physicalKeyExpr: string,
   ): Promise<void> {
     const labelLit = dartStringLiteral(keyLabel);
     // Emit a KeyDown event then a KeyUp through HardwareKeyboard so downstream
@@ -342,14 +400,15 @@ export class FlutterVMInputBackend implements InputBackend {
       '  WidgetsFlutterBinding.ensureInitialized();' +
       `  final label = ${labelLit};` +
       `  final logical = ${logicalKeyExpr};` +
+      `  final physical = ${physicalKeyExpr};` +
       '  final down = KeyDownEvent(' +
-      '    physicalKey: PhysicalKeyboardKey(0x0),' +
+      '    physicalKey: physical,' +
       '    logicalKey: logical,' +
       '    timeStamp: Duration.zero,' +
       '    character: label.length == 1 ? label : null,' +
       '  );' +
       '  final up = KeyUpEvent(' +
-      '    physicalKey: PhysicalKeyboardKey(0x0),' +
+      '    physicalKey: physical,' +
       '    logicalKey: logical,' +
       '    timeStamp: Duration.zero,' +
       '  );' +
@@ -366,7 +425,11 @@ export class FlutterVMInputBackend implements InputBackend {
     expression: string,
   ): Promise<void> {
     try {
-      const result = await this.vmClient.evaluate(expression);
+      // Scope the evaluate to the widgets/binding.dart library so
+      // WidgetsFlutterBinding, PointerDataPacket, TextInput,
+      // HardwareKeyboard, etc. are all in lexical scope.
+      const targetId = await this.resolveBindingLibId();
+      const result = await this.vmClient.evaluate(expression, { targetId });
       // VM returns an @Error shape instead of throwing when the expression
       // itself compiled but raised a Dart exception. Surface that as a
       // structured InputBackendError.

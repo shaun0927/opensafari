@@ -23,12 +23,25 @@ function makeMockClient() {
   const evaluate = jest
     .fn()
     .mockResolvedValue({ type: '@Instance', kind: 'Bool', valueAsString: 'true' });
+  // Mock callMethod('getIsolate', ...) to return the binding library so
+  // resolveBindingLibId() succeeds without a real VM connection.
+  const callMethod = jest.fn().mockResolvedValue({
+    rootLib: { id: 'libraries/root' },
+    libraries: [
+      { uri: 'dart:core', id: 'libraries/dart:core' },
+      { uri: 'package:flutter/src/widgets/binding.dart', id: 'libraries/binding' },
+    ],
+  });
   return {
     evaluate,
+    callMethod,
     isConnected: () => true,
+    getState: () => ({ mainIsolateId: 'isolates/main' }),
   } as unknown as {
     evaluate: jest.Mock;
+    callMethod: jest.Mock;
     isConnected: () => boolean;
+    getState: () => { mainIsolateId: string };
   };
 }
 
