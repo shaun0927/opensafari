@@ -185,11 +185,10 @@ describe('WebInspectorProxy initialization timing', () => {
 
 describe('WebInspectorProxy.start() socket discovery retry (Issue #494)', () => {
   let proxy: WebInspectorProxy;
-  let consoleErrorSpy: jest.SpyInstance;
 
   beforeEach(() => {
     proxy = new WebInspectorProxy({ port: 9522, deviceListPort: 9521 });
-    consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    jest.spyOn(console, 'error').mockImplementation(() => {});
   });
 
   afterEach(() => {
@@ -201,28 +200,29 @@ describe('WebInspectorProxy.start() socket discovery retry (Issue #494)', () => 
       .spyOn(socketFinder, 'waitForSocketPath')
       .mockResolvedValue(null);
 
-    // Mock isPortInUse to return false, which mock execFile to throw for ios_webkit_debug_proxy check
-    const net = require('net');
-    jest.spyOn(net, 'connect').mockImplementation(() => {
-      const { EventEmitter } = require('events');
-      const emitter = new EventEmitter();
-      emitter.setTimeout = jest.fn();
-      emitter.destroy = jest.fn();
-      process.nextTick(() => emitter.emit('error', new Error('ECONNREFUSED')));
-      return emitter;
-    });
+    // Mock isPortInUse to return false so the port-in-use guard is skipped
+    jest.spyOn(
+      proxy as unknown as { isPortInUse: (port: number) => Promise<boolean> },
+      'isPortInUse',
+    ).mockResolvedValue(false);
 
-    // Mock execFile (which check) to succeed
-    const childProcess = require('child_process');
-    jest.spyOn(childProcess, 'execFile').mockImplementation(
-      (...args: unknown[]) => {
-        const cb = args[args.length - 1];
+    // Mock the which check: proxy.ts uses promisify(execFile)('which', ['ios_webkit_debug_proxy'])
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const cp = require('child_process');
+    const origExecFile = cp.execFile;
+    cp.execFile = (...args: unknown[]) => {
+      const cb = args[args.length - 1];
+      if (typeof cb === 'function') {
         (cb as CallableFunction)(null, { stdout: '/usr/local/bin/ios_webkit_debug_proxy\n' });
-      },
-    );
+      }
+    };
 
-    await expect(proxy.start()).rejects.toThrow('Web Inspector socket not found');
-    expect(waitForSocketPathSpy).toHaveBeenCalledWith({ targetUdid: undefined, timeout: 10_000 });
+    try {
+      await expect(proxy.start()).rejects.toThrow('Web Inspector socket not found');
+      expect(waitForSocketPathSpy).toHaveBeenCalledWith({ targetUdid: undefined, timeout: 10_000 });
+    } finally {
+      cp.execFile = origExecFile;
+    }
   });
 });
 

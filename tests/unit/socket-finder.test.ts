@@ -541,8 +541,6 @@ describe('waitForSocketPath', () => {
     stubExecFile({ 'lsof -U': { stdout: 'COMMAND PID USER\n' } });
     readdirMock.mockRejectedValue(new Error('ENOENT'));
 
-    let advancedMs = 0;
-    const origDateNow = Date.now;
     // We rely on jest fake timers advancing Date.now — just verify it returns null within timeout
     const promise = waitForSocketPath({ timeout: 2_000, interval: 200 });
     await jest.runAllTimersAsync();
