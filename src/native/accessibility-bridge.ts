@@ -172,6 +172,64 @@ export class AccessibilityBridge {
     if (deviceId) args.push('--device', deviceId);
     return this.exec<AXNode>(args);
   }
+
+  /**
+   * Invoke `AXPress` on the element at `elementPath`.
+   *
+   * Tier 1.5 headless tap path — interaction routed through the macOS
+   * accessibility API instead of OS-level input synthesis, so the user's
+   * mouse cursor never moves and `Simulator.app` does not have to be
+   * foregrounded. Works on every Xcode version, and is the only path that
+   * covers native (non-Flutter) apps on Xcode 26+ where
+   * `SimulatorKitHIDInputBackend` tap/swipe was disabled pending the Apple
+   * `IndigoHIDMessageForMouseNSEvent` regression (see #537 / #552).
+   *
+   * Response shape is uniform — the bridge always exits 0 and emits a
+   * `PressResponse` on stdout. The caller branches on `ok`:
+   *
+   *   - `ok === true` — press succeeded.
+   *   - `ok === false && code === 'PRESS_NOT_ACTIONABLE'` — element does
+   *     not advertise `AXPress`; the caller should transparently fall back
+   *     to a coordinate-based tap.
+   *   - `ok === false && code === 'PRESS_FAILED'` — `AXPress` was
+   *     advertised but `AXUIElementPerformAction` returned non-success;
+   *     the caller should surface this to the user.
+   *
+   * Bridge-level problems (accessibility permission denied, simulator not
+   * running, unknown command, missing argument, element not found) still
+   * exit non-zero and throw `AccessibilityBridgeError` as usual.
+   */
+  async press(elementPath: string, deviceId?: string): Promise<AXPressResponse> {
+    const args = ['press', '--path', elementPath];
+    if (deviceId) args.push('--device', deviceId);
+    return this.exec<AXPressResponse>(args);
+  }
+}
+
+/**
+ * Uniform press response. `actions` mirrors the full
+ * `AXUIElementCopyActionNames` list so callers can log what else the
+ * element supports when diagnosing unexpected `PRESS_NOT_ACTIONABLE`
+ * fallbacks.
+ */
+export interface AXPressResponse {
+  ok: boolean;
+  code: 'OK' | 'PRESS_NOT_ACTIONABLE' | 'PRESS_FAILED';
+  path: string;
+  actions: string[];
+  role: string | null;
+  identifier: string | null;
+  label: string | null;
+  /**
+   * Human-readable diagnostic surfaced by the Swift bridge for
+   * `PRESS_NOT_ACTIONABLE` / `PRESS_FAILED`. The field is intentionally
+   * named `message` rather than `error` so it does not trigger
+   * `AccessibilityBridge.exec()`'s `parsed.error` auto-throw path —
+   * bridge-level failures (permissions, device-not-found, missing args)
+   * still surface via non-zero exit + `{ error, code }` on stdout.
+   */
+  message: string | null;
+  axErrorCode: number | null;
 }
 
 export class AccessibilityBridgeError extends Error {

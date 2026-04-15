@@ -21,11 +21,27 @@ import type { AXNode, AXQueryResult } from '../../src/native/ax-types';
 const mockQuery = jest.fn();
 const mockTap = jest.fn().mockResolvedValue(undefined);
 const mockTypeText = jest.fn().mockResolvedValue(undefined);
+// Default to PRESS_NOT_ACTIONABLE so the pre-existing coordinate-tap +
+// typeText tests continue to exercise the backend focus path. Tests that
+// target the Tier-1.5 AX press focus override this with
+// `mockPress.mockResolvedValueOnce({ ok: true, ... })`.
+const mockPress = jest.fn().mockResolvedValue({
+  ok: false,
+  code: 'PRESS_NOT_ACTIONABLE',
+  path: '',
+  actions: [],
+  role: null,
+  identifier: null,
+  label: null,
+  message: 'Element does not support AXPress',
+  axErrorCode: null,
+});
 
 jest.mock('../../src/native/accessibility-bridge', () => ({
   getAccessibilityBridge: () => ({
     query: mockQuery,
     dumpTree: jest.fn(),
+    press: mockPress,
   }),
 }));
 
@@ -96,6 +112,21 @@ beforeAll(() => {
 beforeEach(() => {
   jest.clearAllMocks();
   jest.useRealTimers();
+  // See the matching note in `app-tap-element.test.ts` — `clearAllMocks`
+  // does not drain `mockResolvedValueOnce` queues, so reset the press
+  // mock completely and reinstall the default before each test.
+  mockPress.mockReset();
+  mockPress.mockResolvedValue({
+    ok: false,
+    code: 'PRESS_NOT_ACTIONABLE',
+    path: '',
+    actions: [],
+    role: null,
+    identifier: null,
+    label: null,
+    message: 'Element does not support AXPress',
+    axErrorCode: null,
+  });
 });
 
 // ── Tests ──────────────────────────────────────────────────────────────────
@@ -278,5 +309,116 @@ describe('app_type_element', () => {
     });
     expect(body.backend).toBe('simctl');
     expect(body.deviceId).toBe('test-device-id');
+  });
+});
+
+describe('app_type_element — Tier 1.5 AX press focus', () => {
+  it('focuses via AX press and still types through the backend', async () => {
+    const node = makeNode({
+      role: 'AXTextField',
+      label: 'Email',
+      identifier: 'email_field',
+      path: '0/3',
+      frame: { x: 20, y: 200, width: 340, height: 40 },
+    });
+    mockQuery.mockResolvedValue(makeQueryResult([node]));
+    mockPress.mockResolvedValueOnce({
+      ok: true,
+      code: 'OK',
+      path: '0/3',
+      actions: ['AXPress'],
+      role: 'AXTextField',
+      identifier: 'email_field',
+      label: 'Email',
+      message: null,
+      axErrorCode: null,
+    });
+
+    const result = await handler('session', {
+      identifier: 'email_field',
+      text: 'user@example.com',
+      timeout: 0,
+      focusDelay: 0,
+    });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(result.isError).toBeUndefined();
+    expect(body.status).toBe('typed');
+    // Focus came from AX press; typing still goes through backend (Tier
+    // 1 simhid keys in production; mocked simctl here).
+    expect(body.focusBackend).toBe('ax-press');
+    expect(body.backend).toBe('simctl');
+    expect(mockPress).toHaveBeenCalledWith('0/3', 'test-device-id');
+    // Coordinate tap MUST NOT fire when AX press focused the element.
+    expect(mockTap).not.toHaveBeenCalled();
+    expect(mockTypeText).toHaveBeenCalledWith('test-device-id', 'user@example.com');
+  });
+
+  it('falls back to coordinate tap when the text field is not AX-pressable', async () => {
+    const node = makeNode({
+      role: 'AXTextField',
+      identifier: 'plain_text',
+      path: '0/4',
+      frame: { x: 10, y: 300, width: 100, height: 30 },
+    });
+    mockQuery.mockResolvedValue(makeQueryResult([node]));
+    // Default PRESS_NOT_ACTIONABLE resolution applies.
+
+    const result = await handler('session', {
+      identifier: 'plain_text',
+      text: 'hi',
+      timeout: 0,
+      focusDelay: 0,
+    });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(result.isError).toBeUndefined();
+    expect(body.focusBackend).toBe('simctl');
+    expect(mockTap).toHaveBeenCalledTimes(1);
+    expect(mockTypeText).toHaveBeenCalledTimes(1);
+  });
+
+  it('honours OPENSAFARI_DISABLE_AX_PRESS=1 (skips press and uses coordinate tap)', async () => {
+    const node = makeNode({
+      role: 'AXTextField',
+      identifier: 'email_field',
+      path: '0/3',
+      frame: { x: 20, y: 200, width: 340, height: 40 },
+    });
+    mockQuery.mockResolvedValue(makeQueryResult([node]));
+    mockPress.mockResolvedValueOnce({
+      ok: true,
+      code: 'OK',
+      path: '0/3',
+      actions: ['AXPress'],
+      role: 'AXTextField',
+      identifier: 'email_field',
+      label: 'Email',
+      message: null,
+      axErrorCode: null,
+    });
+
+    const prev = process.env.OPENSAFARI_DISABLE_AX_PRESS;
+    process.env.OPENSAFARI_DISABLE_AX_PRESS = '1';
+    try {
+      const result = await handler('session', {
+        identifier: 'email_field',
+        text: 'hi',
+        timeout: 0,
+        focusDelay: 0,
+      });
+      const body = JSON.parse(result.content[0].text);
+
+      expect(result.isError).toBeUndefined();
+      expect(mockPress).not.toHaveBeenCalled();
+      expect(mockTap).toHaveBeenCalledTimes(1);
+      expect(body.focusBackend).toBe('simctl');
+    } finally {
+      if (prev === undefined) {
+        delete process.env.OPENSAFARI_DISABLE_AX_PRESS;
+      } else {
+        process.env.OPENSAFARI_DISABLE_AX_PRESS = prev;
+      }
+    }
   });
 });

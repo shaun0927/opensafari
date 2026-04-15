@@ -9,6 +9,7 @@
 //   ax-bridge dump   --device <UDID> [--max-depth N]
 //   ax-bridge query  --device <UDID> [--id X] [--label X] [--text X] [--role X]
 //   ax-bridge inspect --device <UDID> --path <index-path>
+//   ax-bridge press   --device <UDID> --path <index-path>
 //
 
 import ApplicationServices
@@ -55,6 +56,33 @@ struct QueryJSON: Codable {
 struct ErrorJSON: Codable {
     let error: String
     let code: String
+}
+
+/// Uniform response for `ax-bridge press`.
+///
+/// A non-zero exit code is reserved for unrecoverable bridge-level problems
+/// (accessibility permission denied, simulator not running, unknown
+/// command, missing argument). Anything specific to the press operation —
+/// element not actionable, live `AXUIElementPerformAction` failure — is
+/// reported in-band with `ok: false` and a stable `code`. The TypeScript
+/// caller treats `PRESS_NOT_ACTIONABLE` as "fall back to coordinate tap"
+/// and `PRESS_FAILED` as "surface to the user".
+struct PressResponseJSON: Codable {
+    let ok: Bool
+    let code: String
+    let path: String
+    let actions: [String]
+    let role: String?
+    let identifier: String?
+    let label: String?
+    // Use `message` instead of `error` so the uniform response does not
+    // collide with AccessibilityBridge's stdout-level error-shape detector
+    // (`if (parsed.error) throw ...`). Bridge-level errors — permission
+    // denied, simulator not running, unknown command — still use
+    // `outputError` and exit non-zero, which routes through the existing
+    // throw path.
+    let message: String?
+    let axErrorCode: Int32?
 }
 
 // MARK: - AXUIElement Helpers
@@ -261,6 +289,35 @@ func collectMatches(_ node: AXNodeJSON, identifier: String?, label: String?, tex
     }
 }
 
+/// Resolve a live AXUIElement by index path (e.g. "0/2/1").
+/// Unlike `navigateToPath` which returns the serialised `AXNodeJSON`, this
+/// walks the live AX hierarchy so callers can invoke actions like `AXPress`
+/// against the real element handle.
+func resolveLiveElement(_ root: AXUIElement, path: String) -> AXUIElement? {
+    if path.isEmpty { return root }
+    let components = path.split(separator: "/")
+    var current = root
+    for comp in components {
+        guard let idx = Int(comp) else { return nil }
+        let children = getChildren(current)
+        guard idx >= 0, idx < children.count else { return nil }
+        current = children[idx]
+    }
+    return current
+}
+
+/// Read the list of accessibility actions a live element advertises.
+/// Returns an empty array when the action-names lookup fails — callers
+/// should treat the empty result as "no actions known" rather than
+/// "action definitely unsupported", but for press routing we treat it
+/// the same (fall through).
+func getActionNames(_ element: AXUIElement) -> [String] {
+    var ref: CFArray?
+    let result = AXUIElementCopyActionNames(element, &ref)
+    guard result == .success, let arr = ref as? [String] else { return [] }
+    return arr
+}
+
 /// Navigate to a specific element by index path (e.g. "0/2/1")
 func navigateToPath(_ node: AXNodeJSON, path: String) -> AXNodeJSON? {
     if path.isEmpty || path == node.path { return node }
@@ -398,8 +455,70 @@ func main() {
         // Re-dump with full children for this node
         outputJSON(node)
 
+    case "press":
+        guard let pressPath = args["path"] else {
+            outputError("--path is required for press command", code: "MISSING_PARAM")
+            exit(1)
+        }
+        guard let element = resolveLiveElement(content, path: pressPath) else {
+            outputError("Element not found at path: \(pressPath)", code: "ELEMENT_NOT_FOUND")
+            exit(1)
+        }
+        let actions = getActionNames(element)
+        let role = getStringAttr(element, kAXRoleAttribute as String)
+        let title = getStringAttr(element, kAXTitleAttribute as String)
+        let desc = getStringAttr(element, kAXDescriptionAttribute as String)
+        let label = title ?? desc
+        let identifier = getStringAttr(element, kAXIdentifierAttribute as String)
+
+        if !actions.contains(kAXPressAction as String) {
+            // Element exists but does not advertise AXPress. Report in-band
+            // with ok:false so the TS caller can transparently fall back to
+            // a coordinate tap; exit 0 keeps the response inside stdout
+            // even on Node execFile implementations that strip `stdout`
+            // from rejected promises.
+            outputJSON(PressResponseJSON(
+                ok: false,
+                code: "PRESS_NOT_ACTIONABLE",
+                path: pressPath,
+                actions: actions,
+                role: role,
+                identifier: identifier,
+                label: label,
+                message: "Element does not support AXPress",
+                axErrorCode: nil
+            ))
+            return
+        }
+        let pressResult = AXUIElementPerformAction(element, kAXPressAction as CFString)
+        if pressResult != .success {
+            outputJSON(PressResponseJSON(
+                ok: false,
+                code: "PRESS_FAILED",
+                path: pressPath,
+                actions: actions,
+                role: role,
+                identifier: identifier,
+                label: label,
+                message: "AXUIElementPerformAction(kAXPressAction) returned non-success",
+                axErrorCode: pressResult.rawValue
+            ))
+            return
+        }
+        outputJSON(PressResponseJSON(
+            ok: true,
+            code: "OK",
+            path: pressPath,
+            actions: actions,
+            role: role,
+            identifier: identifier,
+            label: label,
+            message: nil,
+            axErrorCode: nil
+        ))
+
     default:
-        outputError("Unknown command: \(command). Use dump, query, or inspect.", code: "UNKNOWN_COMMAND")
+        outputError("Unknown command: \(command). Use dump, query, inspect, or press.", code: "UNKNOWN_COMMAND")
         exit(1)
     }
 }
