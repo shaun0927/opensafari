@@ -37,7 +37,6 @@ const DEVICE_ID =
 const BUNDLE = 'com.apple.Preferences';
 
 const SETTINGS_GENERAL_ID = 'com.apple.settings.general';
-const SETTINGS_GENERAL_LABEL = process.env.SETTINGS_GENERAL ?? 'General';
 const SETTINGS_ABOUT_LABEL = process.env.SETTINGS_ABOUT ?? 'About';
 
 jest.setTimeout(120_000);
