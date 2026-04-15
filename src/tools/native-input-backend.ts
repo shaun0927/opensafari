@@ -36,7 +36,7 @@ function delay(ms: number): Promise<void> {
  * input — useful when diagnosing focus-theft reports or confirming that a
  * call stayed on a headless tier.
  */
-export type InputBackendKind = 'simctl' | 'webkit' | 'applescript' | 'simhid';
+export type InputBackendKind = 'flutter-vm' | 'simctl' | 'webkit' | 'applescript' | 'simhid';
 
 export interface InputBackend {
   /** Stable identifier used for observability / audit logging. */
