@@ -8,6 +8,7 @@
 // Usage:
 //   sim-hid-bridge <udid> tap    <x> <y> [duration]
 //   sim-hid-bridge <udid> tap-ps <x> <y> [duration] — experimental iOS 26 path
+//   sim-hid-bridge <udid> tap-digitizer <x> <y> [duration] — IOHIDEvent digitizer probe
 //   sim-hid-bridge <udid> swipe  <x1> <y1> <x2> <y2> [duration]
 //   sim-hid-bridge <udid> key    <hidUsage> [duration]
 //   sim-hid-bridge <udid> button <home|lock|sound-up|sound-down> [duration]
@@ -74,6 +75,7 @@ enum Command {
     // mouse NSEvents into UIKit touches unless a pointer HID service has
     // been registered first.
     case tapPS(x: Double, y: Double, duration: Double?)
+    case tapDigitizer(x: Double, y: Double, duration: Double?)
     case swipe(x1: Double, y1: Double, x2: Double, y2: Double, duration: Double?)
     case key(hidUsage: Int, duration: Double?)
     case button(name: String, duration: Double?)
@@ -81,7 +83,7 @@ enum Command {
 enum ParseError: Error { case usage(String) }
 
 func parseCommand(_ argv: [String]) throws -> (udid: String, command: Command) {
-    guard argv.count >= 3 else { throw ParseError.usage("usage: sim-hid-bridge <udid> <tap|tap-ps|swipe|key|button> <args...>\n       sim-hid-bridge diag [udid]") }
+    guard argv.count >= 3 else { throw ParseError.usage("usage: sim-hid-bridge <udid> <tap|tap-ps|tap-digitizer|swipe|key|button> <args...>\n       sim-hid-bridge diag [udid]") }
     let udid = argv[1], kind = argv[2], rest = Array(argv.dropFirst(3))
     switch kind {
     case "tap":
@@ -92,6 +94,10 @@ func parseCommand(_ argv: [String]) throws -> (udid: String, command: Command) {
         guard rest.count >= 2, let x = Double(rest[0]), let y = Double(rest[1]) else {
             throw ParseError.usage("usage: sim-hid-bridge <udid> tap-ps <x> <y> [duration]") }
         return (udid, .tapPS(x: x, y: y, duration: rest.count >= 3 ? Double(rest[2]) : nil))
+    case "tap-digitizer":
+        guard rest.count >= 2, let x = Double(rest[0]), let y = Double(rest[1]) else {
+            throw ParseError.usage("usage: sim-hid-bridge <udid> tap-digitizer <x> <y> [duration]") }
+        return (udid, .tapDigitizer(x: x, y: y, duration: rest.count >= 3 ? Double(rest[2]) : nil))
     case "swipe":
         guard rest.count >= 4, let x1 = Double(rest[0]), let y1 = Double(rest[1]),
               let x2 = Double(rest[2]), let y2 = Double(rest[3]) else {
@@ -107,13 +113,14 @@ func parseCommand(_ argv: [String]) throws -> (udid: String, command: Command) {
         let ok = ["home", "lock", "sound-up", "sound-down"]
         guard ok.contains(rest[0]) else { throw ParseError.usage("unknown button '\(rest[0])'. Allowed: \(ok.joined(separator: ", "))") }
         return (udid, .button(name: rest[0], duration: rest.count >= 2 ? Double(rest[1]) : nil))
-    default: throw ParseError.usage("unknown command '\(kind)'. Allowed: tap, tap-ps, swipe, key, button")
+    default: throw ParseError.usage("unknown command '\(kind)'. Allowed: tap, tap-ps, tap-digitizer, swipe, key, button")
     }
 }
 func kindString(_ c: Command) -> String {
     switch c {
     case .tap: return "tap"
     case .tapPS: return "tap-ps"
+    case .tapDigitizer: return "tap-digitizer"
     case .swipe: return "swipe"
     case .key: return "key"
     case .button: return "button"
@@ -317,6 +324,101 @@ func getScreenSize(_ d: NSObject) -> CGSize {
     return CGSize(width: sz.width / scale, height: sz.height / scale)
 }
 
+
+// MARK: - tap-digitizer: IOHIDEvent digitizer probe (#491 second-gen)
+//
+// Synthesises a kIOHIDEventTypeDigitizer IOHIDEventRef via
+// IOHIDEventCreateDigitizerEvent (dlsym'd out of IOKit.framework) and
+// wraps it with SimulatorKit's
+// IndigoHIDMessageForPointerEventFromHIDEventRef helper. Designed so the
+// wrap helper's return value is the experimental signal: a non-nil
+// Indigo message is forwarded to the HID client and the tap proceeds;
+// nil indicates the wrap helper rejects digitizer-type events.
+//
+// Empirical result at time of writing (Xcode 26 / iOS 26.4 / iPhone 16):
+//   IOHIDEventCreateDigitizerEvent returns a non-nil event with
+//   transducerType=Finger, mask=(Range|Touch|Position), touch=true,
+//   range=true, but IndigoHIDMessageForPointerEventFromHIDEventRef
+//   returns nil — the wrapper appears to be pointer/mouse-only. Next
+//   candidate is probably `IndigoHIDMessageForHIDArbitrary` with a raw
+//   HID report payload. Kept as a subcommand so future investigators
+//   can A/B without rebuilding.
+typealias IOHIDCreateDigFn = @convention(c) (
+    CFAllocator?, UInt64,
+    UInt32, UInt32, UInt32,
+    UInt32, UInt32,
+    Double, Double, Double,
+    Double, Double,
+    UInt8, UInt8,
+    UInt32
+) -> Unmanaged<AnyObject>?
+
+typealias PointerEventMsgFn = @convention(c) (AnyObject) -> UnsafeMutableRawPointer?
+
+// Cache the IOKit handle. On Darwin 25+ the framework binary on disk is
+// a symlink to a path inside the dyld shared cache, so `fileExists`
+// reports missing even though `dlopen` resolves it fine.
+var cachedIOKitHandle: UnsafeMutableRawPointer? = nil
+func loadIOKit() -> UnsafeMutableRawPointer? {
+    if let h = cachedIOKitHandle { return h }
+    cachedIOKitHandle = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_NOW)
+    return cachedIOKitHandle
+}
+
+func execTapDigitizer(_ h: HID, x: Double, y: Double, dur: Double?, sz: CGSize,
+                      skHandle: UnsafeMutableRawPointer) -> Bool {
+    guard let iokitH = loadIOKit() else {
+        fputs("[tap-digitizer] IOKit load failed\n", stderr); return false
+    }
+    guard let digSym = dlsym(iokitH, "IOHIDEventCreateDigitizerEvent") else {
+        fputs("[tap-digitizer] IOHIDEventCreateDigitizerEvent missing\n", stderr); return false
+    }
+    guard let ptrSym = dlsym(skHandle, "IndigoHIDMessageForPointerEventFromHIDEventRef") else {
+        fputs("[tap-digitizer] IndigoHIDMessageForPointerEventFromHIDEventRef missing\n", stderr); return false
+    }
+    let createDig = unsafeBitCast(digSym, to: IOHIDCreateDigFn.self)
+    let ptrMsg = unsafeBitCast(ptrSym, to: PointerEventMsgFn.self)
+
+    // sz is point-denominated (post-#551). Digitizer coords are 0..1.
+    let xNorm = x / Double(sz.width)
+    let yNorm = y / Double(sz.height)
+
+    // IOKit IOHIDEventTypes.h constants:
+    //   kIOHIDDigitizerTransducerTypeFinger = 2
+    //   kIOHIDDigitizerEventRange    = 1 << 0
+    //   kIOHIDDigitizerEventTouch    = 1 << 1
+    //   kIOHIDDigitizerEventPosition = 1 << 2
+    let finger: UInt32 = 2
+    let mask: UInt32 = 1 | 2 | 4
+
+    func sendPhase(touch: Bool, range: Bool, tipPressure: Double) -> Bool {
+        guard let ev = createDig(
+            nil, 0,
+            finger, 0, 0,
+            mask, 0,
+            xNorm, yNorm, 0,
+            tipPressure, 0,
+            range ? 1 : 0, touch ? 1 : 0,
+            0
+        ) else {
+            fputs("[tap-digitizer] IOHIDEventCreateDigitizerEvent returned nil\n", stderr)
+            return false
+        }
+        let obj = ev.takeRetainedValue()
+        guard let msg = ptrMsg(obj) else {
+            fputs("[tap-digitizer] wrapper nil (touch=\(touch) range=\(range))\n", stderr)
+            return false
+        }
+        send(h, msg)
+        return true
+    }
+
+    let ok1 = sendPhase(touch: true, range: true, tipPressure: 1.0)
+    if !ok1 { return false }
+    Thread.sleep(forTimeInterval: dur ?? 0.05)
+    return sendPhase(touch: false, range: false, tipPressure: 0)
+}
+
 // MARK: - Diagnostics (`diag` subcommand, for issue #491 investigation)
 //
 // Emits a structured JSON report describing which private-framework pieces
@@ -419,12 +521,12 @@ func runDiag(udid: String?) -> Int32 {
             deviceReport = DeviceReport(
                 udid: u, resolved: true, booted: isDeviceBooted(dev),
                 screenWidth: Double(sz.width), screenHeight: Double(sz.height),
-                mainScreenScale: scale,
+                mainScreenScale: scale
             )
         } else {
             deviceReport = DeviceReport(
                 udid: u, resolved: false, booted: false,
-                screenWidth: nil, screenHeight: nil, mainScreenScale: nil,
+                screenWidth: nil, screenHeight: nil, mainScreenScale: nil
             )
         }
     }
@@ -435,7 +537,7 @@ func runDiag(udid: String?) -> Int32 {
         simulatorKit: probeFramework(skPaths, skH),
         coreSimulator: probeFramework(csPaths, csH),
         indigoSymbols: symbols, classes: classes,
-        device: deviceReport, xcodePath: getDevDir(), elapsed_ms: ms,
+        device: deviceReport, xcodePath: getDevDir(), elapsed_ms: ms
     ))
     // `diag` is advisory — exit 0 on framework miss too, so callers can
     // parse the JSON instead of decoding argv vs. exit-code semantics.
@@ -474,6 +576,7 @@ func run() -> Int32 {
     switch parsed.command {
     case .tap(let x, let y, let d):       ok = execTap(hid, x: x, y: y, dur: d, sz: sz)
     case .tapPS(let x, let y, let d):     ok = execTapPS(hid, x: x, y: y, dur: d, sz: sz, skHandle: skH)
+    case .tapDigitizer(let x, let y, let d): ok = execTapDigitizer(hid, x: x, y: y, dur: d, sz: sz, skHandle: skH)
     case .swipe(let a, let b, let c, let d, let e): ok = execSwipe(hid, x1: a, y1: b, x2: c, y2: d, dur: e, sz: sz)
     case .key(let u, let d):              ok = execKey(hid, usage: u, dur: d)
     case .button(let n, let d):           ok = execButton(hid, name: n, dur: d)

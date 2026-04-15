@@ -228,9 +228,18 @@ describe('Private API Sentinel', () => {
       }
 
       // AX tree returns either an object (single node) or an array of children.
-      // The one thing it must NOT return is an error shape.
+      // An error shape means ax-bridge failed. SIMULATOR_NOT_RUNNING is an
+      // environment gap (simctl reports booted but Simulator.app isn't
+      // launched — common on GitHub Actions macOS runners) rather than an
+      // Apple-side API break, so skip like we do for a missing UDID.
       const maybeError = parsed as { error?: unknown; code?: string };
       if (maybeError && typeof maybeError === 'object' && 'error' in maybeError) {
+        if (maybeError.code === 'SIMULATOR_NOT_RUNNING') {
+          console.warn(
+            '[sentinel] ax-bridge reports SIMULATOR_NOT_RUNNING — Simulator.app is not launched in this environment. Skipping ax-bridge probe.',
+          );
+          return;
+        }
         throw new Error(
           `ax-bridge returned error shape: code=${maybeError.code ?? 'unknown'} error=${String(maybeError.error)}`,
         );
