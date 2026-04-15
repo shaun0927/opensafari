@@ -12,6 +12,10 @@ import {
   FlutterVMInputBackendError,
 } from '../../src/tools/flutter-vm-input-backend';
 import { FlutterVMError } from '../../src/flutter';
+import {
+  __setInputTelemetrySinkForTest,
+  type InputTelemetryEvent,
+} from '../../src/metrics/input-telemetry';
 
 const DEVICE = 'TEST-DEVICE-UDID';
 
@@ -272,6 +276,66 @@ describe('FlutterVMInputBackend', () => {
       } catch (err) {
         expect((err as FlutterVMInputBackendError).op).toBe('typeText');
       }
+    });
+  });
+
+  // ── telemetry (#502) ─────────────────────────────────────────────────────
+
+  describe('telemetry', () => {
+    let events: InputTelemetryEvent[];
+
+    beforeEach(() => {
+      events = [];
+      __setInputTelemetrySinkForTest((e) => events.push(e));
+    });
+
+    afterEach(() => {
+      __setInputTelemetrySinkForTest(null);
+    });
+
+    test('tap emits one flutter-vm telemetry event with the device id', async () => {
+      const client = makeMockClient();
+      const backend = new FlutterVMInputBackend(client as any);
+
+      await backend.tap(DEVICE, 10, 20);
+
+      expect(events).toHaveLength(1);
+      const ev = events[0];
+      expect(ev.backendKind).toBe('flutter-vm');
+      expect(ev.operation).toBe('tap');
+      expect(ev.deviceId).toBe(DEVICE);
+      expect(ev.ok).toBe(true);
+      expect(ev.elapsed_ms).toBeGreaterThanOrEqual(0);
+    });
+
+    test('swipe / typeText / keypress / sendKey all emit with the right operation label', async () => {
+      const client = makeMockClient();
+      const backend = new FlutterVMInputBackend(client as any);
+
+      await backend.swipe(DEVICE, 10, 10, 20, 20);
+      await backend.typeText(DEVICE, 'hello');
+      await backend.keypress(DEVICE, '40'); // Enter
+      await backend.sendKey(DEVICE, 'Tab');
+
+      expect(events.map((e) => e.operation)).toEqual([
+        'swipe', 'typeText', 'keypress', 'sendKey',
+      ]);
+      expect(events.every((e) => e.backendKind === 'flutter-vm')).toBe(true);
+      expect(events.every((e) => e.deviceId === DEVICE && e.ok === true)).toBe(true);
+    });
+
+    test('failure still emits an event with ok=false before re-throwing', async () => {
+      const client = makeMockClient();
+      client.evaluate.mockRejectedValueOnce(new Error('dart boom'));
+      const backend = new FlutterVMInputBackend(client as any);
+
+      await expect(backend.tap(DEVICE, 1, 2)).rejects.toBeInstanceOf(
+        FlutterVMInputBackendError,
+      );
+      expect(events).toHaveLength(1);
+      expect(events[0].ok).toBe(false);
+      expect(events[0].operation).toBe('tap');
+      expect(events[0].error).toMatch(/dart boom/);
     });
   });
 });
