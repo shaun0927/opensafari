@@ -22,7 +22,7 @@ import { promisify } from 'util';
 import { SimctlExecutor } from '../simulator/simctl';
 import type { BrowserBackend } from '../types/browser-backend';
 import type { FlutterVMClient } from '../flutter';
-import { getFlutterVMClient } from '../flutter';
+import { getFlutterVMClient, removeFlutterVMClient } from '../flutter';
 import { FlutterVMInputBackend } from './flutter-vm-input-backend';
 import { tryCreateSimulatorKitHIDBackend } from './sim-hid-input-backend';
 import { timedInput } from '../metrics/input-telemetry';
@@ -740,6 +740,10 @@ async function defaultFlutterVMResolver(
     // instead of surfacing the raw 113 error to the user.
     const probe = await client.probeEvaluateCompile();
     if (!probe.available) {
+      // Close the orphaned WebSocket — the client is not reusable on negative
+      // probe, so leaving it in the singleton map leaks a file descriptor per
+      // discovery cycle on release-mode Flutter apps.
+      removeFlutterVMClient(deviceId);
       if (probe.reason === 'compile-error-113') {
         console.error(
           `[input-backend] Flutter VM on ${deviceId} rejects evaluate (code 113). ` +
