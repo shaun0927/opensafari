@@ -312,7 +312,8 @@ describeLive('SimulatorKitHIDInputBackend (live — issue #491)', () => {
       await new Promise((r) => setTimeout(r, 900));
     }
 
-    async function _navigateBack(): Promise<void> {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    async function navigateBack(): Promise<void> {
       // Settings exposes a "Back" button once a sub-screen is pushed.
       await ensureSemanticsActive(DEVICE_ID);
       const bridge = getAccessibilityBridge();
