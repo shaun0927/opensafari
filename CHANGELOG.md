@@ -12,6 +12,12 @@ All notable changes to this project will be documented in this file.
 
 This is the first slice of the holistic memory SLO plan in #554. A follow-up PR will add the per-backend RSS rollup, the gated long-session soak test, the `OPENSAFARI_MEMORY_SOFT_CAP_MB` watchdog, and `docs/memory-budget.md` as the SSOT.
 
+### Added — Flutter release / no-DDS routing polish (#553)
+
+- **`FlutterVMClient.probeEvaluateCompile()`** — issues a minimal `evaluate('1')` against the root library and reports whether the VM can compile expressions. Returns `{ available: true }` on success, `{ available: false, reason: 'compile-error-113' }` when the VM Service rejects with code 113 (release builds, `simctl launch` without `flutter run`, any app without DDS + frontend compiler), and `{ available: false, reason: 'other' }` for other rejections. Designed to be cheap (< 500 ms p95) so it fits inside `getInputBackend()`'s Tier-0 discovery path.
+- **Tier-0 routing now gates on compile-capability**, not just VM reachability. `defaultFlutterVMResolver` calls `probeEvaluateCompile()` after the initial connect and treats `compile-error-113` as a negative cache entry — which means release-mode Flutter apps fall through to the coordinate tier (and via the `app_tap_element` / `app_type_element` path, land on Tier 1.5 AX press from #552) instead of trying Tier 0 and surfacing a raw `code 113` error to the user. A one-time `[input-backend] Flutter VM on <id> rejects evaluate (code 113)` diagnostic is logged so the fall-through is observable.
+- **`FlutterVMInputBackendError.code`** is now a structured union — `'VM_NO_EVALUATE' | 'DART_ERROR' | 'UNKNOWN'`. The user-facing message for `VM_NO_EVALUATE` carries remediation ("release build or `simctl launch` — use Tier 1.5 AX press or relaunch under `flutter run --debug`") rather than echoing the raw JSON-RPC payload.
+
 ## [0.4.8] - 2026-04-15
 
 This release is a **stabilization + observability cut** focused on the Xcode 26 headless-input regression discovered after v0.4.6/v0.4.7 shipped. It disables the one SimulatorKitHID code path that silently misses target (native tap/swipe on Xcode 26+), hardens the remaining tiers with telemetry and daily CI probes, documents the investigation in full, and adds three new `sim-hid-bridge` subcommands for on-device diagnosis. No new MCP tools are added — the surface stays compatible with 0.4.7, but `_meta` now carries `_telemetry` latency/routing info for every input call.

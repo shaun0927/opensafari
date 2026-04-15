@@ -503,6 +503,49 @@ export class FlutterVMClient {
   }
 
   /**
+   * Probe whether the connected VM can compile and evaluate expressions.
+   *
+   * `evaluate` requires the Dart Development Service (DDS) plus the frontend
+   * compiler, which `flutter run --debug` and `--profile` both provide but
+   * release builds and apps launched via `xcrun simctl launch` do not. The
+   * symptom is a JSON-RPC error with `code: 113` ("Expression compilation
+   * error"). This probe issues a trivial `evaluate('1')` against the root
+   * library and returns:
+   *   - `{ available: true }` on success — the VM accepts arbitrary
+   *     expressions, so `FlutterVMInputBackend` operations are safe to
+   *     dispatch.
+   *   - `{ available: false, reason: 'compile-error-113' }` when the VM
+   *     Service rejects with code 113.
+   *   - `{ available: false, reason: 'other', message }` for any other
+   *     failure (timeout, connection drop, etc).
+   *
+   * Designed to be cheap (< 500 ms p95) so `getInputBackend()` can call it
+   * once per device-discovery cycle without stalling the input path.
+   */
+  async probeEvaluateCompile(): Promise<
+    | { available: true }
+    | { available: false; reason: 'compile-error-113' | 'other'; message: string }
+  > {
+    try {
+      await this.evaluate('1');
+      return { available: true };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      // The VM Service error format is
+      //   "VM Service error: <msg> (code: <n>)"
+      // produced by the callMethod rejection path. Code 113 is the canonical
+      // "Expression compilation error" surfaced for release-mode VMs and any
+      // VM that cannot reach the frontend compiler.
+      const is113 = /\(code:\s*113\)/.test(message);
+      return {
+        available: false,
+        reason: is113 ? 'compile-error-113' : 'other',
+        message,
+      };
+    }
+  }
+
+  /**
    * Evaluate a Dart expression inside a specific stack frame. Only meaningful
    * while the isolate is paused at a breakpoint (future work — issue #435).
    */
