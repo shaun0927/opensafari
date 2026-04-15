@@ -46,7 +46,7 @@ export interface MemorySnapshot {
   arrayBuffersBytes: number;
   /**
    * Number of RSS samples the tracker has observed. Useful in tests to
-   * assert that `recordSample()` is actually being called from the
+   * assert that `recordMemorySample()` is actually being called from the
    * telemetry path.
    */
   sampleCount: number;

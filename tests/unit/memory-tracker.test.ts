@@ -16,6 +16,10 @@ describe('memory-tracker', () => {
     delete process.env[OPENSAFARI_INPUT_TELEMETRY_MEMORY_ENV];
   });
 
+  afterEach(() => {
+    delete process.env[OPENSAFARI_INPUT_TELEMETRY_MEMORY_ENV];
+  });
+
   test('records samples and tracks peak RSS', () => {
     recordMemorySample();
     recordMemorySample();
