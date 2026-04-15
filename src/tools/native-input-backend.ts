@@ -539,9 +539,15 @@ export class WebKitInputBackend implements InputBackend {
  * instead, preventing silent focus theft.
  */
 export const OPENSAFARI_ALLOW_FOCUS_INPUT_ENV = 'OPENSAFARI_ALLOW_FOCUS_INPUT';
+export const OPENSAFARI_HEADLESS_ONLY_ENV = 'OPENSAFARI_HEADLESS_ONLY';
 
 function isFocusInputAllowed(): boolean {
   const value = process.env[OPENSAFARI_ALLOW_FOCUS_INPUT_ENV];
+  return value === '1' || value === 'true';
+}
+
+function isHeadlessOnly(): boolean {
+  const value = process.env[OPENSAFARI_HEADLESS_ONLY_ENV];
   return value === '1' || value === 'true';
 }
 
@@ -554,18 +560,25 @@ function isFocusInputAllowed(): boolean {
 export class HeadlessInputUnavailableError extends Error {
   readonly name = 'HeadlessInputUnavailableError' as const;
   readonly deviceId: string;
-  readonly reason: 'no-simctl' | 'no-webkit' | 'webkit-disconnected';
+  readonly reason: 'no-simctl' | 'no-webkit' | 'webkit-disconnected' | 'headless-only';
   readonly remediation: readonly string[];
 
   constructor(
     deviceId: string,
     reason: HeadlessInputUnavailableError['reason'],
   ) {
-    const remediation = [
-      "Safari QA: call `set_active_context({ context: 'safari' })` to enable WebKitInputBackend",
-      `Native apps: opt in to the CGEvent fallback by setting ${OPENSAFARI_ALLOW_FOCUS_INPUT_ENV}=1 ` +
-        '(WARNING: will move the mouse cursor and bring Simulator.app to the foreground)',
-    ] as const;
+    const remediation =
+      reason === 'headless-only'
+        ? ([
+            `${OPENSAFARI_HEADLESS_ONLY_ENV}=1 is set — AppleScript/CGEvent fallback is blocked.`,
+            'Ensure a headless backend (simctl, webkit, flutter-vm, simhid) is available.',
+            `To allow focus-stealing input, unset ${OPENSAFARI_HEADLESS_ONLY_ENV}.`,
+          ] as const)
+        : ([
+            "Safari QA: call `set_active_context({ context: 'safari' })` to enable WebKitInputBackend",
+            `Native apps: opt in to the CGEvent fallback by setting ${OPENSAFARI_ALLOW_FOCUS_INPUT_ENV}=1 ` +
+              '(WARNING: will move the mouse cursor and bring Simulator.app to the foreground)',
+          ] as const);
     const message =
       `No headless input backend available for device ${deviceId} (reason: ${reason}).\n` +
       remediation.map((line) => `  - ${line}`).join('\n');
@@ -677,6 +690,21 @@ export async function getInputBackend(
     if (reconnected) {
       return new WebKitInputBackend(webkitClient);
     }
+  }
+
+  // HEADLESS_ONLY safety net — block AppleScript fallback even if opt-in is set.
+  // This is the CI safety net: when OPENSAFARI_HEADLESS_ONLY=1, any attempt to
+  // fall through to the focus-stealing backend is a hard error.
+  if (isHeadlessOnly()) {
+    if (isFocusInputAllowed()) {
+      console.error(
+        `[input-backend] ${OPENSAFARI_HEADLESS_ONLY_ENV}=1 overrides ${OPENSAFARI_ALLOW_FOCUS_INPUT_ENV} — AppleScript backend disabled`,
+      );
+    }
+    const reason: HeadlessInputUnavailableError['reason'] = 'headless-only';
+    const err = new HeadlessInputUnavailableError(deviceId, reason);
+    console.error(`[input-backend] ${err.message}`);
+    throw err;
   }
 
   // Tier 3: AppleScript/CGEvent fallback — DEFAULT-DENY.

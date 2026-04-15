@@ -13,6 +13,7 @@ import {
   resetInputBackend,
   HeadlessInputUnavailableError,
   OPENSAFARI_ALLOW_FOCUS_INPUT_ENV,
+  OPENSAFARI_HEADLESS_ONLY_ENV,
   HID_TO_APPLESCRIPT,
   SENDKEY_TO_APPLESCRIPT,
   HID_TO_WEBKIT_KEY,
@@ -740,5 +741,96 @@ describe('getInputBackend', () => {
     expect(first).toBeInstanceOf(WebKitInputBackend);
     expect(second).toBeInstanceOf(WebKitInputBackend);
     expect(first).not.toBe(second); // Not cached — client state can change
+  });
+  // ── OPENSAFARI_HEADLESS_ONLY CI safety net (issue #499) ─────────────────
+
+  describe('OPENSAFARI_HEADLESS_ONLY', () => {
+    afterEach(() => {
+      delete process.env[OPENSAFARI_HEADLESS_ONLY_ENV];
+      delete process.env[OPENSAFARI_ALLOW_FOCUS_INPUT_ENV];
+      resetInputBackend();
+    });
+
+    test('blocks AppleScript fallback when HEADLESS_ONLY=1', async () => {
+      process.env[OPENSAFARI_HEADLESS_ONLY_ENV] = '1';
+      execMock.mockRejectedValueOnce(new Error('not supported'));
+      await expect(getInputBackend(DEVICE)).rejects.toBeInstanceOf(
+        HeadlessInputUnavailableError,
+      );
+    });
+
+    test('error reason is headless-only when HEADLESS_ONLY=1', async () => {
+      process.env[OPENSAFARI_HEADLESS_ONLY_ENV] = '1';
+      execMock.mockRejectedValueOnce(new Error('not supported'));
+      try {
+        await getInputBackend(DEVICE);
+        fail('expected HeadlessInputUnavailableError');
+      } catch (err) {
+        expect(err).toBeInstanceOf(HeadlessInputUnavailableError);
+        expect((err as HeadlessInputUnavailableError).reason).toBe('headless-only');
+      }
+    });
+
+    test('overrides ALLOW_FOCUS_INPUT when both are set', async () => {
+      process.env[OPENSAFARI_HEADLESS_ONLY_ENV] = '1';
+      process.env[OPENSAFARI_ALLOW_FOCUS_INPUT_ENV] = '1';
+      execMock.mockRejectedValueOnce(new Error('not supported'));
+      await expect(getInputBackend(DEVICE)).rejects.toBeInstanceOf(
+        HeadlessInputUnavailableError,
+      );
+    });
+
+    test('overriding ALLOW_FOCUS_INPUT logs a warning', async () => {
+      const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+      process.env[OPENSAFARI_HEADLESS_ONLY_ENV] = '1';
+      process.env[OPENSAFARI_ALLOW_FOCUS_INPUT_ENV] = '1';
+      execMock.mockRejectedValueOnce(new Error('not supported'));
+      await expect(getInputBackend(DEVICE)).rejects.toBeInstanceOf(
+        HeadlessInputUnavailableError,
+      );
+      const overrideLogs = consoleErrorSpy.mock.calls.filter((args) =>
+        String(args[0]).includes(`${OPENSAFARI_HEADLESS_ONLY_ENV}=1 overrides`),
+      );
+      expect(overrideLogs).toHaveLength(1);
+      consoleErrorSpy.mockRestore();
+    });
+
+    test('includes headless-only remediation in error message', async () => {
+      process.env[OPENSAFARI_HEADLESS_ONLY_ENV] = '1';
+      execMock.mockRejectedValueOnce(new Error('not supported'));
+      try {
+        await getInputBackend(DEVICE);
+        fail('expected HeadlessInputUnavailableError');
+      } catch (err) {
+        const hErr = err as HeadlessInputUnavailableError;
+        expect(hErr.reason).toBe('headless-only');
+        expect(hErr.remediation.some((r) => r.includes(OPENSAFARI_HEADLESS_ONLY_ENV))).toBe(true);
+        expect(hErr.message).toContain(OPENSAFARI_HEADLESS_ONLY_ENV);
+      }
+    });
+
+    test('does not affect behavior when unset (AppleScript opt-in still works)', async () => {
+      process.env[OPENSAFARI_ALLOW_FOCUS_INPUT_ENV] = '1';
+      execMock.mockRejectedValueOnce(new Error('not supported'));
+      const backend = await getInputBackend(DEVICE);
+      expect(backend).toBeInstanceOf(AppleScriptInputBackend);
+      expect(backend.kind).toBe('applescript');
+    });
+
+    test('accepts HEADLESS_ONLY=true as well as =1', async () => {
+      process.env[OPENSAFARI_HEADLESS_ONLY_ENV] = 'true';
+      execMock.mockRejectedValueOnce(new Error('not supported'));
+      await expect(getInputBackend(DEVICE)).rejects.toBeInstanceOf(
+        HeadlessInputUnavailableError,
+      );
+    });
+
+    test('ignores HEADLESS_ONLY values other than "1" or "true"', async () => {
+      process.env[OPENSAFARI_HEADLESS_ONLY_ENV] = 'yes';
+      process.env[OPENSAFARI_ALLOW_FOCUS_INPUT_ENV] = '1';
+      execMock.mockRejectedValueOnce(new Error('not supported'));
+      const backend = await getInputBackend(DEVICE);
+      expect(backend).toBeInstanceOf(AppleScriptInputBackend);
+    });
   });
 });
