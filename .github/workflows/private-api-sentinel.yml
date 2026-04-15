@@ -1,0 +1,202 @@
+name: Private API Sentinel
+
+# Daily regression sentinel for the private Apple APIs opensafari depends on
+# (issue #503). Runs the six probes in tests/sentinel/private-api-probe.test.ts
+# against a booted simulator so that Apple-side BC breaks in Xcode / macOS
+# updates are surfaced within 24 hours.
+#
+# Probes covered:
+#   1. SimulatorKit.framework path exists
+#   2. CoreSimulator.framework path exists
+#   3. sim-hid-bridge spawn — frameworks + HID symbols resolve
+#   4. ax-bridge AXUIElement dump returns non-empty JSON
+#   5. webinspectord_sim socket — findSocketPath() resolves
+#   6. ios_webkit_debug_proxy binary on PATH
+#
+# On scheduled failures the job opens / updates a tracking issue labeled
+# `sentinel` with the failing probe name and jest error message so the
+# on-call engineer can act without hunting through workflow logs.
+
+on:
+  schedule:
+    # Daily at 00:00 UTC — aligns with the cadence proposed in #503.
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+  push:
+    paths:
+      # Re-run when anything that could change probe behavior lands.
+      - 'tests/sentinel/private-api-probe.test.ts'
+      - '.github/workflows/private-api-sentinel.yml'
+      - 'jest.sentinel.config.js'
+      - 'src/native/ax-bridge.swift'
+      - 'src/native/sim-hid-bridge.swift'
+      - 'src/simulator/socket-finder.ts'
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  sentinel:
+    # Matrix across hosted macOS runners so a regression tied to a specific
+    # Xcode / macOS release is pinpointed by row rather than hidden behind
+    # a single green run.
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - macos-latest
+          - macos-14
+    runs-on: ${{ matrix.runner }}
+    name: sentinel (${{ matrix.runner }})
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Print runner info
+        run: |
+          sw_vers
+          xcodebuild -version
+          echo "Xcode select: $(xcode-select -p)"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install ios-webkit-debug-proxy
+        # Probe 6 requires the binary on PATH. Hosted runners do not ship it.
+        run: |
+          brew list ios-webkit-debug-proxy >/dev/null 2>&1 || brew install ios-webkit-debug-proxy
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build native bridges + CLI
+        run: npm run build
+
+      - name: Boot iOS simulator
+        # Probes 4 and 5 (ax-bridge, webinspectord_sim socket) skip with a
+        # warning when no simulator is booted; we explicitly boot one so the
+        # whole suite exercises production code paths.
+        run: |
+          DEVICE_NAME="iPhone 16"
+          UDID=$(xcrun simctl list devices available -j \
+            | python3 -c "import json,sys; data=json.load(sys.stdin); [print(d['udid']) for rt,devs in data['devices'].items() for d in devs if d.get('name')=='${DEVICE_NAME}']" \
+            | head -n1)
+          if [ -z "$UDID" ]; then
+            echo "No '${DEVICE_NAME}' device found; creating one."
+            RUNTIME=$(xcrun simctl list runtimes available -j \
+              | python3 -c "import json,sys; data=json.load(sys.stdin); rts=[r['identifier'] for r in data['runtimes'] if 'iOS' in r['name']]; print(rts[-1] if rts else '')")
+            TYPE=$(xcrun simctl list devicetypes -j \
+              | python3 -c "import json,sys; data=json.load(sys.stdin); tys=[t['identifier'] for t in data['devicetypes'] if t['name']=='${DEVICE_NAME}']; print(tys[0] if tys else '')")
+            UDID=$(xcrun simctl create "${DEVICE_NAME}" "$TYPE" "$RUNTIME")
+          fi
+          xcrun simctl boot "$UDID" || true
+          xcrun simctl bootstatus "$UDID" -b
+          xcrun simctl list devices booted
+
+      - name: Run private-API sentinel suite
+        id: sentinel
+        run: |
+          # Capture jest JSON so the alert step can extract failing probe names.
+          set -o pipefail
+          npx jest --config jest.sentinel.config.js \
+            --json --outputFile=sentinel-report.json \
+            2>&1 | tee sentinel.log
+
+      - name: Upload sentinel artifacts
+        # Always upload so a follow-up triage has logs even on green runs.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sentinel-${{ matrix.runner }}
+          path: |
+            sentinel.log
+            sentinel-report.json
+          if-no-files-found: warn
+
+      - name: Open / update tracking issue on scheduled failure
+        if: failure() && github.event_name == 'schedule'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const runner = process.env.RUNNER_LABEL;
+
+            // Extract the failing probes from the jest JSON report so the
+            // tracking issue points the on-call directly at the broken API
+            // surface instead of a generic "sentinel failed" placeholder.
+            let failing = [];
+            try {
+              const raw = fs.readFileSync('sentinel-report.json', 'utf8');
+              const report = JSON.parse(raw);
+              for (const suite of report.testResults ?? []) {
+                for (const tc of suite.assertionResults ?? []) {
+                  if (tc.status === 'failed') {
+                    failing.push({
+                      name: [...(tc.ancestorTitles ?? []), tc.title].join(' › '),
+                      messages: (tc.failureMessages ?? []).map(m =>
+                        m.split('\n').slice(0, 8).join('\n'),
+                      ),
+                    });
+                  }
+                }
+              }
+            } catch (err) {
+              core.warning(`Could not parse sentinel-report.json: ${err.message}`);
+            }
+
+            const title = `[sentinel] Private API regression on ${runner}`;
+            const failureBlock = failing.length
+              ? failing.map(f =>
+                  `### ${f.name}\n\n\`\`\`\n${f.messages.join('\n---\n')}\n\`\`\``,
+                ).join('\n\n')
+              : '_Could not parse jest report — see attached `sentinel.log` artifact._';
+
+            const body = [
+              '`private-api-sentinel` failed on the daily scheduled run.',
+              '',
+              `- Runner: \`${runner}\``,
+              `- Workflow run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              '',
+              '## Failing probes',
+              '',
+              failureBlock,
+              '',
+              '## Triage checklist',
+              '',
+              '- Confirm private framework paths in `docs/private-apis.md` still match disk layout.',
+              '- Inspect `sentinel.log` and `sentinel-report.json` artifacts on the workflow run.',
+              '- If Apple moved a symbol, update the candidate path list in `tests/sentinel/private-api-probe.test.ts` or the bridge source under `src/native/`.',
+              '',
+              'Towards: #503',
+            ].join('\n');
+
+            const { data: existing } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'sentinel',
+              per_page: 50,
+            });
+            const match = existing.find(i => i.title === title);
+            if (match) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: match.number,
+                body,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body,
+                labels: ['sentinel', 'bug'],
+              });
+            }
+        env:
+          RUNNER_LABEL: ${{ matrix.runner }}
