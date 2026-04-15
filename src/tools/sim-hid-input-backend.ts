@@ -31,6 +31,20 @@ import type { InputBackend } from './native-input-backend';
 
 const execFileAsync = promisify(execFile);
 
+/** Reference appended to error messages for private-framework failures. */
+const PRIVATE_API_DOC_REF = 'See docs/private-apis.md';
+
+/** Latch so the private-API warning is emitted only once per process. */
+let warnedAboutPrivateAPI = false;
+
+/**
+ * Reset the private-API warning latch. Exported for unit tests only — do not
+ * call from production code.
+ */
+export function resetSimHidPrivateAPIWarning(): void {
+  warnedAboutPrivateAPI = false;
+}
+
 /** Spawn timeout for the Swift helper. Matches idb's default. */
 const SPAWN_TIMEOUT_MS = 10_000;
 
@@ -190,6 +204,15 @@ export class SimulatorKitHIDInputBackend implements InputBackend {
    * structured `InputBackendError`.
    */
   private async run(args: string[]): Promise<unknown> {
+    if (!warnedAboutPrivateAPI) {
+      warnedAboutPrivateAPI = true;
+      console.error(
+        '[opensafari] SimulatorKitHIDInputBackend uses private Apple frameworks ' +
+          '(SimulatorKit.framework, CoreSimulator.framework) via dlopen. ' +
+          'These APIs are undocumented and Xcode updates may break them. ' +
+          PRIVATE_API_DOC_REF,
+      );
+    }
     const { cmd, cmdArgs } = this.resolveSpawn(args);
     let stdout = '';
     let stderr = '';
@@ -221,8 +244,9 @@ export class SimulatorKitHIDInputBackend implements InputBackend {
       const exit = typeof e.code === 'number' ? e.code : undefined;
       const classified = codeForExit(exit);
       const hint = stderr.trim() || stdout.trim() || e.message;
+      const docSuffix = classified === 'SIMULATORKIT_UNAVAILABLE' ? ` (${PRIVATE_API_DOC_REF})` : '';
       throw new InputBackendError(
-        `sim-hid-bridge exited ${exit ?? '?'}: ${hint}`,
+        `sim-hid-bridge exited ${exit ?? '?'}: ${hint}${docSuffix}`,
         classified,
         stderr,
       );
@@ -236,9 +260,17 @@ export class SimulatorKitHIDInputBackend implements InputBackend {
     try {
       const parsed = JSON.parse(stdout) as { ok?: boolean; error?: string; code?: string };
       if (parsed.ok === false) {
+        const okFalseCode = (parsed.code as InputBackendErrorCode | undefined) ?? 'UNKNOWN';
+        const frameworkFailureCodes = new Set<string>([
+          'SIMULATORKIT_MISSING',
+          'CORESIMULATOR_MISSING',
+          'HID_CLIENT_FAILED',
+          'HID_FUNCTIONS_MISSING',
+        ]);
+        const okFalseDocSuffix = frameworkFailureCodes.has(parsed.code ?? '') ? ` (${PRIVATE_API_DOC_REF})` : '';
         throw new InputBackendError(
-          parsed.error ?? 'sim-hid-bridge reported ok=false',
-          (parsed.code as InputBackendErrorCode | undefined) ?? 'UNKNOWN',
+          `${parsed.error ?? 'sim-hid-bridge reported ok=false'}${okFalseDocSuffix}`,
+          okFalseCode,
           stderr,
         );
       }

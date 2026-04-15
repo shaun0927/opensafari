@@ -13,6 +13,7 @@ import {
   SimulatorKitHIDInputBackend,
   InputBackendError,
   tryCreateSimulatorKitHIDBackend,
+  resetSimHidPrivateAPIWarning,
 } from '../../src/tools/sim-hid-input-backend';
 
 /* eslint-disable no-var */
@@ -68,6 +69,7 @@ describe('SimulatorKitHIDInputBackend', () => {
 
   beforeEach(() => {
     execFileMock.mockReset();
+    resetSimHidPrivateAPIWarning();
     backend = new SimulatorKitHIDInputBackend(BRIDGE);
   });
 
@@ -254,6 +256,81 @@ describe('SimulatorKitHIDInputBackend', () => {
     await expect(backend.tap(DEVICE, 1, 2)).rejects.toMatchObject({
       code: 'NOT_IMPLEMENTED',
     });
+  });
+
+  // ── Private-API warning latch ────────────────────────────────────────────
+
+  test('first run() emits exactly one warning mentioning SimulatorKit and docs/private-apis.md', async () => {
+    execFileMock.mockResolvedValue({
+      stdout: '{"ok":true,"kind":"tap","udid":"x","elapsed_ms":1}',
+      stderr: '',
+    });
+    const spy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await backend.tap(DEVICE, 1, 2);
+      const calls = spy.mock.calls.filter((c) => {
+        const msg = String(c[0]);
+        return msg.includes('SimulatorKit') && msg.includes('docs/private-apis.md');
+      });
+      expect(calls).toHaveLength(1);
+
+      // Second run must NOT emit an additional warning.
+      spy.mockClear();
+      await backend.tap(DEVICE, 3, 4);
+      const calls2 = spy.mock.calls.filter((c) => {
+        const msg = String(c[0]);
+        return msg.includes('SimulatorKit') && msg.includes('docs/private-apis.md');
+      });
+      expect(calls2).toHaveLength(0);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  test('exit 78 → thrown message contains "See docs/private-apis.md"', async () => {
+    execFileMock.mockRejectedValueOnce(execError({
+      code: 78,
+      stderr: 'dlopen failed',
+    }));
+    const spy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await expect(backend.tap(DEVICE, 1, 2)).rejects.toMatchObject({
+        code: 'SIMULATORKIT_UNAVAILABLE',
+        message: expect.stringContaining('See docs/private-apis.md'),
+      });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  test('{ok:false, code:"SIMULATORKIT_MISSING"} → thrown message contains "See docs/private-apis.md"', async () => {
+    execFileMock.mockResolvedValueOnce({
+      stdout: '{"ok":false,"error":"framework missing","code":"SIMULATORKIT_MISSING"}',
+      stderr: '',
+    });
+    const spy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await expect(backend.tap(DEVICE, 1, 2)).rejects.toMatchObject({
+        message: expect.stringContaining('See docs/private-apis.md'),
+      });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  test('{ok:false, code:"NOT_IMPLEMENTED"} → thrown message does NOT contain "docs/private-apis.md"', async () => {
+    execFileMock.mockResolvedValueOnce({
+      stdout: '{"ok":false,"error":"stub","code":"NOT_IMPLEMENTED"}',
+      stderr: '',
+    });
+    const spy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await expect(backend.tap(DEVICE, 1, 2)).rejects.toMatchObject({
+        message: expect.not.stringContaining('docs/private-apis.md'),
+      });
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   // ── Bridge resolution via swift interpreter ──────────────────────────────
