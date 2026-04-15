@@ -19,11 +19,27 @@ import type { AXNode, AXQueryResult } from '../../src/native/ax-types';
 const mockQuery = jest.fn();
 const mockDumpTree = jest.fn();
 const mockTap = jest.fn().mockResolvedValue(undefined);
+// Default: report the element as not-actionable so every pre-existing
+// coordinate-tap test continues to exercise the Tier-1-and-below backend
+// chain unchanged. Tests targeting the new Tier-1.5 AX press path override
+// this with `mockPress.mockResolvedValueOnce({ ok: true, ... })`.
+const mockPress = jest.fn().mockResolvedValue({
+  ok: false,
+  code: 'PRESS_NOT_ACTIONABLE',
+  path: '',
+  actions: [],
+  role: null,
+  identifier: null,
+  label: null,
+  message: 'Element does not support AXPress',
+  axErrorCode: null,
+});
 
 jest.mock('../../src/native/accessibility-bridge', () => ({
   getAccessibilityBridge: () => ({
     query: mockQuery,
     dumpTree: mockDumpTree,
+    press: mockPress,
   }),
 }));
 
@@ -90,6 +106,25 @@ beforeAll(() => {
 beforeEach(() => {
   jest.clearAllMocks();
   jest.useRealTimers();
+  // Reset the press mock entirely — `clearAllMocks` does not drain the
+  // `mockResolvedValueOnce` / `mockRejectedValueOnce` queue, so an
+  // overridden once-value from a previous test would otherwise be
+  // consumed by the next test's first call. `mockReset` drops queued
+  // once-values and the base implementation; we then reinstall the
+  // default PRESS_NOT_ACTIONABLE base so the vast majority of tests
+  // still exercise the coordinate-tap fallback without further setup.
+  mockPress.mockReset();
+  mockPress.mockResolvedValue({
+    ok: false,
+    code: 'PRESS_NOT_ACTIONABLE',
+    path: '',
+    actions: [],
+    role: null,
+    identifier: null,
+    label: null,
+    message: 'Element does not support AXPress',
+    axErrorCode: null,
+  });
 });
 
 // ── Tests ──────────────────────────────────────────────────────────────────
@@ -463,6 +498,204 @@ describe('app_tap_element', () => {
     expect(body.element).toMatchObject({ frame: { height: 10 } });
     expect(body.element.frame.width).toBeNull();
     expect(mockTap).not.toHaveBeenCalled();
+  });
+});
+
+describe('app_tap_element — Tier 1.5 AX press', () => {
+  it('routes to AX press when the element advertises the AXPress action', async () => {
+    const node = makeNode();
+    mockQuery.mockResolvedValue(makeQueryResult([node]));
+    mockPress.mockResolvedValueOnce({
+      ok: true,
+      code: 'OK',
+      path: '0/1',
+      actions: ['AXPress'],
+      role: 'AXButton',
+      identifier: 'login_btn',
+      label: 'Login',
+      message: null,
+      axErrorCode: null,
+    });
+
+    const result = await handler('session', { label: 'Login', timeout: 0 });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(result.isError).toBeUndefined();
+    expect(body.status).toBe('tapped');
+    expect(body.backend).toBe('ax-press');
+    expect(body._meta).toMatchObject({
+      backendKind: 'ax-press',
+      headless: true,
+      axActions: ['AXPress'],
+    });
+    // Coordinate tap backend MUST NOT be touched when AX press succeeds.
+    expect(mockTap).not.toHaveBeenCalled();
+    expect(mockPress).toHaveBeenCalledWith('0/1', 'test-device-id');
+  });
+
+  it('falls back to coordinate tap when AX press reports PRESS_NOT_ACTIONABLE', async () => {
+    const node = makeNode();
+    mockQuery.mockResolvedValue(makeQueryResult([node]));
+    // Default mockPress resolution is PRESS_NOT_ACTIONABLE.
+
+    const result = await handler('session', { label: 'Login', timeout: 0 });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(result.isError).toBeUndefined();
+    expect(body.backend).toBe('simctl');
+    expect(mockTap).toHaveBeenCalledTimes(1);
+    expect(mockPress).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls back to coordinate tap when AX press reports PRESS_FAILED', async () => {
+    const node = makeNode();
+    mockQuery.mockResolvedValue(makeQueryResult([node]));
+    mockPress.mockResolvedValueOnce({
+      ok: false,
+      code: 'PRESS_FAILED',
+      path: '0/1',
+      actions: ['AXPress'],
+      role: 'AXButton',
+      identifier: 'login_btn',
+      label: 'Login',
+      message: 'AXUIElementPerformAction returned non-success',
+      axErrorCode: -25212,
+    });
+
+    const result = await handler('session', { label: 'Login', timeout: 0 });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(result.isError).toBeUndefined();
+    expect(body.backend).toBe('simctl');
+    expect(mockTap).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips AX press entirely when duration > 0 (long press not supported by AXPress)', async () => {
+    const node = makeNode();
+    mockQuery.mockResolvedValue(makeQueryResult([node]));
+    mockPress.mockResolvedValueOnce({
+      ok: true,
+      code: 'OK',
+      path: '0/1',
+      actions: ['AXPress'],
+      role: 'AXButton',
+      identifier: 'login_btn',
+      label: 'Login',
+      message: null,
+      axErrorCode: null,
+    });
+
+    const result = await handler('session', {
+      label: 'Login',
+      timeout: 0,
+      duration: 1.5,
+    });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(result.isError).toBeUndefined();
+    // Long-press must never route through AX press — it has no duration
+    // semantics. We expect the coordinate tap backend to be invoked and
+    // AX press to never have been consulted.
+    expect(mockPress).not.toHaveBeenCalled();
+    expect(mockTap).toHaveBeenCalledTimes(1);
+    // Duration is forwarded to the coordinate backend.
+    expect(mockTap).toHaveBeenCalledWith('test-device-id', 200, 222, 1.5);
+    expect(body.backend).toBe('simctl');
+  });
+
+  it('honours OPENSAFARI_DISABLE_AX_PRESS=1 to force the coordinate path', async () => {
+    const node = makeNode();
+    mockQuery.mockResolvedValue(makeQueryResult([node]));
+    mockPress.mockResolvedValueOnce({
+      ok: true,
+      code: 'OK',
+      path: '0/1',
+      actions: ['AXPress'],
+      role: 'AXButton',
+      identifier: 'login_btn',
+      label: 'Login',
+      message: null,
+      axErrorCode: null,
+    });
+
+    const prev = process.env.OPENSAFARI_DISABLE_AX_PRESS;
+    process.env.OPENSAFARI_DISABLE_AX_PRESS = '1';
+    try {
+      const result = await handler('session', { label: 'Login', timeout: 0 });
+      const body = JSON.parse(result.content[0].text);
+
+      expect(result.isError).toBeUndefined();
+      expect(mockPress).not.toHaveBeenCalled();
+      expect(mockTap).toHaveBeenCalledTimes(1);
+      expect(body.backend).toBe('simctl');
+    } finally {
+      if (prev === undefined) {
+        delete process.env.OPENSAFARI_DISABLE_AX_PRESS;
+      } else {
+        process.env.OPENSAFARI_DISABLE_AX_PRESS = prev;
+      }
+    }
+  });
+
+  it('falls back cleanly when the bridge cannot be spawned (BRIDGE_NOT_FOUND)', async () => {
+    const node = makeNode();
+    mockQuery.mockResolvedValue(makeQueryResult([node]));
+    const bridgeErr = Object.assign(new Error('ax-bridge not found'), {
+      code: 'BRIDGE_NOT_FOUND',
+      name: 'AccessibilityBridgeError',
+    });
+    mockPress.mockRejectedValueOnce(bridgeErr);
+
+    const result = await handler('session', { label: 'Login', timeout: 0 });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(result.isError).toBeUndefined();
+    // AX press failed with an infrastructure error — we should transparently
+    // fall back, not propagate the failure to the MCP caller.
+    expect(body.backend).toBe('simctl');
+    expect(mockTap).toHaveBeenCalledTimes(1);
+  });
+
+  it('propagates non-fallback bridge errors (e.g. AX_PERMISSION_DENIED)', async () => {
+    const node = makeNode();
+    mockQuery.mockResolvedValue(makeQueryResult([node]));
+    const bridgeErr = Object.assign(
+      new Error('Accessibility permission not granted'),
+      { code: 'AX_PERMISSION_DENIED', name: 'AccessibilityBridgeError' },
+    );
+    mockPress.mockRejectedValueOnce(bridgeErr);
+
+    const result = await handler('session', { label: 'Login', timeout: 0 });
+    const body = JSON.parse(result.content[0].text);
+
+    // Permission denied is a setup problem the user must fix — silently
+    // falling back to coordinate tap would mask that.
+    expect(result.isError).toBe(true);
+    expect(body.error).toMatch(/permission/i);
+    expect(mockTap).not.toHaveBeenCalled();
+  });
+
+  it('surfaces axActions + warning flags in the response envelope', async () => {
+    const node = makeNode({ path: '2/3/4' });
+    mockQuery.mockResolvedValue(makeQueryResult([node, makeNode(), makeNode()]));
+    mockPress.mockResolvedValueOnce({
+      ok: true,
+      code: 'OK',
+      path: '2/3/4',
+      actions: ['AXPress', 'AXShowMenu'],
+      role: 'AXButton',
+      identifier: 'login_btn',
+      label: 'Login',
+      message: null,
+      axErrorCode: null,
+    });
+
+    const result = await handler('session', { label: 'Login', timeout: 0 });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(body._meta.axActions).toEqual(['AXPress', 'AXShowMenu']);
+    // Without explicit `index`, 3 matches should trigger implicit-ambiguity warning.
+    expect(body.warning).toMatch(/ambiguous: 3 elements matched; pressed index 0/);
   });
 });
 

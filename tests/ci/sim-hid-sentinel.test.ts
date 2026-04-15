@@ -21,6 +21,23 @@ import * as path from 'path';
 
 const execFileAsync = promisify(execFile);
 
+// First invocation of `sim-hid-bridge` on a CI runner pays for cold
+// dyld-cache + private-framework load (~5 s on macos-14 / macos-latest
+// since the tap-digitizer probe added IOKit `dlopen` and extra symbol
+// resolution), which exceeds Jest's 5 s default. `runBridge` already
+// caps each exec at 15 s, so 30 s gives comfortable headroom.
+//
+// `jest.setTimeout` is declared at file scope on purpose: when called
+// inside a `describe()` block it does NOT reliably override the per-test
+// default in current Jest releases (jestjs/jest#11543), which is what
+// failed CI run 24455101294 hit ("Exceeded timeout of 5000 ms" even
+// though the suite-level value was 30 s). Per-test third-argument
+// timeouts on the long-running cases below provide a belt-and-suspenders
+// guarantee against future Jest scoping changes.
+jest.setTimeout(45_000);
+
+const SLOW_BRIDGE_TIMEOUT_MS = 45_000;
+
 /** Locate the sim-hid-bridge binary or .swift source. */
 function findBridge(): string | null {
   const candidates = [
@@ -47,8 +64,14 @@ async function runBridge(
   const cmdArgs = bridgePath.endsWith('.swift') ? [bridgePath, ...args] : args;
 
   try {
+    // macos-latest (Sequoia) first-invocation cold start of the bridge
+    // now exceeds 15 s — likely the tap-digitizer probe's IOKit dlopen
+    // plus the larger symbol table, fronted by CoreSimulator taking its
+    // time to reply DEVICE_NOT_FOUND for a fake UDID. Align with
+    // SLOW_BRIDGE_TIMEOUT_MS so the execFile budget matches the jest
+    // per-test budget.
     const { stdout, stderr } = await execFileAsync(cmd, cmdArgs, {
-      timeout: 15_000,
+      timeout: 30_000,
     });
     return { exitCode: 0, stdout, stderr };
   } catch (err) {
@@ -108,7 +131,7 @@ describe('SimulatorKit HID Sentinel', () => {
     // Any exit code other than 78 means frameworks loaded OK.
     // exit 69 (device not found) is the expected "frameworks OK, device missing" path.
     expect(result.exitCode).not.toBe(78);
-  });
+  }, SLOW_BRIDGE_TIMEOUT_MS);
 
   test('HID client and IndigoHIDMessage functions are resolvable (exit != 78 HID_*)', async () => {
     // Use the fake UDID — frameworks load but device won't be found.
@@ -141,7 +164,7 @@ describe('SimulatorKit HID Sentinel', () => {
     //   99 — PoC stub: frameworks loaded OK, HID injection not yet implemented
     // Both confirm that SimulatorKit + CoreSimulator loaded and HID symbols are present.
     expect([69, 99]).toContain(result.exitCode);
-  });
+  }, SLOW_BRIDGE_TIMEOUT_MS);
 
   test('bridge produces valid JSON output', async () => {
     const result = await runBridge([FAKE_UDID, 'tap', '0', '0']);
@@ -150,10 +173,10 @@ describe('SimulatorKit HID Sentinel', () => {
     const parsed = JSON.parse(result.stdout);
     expect(parsed).toHaveProperty('ok');
     expect(parsed).toHaveProperty('code');
-  });
+  }, SLOW_BRIDGE_TIMEOUT_MS);
 
   test('bad arguments produce exit 64', async () => {
     const result = await runBridge([]);
     expect(result.exitCode).toBe(64);
-  });
+  }, SLOW_BRIDGE_TIMEOUT_MS);
 });

@@ -15,6 +15,7 @@ import { MCPServer, getWebKitClient } from '../mcp-server';
 import { getAccessibilityBridge, ensureSemanticsActive } from '../native';
 import type { AXNode, AXQuery } from '../native';
 import { resolveDeviceId, getInputBackend, runInputOp } from './native-input-utils';
+import { tryPress } from './app-tap-element';
 
 const DEFAULT_TIMEOUT_MS = 5000;
 const DEFAULT_FOCUS_DELAY_MS = 150;
@@ -130,13 +131,40 @@ export function registerAppTypeElementTool(server: MCPServer): void {
           });
         }
 
-        // Tap center to focus, then type.
+        // Focus step: prefer Tier 1.5 AX press (headless — no mouse
+        // movement, no Simulator.app foregrounding). Fall back to a
+        // coordinate tap via the selected input backend when AX press is
+        // not actionable or is explicitly disabled via env var.
         const centerX = match.frame.x + match.frame.width / 2;
         const centerY = match.frame.y + match.frame.height / 2;
 
+        const axPressDisabled =
+          process.env.OPENSAFARI_DISABLE_AX_PRESS === '1' ||
+          process.env.OPENSAFARI_DISABLE_AX_PRESS === 'true';
+        const pressResponse =
+          !axPressDisabled && match.path
+            ? await tryPress(bridge, match.path, deviceId)
+            : null;
+        const focusedViaAXPress = pressResponse?.ok === true;
+        if (pressResponse && pressResponse.code === 'PRESS_NOT_ACTIONABLE') {
+          console.error(
+            `[app_type_element] AX press not actionable for path ${match.path} ` +
+              `(role=${match.role}, id=${match.identifier ?? '-'}); ` +
+              `falling back to coordinate tap for focus.`,
+          );
+        } else if (pressResponse && pressResponse.code === 'PRESS_FAILED') {
+          console.error(
+            `[app_type_element] AXPress action fired but returned non-success ` +
+              `(axErrorCode=${pressResponse.axErrorCode}, path=${match.path}); ` +
+              `falling back to coordinate tap for focus.`,
+          );
+        }
+
         const backend = await getInputBackend(deviceId, getWebKitClient(deviceId));
         const { meta } = await runInputOp(backend, deviceId, async () => {
-          await backend.tap(deviceId, centerX, centerY);
+          if (!focusedViaAXPress) {
+            await backend.tap(deviceId, centerX, centerY);
+          }
           if (focusDelay > 0) {
             await sleep(focusDelay);
           }
@@ -158,6 +186,7 @@ export function registerAppTypeElementTool(server: MCPServer): void {
                 coordinates: { x: centerX, y: centerY },
                 length: textToType.length,
                 backend: backend.kind,
+                focusBackend: focusedViaAXPress ? 'ax-press' : backend.kind,
                 deviceId,
                 _meta: meta,
               }),

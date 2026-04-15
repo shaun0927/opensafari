@@ -277,6 +277,59 @@ describe('FlutterVMInputBackend', () => {
         expect((err as FlutterVMInputBackendError).op).toBe('typeText');
       }
     });
+
+    test('classifies code 113 as VM_NO_EVALUATE with release-build guidance (#553)', async () => {
+      const client = makeMockClient();
+      client.evaluate.mockRejectedValueOnce(
+        // Shape mirrors what `FlutterVMClient.callMethod` synthesises when
+        // the VM Service rejects with a compile error. The classifier keys
+        // on the `(code: 113)` suffix rather than the wrapping error type
+        // so future JSON-RPC transports still hit the code path.
+        new Error('VM Service error: Expression compilation error (code: 113)'),
+      );
+      const backend = new FlutterVMInputBackend(client as any);
+
+      try {
+        await backend.tap(DEVICE, 10, 20);
+        fail('expected FlutterVMInputBackendError');
+      } catch (err) {
+        const e = err as FlutterVMInputBackendError;
+        expect(e).toBeInstanceOf(FlutterVMInputBackendError);
+        expect(e.code).toBe('VM_NO_EVALUATE');
+        // User-facing message must surface the remediation — not just echo
+        // the raw JSON-RPC error.
+        expect(e.message).toMatch(/release build|flutter run/i);
+      }
+    });
+
+    test('classifies Dart-side errors as DART_ERROR', async () => {
+      const client = makeMockClient();
+      client.evaluate.mockResolvedValueOnce({
+        type: '@Error',
+        message: 'LateInitializationError',
+      });
+      const backend = new FlutterVMInputBackend(client as any);
+
+      try {
+        await backend.tap(DEVICE, 1, 2);
+        fail('expected error');
+      } catch (err) {
+        expect((err as FlutterVMInputBackendError).code).toBe('DART_ERROR');
+      }
+    });
+
+    test('defaults to UNKNOWN for transport-level failures', async () => {
+      const client = makeMockClient();
+      client.evaluate.mockRejectedValueOnce(new Error('socket reset'));
+      const backend = new FlutterVMInputBackend(client as any);
+
+      try {
+        await backend.tap(DEVICE, 1, 2);
+        fail('expected error');
+      } catch (err) {
+        expect((err as FlutterVMInputBackendError).code).toBe('UNKNOWN');
+      }
+    });
   });
 
   // ── telemetry (#502) ─────────────────────────────────────────────────────

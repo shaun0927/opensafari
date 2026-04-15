@@ -35,6 +35,7 @@ Native input tools (`app_tap`, `app_swipe_native`, `app_scroll_native`,
 |------|---------|--------|-------------|----------|-----------|---------------------|--------|
 | 0 | `FlutterVMInputBackend` | `flutter-vm` | Flutter only | Yes | Yes | Flutter VM Service reachable within 1.5 s discovery timeout | Production |
 | 1 | `SimulatorKitHIDInputBackend` | `simhid` | Any app | Yes | Partial | `sim-hid-bridge` binary resolves and `SimulatorKit.framework` loads via `dlopen`. **Tap/swipe routing is currently disabled** on Xcode 26+ — see note below. Keyboard and hardware-button synthesis still route through this tier. | Partial (tap/swipe disabled on Xcode 26+) |
+| 1.5 | `AccessibilityPressInputBackend` (AX press) | `ax-press` | Any app (element-targeted only) | Yes | Yes | Used by `app_tap_element` / `app_type_element` when the resolved element advertises `AXPress`. Coordinate-only `app_tap({x, y})` cannot use this tier. Disabled via `OPENSAFARI_DISABLE_AX_PRESS=1`. | Production |
 | 2 | `SimctlInputBackend` | `simctl` | Any app | Yes | **Removed** | `xcrun simctl io input` probe succeeds (Xcode ≤ 16) | Legacy |
 | 3 | `WebKitInputBackend` | `webkit` | Safari / WebView | Yes | Yes | Active or reconnectable WebKit connection present | Production |
 | 4 | `AppleScriptInputBackend` | `applescript` | Any app | **No** | Yes | Opt-in only (`OPENSAFARI_ALLOW_FOCUS_INPUT=1`); throws `HeadlessInputUnavailableError` otherwise | Legacy / opt-in |
@@ -68,6 +69,20 @@ runtime and is the only path that survives `simctl io input` removal. See
 > `OPENSAFARI_ALLOW_FOCUS_INPUT=1` for the focus-stealing fallback. Flutter
 > apps (Tier 0) and all non-tap SimHID operations (Tier 1 keys/buttons) are
 > unaffected.
+
+> **Tier 1.5 AX press (`ax-press`) closes most of the Xcode 26+ tap gap.**
+> When the target element advertises the macOS `AXPress` accessibility
+> action — which covers nearly every `AXButton`, `AXMenuItem`, `AXCheckBox`,
+> and Flutter widget wrapped in `Semantics(button: true, …)` —
+> `app_tap_element` / `app_type_element` drive the interaction through the
+> existing `ax-bridge` helper instead of synthesising OS-level input. The
+> mouse cursor does not move, `Simulator.app` does not have to be
+> foregrounded, and the path works on every Xcode version including Xcode
+> 26+ where coordinate-based tap/swipe is blocked. Long-press
+> (`duration > 0`) and pure coordinate taps (`app_tap({x, y})`) are **not**
+> covered by this tier and still need Tier 1 / 2 / 4 depending on the
+> platform. See the AX press backend details below for the full selection
+> contract and the `OPENSAFARI_DISABLE_AX_PRESS` escape hatch.
 
 ### Decision flowchart
 
@@ -124,11 +139,13 @@ iOS apps do not pay the discovery cost on every call.
 | Safari web automation (Xcode 26+) | WebKit Protocol | `webkit` | Yes | `WebKitInputBackend` | `simctl io input` was removed in Xcode 26 |
 | Flutter app (debug / profile build, `flutter run`) | AX bridge (`ax-bridge`) | `flutter-vm` | Yes | `FlutterVMInputBackend` | Requires Dart VM Service + DDS reachable |
 | Flutter app (release build or no VM Service, Xcode ≤ 16) | AX bridge | `simhid` | Yes | `SimulatorKitHIDInputBackend` | Falls through Tier 0 → Tier 1 |
-| Flutter app (release build or no VM Service, Xcode 26+) | AX bridge | `simhid` (keys/buttons) / `applescript` (tap) | Partial | Tier 1 for keys/buttons; tap/swipe falls to opt-in Tier 4 | Tap/swipe requires `OPENSAFARI_ALLOW_FOCUS_INPUT=1` until Tier 1 tap re-enables ([#491](https://github.com/shaun0927/opensafari/issues/491)) |
+| Flutter app (release build or no VM Service, Xcode 26+) | AX bridge | `ax-press` (element-targeted) / `simhid` (keys/buttons) / `applescript` (pure coordinate tap) | Partial | Element-targeted tap/focus via Tier 1.5 AX press; keys via Tier 1; coordinate-only `app_tap({x,y})` still opt-in | Widgets wrapped in `Semantics(button: true, …)` advertise `AXPress` and route headless through Tier 1.5 ([#552](https://github.com/shaun0927/opensafari/issues/552)). Raw coordinate taps still need `OPENSAFARI_ALLOW_FOCUS_INPUT=1` ([#491](https://github.com/shaun0927/opensafari/issues/491)) |
 | Native iOS / SwiftUI app (Xcode ≤ 16) | AX bridge | `simhid` or `simctl` | Yes | Tier 1 preferred, Tier 2 fallback | Tier 1 works on every Xcode version |
-| Native iOS / SwiftUI app (Xcode 26+) | AX bridge | `simhid` keys/buttons; `applescript` tap/swipe with opt-in | Partial | Tier 1 for keys/buttons; tap/swipe currently falls through to Tier 4 | See "Tier 1 tap/swipe — temporarily disabled" note above and [#491](https://github.com/shaun0927/opensafari/issues/491) |
+| Native iOS / SwiftUI app (Xcode 26+, element-targeted) | AX bridge | `ax-press` | Yes | `AccessibilityPressInputBackend` (Tier 1.5) | Default for `app_tap_element` / `app_type_element` when the element advertises `AXPress` |
+| Native iOS / SwiftUI app (Xcode 26+, coordinate-only tap/swipe) | AX bridge | `applescript` (opt-in) | Partial | Opt-in Tier 4 via `OPENSAFARI_ALLOW_FOCUS_INPUT=1` | Raw `app_tap({x, y})` still falls through to the focus-stealing backend until Tier 1 tap re-enables ([#491](https://github.com/shaun0927/opensafari/issues/491)) |
 | WebView inside native app | AX bridge + WebKit | `webkit` | Yes | `WebKitInputBackend` via `app_webview_connect` | Requires an active WebKit connection |
-| GUI-less CI (no display, Xcode 26+, native tap) | AX bridge | none | No | `HeadlessInputUnavailableError` unless a WebKit client is attached | Blocked until Tier 1 tap re-enables; use Flutter (Tier 0) or WebKit (Tier 3) paths meanwhile |
+| GUI-less CI (no display, Xcode 26+, native element-targeted) | AX bridge | `ax-press` | Yes | `AccessibilityPressInputBackend` (Tier 1.5) | Headless element tap/focus via the AX bridge; Simulator.app can stay backgrounded |
+| GUI-less CI (no display, Xcode 26+, native coordinate-only tap) | AX bridge | none | No | `HeadlessInputUnavailableError` unless a WebKit client is attached | Blocked until Tier 1 coordinate tap re-enables; use Flutter (Tier 0), WebKit (Tier 3), or re-query the element path to land on Tier 1.5 |
 | GUI-less CI (no display, Xcode 26+, native keys/buttons) | AX bridge | `simhid` | Yes | `SimulatorKitHIDInputBackend` | Hardware-button / keyboard injection still headless |
 | GUI-less CI (no display, Xcode 26+, Safari) | WebKit Protocol | `webkit` | Yes | `WebKitInputBackend` | Fully headless; recommended CI setup |
 
@@ -184,6 +201,56 @@ the screen black). Keyboard (`key`) and hardware-button (`button`) injection
 are unaffected and continue to route through this tier — `sim-hid-bridge` is
 still probed, cached, and surfaced in `diagnose` output. Re-enabling tap/swipe
 is tracked in [#491](https://github.com/shaun0927/opensafari/issues/491).
+
+### AccessibilityPressInputBackend — AX press (`kind: 'ax-press'`)
+
+Tier 1.5 headless tap path. Drives interaction through the existing
+`ax-bridge` Swift helper by invoking
+`AXUIElementPerformAction(element, kAXPressAction)` against the live AX
+element resolved from the tool's element path. No CGEvent synthesis, no
+mouse cursor movement, no `Simulator.app` foregrounding — just a second
+argv call (`ax-bridge press --path <p> --device <udid>`) to the already-
+resolved bridge binary.
+
+Unlike the other tiers this backend is **not** selected by
+`getInputBackend()`. It is called directly from `app_tap_element` and
+`app_type_element` before they consult the coordinate-based backend
+chain. The rationale is that AX press requires the element path — which
+only those two composite tools have already resolved — so plumbing it
+through the generic `InputBackend.tap(x, y)` signature would force every
+backend to grow an element-targeted variant. Keeping the routing
+element-scoped also cleanly preserves `app_tap({x, y})`'s contract:
+coordinate-only callers continue down the existing Tier 0 → 1 → 2 → 3
+→ 4 chain.
+
+Selection contract:
+
+- Enabled for `app_tap_element` / `app_type_element` by default.
+- Skipped when `duration > 0` is requested — `AXPress` has no duration
+  semantics, so long-press falls through to the coordinate backend.
+- Skipped when the resolved element's path is empty (legacy callers that
+  pre-date path-based element addressing).
+- Skipped when `OPENSAFARI_DISABLE_AX_PRESS=1` is set in the environment.
+- If the element does not advertise the `AXPress` action, the bridge
+  returns `{ ok: false, code: 'PRESS_NOT_ACTIONABLE', actions: […] }`
+  and the tool transparently falls back to coordinate tap.
+- If the action fires but `AXUIElementPerformAction` itself returns
+  non-success, the bridge returns `{ ok: false, code: 'PRESS_FAILED',
+  axErrorCode }` and the tool falls back to coordinate tap (the error is
+  logged so the fall-back is observable).
+- Bridge-level errors (accessibility permission denied, simulator not
+  running) exit non-zero and propagate so the user fixes the setup
+  problem instead of silently masking it.
+
+Response shape includes `_meta.backendKind === 'ax-press'`,
+`_meta.headless === true`, and `_meta.axActions` listing every action the
+element advertised — useful for diagnosing why a press landed where it
+did.
+
+Status: **Production** (Tier 1.5). Shipped in
+[#552](https://github.com/shaun0927/opensafari/issues/552). This is the
+primary headless tap path on Xcode 26+ for native (non-Flutter)
+element-targeted automation.
 
 ### WebKitInputBackend (`kind: 'webkit'`)
 
@@ -248,6 +315,7 @@ Status: **Production** (Tier 0). Shipped in
 | `OPENSAFARI_ALLOW_FOCUS_INPUT` | unset (deny) | Set to `1` or `true` to enable `AppleScriptInputBackend`. **Will move the physical mouse cursor and activate `Simulator.app`.** Accepted values: `1`, `true`; anything else is ignored. A one-time warning is logged to `stderr` at the first use. |
 | `OPENSAFARI_HEADLESS_ONLY` | unset | Set to `1` or `true` to block the `AppleScriptInputBackend` fallback even when `OPENSAFARI_ALLOW_FOCUS_INPUT` is also set. Recommended for CI — `getInputBackend()` throws `HeadlessInputUnavailableError` with `reason: 'headless-only'` instead of ever returning the focus-stealing backend. Overrides `ALLOW_FOCUS_INPUT` with a warning log when both are set. |
 | `OPENSAFARI_ALLOW_SWIFT_INTERPRETER` | unset (deny) | Set to `1` to include the `src/native/sim-hid-bridge.swift` source-tree path in the `tryCreateSimulatorKitHIDBackend()` candidate list. Development-only; skipped in production installs because the repo-relative path escapes `dist/` and executing unsigned Swift source sidesteps future codesigning. |
+| `OPENSAFARI_DISABLE_AX_PRESS` | unset | Set to `1` or `true` to disable the Tier 1.5 `AccessibilityPressInputBackend`. `app_tap_element` / `app_type_element` will not try the `ax-press` path and will go straight to the coordinate-based backend chain. Useful for regression-testing the fallback path or working around an AX-press failure mode that has not yet been isolated. |
 | `OPENSAFARI_PROXY_PORT` | `9322` | WebKit debug proxy port. Overrides the default port used by `ios_webkit_debug_proxy`. Port resolution order: explicit `port` option → `OPENSAFARI_PROXY_PORT` → `9322`. |
 
 ---
@@ -373,6 +441,17 @@ When Apple breaks a private API in a new Xcode release, the recommended response
   `tryCreateSimulatorKitHIDBackend()`, `InputBackendError`
 - `src/native/sim-hid-bridge.swift` — Swift bridge that `dlopen`s
   `SimulatorKit.framework` and runs HID injection
+- `src/tools/app-tap-element.ts` — composite tap tool that tries Tier 1.5
+  AX press before falling through to the coordinate-based backend chain;
+  exports `tryPress()` and `buildAXPressResponse()` helpers
+- `src/tools/app-type-element.ts` — composite type tool that uses AX press
+  for the focus step when available
+- `src/native/accessibility-bridge.ts` — `AccessibilityBridge.press()`
+  wrapper around the `ax-bridge press` sub-command; `AXPressResponse`
+  uniform response shape
+- `src/native/ax-bridge.swift` — Swift helper that resolves an
+  `AXUIElement` by index path and invokes `AXUIElementPerformAction(_,
+  kAXPressAction)`
 - `docs/private-apis.md` — private framework contract, exit-code table, BC-break
   monitoring strategy
 
@@ -386,3 +465,4 @@ When Apple breaks a private API in a new Xcode release, the recommended response
 | [#491](https://github.com/shaun0927/opensafari/issues/491) | SimulatorKitHID integration coverage (blocked on Xcode 26+ tap pipeline) |
 | [#496](https://github.com/shaun0927/opensafari/issues/496) | This document |
 | [#537](https://github.com/shaun0927/opensafari/pull/537) | Disable SimHID tap/swipe routing on Xcode 26+ while the Apple regression is open |
+| [#552](https://github.com/shaun0927/opensafari/issues/552) | `AccessibilityPressInputBackend` (Tier 1.5) — headless element-targeted tap/focus on Xcode 26+ |

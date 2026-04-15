@@ -13,6 +13,7 @@ import {
   getInputTelemetryRollup,
   type InputTelemetryRollup,
 } from '../metrics/input-telemetry-rollup';
+import { getMemorySnapshot, bytesToMB } from '../metrics/memory-tracker';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 
@@ -61,6 +62,23 @@ interface DiagnoseReport {
    * not synthesise traffic.
    */
   latency: InputTelemetryRollup[];
+  /**
+   * Process memory snapshot (#554). `rss_mb` is the current resident set
+   * size; `peak_rss_mb` is the maximum RSS observed across every
+   * telemetry-emitting input-backend call since process start. Heap fields
+   * are taken from `process.memoryUsage()` at diagnose-time so callers
+   * always see a fresh V8 heap breakdown regardless of whether the
+   * per-op sampler has ticked.
+   */
+  memory: {
+    rss_mb: number;
+    peak_rss_mb: number;
+    heap_used_mb: number;
+    heap_total_mb: number;
+    external_mb: number;
+    array_buffers_mb: number;
+    sample_count: number;
+  };
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -211,6 +229,8 @@ export function registerDiagnoseTool(server: MCPServer): void {
       const safariVerdict = webkitStatus.available && (webkitStatus.connected ?? true);
       const nativeVerdict = simctlStatus.available || simhidStatus.available;
 
+      const memorySnapshot = getMemorySnapshot();
+
       const report: DiagnoseReport = {
         device,
         backends: {
@@ -227,6 +247,15 @@ export function registerDiagnoseTool(server: MCPServer): void {
           overall: safariVerdict && nativeVerdict,
         },
         latency: getInputTelemetryRollup(),
+        memory: {
+          rss_mb: bytesToMB(memorySnapshot.rssBytes),
+          peak_rss_mb: bytesToMB(memorySnapshot.peakRssBytes),
+          heap_used_mb: bytesToMB(memorySnapshot.heapUsedBytes),
+          heap_total_mb: bytesToMB(memorySnapshot.heapTotalBytes),
+          external_mb: bytesToMB(memorySnapshot.externalBytes),
+          array_buffers_mb: bytesToMB(memorySnapshot.arrayBuffersBytes),
+          sample_count: memorySnapshot.sampleCount,
+        },
       };
 
       return {

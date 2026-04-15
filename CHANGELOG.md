@@ -4,6 +4,34 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.4.9] - 2026-04-15
+
+This release closes the **Xcode 26+ headless tap gap** with a new Tier 1.5 AX press backend, hardens Flutter VM routing for release builds, adds process-wide memory tracking to `diagnose`, and ships the complete iOS 26 investigation synthesis. Together with the Tier-1 SimHID gating from v0.4.8, element-targeted native automation (`app_tap_element`, `app_type_element`) is now fully headless on Xcode 26+ — no Simulator.app focus required.
+
+### Added — Tier 1.5 AX press, headless native tap on Xcode 26+ (#552)
+
+- **`AccessibilityPressInputBackend` — Tier 1.5 headless element-targeted tap/focus.** `app_tap_element` and `app_type_element` now invoke `AXUIElementPerformAction(element, kAXPressAction)` through the existing `ax-bridge` Swift helper before falling through to the coordinate-based backend chain. The path does not synthesise OS-level input, so the physical mouse cursor never moves and `Simulator.app` does not need to be foregrounded — and critically it works on Xcode 26+ where Tier-1 SimHID tap/swipe is disabled (#537). This closes the bulk of the native-automation gap that epic #484 tracks.
+  - New `ax-bridge press --path <index-path> --device <udid>` sub-command with uniform JSON response (`{ ok, code, path, actions, role, identifier, label, message, axErrorCode }`). `PRESS_NOT_ACTIONABLE` and `PRESS_FAILED` are in-band with exit 0 for transparent fallback; bridge-level errors exit non-zero.
+  - `app_tap_element` tries Tier 1.5 when `duration === 0` and the element has a path. Response carries `backend: 'ax-press'`, `_meta.headless: true`.
+  - `app_type_element` uses AX press for tap-to-focus; typing flows through the selected input backend.
+  - New `OPENSAFARI_DISABLE_AX_PRESS=1` env var to disable the Tier 1.5 path.
+- **`InputBackendKind` gains the `'ax-press'` variant** for telemetry and `_meta.backendKind` consistency.
+
+### Added — Flutter release / no-DDS routing polish (#553)
+
+- **`FlutterVMClient.probeEvaluateCompile()`** — cheap evaluate probe (< 500 ms p95) that gates Tier-0 on compile capability, not just VM reachability. Release-mode Flutter apps and `simctl launch` without `flutter run` now fall through to lower tiers instead of surfacing a raw `code 113` error.
+- **`FlutterVMInputBackendError.code`** is a structured union (`VM_NO_EVALUATE | DART_ERROR | UNKNOWN`) with actionable remediation messages.
+- **WebSocket leak fix** — orphaned `FlutterVMClient` connections on negative probe results are now closed via `removeFlutterVMClient()` to prevent file descriptor leaks on release-mode apps.
+
+### Added — iOS 26 investigation tooling (#491)
+
+- **`sim-hid-bridge tap-digitizer` subcommand** (#491, #556): IOHIDEvent digitizer probe that synthesises `kIOHIDEventTypeDigitizer` and wraps with `IndigoHIDMessageForPointerEventFromHIDEventRef`. Hypothesis falsified (wrapper returns nil for digitizer events) — shipped as negative-result evidence with reusable IOKit scaffolding for next investigation candidate.
+- **iOS 26 tap regression synthesis document** (#491, #557): `docs/simhid-ios26-investigation.md` — comprehensive investigation synthesis covering symptom, reproduction, falsification log for 4 candidates, shipped tooling catalogue, remaining candidates ranked by feasibility, and actionable next-step checklist. Cross-referenced from `docs/private-apis.md`.
+
+### Changed
+
+- **Headless SSOT reflects Tier 1.5.** `docs/headless-architecture.md` adds a Tier 1.5 routing-table row, backend details for `AccessibilityPressInputBackend`, updated "Practical impact on Xcode 26+" blockquote, scenario-matrix rows splitting native Xcode 26+ into element-targeted (headless) and coordinate-only (opt-in), and `OPENSAFARI_DISABLE_AX_PRESS` in the environment-variables table.
+
 ## [0.4.8] - 2026-04-15
 
 This release is a **stabilization + observability cut** focused on the Xcode 26 headless-input regression discovered after v0.4.6/v0.4.7 shipped. It disables the one SimulatorKitHID code path that silently misses target (native tap/swipe on Xcode 26+), hardens the remaining tiers with telemetry and daily CI probes, documents the investigation in full, and adds three new `sim-hid-bridge` subcommands for on-device diagnosis. No new MCP tools are added — the surface stays compatible with 0.4.7, but `_meta` now carries `_telemetry` latency/routing info for every input call.
