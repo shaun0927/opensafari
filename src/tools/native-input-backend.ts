@@ -21,6 +21,9 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { SimctlExecutor } from '../simulator/simctl';
 import type { BrowserBackend } from '../types/browser-backend';
+import type { FlutterVMClient } from '../flutter';
+import { getFlutterVMClient } from '../flutter';
+import { FlutterVMInputBackend } from './flutter-vm-input-backend';
 
 const execFileAsync = promisify(execFile);
 
@@ -36,7 +39,7 @@ function delay(ms: number): Promise<void> {
  * input — useful when diagnosing focus-theft reports or confirming that a
  * call stayed on a headless tier.
  */
-export type InputBackendKind = 'simctl' | 'webkit' | 'applescript' | 'simhid';
+export type InputBackendKind = 'flutter-vm' | 'simctl' | 'webkit' | 'applescript' | 'simhid';
 
 export interface InputBackend {
   /** Stable identifier used for observability / audit logging. */
@@ -586,6 +589,78 @@ let cachedSimctlBackend: SimctlInputBackend | null = null;
 let cachedAppleScriptBackend: AppleScriptInputBackend | null = null;
 let focusInputOptInWarned = false;
 
+// Per-device cache of the Flutter VM client connection so subsequent Tier-0
+// lookups reuse an already-established WebSocket instead of re-running
+// discovery on every call. Cleared via `resetInputBackend()`.
+const flutterClientCache = new Map<string, FlutterVMClient>();
+
+/**
+ * Overridable resolver that returns a connected `FlutterVMClient` for the
+ * device, or `null` when no Flutter VM is discoverable (native app, Safari,
+ * simulator without Flutter debug build). The default implementation is
+ * swapped out by unit tests via `__setFlutterVMResolverForTest`.
+ */
+type FlutterVMResolver = (deviceId: string) => Promise<FlutterVMClient | null>;
+
+async function defaultFlutterVMResolver(
+  deviceId: string,
+): Promise<FlutterVMClient | null> {
+  // Fast path: reuse any cached client that is still connected.
+  const cached = flutterClientCache.get(deviceId);
+  if (cached && cached.isConnected()) {
+    return cached;
+  }
+
+  try {
+    const client = getFlutterVMClient(deviceId);
+    if (!client.isConnected()) {
+      await client.connect({ deviceId });
+    }
+    if (!client.isConnected()) {
+      return null;
+    }
+    flutterClientCache.set(deviceId, client);
+    return client;
+  } catch {
+    // VM discovery / connect failures are expected for non-Flutter apps.
+    // Swallow silently so the caller transparently falls through to Tier 1.
+    return null;
+  }
+}
+
+let flutterVMResolver: FlutterVMResolver = defaultFlutterVMResolver;
+
+/**
+ * Attempt to resolve a FlutterVMClient for this device. Returns null whenever
+ * the device is not running a Flutter app in debug/profile mode. Never
+ * throws — VM discovery errors collapse to null so the tier fallback keeps
+ * working for native iOS apps.
+ *
+ * Exposed so callers (e.g. routing diagnostics) can probe availability
+ * without spinning up the backend; the public routing in `getInputBackend()`
+ * is the normal entry point.
+ */
+export async function tryGetFlutterVMClient(
+  deviceId: string,
+): Promise<FlutterVMClient | null> {
+  try {
+    return await flutterVMResolver(deviceId);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Test seam: override the Flutter VM resolver. `null` restores the default.
+ * Only used by unit tests — mocking `getFlutterVMClient` module-wide is
+ * awkward because the singleton map lives inside the module.
+ */
+export function __setFlutterVMResolverForTest(
+  resolver: FlutterVMResolver | null,
+): void {
+  flutterVMResolver = resolver ?? defaultFlutterVMResolver;
+}
+
 /**
  * Probe whether `simctl io input` is available by attempting a no-op tap at (0,0).
  * On Xcode 26+ this subcommand was removed and returns exit code 117.
@@ -646,6 +721,16 @@ export async function getInputBackend(
   deviceId: string,
   webkitClient?: BrowserBackend | null,
 ): Promise<InputBackend> {
+  // Tier 0: Flutter VM Service (headless, no focus stealing, no opt-in).
+  // When the target device is running a Flutter app in debug/profile mode we
+  // can inject pointer events directly into the Dart isolate, completely
+  // bypassing OS-level input. Returns null for native iOS apps and silently
+  // falls through to the existing tiers in that case.
+  const flutterClient = await tryGetFlutterVMClient(deviceId);
+  if (flutterClient) {
+    return new FlutterVMInputBackend(flutterClient);
+  }
+
   // Probe simctl once and cache the result
   if (simctlAvailable === null) {
     if (!detectionPromise) {
@@ -713,6 +798,8 @@ export function resetInputBackend(): void {
   cachedSimctlBackend = null;
   cachedAppleScriptBackend = null;
   focusInputOptInWarned = false;
+  flutterClientCache.clear();
+  flutterVMResolver = defaultFlutterVMResolver;
 }
 
 // Re-export for convenience
