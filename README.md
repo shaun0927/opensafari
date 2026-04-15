@@ -41,11 +41,23 @@ OpenSafari runs fully headless on CI — no display server, no mouse focus, no `
 | Scenario | Query (AX Tree) | Input (Tap/Type) | Headless | Backend |
 |---|---|---|---|---|
 | Safari (Web) | ✅ | ✅ | ✅ | WebKit Remote Debug |
-| Flutter App | ✅ | ⚠️ Draft | ⚠️ | FlutterVMInputBackend |
-| Native iOS App | ✅ | ⚠️ PoC | ⚠️ | SimulatorKitHID |
+| Flutter App | ✅ | ✅ | ✅ | FlutterVMInputBackend |
+| Native iOS App | ✅ | ✅ | ✅ | SimulatorKitHID (Tier 1) |
 | WebView in Native | ✅ | ⚠️ Partial | ⚠️ | WebKit + Native |
 
 > ✅ Supported and stable. ⚠️ Partially supported — see linked docs for current status and limitations.
+
+### Headless input vs other iOS automation tools
+
+|  | OpenSafari | Appium | idb | XCUITest |
+|---|:---:|:---:|:---:|:---:|
+| **Headless native input** (no mouse focus, no `Simulator.app` activation) | **✅ SimulatorKit HID** | ❌ ([XCUI focus](https://appium.io/docs/en/2.0/ecosystem/drivers/)) | ✅ `FBSimulatorHID` | ❌ |
+| **Works on Xcode 26+** (after `simctl io input` removal) | ✅ | ⚠️ driver-dependent | ✅ | ✅ |
+| **Flutter native taps** (no OS-level input) | ✅ Dart VM `PointerDataPacket` | ⚠️ 3rd-party plugin | ❌ | ❌ |
+| **MCP / LLM integration** | ✅ native | ❌ | ❌ | ❌ |
+| **Private API dependency** | SimulatorKit (documented, sentinel-guarded) | UIAutomation / XCUI | SimulatorKit | none |
+
+> See [docs/private-apis.md](docs/private-apis.md) for the SimulatorKit contract, the daily sentinel CI that detects BC breaks, and the rollback plan if Apple changes symbols.
 
 For CI setup recipes (GitHub Actions, Buildkite, GitLab CI), see [docs/ci-recipes.md](docs/ci-recipes.md).
 
@@ -523,19 +535,33 @@ Multiple Claude Code sessions can share the same proxy. When a session detects a
 
 OpenSafari dispatches native input (`app_tap`, `app_swipe_native`,
 `app_scroll_native`, `app_double_tap`, `app_type_text`, `app_key_input`)
-through a 3-tier fallback chain and surfaces the selected path in each tool
+through a 5-tier fallback chain and surfaces the selected path in each tool
 result via a `backend` field.
 
 | Tier | Backend | Identifier | Headless? | When used |
 |------|---------|------------|-----------|-----------|
-| 1 | `SimctlInputBackend` | `simctl` | Yes | Xcode ≤16 (where `simctl io input` is available) |
-| 2 | `WebKitInputBackend` | `webkit` | Yes | Xcode 26+ with an active Safari WebKit connection |
-| 3 | `AppleScriptInputBackend` | `applescript` | **No** | Opt-in only — moves the mouse cursor and activates Simulator.app |
+| 0 | `FlutterVMInputBackend` | `flutter-vm` | Yes | Flutter app reachable over Dart VM Service + DDS |
+| 1 | `SimulatorKitHIDInputBackend` | `simhid` | Yes | Any app — `sim-hid-bridge` resolves and `SimulatorKit.framework` loads (covers Xcode 26+) |
+| 2 | `SimctlInputBackend` | `simctl` | Yes | Xcode ≤16 legacy path (where `simctl io input` is still available) |
+| 3 | `WebKitInputBackend` | `webkit` | Yes | Xcode 26+ with an active Safari / WebView connection |
+| 4 | `AppleScriptInputBackend` | `applescript` | **No** | Opt-in only — moves the mouse cursor and activates Simulator.app |
+
+See [docs/headless-architecture.md](docs/headless-architecture.md) for the
+decision flowchart and the full scenario matrix. Tool responses also include
+`_meta: { backendKind, headless, deviceId }` so CI can assert
+`_meta.headless === true`.
 
 Example tool result:
 
 ```json
-{ "status": "tapped", "x": 100, "y": 200, "deviceId": "…", "backend": "webkit" }
+{
+  "status": "tapped",
+  "x": 100,
+  "y": 200,
+  "deviceId": "…",
+  "backend": "simhid",
+  "_meta": { "backendKind": "simhid", "headless": true, "deviceId": "…" }
+}
 ```
 
 ### Focus-theft protection (`OPENSAFARI_ALLOW_FOCUS_INPUT`)
