@@ -8,9 +8,9 @@
  * execute it you need:
  *
  *   1. A booted iPhone simulator.
- *   2. The Flutter QA fixture installed and launched in debug/profile mode
- *      (VM Service URL printed to simulator logs). See
- *      `tests/integration/fixtures/flutter_sample/README.md` for setup.
+ *   2. The Flutter QA fixture launched via `flutter run` (DDS required for
+ *      expression evaluation). Plain `simctl launch` won't work because
+ *      the Dart frontend compiler service is only available through DDS.
  *   3. Export `OPENSAFARI_LIVE_VM=1` and pass the device UDID/bundle via
  *      `OSF_DEVICE_ID` / `OSF_BUNDLE_ID` (or rely on the defaults below).
  *
@@ -26,8 +26,7 @@
  * clear routing error rather than silently moving the physical mouse.
  */
 
-import { execSync } from 'child_process';
-import { getInputBackend } from '../../src/tools/native-input-backend';
+import { getInputBackend, resetInputBackend } from '../../src/tools/native-input-backend';
 import { FlutterVMInputBackend } from '../../src/tools/flutter-vm-input-backend';
 import {
   ensureSemanticsActive,
@@ -37,19 +36,8 @@ import {
 const LIVE = process.env.OPENSAFARI_LIVE_VM === '1';
 const DEVICE_ID =
   process.env.OSF_DEVICE_ID ?? '3BEF4E9A-069A-4419-AC62-AB889348EF12';
-const BUNDLE = process.env.OSF_BUNDLE_ID ?? 'com.example.osftest';
 
 jest.setTimeout(180_000);
-
-async function relaunch(): Promise<void> {
-  try {
-    execSync(`xcrun simctl terminate ${DEVICE_ID} ${BUNDLE}`, { stdio: 'pipe' });
-  } catch {
-    /* not running — nothing to do */
-  }
-  execSync(`xcrun simctl launch ${DEVICE_ID} ${BUNDLE}`, { stdio: 'pipe' });
-  await new Promise((r) => setTimeout(r, 1500));
-}
 
 async function readStatus(id = 'status_label'): Promise<string> {
   const bridge = getAccessibilityBridge();
@@ -79,7 +67,8 @@ describe('issue #481 — FlutterVMInputBackend live', () => {
   }
 
   beforeAll(async () => {
-    await relaunch();
+    resetInputBackend();
+    await new Promise((r) => setTimeout(r, 2000));
   });
 
   test('getInputBackend() selects Tier 0 (FlutterVMInputBackend)', async () => {
@@ -89,7 +78,6 @@ describe('issue #481 — FlutterVMInputBackend live', () => {
   });
 
   test('tap on Login button changes status — headless, no focus steal', async () => {
-    await relaunch();
     const before = await readStatus();
     await tapLabel('Login');
     await new Promise((r) => setTimeout(r, 500));
@@ -98,7 +86,6 @@ describe('issue #481 — FlutterVMInputBackend live', () => {
   });
 
   test('typeText into focused TextField fires onChanged', async () => {
-    await relaunch();
     await tapLabel('Email');
     await new Promise((r) => setTimeout(r, 400));
     const backend = await getInputBackend(DEVICE_ID);
@@ -109,7 +96,6 @@ describe('issue #481 — FlutterVMInputBackend live', () => {
   });
 
   test('swipe produces multiple move events in the Flutter gesture arena', async () => {
-    await relaunch();
     const backend = await getInputBackend(DEVICE_ID);
     await backend.swipe(DEVICE_ID, 200, 600, 200, 200, 0.3);
     // No assertion on scroll position — the intent is to prove the gesture

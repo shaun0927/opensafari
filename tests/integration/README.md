@@ -64,6 +64,28 @@ Sibling suites added in follow-up PRs (e.g. `issue-423-native.live.test.ts`,
 file. They share the same opt-in model and the same `--testPathIgnorePatterns`
 override.
 
+## Flutter Headless Input Tests (Issue #481)
+
+The `flutter-vm-input.live.test.ts` suite verifies Tier-0 headless input via the Dart VM Service.
+
+### Prerequisites
+
+1. Booted iPhone simulator
+2. Flutter QA fixture running via `flutter run` (**not** `simctl launch` — DDS is required):
+   ```bash
+   cd tests/integration/fixtures/flutter_sample
+   flutter run -d <DEVICE_UDID>
+   ```
+3. Environment: `OPENSAFARI_LIVE_VM=1`
+
+### Run
+
+```bash
+OPENSAFARI_LIVE_VM=1 OSF_DEVICE_ID=<UDID> \
+  npx jest tests/integration/flutter-vm-input.live.test.ts \
+  --runInBand --testPathIgnorePatterns=/node_modules/
+```
+
 ## Why these are not in CI
 
 CI does not run a desktop Simulator window, and the Tier-3 input backend
