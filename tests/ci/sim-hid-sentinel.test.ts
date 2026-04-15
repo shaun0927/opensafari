@@ -34,9 +34,9 @@ const execFileAsync = promisify(execFile);
 // though the suite-level value was 30 s). Per-test third-argument
 // timeouts on the long-running cases below provide a belt-and-suspenders
 // guarantee against future Jest scoping changes.
-jest.setTimeout(30_000);
+jest.setTimeout(45_000);
 
-const SLOW_BRIDGE_TIMEOUT_MS = 30_000;
+const SLOW_BRIDGE_TIMEOUT_MS = 45_000;
 
 /** Locate the sim-hid-bridge binary or .swift source. */
 function findBridge(): string | null {
@@ -64,8 +64,14 @@ async function runBridge(
   const cmdArgs = bridgePath.endsWith('.swift') ? [bridgePath, ...args] : args;
 
   try {
+    // macos-latest (Sequoia) first-invocation cold start of the bridge
+    // now exceeds 15 s — likely the tap-digitizer probe's IOKit dlopen
+    // plus the larger symbol table, fronted by CoreSimulator taking its
+    // time to reply DEVICE_NOT_FOUND for a fake UDID. Align with
+    // SLOW_BRIDGE_TIMEOUT_MS so the execFile budget matches the jest
+    // per-test budget.
     const { stdout, stderr } = await execFileAsync(cmd, cmdArgs, {
-      timeout: 15_000,
+      timeout: 30_000,
     });
     return { exitCode: 0, stdout, stderr };
   } catch (err) {
