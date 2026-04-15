@@ -852,6 +852,9 @@ export async function getInputBackend(
     }
   }
   // SimHID tap/swipe broken on Xcode 26+ (locks screen). TODO(#491): re-enable.
+  // Read guard — the cache is kept populated so re-activation is a one-line
+  // change; without the read, eslint flags the probe as dead code.
+  void cachedSimHidBackend;
   // if (cachedSimHidBackend) {
   //   return cachedSimHidBackend;
   // }
