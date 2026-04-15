@@ -6,6 +6,12 @@
  * test only needs to walk one well-known UIKit surface to demonstrate
  * parity.
  *
+ * Locale-awareness: primary queries use accessibility identifiers which
+ * are locale-independent. Label-based assertions fall back to environment
+ * variable overrides so the suite runs correctly on non-English simulators
+ * (e.g. Korean ko_KR). Override example:
+ *   SETTINGS_GENERAL=일반 SETTINGS_ABOUT=정보 npx jest ...
+ *
  * Setup prerequisites (see tests/integration/README.md for the full
  * rationale):
  *   - booted iOS Simulator with a visible device window
@@ -29,6 +35,10 @@ import { getInputBackend } from '../../src/tools/native-input-backend';
 const DEVICE_ID =
   process.env.OSF_DEVICE_ID ?? '3BEF4E9A-069A-4419-AC62-AB889348EF12';
 const BUNDLE = 'com.apple.Preferences';
+
+const SETTINGS_GENERAL_ID = 'com.apple.settings.general';
+const SETTINGS_GENERAL_LABEL = process.env.SETTINGS_GENERAL ?? 'General';
+const SETTINGS_ABOUT_LABEL = process.env.SETTINGS_ABOUT ?? 'About';
 
 jest.setTimeout(120_000);
 
@@ -67,10 +77,10 @@ beforeAll(async () => {
 });
 
 describe('issue #423 — native (non-Flutter) app via AccessibilityBridge', () => {
-  test('app_query finds a UIKit row by label (Settings → General)', async () => {
+  test('app_query finds a UIKit row by identifier (Settings → General)', async () => {
     await launchSettings();
     const bridge = getAccessibilityBridge();
-    const r = await bridge.query({ label: 'General' }, { deviceId: DEVICE_ID });
+    const r = await bridge.query({ identifier: SETTINGS_GENERAL_ID }, { deviceId: DEVICE_ID });
     // Settings.app exposes "General" as a top-level cell on every
     // recent iOS release; at least one match is expected.
     expect(r.matches.length).toBeGreaterThan(0);
@@ -82,14 +92,14 @@ describe('issue #423 — native (non-Flutter) app via AccessibilityBridge', () =
 
   test('app_tap_element taps a UIKit row (Settings → General) and advances navigation', async () => {
     await launchSettings();
-    await tap({ label: 'General', index: 0 });
+    await tap({ identifier: SETTINGS_GENERAL_ID });
     await new Promise((r) => setTimeout(r, 900));
-    // After tapping "General", the Settings app pushes the General
-    // sub-screen, which contains an "About" cell. Matching on that
-    // label proves the tap landed on a UIKit cell and advanced the
-    // navigation stack — exactly the same code path as Flutter.
+    // After tapping General, the Settings app pushes the General sub-screen,
+    // which contains an "About" cell. Matching on that label (locale-aware via
+    // SETTINGS_ABOUT env var) proves the tap landed on a UIKit cell and
+    // advanced the navigation stack — exactly the same code path as Flutter.
     const bridge = getAccessibilityBridge();
-    const r = await bridge.query({ label: 'About' }, { deviceId: DEVICE_ID });
+    const r = await bridge.query({ label: SETTINGS_ABOUT_LABEL }, { deviceId: DEVICE_ID });
     expect(r.matches.length).toBeGreaterThan(0);
   });
 });
