@@ -25,6 +25,7 @@ import type { FlutterVMClient } from '../flutter';
 import { getFlutterVMClient } from '../flutter';
 import { FlutterVMInputBackend } from './flutter-vm-input-backend';
 import { tryCreateSimulatorKitHIDBackend } from './sim-hid-input-backend';
+import { timedInput } from '../metrics/input-telemetry';
 
 const execFileAsync = promisify(execFile);
 
@@ -75,14 +76,16 @@ export class SimctlInputBackend implements InputBackend {
   }
 
   async tap(deviceId: string, x: number, y: number, duration?: number): Promise<void> {
-    if (duration && duration > 0) {
-      await this.simctl.exec([
-        'io', deviceId, 'input', 'press',
-        String(x), String(y), String(duration),
-      ]);
-    } else {
-      await this.simctl.exec(['io', deviceId, 'input', 'tap', String(x), String(y)]);
-    }
+    await timedInput(this.kind, 'tap', deviceId, async () => {
+      if (duration && duration > 0) {
+        await this.simctl.exec([
+          'io', deviceId, 'input', 'press',
+          String(x), String(y), String(duration),
+        ]);
+      } else {
+        await this.simctl.exec(['io', deviceId, 'input', 'tap', String(x), String(y)]);
+      }
+    });
   }
 
   async swipe(
@@ -91,31 +94,39 @@ export class SimctlInputBackend implements InputBackend {
     endX: number, endY: number,
     duration?: number,
   ): Promise<void> {
-    try {
-      await this.simctl.exec([
-        'io', deviceId, 'input', 'swipe',
-        String(startX), String(startY), String(endX), String(endY),
-      ]);
-    } catch {
-      // Fallback: `drag` accepts a duration argument
-      await this.simctl.exec([
-        'io', deviceId, 'input', 'drag',
-        String(startX), String(startY), String(endX), String(endY),
-        String(duration ?? 0.5),
-      ]);
-    }
+    await timedInput(this.kind, 'swipe', deviceId, async () => {
+      try {
+        await this.simctl.exec([
+          'io', deviceId, 'input', 'swipe',
+          String(startX), String(startY), String(endX), String(endY),
+        ]);
+      } catch {
+        // Fallback: `drag` accepts a duration argument
+        await this.simctl.exec([
+          'io', deviceId, 'input', 'drag',
+          String(startX), String(startY), String(endX), String(endY),
+          String(duration ?? 0.5),
+        ]);
+      }
+    });
   }
 
   async typeText(deviceId: string, text: string): Promise<void> {
-    await this.simctl.exec(['io', deviceId, 'input', 'text', text]);
+    await timedInput(this.kind, 'typeText', deviceId, async () => {
+      await this.simctl.exec(['io', deviceId, 'input', 'text', text]);
+    });
   }
 
   async keypress(deviceId: string, keyCode: string): Promise<void> {
-    await this.simctl.exec(['io', deviceId, 'input', 'keypress', keyCode]);
+    await timedInput(this.kind, 'keypress', deviceId, async () => {
+      await this.simctl.exec(['io', deviceId, 'input', 'keypress', keyCode]);
+    });
   }
 
   async sendKey(deviceId: string, keyName: string): Promise<void> {
-    await this.simctl.exec(['io', deviceId, 'sendkey', keyName]);
+    await timedInput(this.kind, 'sendKey', deviceId, async () => {
+      await this.simctl.exec(['io', deviceId, 'sendkey', keyName]);
+    });
   }
 }
 
@@ -297,23 +308,25 @@ export class AppleScriptInputBackend implements InputBackend {
   }
 
   async tap(deviceId: string, x: number, y: number, duration?: number): Promise<void> {
-    await this.activateSimulator();
-    const { sx, sy } = await this.toScreen(deviceId, x, y);
+    await timedInput(this.kind, 'tap', deviceId, async () => {
+      await this.activateSimulator();
+      const { sx, sy } = await this.toScreen(deviceId, x, y);
 
-    if (duration && duration > 0) {
-      // Long press: mouse down → wait → mouse up via Swift CGEvent
-      await execFileAsync('swift', ['-e', [
-        'import Cocoa',
-        `let p = CGPoint(x: ${sx}, y: ${sy})`,
-        'CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: p, mouseButton: .left)!.post(tap: .cghidEventTap)',
-        `Thread.sleep(forTimeInterval: ${duration})`,
-        'CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: p, mouseButton: .left)!.post(tap: .cghidEventTap)',
-      ].join('\n')], { timeout: Math.max(15_000, duration * 1000 + 5000) });
-    } else {
-      await this.runAppleScript([
-        `tell application "System Events" to click at {${sx}, ${sy}}`,
-      ]);
-    }
+      if (duration && duration > 0) {
+        // Long press: mouse down → wait → mouse up via Swift CGEvent
+        await execFileAsync('swift', ['-e', [
+          'import Cocoa',
+          `let p = CGPoint(x: ${sx}, y: ${sy})`,
+          'CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: p, mouseButton: .left)!.post(tap: .cghidEventTap)',
+          `Thread.sleep(forTimeInterval: ${duration})`,
+          'CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: p, mouseButton: .left)!.post(tap: .cghidEventTap)',
+        ].join('\n')], { timeout: Math.max(15_000, duration * 1000 + 5000) });
+      } else {
+        await this.runAppleScript([
+          `tell application "System Events" to click at {${sx}, ${sy}}`,
+        ]);
+      }
+    });
   }
 
   async swipe(
@@ -322,71 +335,79 @@ export class AppleScriptInputBackend implements InputBackend {
     endX: number, endY: number,
     duration?: number,
   ): Promise<void> {
-    await this.activateSimulator();
-    // Get origin once for both start and end coordinates
-    const origin = await this.getSimulatorContentOrigin(deviceId);
-    const sx = Math.round(origin.x + startX);
-    const sy = Math.round(origin.y + startY);
-    const ex = Math.round(origin.x + endX);
-    const ey = Math.round(origin.y + endY);
-    const dur = duration ?? 0.5;
-    const steps = 20;
-    const stepDelay = dur / steps;
+    await timedInput(this.kind, 'swipe', deviceId, async () => {
+      await this.activateSimulator();
+      // Get origin once for both start and end coordinates
+      const origin = await this.getSimulatorContentOrigin(deviceId);
+      const sx = Math.round(origin.x + startX);
+      const sy = Math.round(origin.y + startY);
+      const ex = Math.round(origin.x + endX);
+      const ey = Math.round(origin.y + endY);
+      const dur = duration ?? 0.5;
+      const steps = 20;
+      const stepDelay = dur / steps;
 
-    // Mouse drag via Swift CGEvent (macOS built-in, no external deps)
-    await execFileAsync('swift', ['-e', [
-      'import Cocoa',
-      `let x1: CGFloat = ${sx}, y1: CGFloat = ${sy}`,
-      `let x2: CGFloat = ${ex}, y2: CGFloat = ${ey}`,
-      `let steps = ${steps}`,
-      `let stepDelay = ${stepDelay}`,
-      'CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: CGPoint(x: x1, y: y1), mouseButton: .left)!.post(tap: .cghidEventTap)',
-      'Thread.sleep(forTimeInterval: 0.05)',
-      'for i in 1...steps {',
-      '  let t = CGFloat(i) / CGFloat(steps)',
-      '  let p = CGPoint(x: x1 + (x2 - x1) * t, y: y1 + (y2 - y1) * t)',
-      '  CGEvent(mouseEventSource: nil, mouseType: .leftMouseDragged, mouseCursorPosition: p, mouseButton: .left)!.post(tap: .cghidEventTap)',
-      '  Thread.sleep(forTimeInterval: stepDelay)',
-      '}',
-      'CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: CGPoint(x: x2, y: y2), mouseButton: .left)!.post(tap: .cghidEventTap)',
-    ].join('\n')], { timeout: 15_000 });
+      // Mouse drag via Swift CGEvent (macOS built-in, no external deps)
+      await execFileAsync('swift', ['-e', [
+        'import Cocoa',
+        `let x1: CGFloat = ${sx}, y1: CGFloat = ${sy}`,
+        `let x2: CGFloat = ${ex}, y2: CGFloat = ${ey}`,
+        `let steps = ${steps}`,
+        `let stepDelay = ${stepDelay}`,
+        'CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: CGPoint(x: x1, y: y1), mouseButton: .left)!.post(tap: .cghidEventTap)',
+        'Thread.sleep(forTimeInterval: 0.05)',
+        'for i in 1...steps {',
+        '  let t = CGFloat(i) / CGFloat(steps)',
+        '  let p = CGPoint(x: x1 + (x2 - x1) * t, y: y1 + (y2 - y1) * t)',
+        '  CGEvent(mouseEventSource: nil, mouseType: .leftMouseDragged, mouseCursorPosition: p, mouseButton: .left)!.post(tap: .cghidEventTap)',
+        '  Thread.sleep(forTimeInterval: stepDelay)',
+        '}',
+        'CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: CGPoint(x: x2, y: y2), mouseButton: .left)!.post(tap: .cghidEventTap)',
+      ].join('\n')], { timeout: 15_000 });
+    });
   }
 
-  async typeText(_deviceId: string, text: string): Promise<void> {
-    await this.activateSimulator();
-    // Escape special AppleScript characters
-    const escaped = text.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-    await this.runAppleScript([
-      `tell application "System Events" to keystroke "${escaped}"`,
-    ]);
+  async typeText(deviceId: string, text: string): Promise<void> {
+    await timedInput(this.kind, 'typeText', deviceId, async () => {
+      await this.activateSimulator();
+      // Escape special AppleScript characters
+      const escaped = text.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+      await this.runAppleScript([
+        `tell application "System Events" to keystroke "${escaped}"`,
+      ]);
+    });
   }
 
-  async keypress(_deviceId: string, keyCode: string): Promise<void> {
-    await this.activateSimulator();
-    const asKeyCode = HID_TO_APPLESCRIPT[keyCode];
-    if (asKeyCode === undefined) {
-      throw new Error(
-        `Unknown HID key code "${keyCode}" for AppleScript backend. ` +
-        `Supported: ${Object.keys(HID_TO_APPLESCRIPT).join(', ')}`,
-      );
-    }
-    await this.runAppleScript([
-      `tell application "System Events" to key code ${asKeyCode}`,
-    ]);
+  async keypress(deviceId: string, keyCode: string): Promise<void> {
+    await timedInput(this.kind, 'keypress', deviceId, async () => {
+      await this.activateSimulator();
+      const asKeyCode = HID_TO_APPLESCRIPT[keyCode];
+      if (asKeyCode === undefined) {
+        throw new Error(
+          `Unknown HID key code "${keyCode}" for AppleScript backend. ` +
+          `Supported: ${Object.keys(HID_TO_APPLESCRIPT).join(', ')}`,
+        );
+      }
+      await this.runAppleScript([
+        `tell application "System Events" to key code ${asKeyCode}`,
+      ]);
+    });
   }
 
-  async sendKey(_deviceId: string, keyName: string): Promise<void> {
-    await this.activateSimulator();
-    const asKeyCode = SENDKEY_TO_APPLESCRIPT[keyName];
-    if (asKeyCode === undefined) {
-      throw new Error(
-        `Unknown key name "${keyName}" for AppleScript backend. ` +
-        `Supported: ${Object.keys(SENDKEY_TO_APPLESCRIPT).join(', ')}`,
-      );
-    }
-    await this.runAppleScript([
-      `tell application "System Events" to key code ${asKeyCode}`,
-    ]);
+  async sendKey(deviceId: string, keyName: string): Promise<void> {
+    await timedInput(this.kind, 'sendKey', deviceId, async () => {
+      await this.activateSimulator();
+      const asKeyCode = SENDKEY_TO_APPLESCRIPT[keyName];
+      if (asKeyCode === undefined) {
+        throw new Error(
+          `Unknown key name "${keyName}" for AppleScript backend. ` +
+          `Supported: ${Object.keys(SENDKEY_TO_APPLESCRIPT).join(', ')}`,
+        );
+      }
+      await this.runAppleScript([
+        `tell application "System Events" to key code ${asKeyCode}`,
+      ]);
+    });
   }
 }
 
@@ -434,103 +455,113 @@ export class WebKitInputBackend implements InputBackend {
   readonly kind = 'webkit' as const;
   constructor(private client: BrowserBackend) {}
 
-  async tap(_deviceId: string, x: number, y: number, duration?: number): Promise<void> {
-    if (duration && duration > 0) {
-      // Long press via touch events with delay
-      await this.client.evaluate(`
-        (async function(x, y, duration) {
-          var el = document.elementFromPoint(x, y);
-          if (!el) return;
-          var touch = document.createTouch(window, el, 1, x, y, x, y);
-          var touchList = document.createTouchList(touch);
-          el.dispatchEvent(new TouchEvent('touchstart', { touches: touchList, changedTouches: touchList, bubbles: true }));
-          await new Promise(function(r) { setTimeout(r, duration); });
-          var emptyList = document.createTouchList();
-          el.dispatchEvent(new TouchEvent('touchend', { touches: emptyList, changedTouches: touchList, bubbles: true }));
-        })(${x}, ${y}, ${duration * 1000})
-      `);
-    } else {
-      // Normal tap — delegate to BrowserBackend.click() which dispatches
-      // touchstart → touchend → click with emulateUserGesture
-      await this.client.click({ x, y });
-    }
+  async tap(deviceId: string, x: number, y: number, duration?: number): Promise<void> {
+    await timedInput(this.kind, 'tap', deviceId, async () => {
+      if (duration && duration > 0) {
+        // Long press via touch events with delay
+        await this.client.evaluate(`
+          (async function(x, y, duration) {
+            var el = document.elementFromPoint(x, y);
+            if (!el) return;
+            var touch = document.createTouch(window, el, 1, x, y, x, y);
+            var touchList = document.createTouchList(touch);
+            el.dispatchEvent(new TouchEvent('touchstart', { touches: touchList, changedTouches: touchList, bubbles: true }));
+            await new Promise(function(r) { setTimeout(r, duration); });
+            var emptyList = document.createTouchList();
+            el.dispatchEvent(new TouchEvent('touchend', { touches: emptyList, changedTouches: touchList, bubbles: true }));
+          })(${x}, ${y}, ${duration * 1000})
+        `);
+      } else {
+        // Normal tap — delegate to BrowserBackend.click() which dispatches
+        // touchstart → touchend → click with emulateUserGesture
+        await this.client.click({ x, y });
+      }
+    });
   }
 
   async swipe(
-    _deviceId: string,
+    deviceId: string,
     startX: number, startY: number,
     endX: number, endY: number,
     duration?: number,
   ): Promise<void> {
-    const scrollX = startX - endX;
-    const scrollY = startY - endY;
-    const steps = 20;
-    const stepDelay = ((duration ?? 0.5) * 1000) / steps;
+    await timedInput(this.kind, 'swipe', deviceId, async () => {
+      const scrollX = startX - endX;
+      const scrollY = startY - endY;
+      const steps = 20;
+      const stepDelay = ((duration ?? 0.5) * 1000) / steps;
 
-    // Two-pronged: window.scrollBy for native scroll + touch events for JS handlers
-    await this.client.evaluate(`
-      (async function(sx, sy, ex, ey, scrollX, scrollY, steps, stepDelay) {
-        window.scrollBy(scrollX, scrollY);
+      // Two-pronged: window.scrollBy for native scroll + touch events for JS handlers
+      await this.client.evaluate(`
+        (async function(sx, sy, ex, ey, scrollX, scrollY, steps, stepDelay) {
+          window.scrollBy(scrollX, scrollY);
 
-        var el = document.elementFromPoint(sx, sy);
-        if (!el) el = document.body;
-        var makeTouch = function(x, y) { return document.createTouch(window, el, 1, x, y, x, y); };
-        var startTouch = makeTouch(sx, sy);
-        var startList = document.createTouchList(startTouch);
-        el.dispatchEvent(new TouchEvent('touchstart', { touches: startList, changedTouches: startList, bubbles: true }));
-        for (var i = 1; i <= steps; i++) {
-          var x = sx + (ex - sx) * (i / steps);
-          var y = sy + (ey - sy) * (i / steps);
-          var moveTouch = makeTouch(x, y);
-          var moveList = document.createTouchList(moveTouch);
-          el.dispatchEvent(new TouchEvent('touchmove', { touches: moveList, changedTouches: moveList, bubbles: true }));
-          await new Promise(function(r) { setTimeout(r, stepDelay); });
-        }
-        var endTouch = makeTouch(ex, ey);
-        var endList = document.createTouchList(endTouch);
-        var emptyList = document.createTouchList();
-        el.dispatchEvent(new TouchEvent('touchend', { touches: emptyList, changedTouches: endList, bubbles: true }));
-      })(${startX}, ${startY}, ${endX}, ${endY}, ${scrollX}, ${scrollY}, ${steps}, ${stepDelay})
-    `);
+          var el = document.elementFromPoint(sx, sy);
+          if (!el) el = document.body;
+          var makeTouch = function(x, y) { return document.createTouch(window, el, 1, x, y, x, y); };
+          var startTouch = makeTouch(sx, sy);
+          var startList = document.createTouchList(startTouch);
+          el.dispatchEvent(new TouchEvent('touchstart', { touches: startList, changedTouches: startList, bubbles: true }));
+          for (var i = 1; i <= steps; i++) {
+            var x = sx + (ex - sx) * (i / steps);
+            var y = sy + (ey - sy) * (i / steps);
+            var moveTouch = makeTouch(x, y);
+            var moveList = document.createTouchList(moveTouch);
+            el.dispatchEvent(new TouchEvent('touchmove', { touches: moveList, changedTouches: moveList, bubbles: true }));
+            await new Promise(function(r) { setTimeout(r, stepDelay); });
+          }
+          var endTouch = makeTouch(ex, ey);
+          var endList = document.createTouchList(endTouch);
+          var emptyList = document.createTouchList();
+          el.dispatchEvent(new TouchEvent('touchend', { touches: emptyList, changedTouches: endList, bubbles: true }));
+        })(${startX}, ${startY}, ${endX}, ${endY}, ${scrollX}, ${scrollY}, ${steps}, ${stepDelay})
+      `);
+    });
   }
 
-  async typeText(_deviceId: string, text: string): Promise<void> {
-    const escaped = JSON.stringify(text);
-    await this.client.evaluate(`
-      (function() {
-        var el = document.activeElement;
-        if (!el || el === document.body) return;
-        var p = Object.getPrototypeOf(el);
-        while (p && !Object.getOwnPropertyDescriptor(p, 'value')) {
-          p = Object.getPrototypeOf(p);
-        }
-        var desc = p ? Object.getOwnPropertyDescriptor(p, 'value') : null;
-        var cur = (desc && desc.get) ? desc.get.call(el) : (el.value || '');
-        if (desc && desc.set) {
-          desc.set.call(el, cur + ${escaped});
-        } else if ('value' in el) {
-          el.value = cur + ${escaped};
-        }
-        el.dispatchEvent(new Event('input', { bubbles: true }));
-        el.dispatchEvent(new Event('change', { bubbles: true }));
-      })()
-    `);
+  async typeText(deviceId: string, text: string): Promise<void> {
+    await timedInput(this.kind, 'typeText', deviceId, async () => {
+      const escaped = JSON.stringify(text);
+      await this.client.evaluate(`
+        (function() {
+          var el = document.activeElement;
+          if (!el || el === document.body) return;
+          var p = Object.getPrototypeOf(el);
+          while (p && !Object.getOwnPropertyDescriptor(p, 'value')) {
+            p = Object.getPrototypeOf(p);
+          }
+          var desc = p ? Object.getOwnPropertyDescriptor(p, 'value') : null;
+          var cur = (desc && desc.get) ? desc.get.call(el) : (el.value || '');
+          if (desc && desc.set) {
+            desc.set.call(el, cur + ${escaped});
+          } else if ('value' in el) {
+            el.value = cur + ${escaped};
+          }
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+        })()
+      `);
+    });
   }
 
-  async keypress(_deviceId: string, keyCode: string): Promise<void> {
-    const keyName = HID_TO_WEBKIT_KEY[keyCode];
-    if (!keyName) {
-      throw new Error(
-        `Unknown HID key code "${keyCode}" for WebKit backend. ` +
-        `Supported: ${Object.keys(HID_TO_WEBKIT_KEY).join(', ')}`,
-      );
-    }
-    await this.client.press(keyName);
+  async keypress(deviceId: string, keyCode: string): Promise<void> {
+    await timedInput(this.kind, 'keypress', deviceId, async () => {
+      const keyName = HID_TO_WEBKIT_KEY[keyCode];
+      if (!keyName) {
+        throw new Error(
+          `Unknown HID key code "${keyCode}" for WebKit backend. ` +
+          `Supported: ${Object.keys(HID_TO_WEBKIT_KEY).join(', ')}`,
+        );
+      }
+      await this.client.press(keyName);
+    });
   }
 
-  async sendKey(_deviceId: string, keyName: string): Promise<void> {
-    const mapped = SENDKEY_TO_WEBKIT_KEY[keyName] ?? keyName;
-    await this.client.press(mapped);
+  async sendKey(deviceId: string, keyName: string): Promise<void> {
+    await timedInput(this.kind, 'sendKey', deviceId, async () => {
+      const mapped = SENDKEY_TO_WEBKIT_KEY[keyName] ?? keyName;
+      await this.client.press(mapped);
+    });
   }
 }
 

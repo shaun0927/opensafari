@@ -28,6 +28,7 @@ import { promisify } from 'util';
 import { existsSync } from 'fs';
 import * as path from 'path';
 import type { InputBackend } from './native-input-backend';
+import { timedInput } from '../metrics/input-telemetry';
 
 const execFileAsync = promisify(execFile);
 
@@ -111,11 +112,13 @@ export class SimulatorKitHIDInputBackend implements InputBackend {
   constructor(private readonly bridgePath: string) {}
 
   async tap(deviceId: string, x: number, y: number, duration?: number): Promise<void> {
-    const args = [deviceId, 'tap', String(x), String(y)];
-    if (duration !== undefined && duration > 0) {
-      args.push(String(duration));
-    }
-    await this.run(args);
+    await timedInput(this.kind, 'tap', deviceId, async () => {
+      const args = [deviceId, 'tap', String(x), String(y)];
+      if (duration !== undefined && duration > 0) {
+        args.push(String(duration));
+      }
+      await this.run(args);
+    });
   }
 
   async swipe(
@@ -126,62 +129,70 @@ export class SimulatorKitHIDInputBackend implements InputBackend {
     endY: number,
     duration?: number,
   ): Promise<void> {
-    const args = [
-      deviceId, 'swipe',
-      String(startX), String(startY),
-      String(endX), String(endY),
-    ];
-    if (duration !== undefined && duration > 0) {
-      args.push(String(duration));
-    }
-    await this.run(args);
+    await timedInput(this.kind, 'swipe', deviceId, async () => {
+      const args = [
+        deviceId, 'swipe',
+        String(startX), String(startY),
+        String(endX), String(endY),
+      ];
+      if (duration !== undefined && duration > 0) {
+        args.push(String(duration));
+      }
+      await this.run(args);
+    });
   }
 
   async typeText(deviceId: string, text: string): Promise<void> {
-    // PoC: ASCII-only. Each character is converted to a HID usage and sent
-    // as an independent `key` event. Non-ASCII characters are rejected until
-    // the Swift bridge gains a text-composition path.
-    for (const ch of text) {
-      const usage = asciiToHidUsage(ch);
-      if (usage === null) {
+    await timedInput(this.kind, 'typeText', deviceId, async () => {
+      // PoC: ASCII-only. Each character is converted to a HID usage and sent
+      // as an independent `key` event. Non-ASCII characters are rejected until
+      // the Swift bridge gains a text-composition path.
+      for (const ch of text) {
+        const usage = asciiToHidUsage(ch);
+        if (usage === null) {
+          throw new InputBackendError(
+            `SimulatorKitHIDInputBackend.typeText: non-ASCII character '${ch}' ` +
+              'is not supported in the PoC. Track follow-up in issue #483.',
+            'BAD_ARGS',
+          );
+        }
+        await this.run([deviceId, 'key', String(usage)]);
+      }
+    });
+  }
+
+  async keypress(deviceId: string, keyCode: string): Promise<void> {
+    await timedInput(this.kind, 'keypress', deviceId, async () => {
+      // Accept either a decimal HID usage code or a key name known to our map.
+      const parsed = Number.parseInt(keyCode, 10);
+      const usage = Number.isNaN(parsed) ? KEY_NAME_TO_HID_USAGE[keyCode] : parsed;
+      if (usage === undefined) {
         throw new InputBackendError(
-          `SimulatorKitHIDInputBackend.typeText: non-ASCII character '${ch}' ` +
-            'is not supported in the PoC. Track follow-up in issue #483.',
+          `SimulatorKitHIDInputBackend.keypress: unknown HID key code "${keyCode}"`,
           'BAD_ARGS',
         );
       }
       await this.run([deviceId, 'key', String(usage)]);
-    }
-  }
-
-  async keypress(deviceId: string, keyCode: string): Promise<void> {
-    // Accept either a decimal HID usage code or a key name known to our map.
-    const parsed = Number.parseInt(keyCode, 10);
-    const usage = Number.isNaN(parsed) ? KEY_NAME_TO_HID_USAGE[keyCode] : parsed;
-    if (usage === undefined) {
-      throw new InputBackendError(
-        `SimulatorKitHIDInputBackend.keypress: unknown HID key code "${keyCode}"`,
-        'BAD_ARGS',
-      );
-    }
-    await this.run([deviceId, 'key', String(usage)]);
+    });
   }
 
   async sendKey(deviceId: string, keyName: string): Promise<void> {
-    await this.pressKey(deviceId, keyName);
+    await timedInput(this.kind, 'sendKey', deviceId, async () => {
+      const usage = KEY_NAME_TO_HID_USAGE[keyName];
+      if (usage === undefined) {
+        throw new InputBackendError(
+          `SimulatorKitHIDInputBackend.pressKey: unknown key "${keyName}". ` +
+            `Supported: ${Object.keys(KEY_NAME_TO_HID_USAGE).join(', ')}`,
+          'BAD_ARGS',
+        );
+      }
+      await this.run([deviceId, 'key', String(usage)]);
+    });
   }
 
   /** Convenience alias: resolve a symbolic key name to its HID usage. */
   async pressKey(deviceId: string, key: string): Promise<void> {
-    const usage = KEY_NAME_TO_HID_USAGE[key];
-    if (usage === undefined) {
-      throw new InputBackendError(
-        `SimulatorKitHIDInputBackend.pressKey: unknown key "${key}". ` +
-          `Supported: ${Object.keys(KEY_NAME_TO_HID_USAGE).join(', ')}`,
-        'BAD_ARGS',
-      );
-    }
-    await this.run([deviceId, 'key', String(usage)]);
+    await this.sendKey(deviceId, key);
   }
 
   /**
