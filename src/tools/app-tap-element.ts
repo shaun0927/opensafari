@@ -9,7 +9,7 @@
 import { MCPServer, getWebKitClient } from '../mcp-server';
 import { getAccessibilityBridge, ensureSemanticsActive } from '../native';
 import type { AXNode } from '../native';
-import { resolveDeviceId, getInputBackend } from './native-input-utils';
+import { resolveDeviceId, getInputBackend, buildInputMeta } from './native-input-utils';
 
 export function registerAppTapElementTool(server: MCPServer): void {
   server.registerTool(
@@ -224,6 +224,7 @@ export function registerAppTapElementTool(server: MCPServer): void {
           backend: backend.kind,
           deviceId,
           totalMatches,
+          _meta: buildInputMeta(backend, deviceId),
         };
         if (clampedFrom) {
           response.clampedFrom = clampedFrom;

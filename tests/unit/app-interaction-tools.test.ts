@@ -114,6 +114,7 @@ describe('app_tap tool', () => {
     expect(body.x).toBe(100);
     expect(body.y).toBe(200);
     expect(body.backend).toBe('simctl');
+    expect(body._meta).toEqual({ backendKind: 'simctl', headless: true, deviceId: 'MOCK-DEVICE-UDID' });
     expect(execMock).toHaveBeenCalledWith(
       ['io', 'MOCK-DEVICE-UDID', 'input', 'tap', '100', '200'],
     );
@@ -177,6 +178,7 @@ describe('app_double_tap tool', () => {
     const body = parseResult(result as any);
     expect(body.status).toBe('double_tapped');
     expect(body.backend).toBe('simctl');
+    expect(body._meta).toEqual({ backendKind: 'simctl', headless: true, deviceId: 'MOCK-DEVICE-UDID' });
     // Two exec calls for the two taps
     expect(execMock).toHaveBeenCalledTimes(2);
     expect(execMock).toHaveBeenNthCalledWith(
@@ -219,6 +221,7 @@ describe('app_type_text tool', () => {
     expect(body.status).toBe('typed');
     expect(body.length).toBe(11);
     expect(body.backend).toBe('simctl');
+    expect(body._meta).toEqual({ backendKind: 'simctl', headless: true, deviceId: 'MOCK-DEVICE-UDID' });
     expect(execMock).toHaveBeenCalledWith(
       ['io', 'MOCK-DEVICE-UDID', 'input', 'text', 'hello world'],
     );
@@ -264,6 +267,7 @@ describe('app_swipe_native tool', () => {
     expect(body.direction).toBe('up');
     expect(body.to.y).toBe(200); // 500 - 300
     expect(body.backend).toBe('simctl');
+    expect(body._meta).toEqual({ backendKind: 'simctl', headless: true, deviceId: 'MOCK-DEVICE-UDID' });
   });
 
   test('swipes down', async () => {
@@ -342,6 +346,7 @@ describe('app_key_input tool', () => {
     expect(body.key).toBe('return');
     expect(body.keyCode).toBe('40');
     expect(body.backend).toBe('simctl');
+    expect(body._meta).toEqual({ backendKind: 'simctl', headless: true, deviceId: 'MOCK-DEVICE-UDID' });
     expect(execMock).toHaveBeenCalledWith(
       ['io', 'MOCK-DEVICE-UDID', 'input', 'keypress', '40'],
     );
