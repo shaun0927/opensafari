@@ -69,6 +69,7 @@ describe('app_scroll_native', () => {
     expect(body.status).toBe('scrolled');
     expect(body.direction).toBe('up');
     expect(body.backend).toBe('simctl');
+    expect(body._meta).toEqual({ backendKind: 'simctl', headless: true, deviceId: DEVICE_ID });
   });
 
   it('scrolls down with correct simctl args', async () => {

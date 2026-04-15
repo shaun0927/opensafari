@@ -24,6 +24,7 @@ import type { BrowserBackend } from '../types/browser-backend';
 import type { FlutterVMClient } from '../flutter';
 import { getFlutterVMClient } from '../flutter';
 import { FlutterVMInputBackend } from './flutter-vm-input-backend';
+import { tryCreateSimulatorKitHIDBackend } from './sim-hid-input-backend';
 
 const execFileAsync = promisify(execFile);
 
@@ -602,6 +603,10 @@ let cachedSimctlBackend: SimctlInputBackend | null = null;
 let cachedAppleScriptBackend: AppleScriptInputBackend | null = null;
 let focusInputOptInWarned = false;
 
+// SimulatorKit HID backend cache (Tier 1)
+let simHidProbed = false;
+let cachedSimHidBackend: InputBackend | null = null;
+
 // Per-device cache of the Flutter VM client connection so subsequent Tier-0
 // lookups reuse an already-established WebSocket instead of re-running
 // discovery on every call. Cleared via `resetInputBackend()`.
@@ -723,7 +728,6 @@ export function __setFlutterVMResolverForTest(
 ): void {
   flutterVMResolver = resolver ?? defaultFlutterVMResolver;
 }
-
 /**
  * Probe whether `simctl io input` is available by attempting a no-op tap at (0,0).
  * On Xcode 26+ this subcommand was removed and returns exit code 117.
@@ -759,14 +763,16 @@ async function tryReconnectWebKit(client: BrowserBackend): Promise<boolean> {
 }
 
 /**
- * Get the input backend using a 3-tier fallback strategy with default-deny
+ * Get the input backend using a 4-tier fallback strategy with default-deny
  * hardening for the focus-stealing path:
  *
- *   1. **SimctlInputBackend** — `simctl io input` (headless, any app, Xcode ≤16)
- *   2. **WebKitInputBackend** — JS touch events via WebKit protocol (headless,
+ *   1. **SimulatorKitHIDInputBackend** — SimulatorKit private API (headless,
+ *      any app, all Xcode versions). Uses `sim-hid-bridge` Swift helper.
+ *   2. **SimctlInputBackend** — `simctl io input` (headless, any app, Xcode ≤16)
+ *   3. **WebKitInputBackend** — JS touch events via WebKit protocol (headless,
  *      Safari only). If the supplied client exists but reports disconnected,
  *      one reconnect attempt is made before giving up.
- *   3. **AppleScriptInputBackend** — CGEvent mouse synthesis, requires
+ *   4. **AppleScriptInputBackend** — CGEvent mouse synthesis, requires
  *      Simulator window focus. **Default-deny**: only instantiated when
  *      `OPENSAFARI_ALLOW_FOCUS_INPUT=1` (or `true`) is set in the environment.
  *      Without opt-in, this function throws `HeadlessInputUnavailableError`
@@ -805,8 +811,20 @@ export async function getInputBackend(
     await detectionPromise;
   }
 
-  // TODO(#483): Activate SimulatorKitHIDInputBackend as Tier 1 once PoC is verified
-  // Tier 1: simctl io input (headless, works with any app — Xcode ≤16)
+  // Tier 1: SimulatorKit HID (headless, works with any app — all Xcode versions)
+  if (!simHidProbed) {
+    simHidProbed = true;
+    try {
+      cachedSimHidBackend = await tryCreateSimulatorKitHIDBackend();
+    } catch {
+      cachedSimHidBackend = null;
+    }
+  }
+  if (cachedSimHidBackend) {
+    return cachedSimHidBackend;
+  }
+
+  // Tier 2: simctl io input (headless, works with any app — Xcode ≤16)
   if (simctlAvailable) {
     if (!cachedSimctlBackend) {
       cachedSimctlBackend = new SimctlInputBackend();
@@ -878,6 +896,8 @@ export function resetInputBackend(): void {
   focusInputOptInWarned = false;
   flutterClientCache.clear();
   flutterVMResolver = defaultFlutterVMResolver;
+  simHidProbed = false;
+  cachedSimHidBackend = null;
 }
 
 // Re-export for convenience

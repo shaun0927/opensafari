@@ -3,7 +3,7 @@ import { promisify } from 'util';
 import { readFileSync, writeFileSync, unlinkSync } from 'fs';
 import * as http from 'http';
 import * as net from 'net';
-import { findSocketPath } from './socket-finder';
+import { findSocketPath, waitForSocketPath } from './socket-finder';
 
 const execFileAsync = promisify(execFile);
 
@@ -109,7 +109,10 @@ export class WebInspectorProxy {
       throw new Error('ios_webkit_debug_proxy not found. Install: brew install ios-webkit-debug-proxy');
     }
 
-    const socketPath = await this.findSocketPath(options?.targetUdid);
+    const socketPath = await waitForSocketPath({
+      targetUdid: options?.targetUdid,
+      timeout: 10_000,
+    });
     if (!socketPath) {
       throw new Error('Web Inspector socket not found. Is a simulator booted?');
     }

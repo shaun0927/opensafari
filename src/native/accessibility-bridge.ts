@@ -22,36 +22,49 @@ export class AccessibilityBridge {
   private bridgePath: string | null = null;
 
   /**
-   * Resolve the path to the ax-bridge binary.
-   * Checks: compiled dist binary → source Swift script via `swift` interpreter.
+   * Resolve the path to the ax-bridge binary or Swift source.
+   *
+   * Search order:
+   *   1. Compiled binary — parent dir (tsc output layout: dist/native/)
+   *   2. Compiled binary — same dir (webpack flat layout: dist/)
+   *   3. Swift source — parent dir
+   *   4. Swift source — same dir (postbuild copy to dist/)
+   *   5. Dev-only source tree fallback, gated behind OPENSAFARI_ALLOW_SWIFT_INTERPRETER=1
    */
   private async resolveBridgePath(): Promise<string> {
     if (this.bridgePath) return this.bridgePath;
 
-    // 1. Check for compiled binary in dist/
-    const compiled = path.resolve(__dirname, '..', 'ax-bridge');
-    if (fs.existsSync(compiled)) {
-      this.bridgePath = compiled;
-      return compiled;
+    const candidates: string[] = [
+      // 1. Compiled binary — parent dir (tsc output layout: dist/native/)
+      path.resolve(__dirname, '..', 'ax-bridge'),
+      // 2. Compiled binary — same dir (webpack flat layout: dist/)
+      path.resolve(__dirname, 'ax-bridge'),
+      // 3. Swift source — parent dir
+      path.resolve(__dirname, '..', 'ax-bridge.swift'),
+      // 4. Swift source — same dir (postbuild copy to dist/)
+      path.resolve(__dirname, 'ax-bridge.swift'),
+    ];
+
+    for (const candidate of candidates) {
+      if (fs.existsSync(candidate)) {
+        this.bridgePath = candidate;
+        return candidate;
+      }
     }
 
-    // 2. Check for compiled binary next to this file
-    const local = path.resolve(__dirname, 'ax-bridge');
-    if (fs.existsSync(local)) {
-      this.bridgePath = local;
-      return local;
+    // 5. Dev-only: source tree fallback (same gate as sim-hid-bridge)
+    if (process.env.OPENSAFARI_ALLOW_SWIFT_INTERPRETER === '1') {
+      const devSrc = path.resolve(__dirname, '..', '..', 'src', 'native', 'ax-bridge.swift');
+      if (fs.existsSync(devSrc)) {
+        this.bridgePath = devSrc;
+        return devSrc;
+      }
     }
 
-    // 3. Fall back to interpreting Swift source directly
-    const swiftSrc = path.resolve(__dirname, 'ax-bridge.swift');
-    if (fs.existsSync(swiftSrc)) {
-      // Use swift interpreter (slower but works without build step)
-      this.bridgePath = swiftSrc;
-      return swiftSrc;
-    }
-
+    const searched = candidates.map(c => `  - ${c}`).join('\n');
     throw new AccessibilityBridgeError(
-      'ax-bridge not found. Run npm run build or ensure ax-bridge.swift is in src/native/.',
+      `ax-bridge not found. Searched:\n${searched}\n` +
+      'Run npm run build or set OPENSAFARI_ALLOW_SWIFT_INTERPRETER=1 for dev mode.',
       'BRIDGE_NOT_FOUND',
     );
   }
