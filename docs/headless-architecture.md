@@ -48,6 +48,15 @@ Simulator.app can stay backgrounded and the physical mouse cursor does not
 move. See [`docs/private-apis.md`](private-apis.md) for the private-framework
 contract.
 
+> **Tier 1 activation status (as of this writing):** The SimHID return path in
+> `getInputBackend()` is temporarily commented out pending [#491]. On Xcode 26+
+> SimHID tap/swipe was observed to lock the Simulator screen, so native iOS
+> tap/swipe currently falls through to Tier 2 (`simctl`, Xcode ≤ 16) or Tier 3
+> (`WebKit`, Safari contexts) until the regression is fixed. The Tier 1 probe,
+> cache, and `SimulatorKitHIDInputBackend` class remain wired so re-enabling is
+> a one-line flip once #491 lands. The flowchart below describes the intended
+> steady state; nodes `H3` and `H4` are the affected edges.
+
 ### Decision flowchart
 
 ```mermaid
@@ -151,6 +160,12 @@ Status: **Production** (Tier 1). Activated in
 [#490](https://github.com/shaun0927/opensafari/pull/511). Native iOS app taps,
 swipes, key presses, and hardware button synthesis are now fully headless on
 Xcode 26+ where `simctl io input` was removed.
+
+> **Runtime gate pending [#491]:** The `getInputBackend()` dispatcher currently
+> keeps its Tier-1 `return` commented out because a regression in Xcode 26 locks
+> the Simulator screen on SimHID tap/swipe. The backend class, bridge binary,
+> and probe cache stay live; only the routing edge is gated. Follow #491 for
+> re-activation status.
 
 ### WebKitInputBackend (`kind: 'webkit'`)
 
@@ -350,4 +365,8 @@ When Apple breaks a private API in a new Xcode release, the recommended response
 | [#481](https://github.com/shaun0927/opensafari/issues/481) | Remove `simctl io input` dependency for Xcode 26 compatibility |
 | [#483](https://github.com/shaun0927/opensafari/issues/483) | `SimulatorKitHIDInputBackend` PoC — private HID injection via `SimulatorKit.framework` |
 | [#484](https://github.com/shaun0927/opensafari/issues/484) | `FlutterVMInputBackend` — headless input via Dart VM Service `PointerDataPacket` |
+| [#491](https://github.com/shaun0927/opensafari/issues/491) | SimHID Tier-1 tap/swipe regression on Xcode 26 (`getInputBackend()` return currently gated) |
+| [#492](https://github.com/shaun0927/opensafari/issues/492) | Headless architecture doc + README/CHANGELOG sync |
 | [#496](https://github.com/shaun0927/opensafari/issues/496) | This document |
+
+[#491]: https://github.com/shaun0927/opensafari/issues/491
