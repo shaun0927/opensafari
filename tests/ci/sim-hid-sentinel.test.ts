@@ -68,6 +68,13 @@ async function runBridge(
 describe('SimulatorKit HID Sentinel', () => {
   const FAKE_UDID = '00000000-0000-0000-0000-000000000000';
 
+  // First invocation of sim-hid-bridge on a CI runner includes a cold
+  // dyld-cache + private framework load (~5s on macos-14/macos-latest
+  // since the tap-digitizer probe added IOKit dlopen and extra symbol
+  // resolution), which exceeds jest's 5s default. runBridge already
+  // caps individual calls at 15s, so 30s gives comfortable headroom.
+  jest.setTimeout(30_000);
+
   test('sim-hid-bridge binary or source exists', () => {
     const bridge = findBridge();
     expect(bridge).not.toBeNull();
