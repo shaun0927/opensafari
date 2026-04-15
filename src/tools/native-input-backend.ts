@@ -276,8 +276,9 @@ export class AppleScriptInputBackend implements InputBackend {
    * Translate iOS point coordinates to absolute macOS screen coordinates.
    * Assumes 1:1 point mapping (Simulator at default zoom).
    *
-   * Checks if the cached window position matches what AppleScript reports;
-   * if the window has moved, refreshes the origin cache automatically.
+   * Uses the cached origin from `getSimulatorContentOrigin`. If the user
+   * moves the window or rotates the device, callers must explicitly invalidate
+   * the cache via `getSimulatorContentOrigin(deviceId, { refresh: true })`.
    */
   private async toScreen(
     deviceId: string,
