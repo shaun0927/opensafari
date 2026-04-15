@@ -245,8 +245,13 @@ export class SimulatorKitHIDInputBackend implements InputBackend {
       return parsed;
     } catch (err) {
       if (err instanceof InputBackendError) throw err;
+      const safeStdout = stdout
+        .slice(0, 200)
+        // Strip ASCII control / DEL so a crafted bridge payload can't inject
+        // ANSI escapes or JSON-RPC framing into MCP server logs.
+        .replace(/[\x00-\x1f\x7f]/g, '?');
       throw new InputBackendError(
-        `sim-hid-bridge produced non-JSON stdout: ${stdout.slice(0, 200)}`,
+        `sim-hid-bridge produced non-JSON stdout: ${safeStdout}`,
         'JSON_PARSE_FAILURE',
         stderr,
       );
@@ -272,9 +277,13 @@ export class SimulatorKitHIDInputBackend implements InputBackend {
  *
  * Lookup order:
  *   1. Compiled binary at `dist/sim-hid-bridge` (next to `dist/ax-bridge`).
- *   2. Swift source at `src/native/sim-hid-bridge.swift` (interpreted via
- *      `swift dist/sim-hid-bridge.swift` after `npm run build`).
- *   3. Swift source at `dist/sim-hid-bridge.swift` (post-build copy).
+ *   2. Swift source at `dist/sim-hid-bridge.swift` (post-build copy).
+ *   3. Source tree fallback at `src/native/sim-hid-bridge.swift` — DEV ONLY,
+ *      gated behind `OPENSAFARI_ALLOW_SWIFT_INTERPRETER=1`. The repo-relative
+ *      path escapes `dist/` when the package is installed as a dependency,
+ *      and executing unsigned Swift source via the interpreter sidesteps any
+ *      future codesigning we add to the compiled binary, so this candidate
+ *      is intentionally NOT auto-discovered in production installs.
  */
 export async function tryCreateSimulatorKitHIDBackend(): Promise<
   SimulatorKitHIDInputBackend | null
@@ -286,9 +295,12 @@ export async function tryCreateSimulatorKitHIDBackend(): Promise<
     // Swift source copied into dist/ by the postbuild step.
     path.resolve(__dirname, '..', 'sim-hid-bridge.swift'),
     path.resolve(__dirname, 'sim-hid-bridge.swift'),
-    // Source tree fallback for `npm run dev` and integration tests.
-    path.resolve(__dirname, '..', '..', 'src', 'native', 'sim-hid-bridge.swift'),
   ];
+  if (process.env.OPENSAFARI_ALLOW_SWIFT_INTERPRETER === '1') {
+    candidates.push(
+      path.resolve(__dirname, '..', '..', 'src', 'native', 'sim-hid-bridge.swift'),
+    );
+  }
   for (const candidate of candidates) {
     if (existsSync(candidate)) {
       return new SimulatorKitHIDInputBackend(candidate);
