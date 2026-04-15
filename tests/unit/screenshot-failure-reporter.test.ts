@@ -5,7 +5,7 @@
  * default export as `any` — it carries no public TypeScript surface.
  */
 
-// eslint-disable-next-line @typescript-eslint/no-var-requires
+// eslint-disable-next-line @typescript-eslint/no-var-requires, @typescript-eslint/no-require-imports
 const ScreenshotOnFailureReporter = require('../integration/screenshot-failure-reporter.cjs');
 
 interface ReporterStatic {
