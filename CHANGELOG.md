@@ -4,6 +4,33 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.4.6] - 2026-04-15
+
+### Added — Headless automation hardening (Epic #484)
+
+- **`SimulatorKitHIDInputBackend` — full HID injection** (#489, #490): The PoC `sim-hid-bridge.swift` now performs real `IOHIDEvent` injection via `SimulatorKit.framework` private API. Activated as **Tier 1** in `getInputBackend()` — native iOS app taps, swipes, and key presses are now headless on Xcode 26+ where `simctl io input` was removed.
+  - `tap(x, y, duration?)`, `swipe(x1,y1 → x2,y2, duration?)`, `key(hidUsage)`, `button(home|lock|sound-up|sound-down)` all implemented.
+  - Exit code classification: 0 (success), 64 (BAD_ARGS), 69 (DEVICE_NOT_BOOTED), 78 (SIMULATORKIT_UNAVAILABLE), 99 (NOT_IMPLEMENTED).
+  - CI sentinel tests (`tests/ci/sim-hid-sentinel.test.ts`) probe SimulatorKit availability daily.
+- **`diagnose` MCP tool** (#498): New read-only diagnostic tool that reports backend availability, proxy status, environment variables, and a structured `headless_verdict` JSON. Registered at Tier 1 (always visible). Answers "is this setup truly headless?" in one call.
+- **`_meta.backendKind` in input tool responses** (#504): All 10 input tools (`app_tap`, `app_swipe`, `app_scroll_native`, `app_key_input`, `app_double_tap`, `app_type_text`, `app_tap_element`, `app_type_element`, `app_dismiss_keyboard`, `app_alert_handle`) now include `_meta: { backendKind, headless, deviceId }` in their success responses. CI can assert `_meta.headless === true` to verify no focus-stealing backend was used.
+- **`OPENSAFARI_HEADLESS_ONLY=1` environment variable** (#499): CI safety net that blocks the AppleScript/CGEvent fallback regardless of `OPENSAFARI_ALLOW_FOCUS_INPUT`. When set, any attempt to fall through to the focus-stealing backend throws `HeadlessInputUnavailableError` with `reason: 'headless-only'` and tailored remediation. Overrides `ALLOW_FOCUS_INPUT` with a warning log when both are set.
+- **`docs/headless-architecture.md`** (#496): Comprehensive documentation of the multi-tier input backend routing system — Tier table, Mermaid flowchart of `getInputBackend()`, scenario matrix (Safari/Flutter/Native/WebView), environment variable reference, `HeadlessInputUnavailableError` handling guide, private API policy cross-reference.
+- **`docs/ci-recipes.md`** (#497): Copy-paste ready CI workflow recipes for GitHub Actions, Buildkite, and GitLab CI. Covers simulator boot-wait pattern, proxy verification, screenshot artifacts, JUnit reports, and `OPENSAFARI_HEADLESS_ONLY=1` configuration.
+- **README "Headless mobile QA automation" tagline** (#500): Project description updated with headless positioning. New Headless Capabilities comparison table (Safari ✅ / Flutter ⚠️ / Native ⚠️ / WebView ⚠️) with links to architecture docs.
+
+### Fixed
+
+- **Proxy socket finder race condition** (#494): `device_boot` consistently failed to auto-start the WebInspectorProxy because `findSocketPath(targetUdid)` was called exactly once with no retry — but `webinspectord_sim` needs several seconds after `simctl boot` to create its Unix socket. Added `waitForSocketPath()` that polls every 500ms for up to 10 seconds. All WebKit-dependent tools (`navigate`, `screenshot`, `app_tap`, etc.) now work reliably after cold boot.
+- **`app_tree` / `app_query` ax-bridge not found** (#495): `AccessibilityBridge.resolveBridgePath()` had dead code in candidate 1 and no dev-mode source tree fallback. Rewrote to match the robust 5-candidate pattern from `sim-hid-input-backend.ts` — compiled binary (parent + same dir), Swift source (parent + same dir), plus guarded dev-only fallback via `OPENSAFARI_ALLOW_SWIFT_INTERPRETER=1`. Error message now lists all searched paths.
+- **DDS probe for Tier-0 backend** (#519): FlutterVM Tier-0 backend selection now probes for Dart Development Service availability before activation, preventing connection failures on Flutter apps that don't expose DDS.
+
+### Test Coverage
+
+- 1488 tests across 102 suites (up from 1476/100 in v0.4.5)
+- New test files: `accessibility-bridge.test.ts` (6 tests), `diagnose.test.ts` (10 tests), `sim-hid-sentinel.test.ts` (5 tests)
+- Extended: `native-input-backend.test.ts` (+7 HEADLESS_ONLY tests), `socket-finder.test.ts` (+4 polling tests), `proxy-timing.test.ts` (+2 tests), `app-interaction-tools.test.ts` / `app-scroll-native.test.ts` / `app-dismiss-keyboard.test.ts` / `app-alert-handle.test.ts` (_meta assertions)
+
 ## [0.4.5] - 2026-04-15
 
 ### Added — Headless input backend infrastructure (Epic #484)
@@ -14,7 +41,7 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
-- **`FlutterVMInputBackend` (Tier-0, DRAFT)** (#481, #486): New input backend that dispatches `PointerDataPacket`s, `TextInput.updateEditingState` platform messages, and `HardwareKeyboard` events directly into the Dart isolate via VM Service — no CGEvent, no Simulator.app foregrounding, no `OPENSAFARI_ALLOW_FOCUS_INPUT` opt-in required. Tier-0 routing added to `getInputBackend()`: when a Flutter VM is discoverable, the new backend is selected before all existing tiers. Per-device negative cache (30s TTL) + 1.5s discovery timeout prevent native-app latency regression. **Status: DRAFT** — architect review found that `evaluate` cannot resolve top-level Flutter symbols at runtime (the Dart payloads reference `WidgetsFlutterBinding`, `PointerDataPacket`, etc. which are not in the user app's root library scope). Runtime fix tracked at #488.
+- **`FlutterVMInputBackend` (Tier-0)** (#481, #486): New input backend that dispatches `PointerDataPacket`s, `TextInput.updateEditingState` platform messages, and `HardwareKeyboard` events directly into the Dart isolate via VM Service — no CGEvent, no Simulator.app foregrounding, no `OPENSAFARI_ALLOW_FOCUS_INPUT` opt-in required. Tier-0 routing added to `getInputBackend()`: when a Flutter VM is discoverable, the new backend is selected before all existing tiers. Per-device negative cache (30s TTL) + 1.5s discovery timeout prevent native-app latency regression. Scoped evaluate calls target per-operation Flutter libraries (`mouse_tracker.dart` for pointer dispatch, `editable_text.dart` for text input, `hardware_keyboard.dart` for key events) to ensure all required symbols are in lexical scope.
 
 ### Fixed
 

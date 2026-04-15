@@ -7,6 +7,7 @@
 
 import { getSessionManager } from '../session-manager';
 import { SimctlExecutor } from '../simulator/simctl';
+import type { InputBackend } from './native-input-backend';
 
 // Re-export input backend for tool files
 export {
@@ -14,8 +15,24 @@ export {
   resetInputBackend,
   HeadlessInputUnavailableError,
   OPENSAFARI_ALLOW_FOCUS_INPUT_ENV,
+  OPENSAFARI_HEADLESS_ONLY_ENV,
 } from './native-input-backend';
 export type { InputBackend, InputBackendKind } from './native-input-backend';
+
+/**
+ * Build the `_meta` object that input tools include in their response
+ * to expose which backend handled the operation.
+ */
+export function buildInputMeta(
+  backend: InputBackend,
+  deviceId: string,
+): { backendKind: string; headless: boolean; deviceId: string } {
+  return {
+    backendKind: backend.kind,
+    headless: backend.kind !== 'applescript',
+    deviceId,
+  };
+}
 
 /**
  * Resolve the target device UDID from explicit param or the active device.

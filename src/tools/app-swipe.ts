@@ -7,7 +7,7 @@
  */
 
 import { MCPServer, getWebKitClient } from '../mcp-server';
-import { resolveDeviceId, getInputBackend } from './native-input-utils';
+import { resolveDeviceId, getInputBackend, buildInputMeta } from './native-input-utils';
 
 /** Default swipe distance in points. */
 const DEFAULT_DISTANCE = 300;
@@ -121,6 +121,7 @@ export function registerAppSwipeNativeTool(server: MCPServer): void {
                 duration,
                 deviceId,
                 backend: backend.kind,
+                _meta: buildInputMeta(backend, deviceId),
               }),
             },
           ],
