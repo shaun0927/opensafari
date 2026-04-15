@@ -13,6 +13,7 @@
 
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { InputBackendKind } from '../tools/native-input-backend';
+import { accumulateInputTelemetry } from './input-telemetry-rollup';
 
 /**
  * Stable set of operations we time. Matches the `InputBackend` interface
@@ -89,6 +90,11 @@ export function emitInputTelemetry(event: InputTelemetryEvent): void {
     activeSink(event);
   } catch {
     // The telemetry path must never mask an input-backend failure.
+  }
+  try {
+    accumulateInputTelemetry(event);
+  } catch {
+    // Ditto — rollup failures stay invisible to the caller.
   }
   const buf = captureStore.getStore();
   if (buf) buf.push(event);
