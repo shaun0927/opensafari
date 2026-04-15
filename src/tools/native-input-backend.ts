@@ -731,6 +731,29 @@ async function defaultFlutterVMResolver(
       });
       return null;
     }
+    // The VM is reachable, but FlutterVMInputBackend can only drive input
+    // through `evaluate` — which requires DDS + the frontend compiler
+    // (debug/profile builds only). Release builds and apps launched via
+    // `xcrun simctl launch` expose the VM Service socket without the
+    // compile service, and any `evaluate` call rejects with `code: 113`.
+    // Probe once up-front so that case falls through to the next tier
+    // instead of surfacing the raw 113 error to the user.
+    const probe = await client.probeEvaluateCompile();
+    if (!probe.available) {
+      if (probe.reason === 'compile-error-113') {
+        console.error(
+          `[input-backend] Flutter VM on ${deviceId} rejects evaluate (code 113). ` +
+            'Likely a release build or `simctl launch` without `flutter run` — ' +
+            'falling back past Tier 0. Set OPENSAFARI_DISABLE_AX_PRESS=0 to use ' +
+            'Tier 1.5 for element-targeted taps.',
+        );
+      }
+      flutterClientCache.set(deviceId, {
+        client: null,
+        expiresAt: now + NEGATIVE_CACHE_TTL_MS,
+      });
+      return null;
+    }
     flutterClientCache.set(deviceId, { client, expiresAt: Infinity });
     return client;
   } catch {

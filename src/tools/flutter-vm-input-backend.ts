@@ -34,21 +34,68 @@ import { timedInput } from '../metrics/input-telemetry';
  * Service call fails (connection drop, Dart exception, timeout, etc). Carries
  * the originating op so observability layers can attribute the failure.
  */
+/**
+ * Structured error codes attached to `FlutterVMInputBackendError`.
+ *
+ * Today the code table is deliberately small — callers branch only on
+ * `VM_NO_EVALUATE` (release-build / no-DDS fallback signal) vs "anything
+ * else" which is surfaced to the user as a concrete failure. Expand this
+ * as we learn which failure modes the callers actually need to
+ * discriminate.
+ */
+export type FlutterVMInputBackendErrorCode =
+  /** `evaluate` rejected with code 113 — VM cannot compile expressions. */
+  | 'VM_NO_EVALUATE'
+  /** Dart code ran but raised / returned an @Error. */
+  | 'DART_ERROR'
+  /** Any other cause (connection drop, timeout, unknown). */
+  | 'UNKNOWN';
+
 export class FlutterVMInputBackendError extends Error {
   readonly name = 'FlutterVMInputBackendError' as const;
   readonly op: 'tap' | 'swipe' | 'typeText' | 'keypress' | 'sendKey';
   readonly cause: unknown;
+  readonly code: FlutterVMInputBackendErrorCode;
 
   constructor(
     op: FlutterVMInputBackendError['op'],
     cause: unknown,
   ) {
     const msg = cause instanceof Error ? cause.message : String(cause);
-    super(`FlutterVMInputBackend.${op} failed: ${msg}`);
+    const code: FlutterVMInputBackendErrorCode = classifyFlutterVMCause(cause);
+    // Release / no-DDS builds emit a verbose JSON-RPC string — replace it
+    // with a short, actionable diagnostic so tool consumers see a single
+    // clean message instead of the compiler's internal error payload.
+    const userMessage =
+      code === 'VM_NO_EVALUATE'
+        ? `FlutterVMInputBackend.${op} failed: VM cannot compile expressions ` +
+          `(code 113). This app is likely a release build or was launched ` +
+          `with \`simctl launch\` instead of \`flutter run\`. ` +
+          `Use Tier 1.5 AX press (app_tap_element / app_type_element) or ` +
+          `relaunch under \`flutter run --debug\` for full gesture coverage.`
+        : `FlutterVMInputBackend.${op} failed: ${msg}`;
+    super(userMessage);
     this.op = op;
     this.cause = cause;
+    this.code = code;
     Object.setPrototypeOf(this, FlutterVMInputBackendError.prototype);
   }
+}
+
+function classifyFlutterVMCause(cause: unknown): FlutterVMInputBackendErrorCode {
+  const msg = cause instanceof Error ? cause.message : String(cause);
+  if (/\(code:\s*113\)/.test(msg)) return 'VM_NO_EVALUATE';
+  // The inner `evalOrThrow` wraps Dart-side errors with code `DART_ERROR`
+  // via `FlutterVMError`; preserve that classification when bubbling up.
+  if (
+    cause &&
+    typeof cause === 'object' &&
+    'code' in cause &&
+    (cause as { code?: string }).code === 'DART_ERROR'
+  ) {
+    return 'DART_ERROR';
+  }
+  return 'UNKNOWN';
 }
 
 /**
