@@ -1,0 +1,139 @@
+name: Private API Sentinel
+
+# Runs the private-API regression sentinel suite (tests/sentinel/) on a daily
+# cron so Apple-side breakage in Xcode updates is surfaced within 24 hours.
+# Tracked by issue #503.
+
+on:
+  schedule:
+    # Daily at 00:00 UTC.
+    - cron: '0 0 * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  sentinel:
+    runs-on: macos-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build native bridges
+        run: npm run build
+
+      - name: Install ios_webkit_debug_proxy
+        run: brew install ios-webkit-debug-proxy
+
+      - name: Record Xcode version
+        run: |
+          xcodebuild -version
+          xcrun simctl list runtimes
+
+      - name: Boot iOS simulator
+        run: |
+          set -euo pipefail
+          udid=$(xcrun simctl list devices available -j | jq -r '
+            [.devices | to_entries[] | select(.key | test("iOS")) | .value[] | select(.isAvailable)]
+            | (map(select(.name == "iPhone 16")) + .)
+            | .[0].udid // empty
+          ')
+          if [ -z "$udid" ]; then
+            echo "::error::No available iOS simulator on the runner"
+            exit 1
+          fi
+          echo "Booting simulator $udid"
+          xcrun simctl boot "$udid"
+          xcrun simctl bootstatus "$udid" -b
+          xcrun simctl list devices booted
+
+      - name: Run sentinel probes
+        id: sentinel
+        run: npm run test:sentinel -- --json --outputFile=sentinel-result.json
+
+      - name: Upload sentinel report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sentinel-result
+          path: sentinel-result.json
+          if-no-files-found: warn
+
+      - name: Open / update failure issue
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const title = 'Private API Sentinel failure — probe regression detected';
+            const runUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+
+            let probeSummary = '_Jest report not available — see the workflow logs._';
+            try {
+              const report = JSON.parse(fs.readFileSync('sentinel-result.json', 'utf8'));
+              const failed = [];
+              for (const suite of report.testResults || []) {
+                for (const assertion of suite.testResults || []) {
+                  if (assertion.status === 'failed') {
+                    const msg = (assertion.failureMessages || [])
+                      .join('\n')
+                      .replace(/\u001b\[[0-9;]*m/g, '')
+                      .slice(0, 2000);
+                    failed.push({ name: assertion.fullName || assertion.title, msg });
+                  }
+                }
+              }
+              if (failed.length) {
+                probeSummary = failed
+                  .map(f => `### ${f.name}\n\n\`\`\`\n${f.msg}\n\`\`\``)
+                  .join('\n\n');
+              }
+            } catch (err) {
+              probeSummary = `Failed to read sentinel-result.json: ${err.message}`;
+            }
+
+            const body = [
+              `The [private API sentinel](${runUrl}) detected a regression.`,
+              '',
+              '## Failing probes',
+              '',
+              probeSummary,
+              '',
+              '<sub>Automated by `.github/workflows/private-api-sentinel.yml`; tracked by #503.</sub>',
+            ].join('\n');
+
+            const existing = await github.rest.search.issuesAndPullRequests({
+              q: `repo:${context.repo.owner}/${context.repo.repo} is:issue is:open in:title "${title}"`,
+            });
+
+            if (existing.data.items.length > 0) {
+              const issueNumber = existing.data.items[0].number;
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+                body,
+              });
+              core.notice(`Updated existing sentinel issue #${issueNumber}`);
+            } else {
+              const created = await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body,
+                labels: ['reliability'],
+              });
+              core.notice(`Opened sentinel issue #${created.data.number}`);
+            }
