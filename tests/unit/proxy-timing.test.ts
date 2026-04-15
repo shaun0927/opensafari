@@ -9,6 +9,21 @@
  * - WebKitClient connect() succeeds after initial failures with retry configured
  */
 
+// Mock child_process.execFile so promisify(execFile) in proxy.ts uses our mock.
+// Must use jest.mock (hoisted above imports) because proxy.ts captures
+// execFileAsync = promisify(execFile) at module load time.
+const mockExecFileAsync = jest.fn().mockResolvedValue({ stdout: '', stderr: '' });
+jest.mock('child_process', () => {
+  const actual = jest.requireActual('child_process');
+  return {
+    ...actual,
+    execFile: Object.assign(
+      jest.fn((...args: unknown[]) => (actual.execFile as (...a: unknown[]) => unknown)(...args)),
+      { [Symbol.for('nodejs.util.promisify.custom')]: mockExecFileAsync },
+    ),
+  };
+});
+
 import { WebInspectorProxy } from '../../src/simulator/proxy';
 import * as socketFinder from '../../src/simulator/socket-finder';
 import { WebKitClient } from '../../src/webkit/client';
@@ -206,23 +221,11 @@ describe('WebInspectorProxy.start() socket discovery retry (Issue #494)', () => 
       'isPortInUse',
     ).mockResolvedValue(false);
 
-    // Mock the which check: proxy.ts uses promisify(execFile)('which', ['ios_webkit_debug_proxy'])
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const cp = require('child_process');
-    const origExecFile = cp.execFile;
-    cp.execFile = (...args: unknown[]) => {
-      const cb = args[args.length - 1];
-      if (typeof cb === 'function') {
-        (cb as CallableFunction)(null, { stdout: '/usr/local/bin/ios_webkit_debug_proxy\n' });
-      }
-    };
+    // Mock the which check — mockExecFileAsync (hoisted jest.mock) handles promisify(execFile)
+    mockExecFileAsync.mockResolvedValue({ stdout: '/usr/local/bin/ios_webkit_debug_proxy\n', stderr: '' });
 
-    try {
-      await expect(proxy.start()).rejects.toThrow('Web Inspector socket not found');
-      expect(waitForSocketPathSpy).toHaveBeenCalledWith({ targetUdid: undefined, timeout: 10_000 });
-    } finally {
-      cp.execFile = origExecFile;
-    }
+    await expect(proxy.start()).rejects.toThrow('Web Inspector socket not found');
+    expect(waitForSocketPathSpy).toHaveBeenCalledWith({ targetUdid: undefined, timeout: 10_000 });
   });
 });
 
