@@ -1,0 +1,154 @@
+name: Headless Smoke Tests
+
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch: {}
+  pull_request:
+    branches: [develop, main]
+    paths:
+      - '.github/workflows/headless-smoke.yml'
+      - 'cli/**'
+      - 'src/qa/**'
+      - 'src/webkit/**'
+
+concurrency:
+  group: headless-smoke-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: '20'
+  OPENSAFARI_HEADLESS_ONLY: '1'
+  OPENSAFARI_PROXY_PORT: '9322'
+
+jobs:
+  safari-smoke:
+    name: Safari — headless QA audit
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Assert headless posture
+        run: |
+          set -euo pipefail
+          if [ -n "${OPENSAFARI_ALLOW_FOCUS_INPUT:-}" ]; then
+            echo "::error::OPENSAFARI_ALLOW_FOCUS_INPUT must NOT be set in the headless smoke workflow."
+            exit 1
+          fi
+          if [ "${OPENSAFARI_HEADLESS_ONLY:-}" != "1" ]; then
+            echo "::error::OPENSAFARI_HEADLESS_ONLY=1 must be set workflow-level."
+            exit 1
+          fi
+          echo "Headless posture OK (HEADLESS_ONLY=1, ALLOW_FOCUS_INPUT unset)"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Install ios-webkit-debug-proxy
+        run: brew install ios-webkit-debug-proxy
+
+      - name: Pick and boot iOS simulator
+        run: |
+          set -euo pipefail
+          UDID=$(xcrun simctl list devices available -j | node -e '
+            const d = JSON.parse(require("fs").readFileSync(0, "utf8"));
+            const runtimes = Object.keys(d.devices)
+              .filter(r => r.includes("iOS"))
+              .sort();
+            for (const r of runtimes.slice().reverse()) {
+              const iphone = (d.devices[r] || []).find(x => /iPhone/.test(x.name) && x.isAvailable);
+              if (iphone) { process.stdout.write(iphone.udid); return; }
+            }
+            console.error("No available iPhone simulator for any iOS runtime");
+            process.exit(1);
+          ')
+          echo "SIMULATOR_UDID=$UDID" >> "$GITHUB_ENV"
+          xcrun simctl boot "$UDID"
+          for i in $(seq 1 30); do
+            if xcrun simctl list devices booted | grep -q "$UDID"; then
+              echo "Booted $UDID"
+              break
+            fi
+            sleep 2
+          done
+          xcrun simctl list devices booted
+
+      - name: Start ios-webkit-debug-proxy
+        run: |
+          set -euo pipefail
+          ios_webkit_debug_proxy -c "$SIMULATOR_UDID:$OPENSAFARI_PROXY_PORT" &
+          echo $! > /tmp/iwdp.pid
+          for i in $(seq 1 20); do
+            if curl --silent --fail "http://localhost:$OPENSAFARI_PROXY_PORT/json/list" >/dev/null; then
+              echo "Proxy reachable on :$OPENSAFARI_PROXY_PORT"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::ios-webkit-debug-proxy failed to respond on :$OPENSAFARI_PROXY_PORT"
+          exit 1
+
+      - name: Open Safari on smoke target URL
+        run: |
+          set -euo pipefail
+          xcrun simctl openurl "$SIMULATOR_UDID" https://example.com
+          for i in $(seq 1 20); do
+            COUNT=$(curl --silent --fail "http://localhost:$OPENSAFARI_PROXY_PORT/json/list" \
+              | node -e 'const t = JSON.parse(require("fs").readFileSync(0,"utf8")); process.stdout.write(String(Array.isArray(t) ? t.length : 0));')
+            if [ "$COUNT" != "0" ] && [ -n "$COUNT" ]; then
+              echo "Safari WebKit target visible ($COUNT)"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::Safari did not expose a WebInspector target within timeout"
+          curl --silent "http://localhost:$OPENSAFARI_PROXY_PORT/json/list" || true
+          exit 1
+
+      - name: Run Safari QA audit (headless)
+        run: |
+          set -euo pipefail
+          mkdir -p qa-results
+          node dist/cli/index.js audit \
+            --url https://example.com \
+            --format junit \
+            --output qa-results/safari-audit.junit.xml
+
+      - name: Upload JUnit artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: safari-smoke-junit
+          path: qa-results/
+          if-no-files-found: warn
+
+      - name: Upload proxy log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: safari-smoke-diagnostics
+          path: |
+            ~/Library/Logs/CoreSimulator/**/system.log
+          if-no-files-found: ignore
+
+      - name: Shutdown simulator and proxy
+        if: always()
+        run: |
+          if [ -f /tmp/iwdp.pid ]; then
+            kill "$(cat /tmp/iwdp.pid)" 2>/dev/null || true
+          fi
+          if [ -n "${SIMULATOR_UDID:-}" ]; then
+            xcrun simctl shutdown "$SIMULATOR_UDID" 2>/dev/null || true
+          fi
