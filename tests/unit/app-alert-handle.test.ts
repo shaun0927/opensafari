@@ -7,6 +7,7 @@ const mockSendKey = jest.fn().mockResolvedValue(undefined);
 
 jest.mock('../../src/tools/native-input-backend', () => ({
   getInputBackend: jest.fn(async () => ({
+    kind: 'simctl' as const,
     tap: jest.fn(),
     swipe: jest.fn(),
     typeText: jest.fn(),
@@ -81,6 +82,7 @@ describe('app_alert_handle tool', () => {
     expect(text.action).toBe('accept');
     expect(text.method).toBe('input_backend');
     expect(text.deviceId).toBe('TEST-UDID-1234');
+    expect(text._meta).toEqual({ backendKind: 'simctl', headless: true, deviceId: 'TEST-UDID-1234' });
   });
 
   test('dismisses an alert via sendKey Escape', async () => {

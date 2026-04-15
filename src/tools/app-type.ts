@@ -6,7 +6,7 @@
  */
 
 import { MCPServer, getWebKitClient } from '../mcp-server';
-import { resolveDeviceId, getInputBackend } from './native-input-utils';
+import { resolveDeviceId, getInputBackend, buildInputMeta } from './native-input-utils';
 
 export function registerAppTypeTextTool(server: MCPServer): void {
   server.registerTool(
@@ -58,6 +58,7 @@ export function registerAppTypeTextTool(server: MCPServer): void {
                 length: text.length,
                 deviceId,
                 backend: backend.kind,
+                _meta: buildInputMeta(backend, deviceId),
               }),
             },
           ],
