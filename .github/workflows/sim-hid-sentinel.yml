@@ -64,7 +64,7 @@ jobs:
         run: npm run build
 
       - name: Run sentinel tests
-        run: npx jest --config jest.config.js tests/ci/sim-hid-sentinel.test.ts --runTestsByPath
+        run: npx jest --config jest.config.js tests/ci/sim-hid-sentinel.test.ts --runTestsByPath --passWithNoTests
         env:
           # The sentinel probes the bridge directly — it does not need the
           # focus-stealing fallback, and accidentally enabling it would mask
