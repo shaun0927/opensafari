@@ -36,7 +36,7 @@ function delay(ms: number): Promise<void> {
  * input — useful when diagnosing focus-theft reports or confirming that a
  * call stayed on a headless tier.
  */
-export type InputBackendKind = 'simctl' | 'webkit' | 'applescript';
+export type InputBackendKind = 'simctl' | 'webkit' | 'applescript' | 'simhid';
 
 export interface InputBackend {
   /** Stable identifier used for observability / audit logging. */
@@ -657,6 +657,7 @@ export async function getInputBackend(
     await detectionPromise;
   }
 
+  // TODO(#483): Activate SimulatorKitHIDInputBackend as Tier 1 once PoC is verified
   // Tier 1: simctl io input (headless, works with any app — Xcode ≤16)
   if (simctlAvailable) {
     if (!cachedSimctlBackend) {
