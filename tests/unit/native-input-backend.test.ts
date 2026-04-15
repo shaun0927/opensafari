@@ -18,7 +18,9 @@ import {
   SENDKEY_TO_APPLESCRIPT,
   HID_TO_WEBKIT_KEY,
   SENDKEY_TO_WEBKIT_KEY,
+  __setFlutterVMResolverForTest,
 } from '../../src/tools/native-input-backend';
+import { FlutterVMInputBackend } from '../../src/tools/flutter-vm-input-backend';
 
 // ── Mocks ──────────────────────────────────────────────────────────────────
 
@@ -556,6 +558,9 @@ describe('getInputBackend', () => {
     execMock.mockClear();
     resetInputBackend();
     delete process.env[OPENSAFARI_ALLOW_FOCUS_INPUT_ENV];
+    // Ensure Tier-0 routing does not accidentally grab the real
+    // getFlutterVMClient() singleton during the existing tier tests.
+    __setFlutterVMResolverForTest(async () => null);
   });
 
   afterEach(() => {
@@ -742,6 +747,67 @@ describe('getInputBackend', () => {
     expect(second).toBeInstanceOf(WebKitInputBackend);
     expect(first).not.toBe(second); // Not cached — client state can change
   });
+
+  // ── Tier 0 — Flutter VM Service (issue #481) ────────────────────────────
+
+  test('returns FlutterVMInputBackend when Flutter VM is discoverable', async () => {
+    const fakeFlutterClient = {
+      isConnected: () => true,
+      evaluate: jest.fn(),
+    } as any;
+    __setFlutterVMResolverForTest(async () => fakeFlutterClient);
+
+    const backend = await getInputBackend(DEVICE);
+    expect(backend).toBeInstanceOf(FlutterVMInputBackend);
+    expect(backend.kind).toBe('flutter-vm');
+    // simctl probe must NOT run when Tier 0 succeeds.
+    expect(execMock).not.toHaveBeenCalled();
+  });
+
+  test('Flutter VM route wins over a provided WebKit client', async () => {
+    const fakeFlutterClient = {
+      isConnected: () => true,
+      evaluate: jest.fn(),
+    } as any;
+    __setFlutterVMResolverForTest(async () => fakeFlutterClient);
+
+    const mockWebKitClient = { isConnected: () => true } as any;
+    const backend = await getInputBackend(DEVICE, mockWebKitClient);
+    expect(backend).toBeInstanceOf(FlutterVMInputBackend);
+  });
+
+  test('falls through to Tier 1 (simctl) when Flutter resolver returns null', async () => {
+    __setFlutterVMResolverForTest(async () => null);
+    execMock.mockResolvedValueOnce('');
+
+    const backend = await getInputBackend(DEVICE);
+    expect(backend).toBeInstanceOf(SimctlInputBackend);
+    expect(backend.kind).toBe('simctl');
+  });
+
+  test('falls through when Flutter resolver rejects (treated as no-VM)', async () => {
+    __setFlutterVMResolverForTest(async () => {
+      throw new Error('discovery exploded');
+    });
+    execMock.mockResolvedValueOnce('');
+
+    const backend = await getInputBackend(DEVICE);
+    expect(backend).toBeInstanceOf(SimctlInputBackend);
+  });
+
+  test('Flutter VM route requires no OPENSAFARI_ALLOW_FOCUS_INPUT opt-in', async () => {
+    // Deliberately leave OPENSAFARI_ALLOW_FOCUS_INPUT unset (default-deny
+    // applies to AppleScript only; the Flutter route must be headless).
+    const fakeFlutterClient = {
+      isConnected: () => true,
+      evaluate: jest.fn(),
+    } as any;
+    __setFlutterVMResolverForTest(async () => fakeFlutterClient);
+
+    const backend = await getInputBackend(DEVICE);
+    expect(backend).toBeInstanceOf(FlutterVMInputBackend);
+  });
+
   // ── OPENSAFARI_HEADLESS_ONLY CI safety net (issue #499) ─────────────────
 
   describe('OPENSAFARI_HEADLESS_ONLY', () => {
