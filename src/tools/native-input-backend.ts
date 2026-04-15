@@ -592,7 +592,28 @@ let focusInputOptInWarned = false;
 // Per-device cache of the Flutter VM client connection so subsequent Tier-0
 // lookups reuse an already-established WebSocket instead of re-running
 // discovery on every call. Cleared via `resetInputBackend()`.
-const flutterClientCache = new Map<string, FlutterVMClient>();
+//
+// Value semantics:
+//   - FlutterVMClient: positive hit (Flutter app connected; reuse)
+//   - null: negative hit (discovery already failed within NEGATIVE_CACHE_TTL_MS;
+//     skip discovery and let the caller fall through to Tier 1-3)
+interface FlutterClientCacheEntry {
+  client: FlutterVMClient | null;
+  expiresAt: number;
+}
+const flutterClientCache = new Map<string, FlutterClientCacheEntry>();
+
+// Negative cache TTL: after a failed discovery, don't re-probe for this long.
+// Native iOS apps, Safari, and any simulator without a Flutter debug build
+// would otherwise pay the full discovery cost on every `getInputBackend()`
+// call, stalling tools like `app_scroll_native` / `app_tap` well past their
+// unit-test timeouts.
+const NEGATIVE_CACHE_TTL_MS = 30_000;
+
+// Upper bound on how long the initial VM-discovery probe is allowed to block.
+// If discovery has not produced a connected client within this window, treat
+// the device as non-Flutter so native-app code paths aren't penalised.
+const DISCOVERY_TIMEOUT_MS = 1_500;
 
 /**
  * Overridable resolver that returns a connected `FlutterVMClient` for the
@@ -605,25 +626,54 @@ type FlutterVMResolver = (deviceId: string) => Promise<FlutterVMClient | null>;
 async function defaultFlutterVMResolver(
   deviceId: string,
 ): Promise<FlutterVMClient | null> {
-  // Fast path: reuse any cached client that is still connected.
+  const now = Date.now();
   const cached = flutterClientCache.get(deviceId);
-  if (cached && cached.isConnected()) {
-    return cached;
+  if (cached && cached.expiresAt > now) {
+    // Fast path: cached positive hit that is still connected.
+    if (cached.client && cached.client.isConnected()) {
+      return cached.client;
+    }
+    // Fast path: cached negative hit within TTL.
+    if (cached.client === null) {
+      return null;
+    }
+    // Stale positive entry (client disconnected). Fall through to re-probe.
   }
 
+  // Bound the discovery probe so non-Flutter devices don't stall tools
+  // that legitimately just want Tier 1-3.
   try {
     const client = getFlutterVMClient(deviceId);
     if (!client.isConnected()) {
-      await client.connect({ deviceId });
+      let timeoutId: ReturnType<typeof setTimeout> | undefined;
+      const timeout = new Promise<void>((_, reject) => {
+        timeoutId = setTimeout(
+          () => reject(new Error('flutter-vm-discovery-timeout')),
+          DISCOVERY_TIMEOUT_MS,
+        );
+      });
+      try {
+        await Promise.race([client.connect({ deviceId }), timeout]);
+      } finally {
+        if (timeoutId) clearTimeout(timeoutId);
+      }
     }
     if (!client.isConnected()) {
+      flutterClientCache.set(deviceId, {
+        client: null,
+        expiresAt: now + NEGATIVE_CACHE_TTL_MS,
+      });
       return null;
     }
-    flutterClientCache.set(deviceId, client);
+    flutterClientCache.set(deviceId, { client, expiresAt: Infinity });
     return client;
   } catch {
     // VM discovery / connect failures are expected for non-Flutter apps.
-    // Swallow silently so the caller transparently falls through to Tier 1.
+    // Cache the negative result so the next call doesn't pay the probe cost.
+    flutterClientCache.set(deviceId, {
+      client: null,
+      expiresAt: now + NEGATIVE_CACHE_TTL_MS,
+    });
     return null;
   }
 }
