@@ -1,7 +1,7 @@
 import * as childProcess from 'child_process';
 import * as fsPromises from 'fs/promises';
 import { EventEmitter } from 'events';
-import { findSocketPath, probeSocket } from '../../src/simulator/socket-finder';
+import { findSocketPath, probeSocket, waitForSocketPath } from '../../src/simulator/socket-finder';
 
 // Mock modules
 jest.mock('child_process');
@@ -471,6 +471,83 @@ describe('Issue #265: socket finder fix verification', () => {
       const result = await findSocketPath({ targetUdid });
       expect(result).toBe(socketV18);
     });
+  });
+});
+
+describe('waitForSocketPath', () => {
+  beforeEach(() => {
+    jest.useFakeTimers();
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it('returns immediately when socket found on first try', async () => {
+    const socketPath = '/private/var/tmp/com.apple.launchd.ACTIVE/com.apple.webinspectord_sim.socket';
+    probeResults[socketPath] = true;
+
+    stubExecFile({
+      'lsof -U': {
+        stdout: `launchd_s 1234 user  8u  unix 0xabc  0t0  ${socketPath}\n`,
+      },
+    });
+
+    const promise = waitForSocketPath({ timeout: 10_000, interval: 500 });
+    // Flush microtasks so findSocketPath resolves
+    await jest.runAllTimersAsync();
+    const result = await promise;
+    expect(result).toBe(socketPath);
+  });
+
+  it('retries and succeeds on Nth attempt', async () => {
+    const socketPath = '/private/var/tmp/com.apple.launchd.LATE/com.apple.webinspectord_sim.socket';
+    // Socket not found on first two calls, alive on the third
+    let callCount = 0;
+    execFileMock.mockImplementation((cmd: string, args: string[], opts: unknown, cb?: unknown) => {
+      const callback = typeof opts === 'function' ? opts : cb;
+      callCount++;
+      if (callCount < 3) {
+        // lsof returns no matching lines
+        (callback as CallableFunction)(null, { stdout: 'COMMAND PID USER\n' });
+      } else {
+        (callback as CallableFunction)(null, {
+          stdout: `launchd_s 1234 user  8u  unix 0xabc  0t0  ${socketPath}\n`,
+        });
+      }
+    });
+    probeResults[socketPath] = true;
+    readdirMock.mockRejectedValue(new Error('ENOENT'));
+
+    const promise = waitForSocketPath({ timeout: 10_000, interval: 500 });
+    await jest.runAllTimersAsync();
+    const result = await promise;
+    expect(result).toBe(socketPath);
+    expect(callCount).toBeGreaterThanOrEqual(3);
+  });
+
+  it('returns null after timeout', async () => {
+    // lsof always returns nothing; mtime dir also empty
+    stubExecFile({ 'lsof -U': { stdout: 'COMMAND PID USER\n' } });
+    readdirMock.mockRejectedValue(new Error('ENOENT'));
+
+    const promise = waitForSocketPath({ timeout: 1_000, interval: 500 });
+    await jest.runAllTimersAsync();
+    const result = await promise;
+    expect(result).toBeNull();
+  });
+
+  it('respects custom timeout and interval', async () => {
+    stubExecFile({ 'lsof -U': { stdout: 'COMMAND PID USER\n' } });
+    readdirMock.mockRejectedValue(new Error('ENOENT'));
+
+    let advancedMs = 0;
+    const origDateNow = Date.now;
+    // We rely on jest fake timers advancing Date.now — just verify it returns null within timeout
+    const promise = waitForSocketPath({ timeout: 2_000, interval: 200 });
+    await jest.runAllTimersAsync();
+    const result = await promise;
+    expect(result).toBeNull();
   });
 });
 

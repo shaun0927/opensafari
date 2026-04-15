@@ -10,6 +10,7 @@
  */
 
 import { WebInspectorProxy } from '../../src/simulator/proxy';
+import * as socketFinder from '../../src/simulator/socket-finder';
 import { WebKitClient } from '../../src/webkit/client';
 
 // Access private methods via type cast for white-box testing
@@ -179,6 +180,49 @@ describe('WebInspectorProxy initialization timing', () => {
 
       expect(capturedUrls[0]).toBe(`http://localhost:${proxy.deviceListPort}`);
     });
+  });
+});
+
+describe('WebInspectorProxy.start() socket discovery retry (Issue #494)', () => {
+  let proxy: WebInspectorProxy;
+  let consoleErrorSpy: jest.SpyInstance;
+
+  beforeEach(() => {
+    proxy = new WebInspectorProxy({ port: 9522, deviceListPort: 9521 });
+    consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it('start() uses waitForSocketPath (retries socket discovery) rather than a single findSocketPath call', async () => {
+    const waitForSocketPathSpy = jest
+      .spyOn(socketFinder, 'waitForSocketPath')
+      .mockResolvedValue(null);
+
+    // Mock isPortInUse to return false, which mock execFile to throw for ios_webkit_debug_proxy check
+    const net = require('net');
+    jest.spyOn(net, 'connect').mockImplementation(() => {
+      const { EventEmitter } = require('events');
+      const emitter = new EventEmitter();
+      emitter.setTimeout = jest.fn();
+      emitter.destroy = jest.fn();
+      process.nextTick(() => emitter.emit('error', new Error('ECONNREFUSED')));
+      return emitter;
+    });
+
+    // Mock execFile (which check) to succeed
+    const childProcess = require('child_process');
+    jest.spyOn(childProcess, 'execFile').mockImplementation(
+      (...args: unknown[]) => {
+        const cb = args[args.length - 1];
+        (cb as CallableFunction)(null, { stdout: '/usr/local/bin/ios_webkit_debug_proxy\n' });
+      },
+    );
+
+    await expect(proxy.start()).rejects.toThrow('Web Inspector socket not found');
+    expect(waitForSocketPathSpy).toHaveBeenCalledWith({ targetUdid: undefined, timeout: 10_000 });
   });
 });
 

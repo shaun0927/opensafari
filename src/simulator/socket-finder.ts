@@ -41,6 +41,25 @@ export async function findSocketPath(options?: FindSocketOptions): Promise<strin
 }
 
 /**
+ * Poll `findSocketPath` until a live socket is found or timeout expires.
+ * Useful when calling immediately after `simctl boot` — the webinspectord_sim
+ * daemon needs a few seconds to create its socket after the device reports "Booted".
+ */
+export async function waitForSocketPath(
+  options?: FindSocketOptions & { timeout?: number; interval?: number },
+): Promise<string | null> {
+  const timeout = options?.timeout ?? 10_000;
+  const interval = options?.interval ?? 500;
+  const start = Date.now();
+  while (Date.now() - start < timeout) {
+    const result = await findSocketPath(options);
+    if (result) return result;
+    await new Promise(r => setTimeout(r, interval));
+  }
+  return null;
+}
+
+/**
  * Probe a Unix socket for liveness. Returns true if a process is listening.
  * Active sockets connect in ~1ms; stale sockets return ECONNREFUSED in ~1ms.
  */
