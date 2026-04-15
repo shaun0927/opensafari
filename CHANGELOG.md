@@ -14,7 +14,7 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
-- **`FlutterVMInputBackend` (Tier-0, DRAFT)** (#481, #486): New input backend that dispatches `PointerDataPacket`s, `TextInput.updateEditingState` platform messages, and `HardwareKeyboard` events directly into the Dart isolate via VM Service — no CGEvent, no Simulator.app foregrounding, no `OPENSAFARI_ALLOW_FOCUS_INPUT` opt-in required. Tier-0 routing added to `getInputBackend()`: when a Flutter VM is discoverable, the new backend is selected before all existing tiers. Per-device negative cache (30s TTL) + 1.5s discovery timeout prevent native-app latency regression. **Status: DRAFT** — architect review found that `evaluate` cannot resolve top-level Flutter symbols at runtime (the Dart payloads reference `WidgetsFlutterBinding`, `PointerDataPacket`, etc. which are not in the user app's root library scope). Runtime fix tracked at #488.
+- **`FlutterVMInputBackend` (Tier-0)** (#481, #486): New input backend that dispatches `PointerDataPacket`s, `TextInput.updateEditingState` platform messages, and `HardwareKeyboard` events directly into the Dart isolate via VM Service — no CGEvent, no Simulator.app foregrounding, no `OPENSAFARI_ALLOW_FOCUS_INPUT` opt-in required. Tier-0 routing added to `getInputBackend()`: when a Flutter VM is discoverable, the new backend is selected before all existing tiers. Per-device negative cache (30s TTL) + 1.5s discovery timeout prevent native-app latency regression. Scoped evaluate calls target per-operation Flutter libraries (`mouse_tracker.dart` for pointer dispatch, `editable_text.dart` for text input, `hardware_keyboard.dart` for key events) to ensure all required symbols are in lexical scope.
 
 ### Fixed
 

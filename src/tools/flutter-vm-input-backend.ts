@@ -118,22 +118,24 @@ function dartStringLiteral(value: string): string {
  */
 export class FlutterVMInputBackend implements InputBackend {
   readonly kind: InputBackendKind = 'flutter-vm';
-  private bindingLibId: string | null = null;
+  private libIdCache: Map<string, string> = new Map();
 
   constructor(private vmClient: FlutterVMClient) {}
 
   /**
-   * Resolve `package:flutter/src/widgets/binding.dart` in the main isolate's
-   * loaded libraries and cache its id. Evaluating Dart expressions against
-   * this library puts `WidgetsFlutterBinding`, `PointerDataPacket` (from
-   * `dart:ui`), `TextInput`, `HardwareKeyboard`, and other framework symbols
-   * into lexical scope — the user app's `rootLib` does NOT export them.
+   * Resolve a Flutter library URI to its VM Service library id, caching the
+   * result per URI. Each operation targets a different library so that the
+   * required symbols are in lexical scope:
+   *   - pointer dispatch → `mouse_tracker.dart` (bare `import 'dart:ui'`)
+   *   - text input       → `editable_text.dart`
+   *   - key events       → `hardware_keyboard.dart`
    *
    * Same pattern used by `FlutterVMClient.selectWidgetAtPoint` for the
    * inspector library (see `vm-service-client.ts:386-411`).
    */
-  private async resolveBindingLibId(): Promise<string> {
-    if (this.bindingLibId) return this.bindingLibId;
+  private async resolveLibId(uri: string): Promise<string> {
+    const cached = this.libIdCache.get(uri);
+    if (cached) return cached;
 
     const isolateId = this.vmClient.getState()?.mainIsolateId;
     if (!isolateId) {
@@ -142,17 +144,15 @@ export class FlutterVMInputBackend implements InputBackend {
     const isolate = await this.vmClient.callMethod('getIsolate', { isolateId });
     const libs =
       (isolate as { libraries?: Array<{ uri?: string; id?: string }> }).libraries ?? [];
-    const bindingLib = libs.find(
-      (l) => l.uri === 'package:flutter/src/widgets/binding.dart',
-    );
-    if (!bindingLib?.id) {
+    const lib = libs.find((l) => l.uri === uri);
+    if (!lib?.id) {
       throw new FlutterVMError(
-        'widgets/binding.dart library not loaded in isolate — is this a Flutter app?',
+        `${uri} library not loaded in isolate — is this a Flutter app?`,
         'NO_BINDING_LIB',
       );
     }
-    this.bindingLibId = bindingLib.id;
-    return this.bindingLibId;
+    this.libIdCache.set(uri, lib.id);
+    return lib.id;
   }
 
   /**
@@ -181,8 +181,7 @@ export class FlutterVMInputBackend implements InputBackend {
 
     const expression =
       '(() {' +
-      '  final binding = WidgetsFlutterBinding.ensureInitialized();' +
-      '  final dispatcher = binding.platformDispatcher;' +
+      '  final dispatcher = PlatformDispatcher.instance;' +
       '  final view = dispatcher.implicitView;' +
       '  if (view == null) { return false; }' +
       '  final dpr = view.devicePixelRatio;' +
@@ -200,7 +199,7 @@ export class FlutterVMInputBackend implements InputBackend {
       '        pointerIdentifier: 1,' +
       '        physicalX: px,' +
       '        physicalY: py,' +
-      '        buttons: change == PointerChange.up ? 0 : kPrimaryButton,' +
+      '        buttons: change == PointerChange.up ? 0 : 1,' +
       '        pressure: change == PointerChange.up ? 0.0 : 1.0,' +
       '        pressureMax: 1.0,' +
       '      ),' +
@@ -214,7 +213,7 @@ export class FlutterVMInputBackend implements InputBackend {
       '  return true;' +
       '})()';
 
-    await this.evalOrThrow('tap', expression);
+    await this.evalOrThrow('tap', expression, 'package:flutter/src/rendering/mouse_tracker.dart');
   }
 
   /**
@@ -240,8 +239,7 @@ export class FlutterVMInputBackend implements InputBackend {
 
     const expression =
       '(() {' +
-      '  final binding = WidgetsFlutterBinding.ensureInitialized();' +
-      '  final dispatcher = binding.platformDispatcher;' +
+      '  final dispatcher = PlatformDispatcher.instance;' +
       '  final view = dispatcher.implicitView;' +
       '  if (view == null) { return false; }' +
       '  final dpr = view.devicePixelRatio;' +
@@ -261,7 +259,7 @@ export class FlutterVMInputBackend implements InputBackend {
       '        pointerIdentifier: 1,' +
       '        physicalX: x,' +
       '        physicalY: y,' +
-      '        buttons: change == PointerChange.up ? 0 : kPrimaryButton,' +
+      '        buttons: change == PointerChange.up ? 0 : 1,' +
       '        pressure: change == PointerChange.up ? 0.0 : 1.0,' +
       '        pressureMax: 1.0,' +
       '      ),' +
@@ -282,7 +280,7 @@ export class FlutterVMInputBackend implements InputBackend {
       '  return true;' +
       '})()';
 
-    await this.evalOrThrow('swipe', expression);
+    await this.evalOrThrow('swipe', expression, 'package:flutter/src/rendering/mouse_tracker.dart');
   }
 
   /**
@@ -302,17 +300,12 @@ export class FlutterVMInputBackend implements InputBackend {
     // which is private but accessible via evaluate on the binding library.
     const expression =
       '(() async {' +
-      '  final binding = WidgetsFlutterBinding.ensureInitialized();' +
       `  final String newText = ${textLit};` +
       '  // Read the current TextInputConnection client id.' +
       '  // If nothing is focused, fall back to -1 (message is dropped, same' +
       '  // as typing on a hardware keyboard with no focused field).' +
       '  int clientId = -1;' +
       '  try {' +
-      '    final connection = TextInput.instance;' +
-      '    // _currentConnection is private but we can read the _id field' +
-      '    // via the public scribbleInProgress getter side-channel: if' +
-      '    // the connection is active, the instance is non-null.' +
       '    // Fallback: just check if the primary focus accepts text.' +
       '    final focused = FocusManager.instance.primaryFocus;' +
       '    if (focused != null && focused.context != null) {' +
@@ -342,18 +335,18 @@ export class FlutterVMInputBackend implements InputBackend {
       '    "composingBase": -1,' +
       '    "composingExtent": -1,' +
       '  };' +
-      '  final ByteData? message = const JSONMethodCodec().encodeMethodCall(' +
+      '  final message = const JSONMethodCodec().encodeMethodCall(' +
       '    MethodCall("TextInputClient.updateEditingState", <dynamic>[clientId, state]),' +
       '  );' +
-      '  await binding.defaultBinaryMessenger.handlePlatformMessage(' +
+      '  await WidgetsBinding.instance!.defaultBinaryMessenger.handlePlatformMessage(' +
       '    "flutter/textinput",' +
       '    message,' +
-      '    (ByteData? _) {},' +
+      '    (dynamic _) {},' +
       '  );' +
       '  return true;' +
       '})()';
 
-    await this.evalOrThrow('typeText', expression);
+    await this.evalOrThrow('typeText', expression, 'package:flutter/src/widgets/editable_text.dart');
   }
 
   /**
@@ -397,7 +390,6 @@ export class FlutterVMInputBackend implements InputBackend {
     // (zero) — the event queue does not require strict monotonicity.
     const expression =
       '(() {' +
-      '  WidgetsFlutterBinding.ensureInitialized();' +
       `  final label = ${labelLit};` +
       `  final logical = ${logicalKeyExpr};` +
       `  final physical = ${physicalKeyExpr};` +
@@ -417,18 +409,18 @@ export class FlutterVMInputBackend implements InputBackend {
       '  return true;' +
       '})()';
 
-    await this.evalOrThrow(op, expression);
+    await this.evalOrThrow(op, expression, 'package:flutter/src/services/hardware_keyboard.dart');
   }
 
   private async evalOrThrow(
     op: FlutterVMInputBackendError['op'],
     expression: string,
+    libraryUri: string,
   ): Promise<void> {
     try {
-      // Scope the evaluate to the widgets/binding.dart library so
-      // WidgetsFlutterBinding, PointerDataPacket, TextInput,
-      // HardwareKeyboard, etc. are all in lexical scope.
-      const targetId = await this.resolveBindingLibId();
+      // Scope the evaluate to the per-operation Flutter library so all
+      // required symbols are in lexical scope.
+      const targetId = await this.resolveLibId(libraryUri);
       const result = await this.vmClient.evaluate(expression, { targetId });
       // VM returns an @Error shape instead of throwing when the expression
       // itself compiled but raised a Dart exception. Surface that as a

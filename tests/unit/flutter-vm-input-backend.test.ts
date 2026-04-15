@@ -23,13 +23,15 @@ function makeMockClient() {
   const evaluate = jest
     .fn()
     .mockResolvedValue({ type: '@Instance', kind: 'Bool', valueAsString: 'true' });
-  // Mock callMethod('getIsolate', ...) to return the binding library so
-  // resolveBindingLibId() succeeds without a real VM connection.
+  // Mock callMethod('getIsolate', ...) to return all per-operation libraries so
+  // resolveLibId() succeeds without a real VM connection.
   const callMethod = jest.fn().mockResolvedValue({
     rootLib: { id: 'libraries/root' },
     libraries: [
       { uri: 'dart:core', id: 'libraries/dart:core' },
-      { uri: 'package:flutter/src/widgets/binding.dart', id: 'libraries/binding' },
+      { uri: 'package:flutter/src/rendering/mouse_tracker.dart', id: 'libraries/mouse_tracker' },
+      { uri: 'package:flutter/src/widgets/editable_text.dart', id: 'libraries/editable_text' },
+      { uri: 'package:flutter/src/services/hardware_keyboard.dart', id: 'libraries/hardware_keyboard' },
     ],
   });
   return {
