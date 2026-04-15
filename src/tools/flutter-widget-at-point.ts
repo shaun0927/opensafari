@@ -108,6 +108,12 @@ export function isUserDefinedWidget(node: WidgetSummary | null | undefined): boo
 /**
  * Extract `{ type, description, creation_location, widget_id }` from an
  * inspector payload (already one-level summarised).
+ *
+ * The raw inspector node wraps every widget in `_ElementDiagnosticableTreeNode`,
+ * so `summary.type` carries the wrapper class, not the Flutter widget name.
+ * Prefer `widgetRuntimeType` (always the user-visible widget, e.g.
+ * `"ElevatedButton"`), then `description`, and fall back to `type` only when
+ * neither is present so the public `widget_type` identifies the widget.
  */
 function toPublicShape(summary: WidgetSummary): {
   widget_type: string;
@@ -116,7 +122,7 @@ function toPublicShape(summary: WidgetSummary): {
   creation_location?: { file: string; line: number; column: number };
 } {
   return {
-    widget_type: summary.type,
+    widget_type: summary.widgetRuntimeType ?? summary.description ?? summary.type,
     description: summary.description,
     widget_id: summary.valueId,
     creation_location: summary.creationLocation,
@@ -124,15 +130,26 @@ function toPublicShape(summary: WidgetSummary): {
 }
 
 /**
- * Flatten the `getParentChain` response into `WidgetSummary[]`. The VM
- * Service returns `{ chain: [{ node: {...}, children: [...] }, ...] }` or
- * similar; we tolerate a couple of shapes for robustness across Flutter
- * versions.
+ * Flatten the `getParentChain` response into `WidgetSummary[]`.
+ *
+ * Three payload shapes are seen in the wild:
+ *   1. `{ chain: [{ node: {...}, children: [...] }, ...] }` — synthetic /
+ *      DevTools fixtures.
+ *   2. `{ result: { chain: [...] } }` — wrapped chain from older inspector
+ *      variants.
+ *   3. `{ type: "_extensionType", result: [{ node: {...}, children: [...] }, ...] }`
+ *      — the live Flutter 3.11+ VM Service response, where the top-level
+ *      `result` key *is* the chain array. The pre-fix code only recognised
+ *      shapes (1) and (2), so `ancestor_chain` was always empty against
+ *      real apps (issue #436 live verification).
  */
 export function flattenParentChain(raw: Record<string, unknown>): WidgetSummary[] {
+  const resultField = (raw as { result?: unknown }).result;
   const chain =
     (raw as { chain?: unknown[] }).chain ??
-    (raw as { result?: { chain?: unknown[] } }).result?.chain ??
+    (Array.isArray(resultField)
+      ? resultField
+      : (resultField as { chain?: unknown[] } | undefined)?.chain) ??
     [];
 
   if (!Array.isArray(chain)) return [];

@@ -88,6 +88,38 @@ describe('flattenParentChain', () => {
     expect(out[0].type).toBe('X');
   });
 
+  it('accepts the live Flutter 3.11+ shape where result itself is the chain array', () => {
+    // Reproduces the real VM Service response from
+    // ext.flutter.inspector.getParentChain on Flutter 3.11.3: the top-level
+    // `result` key IS the chain array (not an object with a `chain` field).
+    // Pre-fix flattenParentChain returned [] here, which made
+    // `flutter_widget_at_point` report `ancestor_chain: []` on every live hit.
+    const raw = {
+      type: '_extensionType',
+      result: [
+        { node: { type: 'A', creationLocation: { file: 'a.dart', line: 1, column: 1 } } },
+        { node: { type: 'B', creationLocation: { file: 'b.dart', line: 2, column: 2 } } },
+      ],
+    };
+    const out = flattenParentChain(raw as unknown as Record<string, unknown>);
+    expect(out.map((n) => n.type)).toEqual(['A', 'B']);
+  });
+
+  it('flattens the live result-array shape through the user-defined filter', () => {
+    const raw = {
+      type: '_extensionType',
+      result: [
+        { node: { type: 'RootWidget' } }, // no creationLocation — framework
+        { node: { type: 'MyApp', creationLocation: { file: 'package:myapp/main.dart', line: 1, column: 1 } } },
+        { node: { type: 'MaterialApp', creationLocation: { file: 'package:flutter/src/material/app.dart', line: 1, column: 1 } } },
+        { node: { type: 'HomePage', creationLocation: { file: 'package:myapp/home.dart', line: 1, column: 1 } } },
+      ],
+    };
+    const filtered = flattenParentChain(raw as unknown as Record<string, unknown>)
+      .filter(isUserDefinedWidget);
+    expect(filtered.map((n) => n.type)).toEqual(['MyApp', 'HomePage']);
+  });
+
   it('returns [] for malformed input', () => {
     expect(flattenParentChain({})).toEqual([]);
     expect(flattenParentChain({ chain: 'nope' as unknown as unknown[] })).toEqual([]);
@@ -316,9 +348,13 @@ describe('flutter_widget_at_point handler', () => {
     mockEvaluate.mockResolvedValueOnce({ valueAsString: '2|750|1334' });
     mockSelectWidgetAtPoint.mockResolvedValueOnce({
       hit: true,
+      // Shape matches the live VM Service payload: every widget is wrapped in
+      // `_ElementDiagnosticableTreeNode`, the user-visible widget name lives in
+      // `widgetRuntimeType`, and `description` carries the formatted form.
       selection: {
-        type: 'ElevatedButton',
-        description: 'ElevatedButton(onPressed)',
+        type: '_ElementDiagnosticableTreeNode',
+        widgetRuntimeType: 'ElevatedButton',
+        description: 'ElevatedButton',
         valueId: 'inspector-42',
         creationLocation: { file: 'package:myapp/home.dart', line: 47, column: 12 },
       },
@@ -365,7 +401,9 @@ describe('flutter_widget_at_point handler', () => {
     mockSelectWidgetAtPoint.mockResolvedValueOnce({
       hit: true,
       selection: {
-        type: 'Text',
+        type: '_ElementDiagnosticableTreeNode',
+        widgetRuntimeType: 'Text',
+        description: 'Text',
         valueId: 'inspector-9',
         creationLocation: { file: 'package:myapp/home.dart', line: 1, column: 1 },
       },
@@ -376,6 +414,51 @@ describe('flutter_widget_at_point handler', () => {
     const body = JSON.parse(result.content[0].text);
     expect(body.widget_type).toBe('Text');
     expect(body.ancestor_chain).toEqual([]);
+  });
+
+  it('surfaces the user-visible widget in widget_type even when the inspector wraps the node', async () => {
+    // Matches the Flutter 3.11.3 VM Service payload: the outer `type` is the
+    // diagnostic wrapper, and the actual Flutter widget name only appears in
+    // `widgetRuntimeType`. Callers expect `widget_type` to identify the
+    // widget — not the inspector's bookkeeping class — so the tool must
+    // prefer `widgetRuntimeType` / `description` over the wrapper `type`.
+    mockEvaluate.mockResolvedValueOnce({ valueAsString: '3|1179|2556' });
+    mockSelectWidgetAtPoint.mockResolvedValueOnce({
+      hit: true,
+      selection: {
+        type: '_ElementDiagnosticableTreeNode',
+        widgetRuntimeType: 'ElevatedButton',
+        description: 'ElevatedButton',
+        valueId: 'inspector-199',
+        creationLocation: { file: 'package:myapp/home.dart', line: 65, column: 22 },
+      },
+    });
+    mockGetParentChain.mockResolvedValueOnce({ chain: [] });
+
+    const result = await handler('s', { x: 80, y: 465 });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(body.widget_type).toBe('ElevatedButton');
+    expect(body.description).toBe('ElevatedButton');
+    expect(body.widget_id).toBe('inspector-199');
+  });
+
+  it('falls back to description when widgetRuntimeType is absent', async () => {
+    mockEvaluate.mockResolvedValueOnce({ valueAsString: '2|750|1334' });
+    mockSelectWidgetAtPoint.mockResolvedValueOnce({
+      hit: true,
+      selection: {
+        type: '_ElementDiagnosticableTreeNode',
+        description: 'Scaffold',
+        valueId: 'inspector-7',
+        creationLocation: { file: 'package:myapp/home.dart', line: 2, column: 1 },
+      },
+    });
+    mockGetParentChain.mockResolvedValueOnce({ chain: [] });
+
+    const result = await handler('s', { x: 10, y: 20 });
+    const body = JSON.parse(result.content[0].text);
+    expect(body.widget_type).toBe('Scaffold');
   });
 });
 
