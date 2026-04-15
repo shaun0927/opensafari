@@ -9,7 +9,7 @@
 import { MCPServer, getWebKitClient } from '../mcp-server';
 import { getAccessibilityBridge, ensureSemanticsActive } from '../native';
 import type { AXNode } from '../native';
-import { resolveDeviceId, getInputBackend, buildInputMeta } from './native-input-utils';
+import { resolveDeviceId, getInputBackend, runInputOp } from './native-input-utils';
 
 export function registerAppTapElementTool(server: MCPServer): void {
   server.registerTool(
@@ -197,7 +197,9 @@ export function registerAppTapElementTool(server: MCPServer): void {
 
         // Tap via input backend
         const backend = await getInputBackend(deviceId, getWebKitClient(deviceId));
-        await backend.tap(deviceId, centerX, centerY, duration > 0 ? duration : undefined);
+        const { meta } = await runInputOp(backend, deviceId, () =>
+          backend.tap(deviceId, centerX, centerY, duration > 0 ? duration : undefined),
+        );
 
         // Flag an implicit ambiguous tap: several candidates matched but
         // the caller did not disambiguate via `index`. We still tap the
@@ -224,7 +226,7 @@ export function registerAppTapElementTool(server: MCPServer): void {
           backend: backend.kind,
           deviceId,
           totalMatches,
-          _meta: buildInputMeta(backend, deviceId),
+          _meta: meta,
         };
         if (clampedFrom) {
           response.clampedFrom = clampedFrom;

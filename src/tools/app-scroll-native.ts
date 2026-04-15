@@ -12,7 +12,7 @@ import { MCPServer, getWebKitClient } from '../mcp-server';
 import { SimulatorManager } from '../simulator';
 import { getSessionManager } from '../session-manager';
 import { getInputBackend } from './native-input-backend';
-import { buildInputMeta } from './native-input-utils';
+import { runInputOp } from './native-input-utils';
 
 /** Default scroll amount in points. */
 const DEFAULT_AMOUNT = 300;
@@ -128,7 +128,9 @@ export function registerAppScrollNativeTool(server: MCPServer): void {
 
         const { endX, endY } = calculateScrollEndpoint(x, y, direction, amount);
         const backend = await getInputBackend(deviceId, getWebKitClient(deviceId));
-        await backend.swipe(deviceId, x, y, endX, endY);
+        const { meta } = await runInputOp(backend, deviceId, () =>
+          backend.swipe(deviceId, x, y, endX, endY),
+        );
 
         return {
           content: [
@@ -142,7 +144,7 @@ export function registerAppScrollNativeTool(server: MCPServer): void {
                 to: { x: endX, y: endY },
                 deviceId,
                 backend: backend.kind,
-                _meta: buildInputMeta(backend, deviceId),
+                _meta: meta,
               }),
             },
           ],

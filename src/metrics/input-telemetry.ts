@@ -11,6 +11,7 @@
  * See issue #502 for the rollout checklist.
  */
 
+import { AsyncLocalStorage } from 'node:async_hooks';
 import type { InputBackendKind } from '../tools/native-input-backend';
 
 /**
@@ -43,9 +44,26 @@ export type InputOperationResult = InputTelemetryEvent;
  */
 export const OPENSAFARI_INPUT_TELEMETRY_ENV = 'OPENSAFARI_INPUT_TELEMETRY';
 
+/**
+ * Env var that opts MCP tool responses into the Phase-2 `_telemetry` metadata
+ * field. When set to `1` / `true`, each input tool (`app_tap`, `app_swipe`,
+ * ...) attaches the captured `InputTelemetryEvent` list under `_meta._telemetry`
+ * so clients and CI can assert on `elapsed_ms` without scraping stderr.
+ *
+ * Default-off so the field is strictly opt-in and does not inflate payloads
+ * for consumers that only care about success/failure.
+ */
+export const OPENSAFARI_INPUT_TELEMETRY_META_ENV = 'OPENSAFARI_INPUT_TELEMETRY_META';
+
 function isTelemetryEnabled(): boolean {
   const value = process.env[OPENSAFARI_INPUT_TELEMETRY_ENV];
   return value !== '0' && value !== 'false';
+}
+
+/** Whether input tool responses should include `_meta._telemetry`. */
+export function isInputTelemetryMetaEnabled(): boolean {
+  const value = process.env[OPENSAFARI_INPUT_TELEMETRY_META_ENV];
+  return value === '1' || value === 'true';
 }
 
 type TelemetrySink = (event: InputTelemetryEvent) => void;
@@ -57,6 +75,14 @@ function consoleSink(event: InputTelemetryEvent): void {
 
 let activeSink: TelemetrySink = consoleSink;
 
+/**
+ * Per-async-context capture store. When a caller opens a scope via
+ * `captureInputTelemetry`, every event emitted inside that scope — and only
+ * that scope — is appended to the bound array. Isolation is handled by
+ * `AsyncLocalStorage`, so concurrent MCP tool calls do not cross-contaminate.
+ */
+const captureStore = new AsyncLocalStorage<InputTelemetryEvent[]>();
+
 /** Emit a telemetry event through the active sink. Never throws. */
 export function emitInputTelemetry(event: InputTelemetryEvent): void {
   try {
@@ -64,6 +90,22 @@ export function emitInputTelemetry(event: InputTelemetryEvent): void {
   } catch {
     // The telemetry path must never mask an input-backend failure.
   }
+  const buf = captureStore.getStore();
+  if (buf) buf.push(event);
+}
+
+/**
+ * Run `fn` inside a telemetry capture scope. Every `timedInput` event fired
+ * by `fn` (directly or via any awaited descendant) is collected and returned
+ * alongside `fn`'s result. The sink still fires as usual — capture is a
+ * read-only subscriber, not a redirect.
+ */
+export async function captureInputTelemetry<T>(
+  fn: () => Promise<T>,
+): Promise<{ result: T; events: InputTelemetryEvent[] }> {
+  const events: InputTelemetryEvent[] = [];
+  const result = await captureStore.run(events, fn);
+  return { result, events };
 }
 
 /**

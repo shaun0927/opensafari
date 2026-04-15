@@ -11,8 +11,11 @@
 import {
   timedInput,
   emitInputTelemetry,
+  captureInputTelemetry,
+  isInputTelemetryMetaEnabled,
   __setInputTelemetrySinkForTest,
   OPENSAFARI_INPUT_TELEMETRY_ENV,
+  OPENSAFARI_INPUT_TELEMETRY_META_ENV,
   type InputTelemetryEvent,
 } from '../../src/metrics/input-telemetry';
 
@@ -155,6 +158,97 @@ describe('input-telemetry / console sink', () => {
         ok: true,
       });
       expect(spy).not.toHaveBeenCalled();
+    },
+  );
+});
+
+// ── Phase 2: captureInputTelemetry + meta opt-in ─────────────────────────
+
+describe('input-telemetry / captureInputTelemetry', () => {
+  afterEach(() => {
+    __setInputTelemetrySinkForTest(null);
+    delete process.env[OPENSAFARI_INPUT_TELEMETRY_ENV];
+  });
+
+  test('collects every event emitted inside the scope', async () => {
+    process.env[OPENSAFARI_INPUT_TELEMETRY_ENV] = '0'; // silence console sink
+    const { result, events } = await captureInputTelemetry(async () => {
+      await timedInput('webkit', 'tap', 'UDID-H', async () => undefined);
+      await timedInput('webkit', 'swipe', 'UDID-H', async () => 42);
+      return 'done';
+    });
+    expect(result).toBe('done');
+    expect(events).toHaveLength(2);
+    expect(events.map((e) => e.operation)).toEqual(['tap', 'swipe']);
+  });
+
+  test('scopes are isolated across concurrent captures (AsyncLocalStorage)', async () => {
+    process.env[OPENSAFARI_INPUT_TELEMETRY_ENV] = '0';
+    const scopeA = captureInputTelemetry(async () => {
+      await timedInput('webkit', 'tap', 'A', async () => {
+        await new Promise((r) => setTimeout(r, 10));
+      });
+    });
+    const scopeB = captureInputTelemetry(async () => {
+      await timedInput('simctl', 'swipe', 'B', async () => {
+        await new Promise((r) => setTimeout(r, 5));
+      });
+    });
+    const [a, b] = await Promise.all([scopeA, scopeB]);
+    expect(a.events).toHaveLength(1);
+    expect(a.events[0].deviceId).toBe('A');
+    expect(a.events[0].operation).toBe('tap');
+    expect(b.events).toHaveLength(1);
+    expect(b.events[0].deviceId).toBe('B');
+    expect(b.events[0].operation).toBe('swipe');
+  });
+
+  test('capture does not suppress the active sink — events still fire there', async () => {
+    const sinkEvents: InputTelemetryEvent[] = [];
+    __setInputTelemetrySinkForTest((e) => sinkEvents.push(e));
+    const { events } = await captureInputTelemetry(async () => {
+      await timedInput('simhid', 'tap', 'UDID-I', async () => undefined);
+    });
+    expect(events).toHaveLength(1);
+    expect(sinkEvents).toHaveLength(1);
+    expect(sinkEvents[0]).toEqual(events[0]);
+  });
+
+  test('captures failure events and re-throws', async () => {
+    process.env[OPENSAFARI_INPUT_TELEMETRY_ENV] = '0';
+    await expect(
+      captureInputTelemetry(async () => {
+        await timedInput('webkit', 'tap', 'UDID-J', async () => {
+          throw new Error('boom');
+        });
+      }),
+    ).rejects.toThrow('boom');
+  });
+});
+
+describe('input-telemetry / meta opt-in flag', () => {
+  afterEach(() => {
+    delete process.env[OPENSAFARI_INPUT_TELEMETRY_META_ENV];
+  });
+
+  test.each(['1', 'true'])(
+    'isInputTelemetryMetaEnabled returns true for OPENSAFARI_INPUT_TELEMETRY_META=%s',
+    (value) => {
+      process.env[OPENSAFARI_INPUT_TELEMETRY_META_ENV] = value;
+      expect(isInputTelemetryMetaEnabled()).toBe(true);
+    },
+  );
+
+  test('is false by default (opt-in)', () => {
+    delete process.env[OPENSAFARI_INPUT_TELEMETRY_META_ENV];
+    expect(isInputTelemetryMetaEnabled()).toBe(false);
+  });
+
+  test.each(['0', 'false', 'yes', ''])(
+    'is false for OPENSAFARI_INPUT_TELEMETRY_META=%s (strict)',
+    (value) => {
+      process.env[OPENSAFARI_INPUT_TELEMETRY_META_ENV] = value;
+      expect(isInputTelemetryMetaEnabled()).toBe(false);
     },
   );
 });

@@ -6,7 +6,7 @@
  */
 
 import { MCPServer, getWebKitClient } from '../mcp-server';
-import { resolveDeviceId, getInputBackend, buildInputMeta, KEY_MAP } from './native-input-utils';
+import { resolveDeviceId, getInputBackend, runInputOp, KEY_MAP } from './native-input-utils';
 
 export function registerAppKeyInputTool(server: MCPServer): void {
   server.registerTool(
@@ -50,7 +50,9 @@ export function registerAppKeyInputTool(server: MCPServer): void {
         }
 
         const backend = await getInputBackend(deviceId, getWebKitClient(deviceId));
-        await backend.keypress(deviceId, keyCode);
+        const { meta } = await runInputOp(backend, deviceId, () =>
+          backend.keypress(deviceId, keyCode),
+        );
 
         return {
           content: [
@@ -62,7 +64,7 @@ export function registerAppKeyInputTool(server: MCPServer): void {
                 keyCode,
                 deviceId,
                 backend: backend.kind,
-                _meta: buildInputMeta(backend, deviceId),
+                _meta: meta,
               }),
             },
           ],
