@@ -216,3 +216,12 @@ Relevant shipped PRs:
 - [#493](https://github.com/shaun0927/opensafari/issues/493) — Daily cron
   workflow + idb-pattern comparison (this document) + one-time stderr
   notice.
+
+### #491 investigation
+
+The Xcode 26 tap regression + the candidates we have already falsified
+(mouse NSEvent coord units, `CreatePointerService` bracket, digitizer
+IOHIDEvent → pointer wrapper) are tracked in
+[docs/simhid-ios26-investigation.md](./simhid-ios26-investigation.md).
+Read that file before adding a new candidate path so we don't reproduce
+work already ruled out.
