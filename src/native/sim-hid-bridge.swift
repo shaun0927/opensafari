@@ -241,9 +241,19 @@ func execButton(_ h: HID, name: String, dur: Double?) -> Bool {
 }
 
 func getScreenSize(_ d: NSObject) -> CGSize {
-    if let dt = d.perform(NSSelectorFromString("deviceType"))?.takeUnretainedValue() as? NSObject,
-       let sz = dt.value(forKey: "mainScreenSize") as? CGSize { return sz }
-    return CGSize(width: 393, height: 852)
+    // `mainScreenSize` is in pixels on Xcode 26+ (e.g. iPhone 16 reports
+    // 1179x2556) but `IndigoHIDMessageForMouseNSEvent` expects the screen
+    // size in the same unit as the point coords opensafari hands in.
+    // Divide by `mainScreenScale` (3.0 on recent iPhones) when present so
+    // the function sees point-in-point coords on all Xcode versions.
+    // See #491 for the pixel-unit regression investigation.
+    guard let dt = d.perform(NSSelectorFromString("deviceType"))?.takeUnretainedValue() as? NSObject,
+          let sz = dt.value(forKey: "mainScreenSize") as? CGSize else {
+        return CGSize(width: 393, height: 852)
+    }
+    let scale = (dt.value(forKey: "mainScreenScale") as? Double) ?? 1.0
+    guard scale > 1.0 else { return sz }
+    return CGSize(width: sz.width / scale, height: sz.height / scale)
 }
 
 // MARK: - Entrypoint
