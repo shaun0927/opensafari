@@ -152,6 +152,12 @@ export function registerAppTypeElementTool(server: MCPServer): void {
               `(role=${match.role}, id=${match.identifier ?? '-'}); ` +
               `falling back to coordinate tap for focus.`,
           );
+        } else if (pressResponse && pressResponse.code === 'PRESS_FAILED') {
+          console.error(
+            `[app_type_element] AXPress action fired but returned non-success ` +
+              `(axErrorCode=${pressResponse.axErrorCode}, path=${match.path}); ` +
+              `falling back to coordinate tap for focus.`,
+          );
         }
 
         const backend = await getInputBackend(deviceId, getWebKitClient(deviceId));
