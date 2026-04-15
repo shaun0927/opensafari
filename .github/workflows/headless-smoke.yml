@@ -69,7 +69,7 @@ jobs:
               .sort();
             for (const r of runtimes.slice().reverse()) {
               const iphone = (d.devices[r] || []).find(x => /iPhone/.test(x.name) && x.isAvailable);
-              if (iphone) { process.stdout.write(iphone.udid); return; }
+              if (iphone) { process.stdout.write(iphone.udid); process.exit(0); }
             }
             console.error("No available iPhone simulator for any iOS runtime");
             process.exit(1);
