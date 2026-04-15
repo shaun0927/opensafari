@@ -84,7 +84,7 @@ Interpretation:
 
 ## Why routing stays gated
 
-`src/tools/native-input-backend.ts:854–857` keeps the Tier-1 return
+`src/tools/native-input-backend.ts:871–876` keeps the Tier-1 return
 block commented. Until one of the candidates above produces a working
 tap, the cached `SimulatorKitHIDInputBackend` is effectively dead
 weight for tap/swipe. Hardware buttons and keyboard remain safe to
