@@ -14,6 +14,7 @@ export {
   resetInputBackend,
   HeadlessInputUnavailableError,
   OPENSAFARI_ALLOW_FOCUS_INPUT_ENV,
+  OPENSAFARI_HEADLESS_ONLY_ENV,
 } from './native-input-backend';
 export type { InputBackend, InputBackendKind } from './native-input-backend';
 
