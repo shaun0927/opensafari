@@ -13,6 +13,7 @@ const mockListBooted = jest.fn();
 
 jest.mock('../../src/tools/native-input-backend', () => ({
   getInputBackend: jest.fn(async () => ({
+    kind: 'simctl' as const,
     sendKey: mockSendKey,
     tap: mockTap,
     swipe: jest.fn(),
@@ -74,6 +75,7 @@ describe('app_dismiss_keyboard tool', () => {
     expect(body.dismissed).toBe(true);
     expect(body.deviceId).toBe('device-123');
     expect(body.method).toBe('sendkey');
+    expect(body._meta).toEqual({ backendKind: 'simctl', headless: true, deviceId: 'device-123' });
   });
 
   test('falls back to tap when sendKey fails', async () => {

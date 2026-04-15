@@ -6,6 +6,10 @@
 </p>
 
 <p align="center">
+  <b>Headless mobile QA automation</b> — drive real Safari, Flutter, and native iOS apps on Xcode Simulator without stealing your mouse or requiring Simulator.app focus.
+</p>
+
+<p align="center">
   <a href="https://www.npmjs.com/package/opensafari-mcp"><img src="https://img.shields.io/npm/v/opensafari-mcp.svg" alt="npm"></a>
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="MIT"></a>
   <a href="https://github.com/shaun0927/openchrome"><img src="https://img.shields.io/badge/sibling-OpenChrome-blue" alt="OpenChrome"></a>
@@ -27,6 +31,23 @@
 | **iOS-specific QA** | **auto-detect** (zoom, safe area, keyboard) | none | manual | manual |
 
 > **tl;dr** — OpenSafari controls the **real Safari** inside Xcode Simulator via WebKit Remote Debugging Protocol — the same way [OpenChrome](https://github.com/shaun0927/openchrome) controls real Chrome via CDP. No middleware, no bundled browsers. Just direct protocol access to the actual Safari.app.
+
+---
+
+## Headless Capabilities
+
+OpenSafari runs fully headless on CI — no display server, no mouse focus, no `Simulator.app` window required. See [docs/headless-architecture.md](docs/headless-architecture.md) for the full technical design.
+
+| Scenario | Query (AX Tree) | Input (Tap/Type) | Headless | Backend |
+|---|---|---|---|---|
+| Safari (Web) | ✅ | ✅ | ✅ | WebKit Remote Debug |
+| Flutter App | ✅ | ⚠️ Draft | ⚠️ | FlutterVMInputBackend |
+| Native iOS App | ✅ | ⚠️ PoC | ⚠️ | SimulatorKitHID |
+| WebView in Native | ✅ | ⚠️ Partial | ⚠️ | WebKit + Native |
+
+> ✅ Supported and stable. ⚠️ Partially supported — see linked docs for current status and limitations.
+
+For CI setup recipes (GitHub Actions, Buildkite, GitLab CI), see [docs/ci-recipes.md](docs/ci-recipes.md).
 
 ---
 
@@ -563,6 +584,7 @@ Together, they provide **complete browser coverage** — Chrome for desktop, Saf
 | [API Reference](docs/api-reference.md) | Programmatic API documentation |
 | [Troubleshooting](docs/troubleshooting.md) | Common issues and solutions |
 | [CI Integration](docs/ci-integration.md) | Using OpenSafari in CI pipelines |
+| [CI Recipes](docs/ci-recipes.md) | Copy-paste GitHub Actions, Buildkite, and GitLab CI recipes |
 | [RFC: Native App Backend](docs/rfc-native-app-backend.md) | Architecture RFC for native-app automation in Xcode Simulator |
 | [Native App Tool Surface](docs/native-app-tool-surface.md) | Proposed MCP tool surface for native-app automation |
 | [WebKit Protocol Research](docs/webkit-protocol-research.md) | WebKit Remote Debugging Protocol research notes |

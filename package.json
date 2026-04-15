@@ -1,6 +1,6 @@
 {
   "name": "opensafari-mcp",
-  "version": "0.4.5",
+  "version": "0.4.6",
   "description": "iOS Safari automation MCP server via Xcode Simulator + WebKit Remote Debugging Protocol",
   "main": "dist/index.js",
   "bin": {
@@ -13,11 +13,12 @@
     "darwin"
   ],
   "scripts": {
-    "build": "npm run clean && npm run build:src && npm run build:cli && npm run build:ax-bridge",
+    "build": "npm run clean && npm run build:src && npm run build:cli && npm run build:ax-bridge && npm run build:sim-hid-bridge",
     "postbuild": "cp src/native/ax-bridge.swift dist/ 2>/dev/null || true; cp src/native/sim-hid-bridge.swift dist/ 2>/dev/null || true",
     "build:src": "webpack --config webpack.config.js --config-name server",
     "build:cli": "webpack --config webpack.config.js --config-name cli",
     "build:ax-bridge": "swiftc -O src/native/ax-bridge.swift -o dist/ax-bridge 2>/dev/null && (codesign --sign - dist/ax-bridge 2>/dev/null || (echo 'ax-bridge: codesign failed, removing unsigned binary' && rm -f dist/ax-bridge)) || echo 'ax-bridge: compiled binary skipped, using swift interpreter fallback'",
+    "build:sim-hid-bridge": "swiftc -O src/native/sim-hid-bridge.swift -o dist/sim-hid-bridge 2>/dev/null && (codesign --sign - dist/sim-hid-bridge 2>/dev/null || (echo 'sim-hid-bridge: codesign failed, removing unsigned binary' && rm -f dist/sim-hid-bridge)) || echo 'sim-hid-bridge: compiled binary skipped, using swift interpreter fallback'",
     "clean": "rimraf dist",
     "dev": "ts-node --esm src/index.ts",
     "start": "node dist/index.js",

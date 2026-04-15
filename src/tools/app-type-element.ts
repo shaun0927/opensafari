@@ -14,7 +14,7 @@
 import { MCPServer, getWebKitClient } from '../mcp-server';
 import { getAccessibilityBridge, ensureSemanticsActive } from '../native';
 import type { AXNode, AXQuery } from '../native';
-import { resolveDeviceId, getInputBackend } from './native-input-utils';
+import { resolveDeviceId, getInputBackend, buildInputMeta } from './native-input-utils';
 
 const DEFAULT_TIMEOUT_MS = 5000;
 const DEFAULT_FOCUS_DELAY_MS = 150;
@@ -159,6 +159,7 @@ export function registerAppTypeElementTool(server: MCPServer): void {
                 length: textToType.length,
                 backend: backend.kind,
                 deviceId,
+                _meta: buildInputMeta(backend, deviceId),
               }),
             },
           ],
