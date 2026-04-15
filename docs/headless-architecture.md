@@ -27,27 +27,25 @@ These guarantees are enforced by the input-backend tier system. The non-headless
 
 Native input tools (`app_tap`, `app_swipe_native`, `app_scroll_native`,
 `app_double_tap`, `app_type_text`, `app_key_input`) are dispatched through a
-3-tier fallback chain defined in `src/tools/native-input-backend.ts`.
+tiered fallback chain defined in `src/tools/native-input-backend.ts`.
 
 ### Routing table
 
 | Tier | Backend | `kind` | Headless | Selection Condition | Status |
 |------|---------|--------|----------|---------------------|--------|
-| 1 | `SimctlInputBackend` | `simctl` | Yes | `xcrun simctl io input` probe succeeds (Xcode ≤ 16) | Production |
-| 2 | `WebKitInputBackend` | `webkit` | Yes | Active or reconnectable WebKit connection present (Xcode 26+, Safari/WebView only) | Production |
-| 3 | `AppleScriptInputBackend` | `applescript` | **No** | Opt-in only (`OPENSAFARI_ALLOW_FOCUS_INPUT=1`); throws `HeadlessInputUnavailableError` otherwise | Legacy/opt-in |
-
-A fourth backend (`SimulatorKitHIDInputBackend`, `kind: 'simhid'`) is shipped in
-`src/tools/sim-hid-input-backend.ts` as a PoC. It is **not yet wired into
-`getInputBackend()`** — see the `TODO(#483)` comment in the source. When activated
-it is intended to replace Tier 1 and provide headless HID events for any app type
-on all Xcode versions.
+| 0 | `FlutterVMInputBackend` | `flutter-vm` | Yes | Flutter VM Service connected (Flutter apps only) | Production |
+| 1 | `SimulatorKitHIDInputBackend` | `simhid` | Yes | `sim-hid-bridge` binary present on disk (Xcode 26+, native and Flutter apps) | Production |
+| 2 | `SimctlInputBackend` | `simctl` | Yes | `xcrun simctl io input` probe succeeds (Xcode ≤ 16) | Production |
+| 3 | `WebKitInputBackend` | `webkit` | Yes | Active or reconnectable WebKit connection present (Xcode 26+, Safari/WebView only) | Production |
+| 4 | `AppleScriptInputBackend` | `applescript` | **No** | Opt-in only (`OPENSAFARI_ALLOW_FOCUS_INPUT=1`); throws `HeadlessInputUnavailableError` otherwise | Legacy/opt-in |
 
 ### Decision flowchart
 
 ```mermaid
 flowchart TD
-    A([getInputBackend called]) --> B{simctl probe cached?}
+    A([getInputBackend called]) --> A1{simhid bridge present?}
+    A1 -- Yes --> A4[return SimulatorKitHIDInputBackend]
+    A1 -- No --> B{simctl probe cached?}
     B -- No --> C[probeSimctlInput — xcrun simctl io input tap 0 0]
     C --> D{exit 0?}
     D -- Yes --> E[simctlAvailable = true]
@@ -82,9 +80,9 @@ between tool calls.
 | Safari web automation (Xcode ≤ 16) | WebKit Protocol | `simctl` | Yes | `SimctlInputBackend` | Default for Xcode 15 / 16 |
 | Safari web automation (Xcode 26+) | WebKit Protocol | `webkit` | Yes | `WebKitInputBackend` | `simctl io input` was removed in Xcode 26 |
 | Flutter app (Xcode ≤ 16) | AX bridge (`ax-bridge`) | `simctl` | Yes | `SimctlInputBackend` | Flutter semantics must be active |
-| Flutter app (Xcode 26+, no simhid) | AX bridge | — | **No** | Throws `HeadlessInputUnavailableError` unless `OPENSAFARI_ALLOW_FOCUS_INPUT=1` | simhid PoC targets this gap (#483) |
+| Flutter app (Xcode 26+) | AX bridge | `simhid` | Yes | `SimulatorKitHIDInputBackend` | Primary headless backend on Xcode 26+ |
 | Native iOS / SwiftUI app (Xcode ≤ 16) | AX bridge | `simctl` | Yes | `SimctlInputBackend` | Works for any app |
-| Native iOS / SwiftUI app (Xcode 26+, no simhid) | AX bridge | — | **No** | Throws `HeadlessInputUnavailableError` | Same gap as Flutter above |
+| Native iOS / SwiftUI app (Xcode 26+) | AX bridge | `simhid` | Yes | `SimulatorKitHIDInputBackend` | Primary headless backend on Xcode 26+ |
 | WebView inside native app | AX bridge + WebKit | `webkit` | Yes | `WebKitInputBackend` via `app_webview_connect` | Requires an active WebKit connection |
 | GUI-less CI (no display, Xcode 26+, Safari) | WebKit Protocol | `webkit` | Yes | `WebKitInputBackend` | Fully headless; recommended CI setup |
 
@@ -103,7 +101,7 @@ first requested device. If the probe succeeds, `simctlAvailable` is cached `true
 for the process lifetime; otherwise `false`. A cached `SimctlInputBackend` instance
 is reused for all subsequent calls.
 
-Status: **Production** (default Tier 1 on Xcode ≤ 16).
+Status: **Production** (Tier 2; default on Xcode ≤ 16).
 
 ### SimulatorKitHIDInputBackend (`kind: 'simhid'`)
 
@@ -117,11 +115,7 @@ Swift bridge; the TypeScript side treats the bridge as an opaque child process.
 The bridge communicates exclusively via argv (command) and newline-terminated JSON
 on stdout. Exit codes are a stable contract (see `docs/private-apis.md`).
 
-The current Swift implementation exits `99 NOT_IMPLEMENTED` — the PoC proves the
-`dlopen` path works, but the actual HID injection is not yet shipped. Routing
-activation and the sentinel CI job land in follow-up PRs.
-
-Status: **PoC** — not yet wired into `getInputBackend()`. Tracked in
+Status: **Production** (Tier 1; primary headless backend on Xcode 26+ for native and Flutter apps). Tracked in
 [#483](https://github.com/shaun0927/opensafari/issues/483).
 
 ### WebKitInputBackend (`kind: 'webkit'`)
@@ -140,7 +134,7 @@ If the client exists but reports `isConnected() === false`, `getInputBackend()`
 makes one reconnect attempt before falling through to Tier 3. This tolerates
 transient drops caused by proxy restarts or tab churn.
 
-Status: **Production** (Tier 2; becomes the primary tier on Xcode 26+).
+Status: **Production** (Tier 3; becomes active on Xcode 26+ for Safari/WebView when simhid is unavailable).
 
 ### AppleScriptInputBackend (`kind: 'applescript'`)
 
@@ -156,15 +150,15 @@ one-time warning is logged to `stderr` at the first tool call.
 
 Status: **Legacy opt-in only**.
 
-### FlutterVMInputBackend (planned)
+### FlutterVMInputBackend
 
-A planned backend that would inject touch events by sending `PointerDataPacket`
-messages directly to the Dart VM Service running inside the Flutter engine. This
-path would be fully headless and would work for Flutter apps without requiring the
-`simctl io input` subcommand or a WebKit connection.
+Injects touch events by sending `PointerDataPacket` messages directly to the
+Dart VM Service running inside the Flutter engine. This path is fully headless
+and works for Flutter apps without requiring the `simctl io input` subcommand
+or a WebKit connection.
 
-Status: **Not yet implemented**. Tracked in
-[#484](https://github.com/shaun0927/opensafari/issues/484).
+Status: **Production** (Tier 0; used for Flutter apps with active VM Service
+connection). Tracked in [#484](https://github.com/shaun0927/opensafari/issues/484).
 
 ---
 
@@ -209,11 +203,12 @@ export class HeadlessInputUnavailableError extends Error {
 
 **When it is thrown:**
 
-`getInputBackend()` throws this error when all three conditions hold:
-1. `simctlAvailable` is `false` (Xcode 26+ where `simctl io input` was removed).
-2. No usable WebKit connection is available (either none provided, or reconnect
+`getInputBackend()` throws this error when all four conditions hold:
+1. `simhid` bridge binary is absent.
+2. `simctlAvailable` is `false` (Xcode 26+ where `simctl io input` was removed).
+3. No usable WebKit connection is available (either none provided, or reconnect
    failed).
-3. `OPENSAFARI_ALLOW_FOCUS_INPUT` is not set to `1` or `true`.
+4. `OPENSAFARI_ALLOW_FOCUS_INPUT` is not set to `1` or `true`.
 
 **How to handle it:**
 
@@ -254,7 +249,7 @@ Key policies:
   not remove `SimctlInputBackend`, `WebKitInputBackend`, or
   `AppleScriptInputBackend`. If the private-framework path breaks (exit code `78`
   or `99`), `getInputBackend()` drops to the next tier automatically.
-- **Sentinel CI job (planned)** — a nightly workflow will run a smoke-tap against a
+- **Sentinel CI job (shipped)** — a daily workflow probes framework symbols against a
   matrix of (macOS, Xcode) runners. A regression on any previously-passing version
   fails loudly while existing tiers continue serving users.
 - **Update obligation** — any PR that adds or removes a private-symbol dependency
