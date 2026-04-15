@@ -399,7 +399,7 @@ func execTapDigitizer(_ h: HID, x: Double, y: Double, dur: Double?, sz: CGSize,
             xNorm, yNorm, 0,
             tipPressure, 0,
             range ? 1 : 0, touch ? 1 : 0,
-            0,
+            0
         ) else {
             fputs("[tap-digitizer] IOHIDEventCreateDigitizerEvent returned nil\n", stderr)
             return false
@@ -521,12 +521,12 @@ func runDiag(udid: String?) -> Int32 {
             deviceReport = DeviceReport(
                 udid: u, resolved: true, booted: isDeviceBooted(dev),
                 screenWidth: Double(sz.width), screenHeight: Double(sz.height),
-                mainScreenScale: scale,
+                mainScreenScale: scale
             )
         } else {
             deviceReport = DeviceReport(
                 udid: u, resolved: false, booted: false,
-                screenWidth: nil, screenHeight: nil, mainScreenScale: nil,
+                screenWidth: nil, screenHeight: nil, mainScreenScale: nil
             )
         }
     }
@@ -537,7 +537,7 @@ func runDiag(udid: String?) -> Int32 {
         simulatorKit: probeFramework(skPaths, skH),
         coreSimulator: probeFramework(csPaths, csH),
         indigoSymbols: symbols, classes: classes,
-        device: deviceReport, xcodePath: getDevDir(), elapsed_ms: ms,
+        device: deviceReport, xcodePath: getDevDir(), elapsed_ms: ms
     ))
     // `diag` is advisory — exit 0 on framework miss too, so callers can
     // parse the JSON instead of decoding argv vs. exit-code semantics.
