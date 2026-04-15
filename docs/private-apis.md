@@ -101,6 +101,38 @@ that risk with three independent layers:
    `NOT_IMPLEMENTED`, surface on `DEVICE_NOT_BOOTED`") without string
    parsing.
 
+## idb vs. opensafari call patterns
+
+> **Disclaimer**: This table is a behavioural comparison drawn from public idb
+> source references and opensafari's own code. No source was copied from idb.
+> When refreshing this table, reviewers must re-cite the exact idb commit they
+> used for reference in the PR description.
+
+| Aspect | idb | opensafari sim-hid-bridge |
+|---|---|---|
+| Framework loading | Static link at build time | `dlopen` at runtime (`loadSimulatorKit` / `loadCoreSimulator` — `src/native/sim-hid-bridge.swift:49,:57`) |
+| SimDevice resolution | `FBSimulatorSet` | CoreSimulator `dlsym` → `SimServiceContext` → `defaultDeviceSetWithError:` (`src/native/sim-hid-bridge.swift:127`) |
+| Tap event | `IndigoHIDData` + `IOHIDEvent` via `FBSimulatorHIDEvent` | `IndigoHIDMessageForMouseNSEvent` resolved via `dlsym` (`src/native/sim-hid-bridge.swift:170`) |
+| Key event | `FBKeyboardCommand` / `FBSimulatorHIDEvent` | `IndigoHIDMessageForKeyboardArbitrary` resolved via `dlsym` (`src/native/sim-hid-bridge.swift:171`) |
+| Button event | `FBSimulatorButton` enum + `FBSimulatorHIDEvent` | `IndigoHIDMessageForButton` resolved via `dlsym` (`src/native/sim-hid-bridge.swift:172`) |
+| Arg encoding | Protobuf over a gRPC/socket transport | CLI argv + JSON stdout (newline-terminated envelope) |
+| Process model | Long-lived `FBSimulator` session | Short-lived `execFile` per call (`src/tools/sim-hid-input-backend.ts`) |
+| Spawn timeout | idb default 10 s | `SPAWN_TIMEOUT_MS = 10_000` (`src/tools/sim-hid-input-backend.ts:35`) |
+
+### Rationale for deliberate divergences
+
+opensafari uses `execFile` per call for **process isolation and crash
+containment**: a misbehaving or crashing Swift helper cannot corrupt the
+long-lived Node MCP server process. idb's Protobuf transport is not adopted
+because opensafari is a single-language (TypeScript) wrapper — the overhead of
+a schema registry and generated types is unjustified for a thin argv/JSON
+contract. `SPAWN_TIMEOUT_MS` is deliberately kept at 10 000 ms to match idb's
+default so operators who already know idb have a familiar mental model for
+latency budgets. Finally, frameworks are `dlopen`ed rather than linked so that
+a binary-incompatible Apple framework update cannot take the Node process down
+at dyld time — failure surfaces as a structured `SIMULATORKIT_UNAVAILABLE`
+error and the routing layer falls through to the next input tier.
+
 ## License note
 
 The `SimulatorKit` HID pattern is well-known in the community thanks to
