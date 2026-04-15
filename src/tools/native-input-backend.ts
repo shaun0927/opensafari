@@ -21,7 +21,7 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { SimctlExecutor } from '../simulator/simctl';
 import type { BrowserBackend } from '../types/browser-backend';
-import { tryCreateSimulatorKitHIDBackend, InputBackendError } from './sim-hid-input-backend';
+import { tryCreateSimulatorKitHIDBackend } from './sim-hid-input-backend';
 
 const execFileAsync = promisify(execFile);
 
