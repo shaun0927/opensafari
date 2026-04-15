@@ -311,3 +311,136 @@ jobs:
           if [ -n "${SIMULATOR_UDID:-}" ]; then
             xcrun simctl shutdown "$SIMULATOR_UDID" 2>/dev/null || true
           fi
+
+  native-smoke:
+    name: Native — SimulatorKit HID (Tier 1)
+    runs-on: macos-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Assert headless posture
+        run: |
+          set -euo pipefail
+          if [ -n "${OPENSAFARI_ALLOW_FOCUS_INPUT:-}" ]; then
+            echo "::error::OPENSAFARI_ALLOW_FOCUS_INPUT must NOT be set."
+            exit 1
+          fi
+          if [ "${OPENSAFARI_HEADLESS_ONLY:-}" != "1" ]; then
+            echo "::error::OPENSAFARI_HEADLESS_ONLY=1 must be set."
+            exit 1
+          fi
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Build (including dist/sim-hid-bridge)
+        run: npm run build
+
+      - name: Ensure sim-hid-bridge binary is present
+        run: |
+          set -euo pipefail
+          if [ ! -x dist/sim-hid-bridge ]; then
+            echo "::error::dist/sim-hid-bridge was not produced by npm run build — SimulatorKitHID backend cannot be exercised."
+            ls -la dist/ || true
+            exit 1
+          fi
+          file dist/sim-hid-bridge
+
+      - name: Pick and boot iOS simulator
+        run: |
+          set -euo pipefail
+          UDID=$(xcrun simctl list devices available -j | node -e '
+            const d = JSON.parse(require("fs").readFileSync(0, "utf8"));
+            const runtimes = Object.keys(d.devices)
+              .filter(r => r.includes("iOS"))
+              .sort();
+            for (const r of runtimes.slice().reverse()) {
+              const iphone = (d.devices[r] || []).find(x => /iPhone/.test(x.name) && x.isAvailable);
+              if (iphone) { process.stdout.write(iphone.udid); return; }
+            }
+            console.error("No available iPhone simulator");
+            process.exit(1);
+          ')
+          echo "SIMULATOR_UDID=$UDID" >> "$GITHUB_ENV"
+          xcrun simctl boot "$UDID"
+          for i in $(seq 1 30); do
+            if xcrun simctl list devices booted | grep -q "$UDID"; then
+              break
+            fi
+            sleep 2
+          done
+          xcrun simctl list devices booted
+
+      - name: Run Tier-1 simhid smoke (backend selection + headless + hardware + perf)
+        env:
+          OSF_DEVICE_ID: ${{ env.SIMULATOR_UDID }}
+          JEST_JUNIT_OUTPUT_DIR: test-results
+          JEST_JUNIT_OUTPUT_NAME: native-smoke.junit.xml
+          JEST_JUNIT_SUITE_NAME: 'SimulatorKit HID headless smoke'
+        run: |
+          set -euo pipefail
+          mkdir -p test-results
+          # Skip the "Settings.app automation" describe: known-failing on iOS 26 per
+          # test file docstring — mouse-HID events are swallowed by the system
+          # gesture recogniser instead of the UIKit responder. The remaining
+          # describes cover the load-bearing headless claims:
+          #   - simhid is selected (Tier 1) without OPENSAFARI_ALLOW_FOCUS_INPUT
+          #   - physical mouse cursor does not move
+          #   - Simulator.app never comes to the foreground
+          #   - hardware button / keyboard HID events succeed via the bridge
+          #   - single-tap + spawn overhead stay within the documented envelope
+          npx jest \
+            --config jest.config.js \
+            --testPathIgnorePatterns='/node_modules/' \
+            --testTimeout=180000 \
+            --runInBand \
+            --reporters=default \
+            --reporters=jest-junit \
+            -t 'backend selection|headless characteristics|hardware buttons|performance' \
+            tests/integration/sim-hid-input.live.test.ts
+
+      - name: Verify no AppleScript fallback was loaded
+        if: always()
+        run: |
+          set -euo pipefail
+          LOG="$HOME/.opensafari/audit.log"
+          if [ ! -f "$LOG" ]; then
+            echo "audit log not present — HEADLESS_ONLY=1 blocks the AppleScript backend at construction time."
+            exit 0
+          fi
+          if grep -q -i 'applescript' "$LOG"; then
+            echo "::error::audit.log references applescript — headless posture violated."
+            grep -n -i 'applescript' "$LOG" | head -20
+            exit 1
+          fi
+          echo "audit log free of applescript references"
+
+      - name: Capture screenshot on failure
+        if: failure()
+        run: |
+          mkdir -p native-smoke-logs
+          xcrun simctl io "$SIMULATOR_UDID" screenshot \
+            "native-smoke-logs/failure-screenshot.png" || true
+
+      - name: Upload JUnit + diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-smoke-artifacts
+          path: |
+            test-results/
+            native-smoke-logs/
+          if-no-files-found: warn
+
+      - name: Shutdown
+        if: always()
+        run: |
+          if [ -n "${SIMULATOR_UDID:-}" ]; then
+            xcrun simctl shutdown "$SIMULATOR_UDID" 2>/dev/null || true
+          fi
