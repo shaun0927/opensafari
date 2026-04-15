@@ -5,7 +5,7 @@ module.exports = {
   roots: ['<rootDir>/tests'],
   testMatch: ['**/*.test.ts'],
   // Exclude integration tests from default run (require macOS + Xcode + Simulator)
-  testPathIgnorePatterns: ['/node_modules/', '/tests/integration/', '/tests/e2e-', '/tests/fixtures/', '/tests/sentinel/'],
+  testPathIgnorePatterns: ['/node_modules/', '/tests/integration/', '/tests/e2e-', '/tests/fixtures/', '/tests/sentinel/', '/tests/ci/'],
   // Transform ESM-only dependencies (pixelmatch is pure ESM)
   transformIgnorePatterns: ['/node_modules/(?!pixelmatch)'],
   transform: {
