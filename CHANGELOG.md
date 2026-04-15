@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### CI / Stability
+
+- **Daily `sim-hid-sentinel` workflow** (#493): New `.github/workflows/sim-hid-sentinel.yml` runs `tests/ci/sim-hid-sentinel.test.ts` on a daily 06:00 UTC cron across `macos-latest` and `macos-14` so BC breaks in Apple's private `SimulatorKit.framework` / `CoreSimulator.framework` surface before users hit them. On scheduled failure, the workflow opens (or comments on) a `sentinel`-labelled GitHub issue with the runner info, the failed workflow run URL, and pointers to `docs/private-apis.md`. Also fires on `workflow_dispatch` and on pushes touching `src/native/sim-hid-bridge.swift`.
+- **One-time private-API stderr notice** (#493): `SimulatorKitHIDInputBackend` now emits a single `[opensafari] SimulatorKitHIDInputBackend uses Apple private frameworks …` line via `console.error` the first time `sim-hid-bridge` is spawned in a process. This makes the private-framework dependency visible to MCP server operators and CI logs without drowning them with per-call repetition. The notice fires even when the spawn itself fails with exit `78`, so a broken SimulatorKit environment still surfaces the context.
+- **`docs/private-apis.md` link in SimulatorKit errors** (#493): `InputBackendError` messages for `SIMULATORKIT_UNAVAILABLE` and `NOT_IMPLEMENTED` now append `See docs/private-apis.md.` so CI operators and on-call engineers land directly on the BC-break response playbook instead of grepping a bare exit code.
+- **`tests/ci/` excluded from default `npm test`** (#493): `jest.config.js` `testPathIgnorePatterns` now lists `/tests/ci/`, so the sentinel suite runs only under the dedicated workflow or via `npx jest tests/ci/...`. This matches the existing convention for `/tests/integration/` and keeps the default developer loop focused on the ~1500-test unit suite.
+
+### Documentation
+
+- **`docs/private-apis.md` rewritten as a production contract** (#493): Header bumped from "PoC, not yet activated" to "Production — Tier 1 shipped". BC-break monitoring strategy section rewritten to reference the shipped sentinel workflow, the one-time stderr notice, and the doc-pointer in `InputBackendError`. New `idb` call-pattern comparison table documents how OpenSafari's bridge aligns with (and where it diverges from) Facebook's `idb_companion` on framework loading, `SimDevice` resolution, HID client acquisition, tap / swipe / key / button encoding, send channel, transport, arg encoding, timing, and license. Tracking section lists the shipped PRs (#487, #510, #511, #513).
+
 ## [0.4.7] - 2026-04-15
 
 ### Added — FlutterVMInputBackend (Tier 0) ships in production (Epic #484, Issue #481)

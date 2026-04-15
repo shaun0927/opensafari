@@ -189,6 +189,31 @@ describe('SimulatorKitHIDInputBackend', () => {
     });
   });
 
+  test('exit 78 error message references docs/private-apis.md', async () => {
+    execFileMock.mockRejectedValueOnce(execError({
+      code: 78,
+      stderr: 'dlopen failed',
+    }));
+    await expect(backend.tap(DEVICE, 1, 2)).rejects.toThrow(/docs\/private-apis\.md/);
+  });
+
+  test('exit 99 error message references docs/private-apis.md', async () => {
+    execFileMock.mockRejectedValueOnce(execError({
+      code: 99,
+      stderr: 'stub path',
+    }));
+    await expect(backend.tap(DEVICE, 1, 2)).rejects.toThrow(/docs\/private-apis\.md/);
+  });
+
+  test('non-SimulatorKit exit codes do not leak the private-apis hint', async () => {
+    execFileMock.mockRejectedValueOnce(execError({
+      code: 64,
+      stderr: 'usage',
+    }));
+    // BAD_ARGS is a caller bug, not an Apple BC break — no doc pointer.
+    await expect(backend.tap(DEVICE, 1, 2)).rejects.not.toThrow(/private-apis\.md/);
+  });
+
   test('exit 69 → InputBackendError code "DEVICE_NOT_BOOTED"', async () => {
     execFileMock.mockRejectedValueOnce(execError({
       code: 69,
@@ -258,34 +283,7 @@ describe('SimulatorKitHIDInputBackend', () => {
     });
   });
 
-  // ── Private-API warning latch ────────────────────────────────────────────
-
-  test('first run() emits exactly one warning mentioning SimulatorKit and docs/private-apis.md', async () => {
-    execFileMock.mockResolvedValue({
-      stdout: '{"ok":true,"kind":"tap","udid":"x","elapsed_ms":1}',
-      stderr: '',
-    });
-    const spy = jest.spyOn(console, 'error').mockImplementation(() => {});
-    try {
-      await backend.tap(DEVICE, 1, 2);
-      const calls = spy.mock.calls.filter((c) => {
-        const msg = String(c[0]);
-        return msg.includes('SimulatorKit') && msg.includes('docs/private-apis.md');
-      });
-      expect(calls).toHaveLength(1);
-
-      // Second run must NOT emit an additional warning.
-      spy.mockClear();
-      await backend.tap(DEVICE, 3, 4);
-      const calls2 = spy.mock.calls.filter((c) => {
-        const msg = String(c[0]);
-        return msg.includes('SimulatorKit') && msg.includes('docs/private-apis.md');
-      });
-      expect(calls2).toHaveLength(0);
-    } finally {
-      spy.mockRestore();
-    }
-  });
+  // Private-API warning latch is tested in the dedicated describe block below.
 
   test('exit 78 → thrown message contains "See docs/private-apis.md"', async () => {
     execFileMock.mockRejectedValueOnce(execError({
@@ -368,5 +366,64 @@ describe('tryCreateSimulatorKitHIDBackend', () => {
     const result = await tryCreateSimulatorKitHIDBackend();
     expect(result).toBeInstanceOf(SimulatorKitHIDInputBackend);
     expect(result?.kind).toBe('simhid');
+  });
+});
+
+// ── Private-API warning latch (issue #493) ─────────────────────────────────
+
+describe('SimulatorKitHIDInputBackend private-API warning', () => {
+  let backend: SimulatorKitHIDInputBackend;
+  let stderrSpy: jest.SpyInstance;
+
+  beforeEach(() => {
+    execFileMock.mockReset();
+    resetSimHidPrivateAPIWarning();
+    backend = new SimulatorKitHIDInputBackend('/fake/dist/sim-hid-bridge');
+    stderrSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    stderrSpy.mockRestore();
+  });
+
+  test('emits a stderr notice the first time sim-hid-bridge is spawned', async () => {
+    execFileMock.mockResolvedValueOnce({
+      stdout: '{"ok":true,"kind":"tap","udid":"x","elapsed_ms":1}',
+      stderr: '',
+    });
+    await backend.tap(DEVICE, 1, 2);
+    const warningCalls = stderrSpy.mock.calls.filter((call) =>
+      typeof call[0] === 'string' && call[0].includes('SimulatorKit'),
+    );
+    expect(warningCalls).toHaveLength(1);
+    expect(warningCalls[0][0]).toMatch(/docs\/private-apis\.md/);
+  });
+
+  test('does not re-emit the notice on subsequent spawns', async () => {
+    execFileMock.mockResolvedValue({
+      stdout: '{"ok":true,"kind":"tap","udid":"x","elapsed_ms":1}',
+      stderr: '',
+    });
+    await backend.tap(DEVICE, 1, 2);
+    await backend.tap(DEVICE, 3, 4);
+    await backend.tap(DEVICE, 5, 6);
+    const warningCalls = stderrSpy.mock.calls.filter((call) =>
+      typeof call[0] === 'string' && call[0].includes('SimulatorKit'),
+    );
+    expect(warningCalls).toHaveLength(1);
+  });
+
+  test('emits the notice even when the spawn itself fails (CI operator visibility)', async () => {
+    execFileMock.mockRejectedValueOnce(execError({
+      code: 78,
+      stderr: 'dlopen failed',
+    }));
+    await expect(backend.tap(DEVICE, 1, 2)).rejects.toBeInstanceOf(InputBackendError);
+    // The notice fires before the exec call — so even a bridge that exits 78
+    // (SimulatorKit missing) still surfaces the private-API context.
+    const privateApiCalls = stderrSpy.mock.calls.filter((call) =>
+      typeof call[0] === 'string' && call[0].includes('private Apple frameworks'),
+    );
+    expect(privateApiCalls).toHaveLength(1);
   });
 });

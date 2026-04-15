@@ -49,6 +49,7 @@ export function resetSimHidPrivateAPIWarning(): void {
 /** Spawn timeout for the Swift helper. Matches idb's default. */
 const SPAWN_TIMEOUT_MS = 10_000;
 
+
 /** HID usage page 0x07 (Keyboard/Keypad) — subset we map for pressKey(). */
 const KEY_NAME_TO_HID_USAGE: Record<string, number> = {
   Enter: 0x28,
@@ -255,7 +256,13 @@ export class SimulatorKitHIDInputBackend implements InputBackend {
       const exit = typeof e.code === 'number' ? e.code : undefined;
       const classified = codeForExit(exit);
       const hint = stderr.trim() || stdout.trim() || e.message;
-      const docSuffix = classified === 'SIMULATORKIT_UNAVAILABLE' ? ` (${PRIVATE_API_DOC_REF})` : '';
+      // Attach the private-APIs doc pointer to every SimulatorKit-layer
+      // failure so MCP clients / CI logs link directly to the BC-break
+      // response playbook rather than surfacing a bare exit code.
+      const docSuffix =
+        classified === 'SIMULATORKIT_UNAVAILABLE' || classified === 'NOT_IMPLEMENTED'
+          ? ` (${PRIVATE_API_DOC_REF})`
+          : '';
       throw new InputBackendError(
         `sim-hid-bridge exited ${exit ?? '?'}: ${hint}${docSuffix}`,
         classified,
