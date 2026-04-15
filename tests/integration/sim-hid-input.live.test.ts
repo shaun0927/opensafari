@@ -1,11 +1,10 @@
 /**
  * Live integration suite for issue #491 — SimulatorKitHIDInputBackend.
  *
- * Exercises `SimulatorKitHIDInputBackend` (Tier 1) against a real booted iOS
- * Simulator. Unlike the Flutter / AppleScript suites this file intentionally
- * does NOT set `OPENSAFARI_ALLOW_FOCUS_INPUT` — the whole point of the
- * SimulatorKit bridge is that it works headlessly without the focus-stealing
- * CGEvent fallback.
+ * Exercises the SimulatorKit HID bridge (`dist/sim-hid-bridge`) against a real
+ * booted iOS Simulator. This suite is the definitive live validation for the
+ * bridge's post-#537 capabilities: hardware buttons, keyboard events, swipes,
+ * headless dispatch characteristics, and spawn/throughput performance.
  *
  * Setup prerequisites:
  *   - macOS host with Xcode 16+ installed (SimulatorKit.framework must be
@@ -19,18 +18,26 @@
  *     tests/integration/sim-hid-input.live.test.ts \
  *     --runInBand --testPathIgnorePatterns=/node_modules/
  *
- * Localisation: the target workstation runs Settings.app in Korean so every
- * Settings query uses the Korean label. Override via the `SETTINGS_GENERAL`,
- * `SETTINGS_ABOUT` and related env vars if the host uses a different locale.
+ * Scope vs. #537:
+ *   PR #537 disabled the Tier-1 `return cachedSimHidBackend` in
+ *   `getInputBackend()` because `IndigoHIDMessageForMouseNSEvent` causes the
+ *   iOS 26.4 simulator to lock instead of tapping. Hardware button
+ *   (`IndigoHIDMessageForButton`) and keyboard (`IndigoHIDMessageForKeyboardArbitrary`)
+ *   messages are unaffected. Accordingly:
+ *     - Backend-selection tests assert the new routing: simhid is probed and
+ *       cached, but `getInputBackend()` does NOT return it for tap/swipe until
+ *       the upstream bridge bug is resolved.
+ *     - Settings.app automation tests (which require UIKit tap consumption)
+ *       are `describe.skip`ped with an inline TODO(#491) — they will be
+ *       re-enabled by the PR that restores Tier-1 tap routing.
+ *     - Hardware button / key / swipe / performance tests drive the bridge
+ *       binary directly, independent of `getInputBackend()` routing, and stay
+ *       as live assertions.
  *
- * NOTE: the SimulatorKit mouse-event path used by the current Swift bridge
- * (`IndigoHIDMessageForMouseNSEvent`) delivers events correctly for hardware
- * buttons and keyboard input, but mouse taps on iOS 26 are not consumed by
- * the UIKit responder chain — the simulator forwards them to the system
- * gesture recogniser which interprets them as a Home swipe. Scenarios that
- * depend on tapping a UIKit element therefore still fail against this PoC.
- * The affected tests are kept `test()` (not `test.skip()`) so regressions and
- * fixes both surface automatically.
+ * Device-state hygiene: the `button lock` hardware-button test puts the
+ * simulator to sleep. `afterAll` dispatches a `button home` and waits briefly
+ * so the device is unlocked for the next jest invocation. Individual tests
+ * that need Settings.app relaunch the bundle explicitly.
  */
 
 import { execFile, execFileSync, execSync } from 'child_process';
@@ -43,8 +50,10 @@ import {
 } from '../../src/native';
 import {
   getInputBackend,
+  HeadlessInputUnavailableError,
   resetInputBackend,
 } from '../../src/tools/native-input-backend';
+import { tryCreateSimulatorKitHIDBackend } from '../../src/tools/sim-hid-input-backend';
 
 const execFileAsync = promisify(execFile);
 
@@ -138,6 +147,25 @@ function getMouseLocation(): { x: number; y: number } {
   return { x: Number(sx), y: Number(sy) };
 }
 
+/**
+ * Pin the macOS mouse cursor to a fixed coordinate using
+ * `CGWarpMouseCursorPosition`. This is a *displacement* call: it teleports the
+ * cursor without posting a CGEvent, so any subsequent movement detected by
+ * `CGEventGetLocation` can only have been caused by a real CGEvent (i.e. the
+ * SimHID bridge under test, or the developer's hand). Used to isolate the
+ * headless-cursor assertion from incidental mouse movement during local runs.
+ */
+function pinMouseCursor(x: number, y: number): void {
+  execFileSync(
+    '/usr/bin/swift',
+    [
+      '-e',
+      `import CoreGraphics; CGWarpMouseCursorPosition(CGPoint(x: ${x}, y: ${y}))`,
+    ],
+    { encoding: 'utf8' },
+  );
+}
+
 function frontmostAppName(): string {
   try {
     return execFileSync(
@@ -176,23 +204,28 @@ afterAll(() => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Backend selection — these tests prove that SimulatorKitHIDInputBackend is
-// chosen as Tier 1 and that we never silently fall through to AppleScript.
+// Backend selection — assert the post-#537 routing: the SimulatorKit HID
+// backend is probed and cached on boot, but `getInputBackend()` does NOT
+// return it for tap/swipe because `IndigoHIDMessageForMouseNSEvent` locks the
+// iOS 26.4 simulator. When the bridge migrates to a UIKit-consumable touch
+// pathway the first two tests flip (simhid is returned again) and the third
+// test should be deleted.
 // ─────────────────────────────────────────────────────────────────────────────
 describe('SimulatorKitHIDInputBackend — backend selection', () => {
-  test('getInputBackend resolves to kind="simhid" on a booted simulator', async () => {
-    resetInputBackend();
-    const backend = await getInputBackend(DEVICE_ID);
-    expect(backend.kind).toBe('simhid');
+  test('tryCreateSimulatorKitHIDBackend resolves to a simhid backend on a booted simulator', async () => {
+    const backend = await tryCreateSimulatorKitHIDBackend();
+    expect(backend).not.toBeNull();
+    expect(backend?.kind).toBe('simhid');
   });
 
-  test('OPENSAFARI_ALLOW_FOCUS_INPUT is NOT required — simhid is selected without it', async () => {
+  test('getInputBackend does NOT return simhid for tap/swipe (post-#537 regression guard)', async () => {
     const originalAllow = process.env.OPENSAFARI_ALLOW_FOCUS_INPUT;
     delete process.env.OPENSAFARI_ALLOW_FOCUS_INPUT;
     try {
       resetInputBackend();
-      const backend = await getInputBackend(DEVICE_ID);
-      expect(backend.kind).toBe('simhid');
+      await expect(getInputBackend(DEVICE_ID)).rejects.toBeInstanceOf(
+        HeadlessInputUnavailableError,
+      );
     } finally {
       if (originalAllow !== undefined) {
         process.env.OPENSAFARI_ALLOW_FOCUS_INPUT = originalAllow;
@@ -200,10 +233,21 @@ describe('SimulatorKitHIDInputBackend — backend selection', () => {
     }
   });
 
-  test('AppleScript Tier is NOT used — tap round-trips through simhid only', async () => {
-    await relaunchSettings();
-    const result = await tap({ label: SETTINGS_GENERAL, index: 0 });
-    expect(result.kind).toBe('simhid');
+  test('getInputBackend falls through to AppleScript with explicit OPENSAFARI_ALLOW_FOCUS_INPUT opt-in', async () => {
+    const originalAllow = process.env.OPENSAFARI_ALLOW_FOCUS_INPUT;
+    process.env.OPENSAFARI_ALLOW_FOCUS_INPUT = '1';
+    try {
+      resetInputBackend();
+      const backend = await getInputBackend(DEVICE_ID);
+      expect(backend.kind).toBe('applescript');
+    } finally {
+      if (originalAllow === undefined) {
+        delete process.env.OPENSAFARI_ALLOW_FOCUS_INPUT;
+      } else {
+        process.env.OPENSAFARI_ALLOW_FOCUS_INPUT = originalAllow;
+      }
+      resetInputBackend();
+    }
   });
 });
 
@@ -213,6 +257,13 @@ describe('SimulatorKitHIDInputBackend — backend selection', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 describe('SimulatorKitHIDInputBackend — headless characteristics', () => {
   test('physical mouse cursor does not move while simhid events are dispatched', async () => {
+    // Pin the cursor to a fixed coordinate via CGWarpMouseCursorPosition so
+    // incidental developer mouse movement during the test cannot mask or
+    // simulate the failure mode this assertion is designed to catch (a CGEvent
+    // posted by the bridge that drags the real cursor).
+    const PIN_X = 100;
+    const PIN_Y = 100;
+    pinMouseCursor(PIN_X, PIN_Y);
     const before = getMouseLocation();
     await runBridge([DEVICE_ID, 'tap', '200', '500']);
     await runBridge([DEVICE_ID, 'tap', '100', '100']);
@@ -245,7 +296,11 @@ describe('SimulatorKitHIDInputBackend — headless characteristics', () => {
 // call it so the contract is end-to-end.
 // ─────────────────────────────────────────────────────────────────────────────
 describe('SimulatorKitHIDInputBackend — hardware buttons', () => {
-  test.each(['home', 'lock', 'sound-up', 'sound-down'] as const)(
+  // `lock` intentionally runs last: it puts the simulator to sleep and causes
+  // subsequent `xcrun simctl launch` calls to fail with code 405
+  // ("Unable to lookup in current state: Shutting Down"). `afterAll` below
+  // wakes the device again before the next test file can run.
+  test.each(['home', 'sound-up', 'sound-down', 'lock'] as const)(
     'button %s — bridge reports ok=true',
     async (btn) => {
       const r = await runBridge([DEVICE_ID, 'button', btn]);
@@ -255,6 +310,8 @@ describe('SimulatorKitHIDInputBackend — hardware buttons', () => {
   );
 
   test('key (HID usage 0x28 / Enter) — bridge reports ok=true', async () => {
+    // Wake the device if the preceding `lock` test has just put it to sleep.
+    await runBridge([DEVICE_ID, 'button', 'home']);
     const r = await runBridge([DEVICE_ID, 'key', '40']);
     expect(r.ok).toBe(true);
     expect(r.kind).toBe('key');
@@ -264,6 +321,15 @@ describe('SimulatorKitHIDInputBackend — hardware buttons', () => {
     const r = await runBridge([DEVICE_ID, 'swipe', '200', '600', '200', '300']);
     expect(r.ok).toBe(true);
     expect(r.kind).toBe('swipe');
+  });
+
+  // Ensure the device is awake before later suites (performance, etc.) run.
+  afterAll(async () => {
+    try {
+      await runBridge([DEVICE_ID, 'button', 'home']);
+    } catch {
+      /* best-effort wake — safe to ignore */
+    }
   });
 });
 
@@ -309,12 +375,13 @@ describe('SimulatorKitHIDInputBackend — performance', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Settings.app automation scenarios — these depend on UIKit consuming the
-// synthesised mouse events as touches. On the PoC Swift bridge they exercise
-// the real Settings.app but may FAIL until the bridge migrates from
-// `IndigoHIDMessageForMouseNSEvent` to the digitiser / touch pathway.
+// Settings.app automation scenarios — skipped until the Swift bridge migrates
+// off `IndigoHIDMessageForMouseNSEvent`. See #491 comment and PR #537 for the
+// device-lock root cause. When Tier-1 tap routing is restored flip this to
+// `describe(...)` and the seven scenarios below should go green.
+// TODO(#491): re-enable once sim-hid-bridge mouse-event path is rewritten.
 // ─────────────────────────────────────────────────────────────────────────────
-describe('SimulatorKitHIDInputBackend — Settings.app automation', () => {
+describe.skip('SimulatorKitHIDInputBackend — Settings.app automation', () => {
   beforeEach(async () => {
     await relaunchSettings();
   });
@@ -392,11 +459,13 @@ describe('SimulatorKitHIDInputBackend — Settings.app automation', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Cross-app compatibility — same simhid backend must drive Settings, Photos
-// and Maps. Only checks the backend resolution per bundle; full UI navigation
-// is covered by the Settings.app suite above.
+// Cross-app compatibility — skipped alongside the Settings.app automation
+// block because the assertion (`backend.kind === 'simhid'`) is invalidated by
+// PR #537. It will be re-enabled together with the Settings.app automation
+// when Tier-1 tap routing is restored.
+// TODO(#491): re-enable once sim-hid-bridge mouse-event path is rewritten.
 // ─────────────────────────────────────────────────────────────────────────────
-describe('SimulatorKitHIDInputBackend — cross-app backend consistency', () => {
+describe.skip('SimulatorKitHIDInputBackend — cross-app backend consistency', () => {
   test.each([
     ['Settings', SETTINGS_BUNDLE],
     ['Photos', PHOTOS_BUNDLE],
