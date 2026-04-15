@@ -4,6 +4,35 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.4.7] - 2026-04-15
+
+### Added — FlutterVMInputBackend (Tier 0) ships in production (Epic #484, Issue #481)
+
+- **`FlutterVMInputBackend` — Tier-0 headless Flutter input** (#481, #486): The Dart VM Service-based input backend now ships as the highest-priority routing tier in `getInputBackend()`. When the target device runs a Flutter app in debug or profile mode, pointer events, text input, and key presses are dispatched directly into the Dart isolate via VM Service `evaluate` — completely bypassing OS-level input.
+  - `tap(x, y, duration?)` — synthetic `PointerDataPacket` with down/up phases via `PlatformDispatcher.onPointerDataPacket`
+  - `swipe(x1, y1 → x2, y2, duration?)` — interpolated `PointerChange.move` events
+  - `typeText(text)` — `TextInput.updateEditingState` platform message via primary focus
+  - `keypress(hidUsage)` / `sendKey(name)` — `HardwareKeyboard` events with HID → `LogicalKeyboardKey` mapping
+  - No CGEvent synthesis, no mouse cursor movement, no Simulator.app focus stealing
+  - No `OPENSAFARI_ALLOW_FOCUS_INPUT` opt-in required — Flutter route is always headless
+  - Per-device negative cache (30s TTL) prevents repeated discovery probes for non-Flutter devices
+  - 1.5s discovery timeout bounds VM Service probe so native iOS apps don't stall input tools
+- **Per-operation library scoping for Dart `evaluate`** (#481, #514): The Dart VM Service `evaluate` RPC compiles expressions in the scope of a specific library. Different operations now target the library that exposes their required symbols:
+  - tap/swipe → `widgets/binding.dart` (`PlatformDispatcher`, `PointerDataPacket`, `PointerChange`, `PointerDeviceKind`)
+  - typeText → `widgets/editable_text.dart` (`FocusManager`, `EditableTextState`, `TextEditingValue`, `SelectionChangedCause`)
+  - keypress/sendKey → `services/hardware_keyboard.dart` (`HardwareKeyboard`, `KeyDownEvent`, `KeyUpEvent`, `LogicalKeyboardKey`)
+- **DDS requirement documentation** (#481, #515): Documented in `docs/headless-architecture.md` and integration test fixtures that Flutter apps must be launched via `flutter run` (which starts Dart Development Service / DDS and the frontend compiler). Apps launched via `xcrun simctl launch` expose the VM Service socket but lack the compilation service, so `evaluate` calls fail. Integration test fixtures (`tests/integration/flutter-vm-input.live.test.ts`) updated to require a `flutter run`-launched fixture app.
+
+### Test Coverage
+
+- 1510 tests across 103 suites (up from 1488/102 in v0.4.6)
+- New: extended `flutter-vm-input-backend.test.ts` coverage for library-scoped evaluate, integration test for tap/swipe/typeText/keypress against a fixture Flutter app
+- All tests green on develop with FlutterVMInputBackend coexisting with SimulatorKitHID Tier 1 and the rest of the routing chain
+
+### Notes
+
+This release graduates FlutterVMInputBackend from DRAFT (where it sat in v0.4.5) to production-ready Tier 0. Combined with the SimulatorKitHID Tier 1 work in v0.4.6, OpenSafari now has end-to-end headless input coverage for both Flutter apps and native iOS apps on Xcode 26+ where `simctl io input` was removed.
+
 ## [0.4.6] - 2026-04-15
 
 ### Added — Headless automation hardening (Epic #484)
