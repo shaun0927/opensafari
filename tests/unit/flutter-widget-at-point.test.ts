@@ -88,6 +88,38 @@ describe('flattenParentChain', () => {
     expect(out[0].type).toBe('X');
   });
 
+  it('accepts the live Flutter 3.11+ shape where result itself is the chain array', () => {
+    // Reproduces the real VM Service response from
+    // ext.flutter.inspector.getParentChain on Flutter 3.11.3: the top-level
+    // `result` key IS the chain array (not an object with a `chain` field).
+    // Pre-fix flattenParentChain returned [] here, which made
+    // `flutter_widget_at_point` report `ancestor_chain: []` on every live hit.
+    const raw = {
+      type: '_extensionType',
+      result: [
+        { node: { type: 'A', creationLocation: { file: 'a.dart', line: 1, column: 1 } } },
+        { node: { type: 'B', creationLocation: { file: 'b.dart', line: 2, column: 2 } } },
+      ],
+    };
+    const out = flattenParentChain(raw as unknown as Record<string, unknown>);
+    expect(out.map((n) => n.type)).toEqual(['A', 'B']);
+  });
+
+  it('flattens the live result-array shape through the user-defined filter', () => {
+    const raw = {
+      type: '_extensionType',
+      result: [
+        { node: { type: 'RootWidget' } }, // no creationLocation — framework
+        { node: { type: 'MyApp', creationLocation: { file: 'package:myapp/main.dart', line: 1, column: 1 } } },
+        { node: { type: 'MaterialApp', creationLocation: { file: 'package:flutter/src/material/app.dart', line: 1, column: 1 } } },
+        { node: { type: 'HomePage', creationLocation: { file: 'package:myapp/home.dart', line: 1, column: 1 } } },
+      ],
+    };
+    const filtered = flattenParentChain(raw as unknown as Record<string, unknown>)
+      .filter(isUserDefinedWidget);
+    expect(filtered.map((n) => n.type)).toEqual(['MyApp', 'HomePage']);
+  });
+
   it('returns [] for malformed input', () => {
     expect(flattenParentChain({})).toEqual([]);
     expect(flattenParentChain({ chain: 'nope' as unknown as unknown[] })).toEqual([]);

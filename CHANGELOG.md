@@ -7,6 +7,7 @@ All notable changes to this project will be documented in this file.
 ### Fixed
 
 - **`flutter_widget_at_point` returns wrapper type in `widget_type`** (#436): The tool previously surfaced the raw inspector `_ElementDiagnosticableTreeNode` wrapper in the `widget_type` field because `summariseNode` reads the inspector's own `type` key first. The public payload now prefers `widgetRuntimeType` (e.g. `"ElevatedButton"`) and falls back to `description` before the wrapper `type`, so callers see the Flutter widget name that the checklist promises. Covered by new unit tests that mirror the live Flutter 3.11.3 VM Service payload.
+- **`flutter_widget_at_point` `ancestor_chain` always empty against real apps** (#436): `flattenParentChain` only recognised the synthetic `{chain: [...]}` and `{result: {chain: [...]}}` shapes used by the unit tests. The live Flutter 3.11+ response from `ext.flutter.inspector.getParentChain` is `{type: "_extensionType", result: [{node, children}, ...]}` — the `result` key IS the chain array. That third shape is now detected via `Array.isArray(raw.result)`, so the tool returns the real ancestor path instead of an empty list.
 
 ## [0.4.4] - 2026-04-15
 
