@@ -175,6 +175,9 @@ export const TOOL_TIERS: Record<string, number> = {
   hybrid_qa_start: 2,
   hybrid_qa_status: 2,
   hybrid_qa_results: 2,
+
+  // Tier 1: Diagnostics
+  diagnose: 1,
 };
 
 export function getToolTier(toolName: string): number {
