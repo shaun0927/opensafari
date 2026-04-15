@@ -52,6 +52,7 @@ import {
   getInputBackend,
   HeadlessInputUnavailableError,
   resetInputBackend,
+  tryGetFlutterVMClient,
 } from '../../src/tools/native-input-backend';
 import { tryCreateSimulatorKitHIDBackend } from '../../src/tools/sim-hid-input-backend';
 
@@ -62,6 +63,9 @@ const DEVICE_ID =
 const SETTINGS_BUNDLE = 'com.apple.Preferences';
 const PHOTOS_BUNDLE = 'com.apple.mobileslideshow';
 const MAPS_BUNDLE = 'com.apple.Maps';
+// Flutter sample app installed by `tests/integration/fixtures/flutter_sample`.
+// Override with `OSF_FLUTTER_BUNDLE_ID` if a different fixture is deployed.
+const FLUTTER_BUNDLE = process.env.OSF_FLUTTER_BUNDLE_ID ?? 'com.example.osftest';
 
 const SETTINGS_GENERAL = process.env.SETTINGS_GENERAL ?? '일반';
 const SETTINGS_ABOUT = process.env.SETTINGS_ABOUT ?? '정보';
@@ -477,3 +481,146 @@ describe.skip('SimulatorKitHIDInputBackend — cross-app backend consistency', (
     expect(backend.kind).toBe('simhid');
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Native + Flutter dual-boot routing — verifies the documented behavior of
+// `getInputBackend()` when both a native iOS app and a Flutter app are running
+// on the same device.
+//
+// Current implementation (see `getInputBackend` in
+// `src/tools/native-input-backend.ts`):
+//   - Tier 0 wins whenever `tryGetFlutterVMClient(deviceId)` returns a client.
+//     Flutter VM detection is device-scoped, not bundle-scoped, so any
+//     Flutter app booted on the simulator will route input via flutter-vm
+//     regardless of which app is currently in the foreground.
+//   - When no Flutter app is reachable, routing falls through to the native
+//     tiers (simhid disabled by #537 → simctl on Xcode ≤16 → AppleScript
+//     opt-in or `HeadlessInputUnavailableError` on Xcode 26+).
+//
+// Skipped by default because the suite needs `OSF_FLUTTER_BUNDLE_ID` to be
+// installed on the simulator. The bundled fixture in
+// `tests/integration/fixtures/flutter_sample` produces `com.example.osftest`
+// — install it with `flutter install --device-id <udid>` before enabling.
+// ─────────────────────────────────────────────────────────────────────────────
+const FLUTTER_INSTALLED = (() => {
+  try {
+    const out = execFileSync(
+      'xcrun',
+      ['simctl', 'listapps', DEVICE_ID],
+      { encoding: 'utf8', stdio: 'pipe' },
+    );
+    return out.includes(`"${FLUTTER_BUNDLE}"`);
+  } catch {
+    return false;
+  }
+})();
+
+const describeIfFlutter = FLUTTER_INSTALLED ? describe : describe.skip;
+
+describeIfFlutter(
+  'SimulatorKitHIDInputBackend — native + flutter dual-boot routing',
+  () => {
+    /**
+     * Wait for the Flutter app's Dart VM Service to come online by polling
+     * `tryGetFlutterVMClient` until it returns a non-null client. Flutter
+     * apps need a few seconds to publish the VM Service URL after launch.
+     */
+    async function waitForFlutterVM(timeoutMs = 30_000): Promise<void> {
+      const deadline = Date.now() + timeoutMs;
+      let lastError: unknown;
+      while (Date.now() < deadline) {
+        try {
+          const client = await tryGetFlutterVMClient(DEVICE_ID);
+          if (client) return;
+        } catch (e) {
+          lastError = e;
+        }
+        await new Promise((r) => setTimeout(r, 500));
+      }
+      throw new Error(
+        `Flutter VM Service did not appear within ${timeoutMs}ms` +
+          (lastError ? ` (last error: ${(lastError as Error).message})` : ''),
+      );
+    }
+
+    beforeAll(async () => {
+      // Cold-boot both apps so the dual-boot precondition is real, not
+      // inherited from a previous suite.
+      try {
+        execSync(`xcrun simctl terminate ${DEVICE_ID} ${FLUTTER_BUNDLE}`, {
+          stdio: 'pipe',
+        });
+      } catch {
+        /* not running — fine */
+      }
+      try {
+        execSync(`xcrun simctl terminate ${DEVICE_ID} ${SETTINGS_BUNDLE}`, {
+          stdio: 'pipe',
+        });
+      } catch {
+        /* not running — fine */
+      }
+      execSync(`xcrun simctl launch ${DEVICE_ID} ${FLUTTER_BUNDLE}`, {
+        stdio: 'pipe',
+      });
+      execSync(`xcrun simctl launch ${DEVICE_ID} ${SETTINGS_BUNDLE}`, {
+        stdio: 'pipe',
+      });
+      await waitForFlutterVM();
+      resetInputBackend();
+    });
+
+    afterAll(() => {
+      try {
+        execSync(`xcrun simctl terminate ${DEVICE_ID} ${FLUTTER_BUNDLE}`, {
+          stdio: 'pipe',
+        });
+      } catch {
+        /* best-effort */
+      }
+      resetInputBackend();
+    });
+
+    test('Tier-0 wins when Flutter app is co-resident — getInputBackend resolves to flutter-vm', async () => {
+      const backend = await getInputBackend(DEVICE_ID);
+      expect(backend.kind).toBe('flutter-vm');
+    });
+
+    test('tryGetFlutterVMClient returns a non-null client while both apps are booted', async () => {
+      const client = await tryGetFlutterVMClient(DEVICE_ID);
+      expect(client).not.toBeNull();
+    });
+
+    test('terminating the Flutter app collapses Tier-0 — routing falls through', async () => {
+      execSync(`xcrun simctl terminate ${DEVICE_ID} ${FLUTTER_BUNDLE}`, {
+        stdio: 'pipe',
+      });
+      // VM Service teardown is asynchronous; poll until tryGetFlutterVMClient
+      // returns null to avoid a stale-cache race.
+      const deadline = Date.now() + 15_000;
+      let cleared = false;
+      while (Date.now() < deadline) {
+        resetInputBackend();
+        const client = await tryGetFlutterVMClient(DEVICE_ID);
+        if (!client) {
+          cleared = true;
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 500));
+      }
+      expect(cleared).toBe(true);
+
+      const originalAllow = process.env.OPENSAFARI_ALLOW_FOCUS_INPUT;
+      delete process.env.OPENSAFARI_ALLOW_FOCUS_INPUT;
+      try {
+        await expect(getInputBackend(DEVICE_ID)).rejects.toBeInstanceOf(
+          HeadlessInputUnavailableError,
+        );
+      } finally {
+        if (originalAllow !== undefined) {
+          process.env.OPENSAFARI_ALLOW_FOCUS_INPUT = originalAllow;
+        }
+      }
+    });
+  },
+);
