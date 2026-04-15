@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added — Memory tracker + `diagnose` memory block (#554, slice 1)
+
+- **New `src/metrics/memory-tracker.ts`** — process-wide RSS peak tracker. `recordMemorySample()` is called from every `emitInputTelemetry()` tick (cheap fast-path: `process.memoryUsage.rss()` when available, single syscall, < 1 µs on macOS/Linux) so the peak RSS is always observable without scheduling its own poller.
+- **`diagnose` MCP tool** now returns a `memory` block: `{ rss_mb, peak_rss_mb, heap_used_mb, heap_total_mb, external_mb, array_buffers_mb, sample_count }`. Heap fields come from a fresh `process.memoryUsage()` call so callers see accurate V8 numbers regardless of whether the per-op sampler has ticked. `peak_rss_mb` answers "did this process ever grow to X MB" without forcing a soak test.
+- **New env var `OPENSAFARI_INPUT_TELEMETRY_MEMORY`** — set to `0` / `false` / `off` to disable the per-op sampler. Default-on because the cost is below the noise floor of the existing `timedInput` wrapper. The full `diagnose` snapshot bypasses the gate so the read-only diagnose tool stays useful even when the hot-path sampler is silenced.
+
+This is the first slice of the holistic memory SLO plan in #554. A follow-up PR will add the per-backend RSS rollup, the gated long-session soak test, the `OPENSAFARI_MEMORY_SOFT_CAP_MB` watchdog, and `docs/memory-budget.md` as the SSOT.
+
 ## [0.4.8] - 2026-04-15
 
 This release is a **stabilization + observability cut** focused on the Xcode 26 headless-input regression discovered after v0.4.6/v0.4.7 shipped. It disables the one SimulatorKitHID code path that silently misses target (native tap/swipe on Xcode 26+), hardens the remaining tiers with telemetry and daily CI probes, documents the investigation in full, and adds three new `sim-hid-bridge` subcommands for on-device diagnosis. No new MCP tools are added — the surface stays compatible with 0.4.7, but `_meta` now carries `_telemetry` latency/routing info for every input call.

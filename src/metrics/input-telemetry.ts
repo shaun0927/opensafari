@@ -14,6 +14,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { InputBackendKind } from '../tools/native-input-backend';
 import { accumulateInputTelemetry } from './input-telemetry-rollup';
+import { recordMemorySample } from './memory-tracker';
 
 /**
  * Stable set of operations we time. Matches the `InputBackend` interface
@@ -96,6 +97,11 @@ export function emitInputTelemetry(event: InputTelemetryEvent): void {
   } catch {
     // Ditto — rollup failures stay invisible to the caller.
   }
+  // Piggyback a cheap RSS sample on every telemetry tick so peak memory
+  // is observable from `diagnose` without any separate scheduling. The
+  // tracker guards itself with its own env var and try/catch, so this
+  // call cannot destabilise the telemetry path.
+  recordMemorySample();
   const buf = captureStore.getStore();
   if (buf) buf.push(event);
 }
