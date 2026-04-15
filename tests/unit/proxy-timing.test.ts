@@ -9,7 +9,23 @@
  * - WebKitClient connect() succeeds after initial failures with retry configured
  */
 
+// Mock child_process.execFile so promisify(execFile) in proxy.ts uses our mock.
+// Must use jest.mock (hoisted above imports) because proxy.ts captures
+// execFileAsync = promisify(execFile) at module load time.
+const mockExecFileAsync = jest.fn().mockResolvedValue({ stdout: '', stderr: '' });
+jest.mock('child_process', () => {
+  const actual = jest.requireActual('child_process');
+  return {
+    ...actual,
+    execFile: Object.assign(
+      jest.fn((...args: unknown[]) => (actual.execFile as (...a: unknown[]) => unknown)(...args)),
+      { [Symbol.for('nodejs.util.promisify.custom')]: mockExecFileAsync },
+    ),
+  };
+});
+
 import { WebInspectorProxy } from '../../src/simulator/proxy';
+import * as socketFinder from '../../src/simulator/socket-finder';
 import { WebKitClient } from '../../src/webkit/client';
 
 // Access private methods via type cast for white-box testing
@@ -179,6 +195,37 @@ describe('WebInspectorProxy initialization timing', () => {
 
       expect(capturedUrls[0]).toBe(`http://localhost:${proxy.deviceListPort}`);
     });
+  });
+});
+
+describe('WebInspectorProxy.start() socket discovery retry (Issue #494)', () => {
+  let proxy: WebInspectorProxy;
+
+  beforeEach(() => {
+    proxy = new WebInspectorProxy({ port: 9522, deviceListPort: 9521 });
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it('start() uses waitForSocketPath (retries socket discovery) rather than a single findSocketPath call', async () => {
+    const waitForSocketPathSpy = jest
+      .spyOn(socketFinder, 'waitForSocketPath')
+      .mockResolvedValue(null);
+
+    // Mock isPortInUse to return false so the port-in-use guard is skipped
+    jest.spyOn(
+      proxy as unknown as { isPortInUse: (port: number) => Promise<boolean> },
+      'isPortInUse',
+    ).mockResolvedValue(false);
+
+    // Mock the which check — mockExecFileAsync (hoisted jest.mock) handles promisify(execFile)
+    mockExecFileAsync.mockResolvedValue({ stdout: '/usr/local/bin/ios_webkit_debug_proxy\n', stderr: '' });
+
+    await expect(proxy.start()).rejects.toThrow('Web Inspector socket not found');
+    expect(waitForSocketPathSpy).toHaveBeenCalledWith({ targetUdid: undefined, timeout: 10_000 });
   });
 });
 
