@@ -78,6 +78,7 @@
     "eslint": "^10.1.0",
     "eslint-config-prettier": "^10.1.8",
     "jest": "^30.3.0",
+    "jest-junit": "^16.0.0",
     "prettier": "^3.8.1",
     "rimraf": "^5.0.0",
     "ts-jest": "^29.4.6",
