@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Tests
+
+- **Live SimulatorKit HID integration suite** (#491): New `tests/integration/sim-hid-input.live.test.ts` exercises `SimulatorKitHIDInputBackend` against a booted iPhone Simulator and pins the headless guarantees from #483: routing picks the `simhid` backend without `OPENSAFARI_ALLOW_FOCUS_INPUT`, the Swift bridge returns `ok:true` for every command shape (tap / swipe / key / button), the physical mouse cursor does not move across a tap, AX-bridge-driven Settings.app navigation (General, About, search → Wi-Fi, Display & Brightness, Airplane Mode, Transfer or Reset) reaches each expected sub-screen, the `simhid` kind stays selected across Settings / Photos / Maps relaunches, and a 100-tap loop keeps RSS growth under 30 MB. Gated behind the existing `/tests/integration/` ignore pattern — runs only via `npx jest tests/integration/sim-hid-input.live.test.ts --runInBand`, and auto-skips (`describe.skip`) on non-darwin machines or when `dist/sim-hid-bridge` is absent so CI on Linux stays green.
+
 ## [0.4.7] - 2026-04-15
 
 ### Added — FlutterVMInputBackend (Tier 0) ships in production (Epic #484, Issue #481)
