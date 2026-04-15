@@ -159,30 +159,30 @@ describe('AppleScriptInputBackend', () => {
 
   test('tap activates Simulator and calls osascript click', async () => {
     // First call: activate Simulator
-    // Second call: get window position
+    // Second call: get window + child UI element positions
     // Third call: click at coordinates
     execFileMock
-      .mockResolvedValueOnce({ stdout: '', stderr: '' })       // activate
-      .mockResolvedValueOnce({ stdout: '100,200', stderr: '' }) // window position
-      .mockResolvedValueOnce({ stdout: '', stderr: '' });       // click
+      .mockResolvedValueOnce({ stdout: '', stderr: '' })                    // activate
+      .mockResolvedValueOnce({ stdout: '100,200|100,230', stderr: '' })    // AX origin query
+      .mockResolvedValueOnce({ stdout: '', stderr: '' });                   // click
 
     await backend.tap(DEVICE, 50, 100);
 
     // Third call should be the click at translated coordinates
-    // Window at (100, 200), title bar = 28, so content origin = (100, 228)
-    // iOS (50, 100) → screen (150, 328)
+    // Child UI element (content origin) at (100, 230)
+    // iOS (50, 100) → screen (150, 330)
     const clickCall = execFileMock.mock.calls[2];
     expect(clickCall[0]).toBe('osascript');
     expect(clickCall[1]).toContain(
-      'tell application "System Events" to click at {150, 328}',
+      'tell application "System Events" to click at {150, 330}',
     );
   });
 
   test('tap with duration uses Swift CGEvent for long press', async () => {
     execFileMock
-      .mockResolvedValueOnce({ stdout: '', stderr: '' })       // activate
-      .mockResolvedValueOnce({ stdout: '0,0', stderr: '' })   // window position
-      .mockResolvedValueOnce({ stdout: '', stderr: '' });      // swift CGEvent
+      .mockResolvedValueOnce({ stdout: '', stderr: '' })                  // activate
+      .mockResolvedValueOnce({ stdout: '0,0|0,28', stderr: '' })         // AX origin query
+      .mockResolvedValueOnce({ stdout: '', stderr: '' });                 // swift CGEvent
 
     await backend.tap(DEVICE, 200, 400, 1.5);
 
@@ -262,9 +262,9 @@ describe('AppleScriptInputBackend', () => {
 
   test('swipe activates Simulator and uses Swift CGEvent drag', async () => {
     execFileMock
-      .mockResolvedValueOnce({ stdout: '', stderr: '' })       // activate
-      .mockResolvedValueOnce({ stdout: '50,100', stderr: '' }) // window position
-      .mockResolvedValueOnce({ stdout: '', stderr: '' });      // swift
+      .mockResolvedValueOnce({ stdout: '', stderr: '' })                   // activate
+      .mockResolvedValueOnce({ stdout: '50,100|50,128', stderr: '' })     // AX origin query
+      .mockResolvedValueOnce({ stdout: '', stderr: '' });                  // swift
 
     await backend.swipe(DEVICE, 200, 600, 200, 200, 0.5);
 
@@ -276,11 +276,119 @@ describe('AppleScriptInputBackend', () => {
     expect(script).toContain('leftMouseUp');
   });
 
-  test('getSimulatorContentOrigin parses window position', async () => {
-    execFileMock.mockResolvedValueOnce({ stdout: '300,150\n', stderr: '' });
+  // ── getSimulatorContentOrigin (dynamic AX measurement) ────────────────────
 
-    const origin = await backend.getSimulatorContentOrigin();
-    expect(origin).toEqual({ x: 300, y: 178 }); // 150 + 28 title bar
+  test('getSimulatorContentOrigin returns child UI element position', async () => {
+    execFileMock.mockResolvedValueOnce({ stdout: '300,150|300,178\n', stderr: '' });
+
+    const origin = await backend.getSimulatorContentOrigin(DEVICE);
+    // Uses the child element position directly — no hardcoded offset
+    expect(origin).toEqual({ x: 300, y: 178 });
+  });
+
+  test('getSimulatorContentOrigin falls back to window position on malformed output', async () => {
+    const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    // Malformed: missing pipe separator → triggers fallback path
+    execFileMock
+      .mockResolvedValueOnce({ stdout: 'malformed-output', stderr: '' })  // AX query fails parse
+      .mockResolvedValueOnce({ stdout: '100,200', stderr: '' });           // fallback window query
+
+    const origin = await backend.getSimulatorContentOrigin(DEVICE);
+    expect(origin).toEqual({ x: 100, y: 200 });
+    expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
+    expect(consoleErrorSpy.mock.calls[0][0]).toContain('falling back to window position');
+    consoleErrorSpy.mockRestore();
+  });
+
+  test('getSimulatorContentOrigin emits console.error warning only once per device', async () => {
+    const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    execFileMock
+      .mockResolvedValueOnce({ stdout: 'bad', stderr: '' })   // first call — fails
+      .mockResolvedValueOnce({ stdout: '10,20', stderr: '' }) // fallback window pos
+      .mockResolvedValueOnce({ stdout: 'bad', stderr: '' });  // second call (refresh) — fails again
+
+    // First call — warns
+    await backend.getSimulatorContentOrigin(DEVICE);
+    // Second call with refresh=true — same device, should NOT warn again
+    await backend.getSimulatorContentOrigin(DEVICE, { refresh: true });
+
+    const warningCalls = consoleErrorSpy.mock.calls.filter((args) =>
+      String(args[0]).includes('falling back to window position'),
+    );
+    expect(warningCalls).toHaveLength(1);
+    consoleErrorSpy.mockRestore();
+  });
+
+  test('getSimulatorContentOrigin falls back to window position when AppleScript throws', async () => {
+    const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    execFileMock
+      .mockRejectedValueOnce(new Error('osascript: timed out'))  // AX query throws
+      .mockResolvedValueOnce({ stdout: '50,60', stderr: '' });    // fallback window query
+
+    const origin = await backend.getSimulatorContentOrigin(DEVICE);
+    expect(origin).toEqual({ x: 50, y: 60 });
+    expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
+    consoleErrorSpy.mockRestore();
+  });
+
+  test('getSimulatorContentOrigin cache hit returns same value without re-invoking osascript', async () => {
+    execFileMock.mockResolvedValueOnce({ stdout: '10,20|10,48', stderr: '' });
+
+    const first = await backend.getSimulatorContentOrigin(DEVICE);
+    const second = await backend.getSimulatorContentOrigin(DEVICE);
+
+    expect(first).toEqual({ x: 10, y: 48 });
+    expect(second).toEqual({ x: 10, y: 48 });
+    // osascript should only have been called once (via execFileMock)
+    expect(execFileMock).toHaveBeenCalledTimes(1);
+  });
+
+  test('getSimulatorContentOrigin refresh:true re-invokes osascript', async () => {
+    execFileMock
+      .mockResolvedValueOnce({ stdout: '10,20|10,48', stderr: '' })   // first call
+      .mockResolvedValueOnce({ stdout: '30,40|30,68', stderr: '' });  // after refresh
+
+    await backend.getSimulatorContentOrigin(DEVICE);
+    const refreshed = await backend.getSimulatorContentOrigin(DEVICE, { refresh: true });
+
+    expect(refreshed).toEqual({ x: 30, y: 68 });
+    expect(execFileMock).toHaveBeenCalledTimes(2);
+  });
+
+  test('getSimulatorContentOrigin uses independent cache entries per deviceId', async () => {
+    const DEVICE_B = 'DEVICE-B-UDID';
+    execFileMock
+      .mockResolvedValueOnce({ stdout: '10,20|10,48', stderr: '' })   // device A
+      .mockResolvedValueOnce({ stdout: '50,60|50,88', stderr: '' });  // device B
+
+    const originA = await backend.getSimulatorContentOrigin(DEVICE);
+    const originB = await backend.getSimulatorContentOrigin(DEVICE_B);
+
+    expect(originA).toEqual({ x: 10, y: 48 });
+    expect(originB).toEqual({ x: 50, y: 88 });
+    expect(execFileMock).toHaveBeenCalledTimes(2);
+
+    // Cache hits should not call osascript again
+    await backend.getSimulatorContentOrigin(DEVICE);
+    await backend.getSimulatorContentOrigin(DEVICE_B);
+    expect(execFileMock).toHaveBeenCalledTimes(2);
+  });
+
+  test('tap translates iOS-point coordinates to absolute screen using dynamic origin', async () => {
+    // Simulate AX returning window at (200,300) and child (content) at (200,330)
+    execFileMock
+      .mockResolvedValueOnce({ stdout: '', stderr: '' })                    // activate
+      .mockResolvedValueOnce({ stdout: '200,300|200,330', stderr: '' })    // AX origin
+      .mockResolvedValueOnce({ stdout: '', stderr: '' });                   // click
+
+    await backend.tap(DEVICE, 75, 150);
+
+    // content origin (200, 330) + iOS (75, 150) = screen (275, 480)
+    const clickCall = execFileMock.mock.calls[2];
+    expect(clickCall[0]).toBe('osascript');
+    expect(clickCall[1]).toContain(
+      'tell application "System Events" to click at {275, 480}',
+    );
   });
 });
 
