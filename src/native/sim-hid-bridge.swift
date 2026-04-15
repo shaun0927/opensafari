@@ -10,6 +10,7 @@
 //   sim-hid-bridge <udid> swipe  <x1> <y1> <x2> <y2> [duration]
 //   sim-hid-bridge <udid> key    <hidUsage> [duration]
 //   sim-hid-bridge <udid> button <home|lock|sound-up|sound-down> [duration]
+//   sim-hid-bridge diag [udid]   — framework + symbol probe (see runDiag)
 //
 // Exit codes:
 //   0  — success
@@ -72,7 +73,7 @@ enum Command {
 enum ParseError: Error { case usage(String) }
 
 func parseCommand(_ argv: [String]) throws -> (udid: String, command: Command) {
-    guard argv.count >= 3 else { throw ParseError.usage("usage: sim-hid-bridge <udid> <tap|swipe|key|button> <args...>") }
+    guard argv.count >= 3 else { throw ParseError.usage("usage: sim-hid-bridge <udid> <tap|swipe|key|button> <args...>\n       sim-hid-bridge diag [udid]") }
     let udid = argv[1], kind = argv[2], rest = Array(argv.dropFirst(3))
     switch kind {
     case "tap":
@@ -256,9 +257,140 @@ func getScreenSize(_ d: NSObject) -> CGSize {
     return CGSize(width: sz.width / scale, height: sz.height / scale)
 }
 
+// MARK: - Diagnostics (`diag` subcommand, for issue #491 investigation)
+//
+// Emits a structured JSON report describing which private-framework pieces
+// resolved on this host. No HID injection is attempted — `diag` exists so
+// operators can verify the symbol contract without risking the iOS 26+
+// screen-lock side-effect tracked in #491.
+//
+// Usage:
+//   sim-hid-bridge diag           — framework + symbol probe only
+//   sim-hid-bridge diag <udid>    — also reports device state
+//
+// The `indigoSymbols` list mirrors the C functions used by the production
+// bridge plus candidates worth investigating for the #491 remediation
+// (pointer-service registration, raw HID arbitrary payloads).
+struct DiagJSON: Encodable {
+    let ok: Bool
+    let kind: String
+    let simulatorKit: FrameworkReport
+    let coreSimulator: FrameworkReport
+    let indigoSymbols: [String: Bool]
+    let classes: [String: Bool]
+    let device: DeviceReport?
+    let xcodePath: String
+    let elapsed_ms: Int
+}
+struct FrameworkReport: Encodable { let loaded: Bool; let path: String? }
+struct DeviceReport: Encodable {
+    let udid: String
+    let resolved: Bool
+    let booted: Bool
+    let screenWidth: Double?
+    let screenHeight: Double?
+    let mainScreenScale: Double?
+}
+
+func firstExistingPath(_ candidates: [String]) -> String? {
+    for p in candidates { if FileManager.default.fileExists(atPath: p) { return p } }
+    return nil
+}
+
+func probeFramework(_ candidates: [String], _ handle: UnsafeMutableRawPointer?) -> FrameworkReport {
+    FrameworkReport(loaded: handle != nil, path: firstExistingPath(candidates))
+}
+
+func runDiag(udid: String?) -> Int32 {
+    let start = Date()
+    let skPaths = [
+        "/Library/Developer/PrivateFrameworks/SimulatorKit.framework/SimulatorKit",
+        "/Applications/Xcode.app/Contents/Developer/Library/PrivateFrameworks/SimulatorKit.framework/Versions/A/SimulatorKit",
+        "/Applications/Xcode.app/Contents/Developer/Library/PrivateFrameworks/SimulatorKit.framework/SimulatorKit",
+        "/Applications/Xcode-beta.app/Contents/Developer/Library/PrivateFrameworks/SimulatorKit.framework/Versions/A/SimulatorKit",
+    ]
+    let csPaths = [
+        "/Library/Developer/PrivateFrameworks/CoreSimulator.framework/CoreSimulator",
+        "/Library/Developer/PrivateFrameworks/CoreSimulator.framework/Versions/A/CoreSimulator",
+        "/Applications/Xcode.app/Contents/Developer/Library/PrivateFrameworks/CoreSimulator.framework/CoreSimulator",
+    ]
+    let skH = loadFramework(skPaths)
+    let csH = loadFramework(csPaths)
+
+    let symbolNames = [
+        "IndigoHIDMessageForMouseNSEvent",
+        "IndigoHIDMessageForKeyboardArbitrary",
+        "IndigoHIDMessageForButton",
+        "IndigoHIDMessageForPointerEventFromHIDEventRef",
+        "IndigoHIDMessageToCreatePointerService",
+        "IndigoHIDMessageToRemovePointerService",
+        "IndigoHIDMessageToCreateMouseService",
+        "IndigoHIDMessageToRemoveMouseService",
+        "IndigoHIDMessageForHIDArbitrary",
+        "IndigoHIDMessageForPressureEvent",
+        "IndigoHIDMessageForScrollEvent",
+        "IndigoHIDMessageForTrackpadMoveEvent",
+        "IndigoHIDTargetForScreen",
+        "IndigoHIDGetKeyboardType",
+    ]
+    var symbols: [String: Bool] = [:]
+    for name in symbolNames {
+        symbols[name] = skH.flatMap { dlsym($0, name) } != nil
+    }
+
+    let classNames = [
+        "_TtC12SimulatorKit24SimDeviceLegacyHIDClient",
+        "_TtC12SimulatorKit21SimDigitizerInputView",
+        "SimDeviceSet",
+        "SimServiceContext",
+    ]
+    var classes: [String: Bool] = [:]
+    for name in classNames {
+        classes[name] = NSClassFromString(name) != nil
+    }
+
+    var deviceReport: DeviceReport? = nil
+    if let u = udid {
+        if let dev = resolveDevice(udid: u) {
+            let sz = getScreenSize(dev)
+            let scale = (dev.perform(NSSelectorFromString("deviceType"))?
+                .takeUnretainedValue() as? NSObject)?
+                .value(forKey: "mainScreenScale") as? Double
+            deviceReport = DeviceReport(
+                udid: u, resolved: true, booted: isDeviceBooted(dev),
+                screenWidth: Double(sz.width), screenHeight: Double(sz.height),
+                mainScreenScale: scale,
+            )
+        } else {
+            deviceReport = DeviceReport(
+                udid: u, resolved: false, booted: false,
+                screenWidth: nil, screenHeight: nil, mainScreenScale: nil,
+            )
+        }
+    }
+
+    let ms = Int(Date().timeIntervalSince(start) * 1000)
+    emitJSON(DiagJSON(
+        ok: skH != nil && csH != nil, kind: "diag",
+        simulatorKit: probeFramework(skPaths, skH),
+        coreSimulator: probeFramework(csPaths, csH),
+        indigoSymbols: symbols, classes: classes,
+        device: deviceReport, xcodePath: getDevDir(), elapsed_ms: ms,
+    ))
+    // `diag` is advisory — exit 0 on framework miss too, so callers can
+    // parse the JSON instead of decoding argv vs. exit-code semantics.
+    return 0
+}
+
 // MARK: - Entrypoint
 func run() -> Int32 {
     let argv = CommandLine.arguments; let start = Date()
+    // `diag` bypasses normal command parsing because it does not require a
+    // UDID. See runDiag() above.
+    if argv.count >= 2 && argv[1] == "diag" {
+        let udid = argv.count >= 3 ? argv[2] : nil
+        return runDiag(udid: udid)
+    }
     let parsed: (udid: String, command: Command)
     do { parsed = try parseCommand(argv) }
     catch let ParseError.usage(m) { emitError(m, code: "USAGE"); return 64 }
