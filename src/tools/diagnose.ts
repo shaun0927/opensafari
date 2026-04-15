@@ -9,6 +9,10 @@ import { MCPServer } from '../mcp-server';
 import { getSessionManager } from '../session-manager';
 import { peekProxyForDevice } from '../simulator/proxy-manager';
 import { tryCreateSimulatorKitHIDBackend } from './sim-hid-input-backend';
+import {
+  getInputTelemetryRollup,
+  type InputTelemetryRollup,
+} from '../metrics/input-telemetry-rollup';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 
@@ -51,6 +55,12 @@ interface DiagnoseReport {
     native: boolean;
     overall: boolean;
   };
+  /**
+   * Per-(backendKind, operation) latency rollup (#502). Empty when the
+   * accumulator has not seen any input events yet — diagnose itself does
+   * not synthesise traffic.
+   */
+  latency: InputTelemetryRollup[];
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -216,6 +226,7 @@ export function registerDiagnoseTool(server: MCPServer): void {
           native: nativeVerdict,
           overall: safariVerdict && nativeVerdict,
         },
+        latency: getInputTelemetryRollup(),
       };
 
       return {

@@ -2,7 +2,7 @@ import { MCPServer } from '../mcp-server';
 import { SimulatorManager } from '../simulator';
 import { getSessionManager } from '../session-manager';
 import { getInputBackend } from './native-input-backend';
-import { buildInputMeta } from './native-input-utils';
+import { runInputOp } from './native-input-utils';
 
 export function registerAppAlertHandleTool(server: MCPServer): void {
   server.registerTool(
@@ -72,7 +72,9 @@ export function registerAppAlertHandleTool(server: MCPServer): void {
 
       try {
         const backend = await getInputBackend(deviceId);
-        await backend.sendKey(deviceId, keyName);
+        const { meta } = await runInputOp(backend, deviceId, () =>
+          backend.sendKey(deviceId, keyName),
+        );
 
         return {
           content: [
@@ -83,7 +85,7 @@ export function registerAppAlertHandleTool(server: MCPServer): void {
                 action,
                 deviceId,
                 method: 'input_backend',
-                _meta: buildInputMeta(backend, deviceId),
+                _meta: meta,
               }),
             },
           ],

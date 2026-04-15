@@ -7,9 +7,11 @@
 //
 // Usage:
 //   sim-hid-bridge <udid> tap    <x> <y> [duration]
+//   sim-hid-bridge <udid> tap-ps <x> <y> [duration] — experimental iOS 26 path
 //   sim-hid-bridge <udid> swipe  <x1> <y1> <x2> <y2> [duration]
 //   sim-hid-bridge <udid> key    <hidUsage> [duration]
 //   sim-hid-bridge <udid> button <home|lock|sound-up|sound-down> [duration]
+//   sim-hid-bridge diag [udid]   — framework + symbol probe (see runDiag)
 //
 // Exit codes:
 //   0  — success
@@ -65,6 +67,13 @@ func loadCoreSimulator() -> UnsafeMutableRawPointer? {
 // MARK: - Command parsing
 enum Command {
     case tap(x: Double, y: Double, duration: Double?)
+    // tap-ps: experimental path for iOS 26+ — wraps the mouse-down/up
+    // messages with IndigoHIDMessageToCreatePointerService /
+    // IndigoHIDMessageToRemovePointerService. See #491 for the hypothesis
+    // that the screen-lock symptom is caused by iOS 26 no longer routing
+    // mouse NSEvents into UIKit touches unless a pointer HID service has
+    // been registered first.
+    case tapPS(x: Double, y: Double, duration: Double?)
     case swipe(x1: Double, y1: Double, x2: Double, y2: Double, duration: Double?)
     case key(hidUsage: Int, duration: Double?)
     case button(name: String, duration: Double?)
@@ -72,13 +81,17 @@ enum Command {
 enum ParseError: Error { case usage(String) }
 
 func parseCommand(_ argv: [String]) throws -> (udid: String, command: Command) {
-    guard argv.count >= 3 else { throw ParseError.usage("usage: sim-hid-bridge <udid> <tap|swipe|key|button> <args...>") }
+    guard argv.count >= 3 else { throw ParseError.usage("usage: sim-hid-bridge <udid> <tap|tap-ps|swipe|key|button> <args...>\n       sim-hid-bridge diag [udid]") }
     let udid = argv[1], kind = argv[2], rest = Array(argv.dropFirst(3))
     switch kind {
     case "tap":
         guard rest.count >= 2, let x = Double(rest[0]), let y = Double(rest[1]) else {
             throw ParseError.usage("usage: sim-hid-bridge <udid> tap <x> <y> [duration]") }
         return (udid, .tap(x: x, y: y, duration: rest.count >= 3 ? Double(rest[2]) : nil))
+    case "tap-ps":
+        guard rest.count >= 2, let x = Double(rest[0]), let y = Double(rest[1]) else {
+            throw ParseError.usage("usage: sim-hid-bridge <udid> tap-ps <x> <y> [duration]") }
+        return (udid, .tapPS(x: x, y: y, duration: rest.count >= 3 ? Double(rest[2]) : nil))
     case "swipe":
         guard rest.count >= 4, let x1 = Double(rest[0]), let y1 = Double(rest[1]),
               let x2 = Double(rest[2]), let y2 = Double(rest[3]) else {
@@ -94,11 +107,17 @@ func parseCommand(_ argv: [String]) throws -> (udid: String, command: Command) {
         let ok = ["home", "lock", "sound-up", "sound-down"]
         guard ok.contains(rest[0]) else { throw ParseError.usage("unknown button '\(rest[0])'. Allowed: \(ok.joined(separator: ", "))") }
         return (udid, .button(name: rest[0], duration: rest.count >= 2 ? Double(rest[1]) : nil))
-    default: throw ParseError.usage("unknown command '\(kind)'. Allowed: tap, swipe, key, button")
+    default: throw ParseError.usage("unknown command '\(kind)'. Allowed: tap, tap-ps, swipe, key, button")
     }
 }
 func kindString(_ c: Command) -> String {
-    switch c { case .tap: return "tap"; case .swipe: return "swipe"; case .key: return "key"; case .button: return "button" }
+    switch c {
+    case .tap: return "tap"
+    case .tapPS: return "tap-ps"
+    case .swipe: return "swipe"
+    case .key: return "key"
+    case .button: return "button"
+    }
 }
 
 // MARK: - Device Resolution (CoreSimulator private API)
@@ -206,6 +225,48 @@ func execTap(_ h: HID, x: Double, y: Double, dur: Double?, sz: CGSize) -> Bool {
     send(h, up); return true
 }
 
+// MARK: - tap-ps: experimental pointer-service-bracketed tap (#491)
+//
+// Hypothesis: iOS 26 stopped synthesising UITouches from bare mouse HID
+// messages unless a pointer service is first registered against the
+// SimDeviceLegacyHIDClient. `IndigoHIDMessageToCreatePointerService` and
+// `IndigoHIDMessageToRemovePointerService` exist in SimulatorKit's
+// exported C surface (confirmed via `sim-hid-bridge diag`) but are not
+// called by the current production bridge.
+//
+// This function best-effort brackets the existing mouse-down/up pair with
+// the pointer-service create/remove messages. Signatures of the C
+// functions are not in any public header; we try the most common shape
+// — `() -> UnsafeMutableRawPointer?` — which matches every other
+// IndigoHIDMessage*For* helper we already resolve. If the real signature
+// differs, the worst case is a benign no-op message and we fall through
+// to the existing mouse path, which is what the unmodified `tap` does
+// anyway.
+typealias NoArgMsgFn = @convention(c) () -> UnsafeMutableRawPointer?
+
+func resolveNoArg(_ handle: UnsafeMutableRawPointer, _ name: String) -> NoArgMsgFn? {
+    guard let sym = dlsym(handle, name) else { return nil }
+    return unsafeBitCast(sym, to: NoArgMsgFn.self)
+}
+
+func execTapPS(_ h: HID, x: Double, y: Double, dur: Double?, sz: CGSize,
+               skHandle: UnsafeMutableRawPointer) -> Bool {
+    let createPS = resolveNoArg(skHandle, "IndigoHIDMessageToCreatePointerService")
+    let removePS = resolveNoArg(skHandle, "IndigoHIDMessageToRemovePointerService")
+    if createPS == nil || removePS == nil {
+        fputs("[sim-hid] tap-ps: pointer-service symbols missing, falling back to bare tap\n", stderr)
+        return execTap(h, x: x, y: y, dur: dur, sz: sz)
+    }
+    if let msg = createPS?() { send(h, msg) }
+    // Give the simulator a moment to wire up the freshly-registered service
+    // before we hand it the first touch. 20ms matches idb's default.
+    Thread.sleep(forTimeInterval: 0.02)
+    let tapped = execTap(h, x: x, y: y, dur: dur, sz: sz)
+    if let msg = removePS?() { send(h, msg) }
+    return tapped
+}
+
+
 func execSwipe(_ h: HID, x1: Double, y1: Double, x2: Double, y2: Double, dur: Double?, sz: CGSize) -> Bool {
     let total = dur ?? 0.3; let steps = 10; let delay = total / Double(steps + 2)
     var ss = CGPoint(x: x1, y: y1); var ws = CGPoint(x: x1, y: y1)
@@ -241,14 +302,155 @@ func execButton(_ h: HID, name: String, dur: Double?) -> Bool {
 }
 
 func getScreenSize(_ d: NSObject) -> CGSize {
-    if let dt = d.perform(NSSelectorFromString("deviceType"))?.takeUnretainedValue() as? NSObject,
-       let sz = dt.value(forKey: "mainScreenSize") as? CGSize { return sz }
-    return CGSize(width: 393, height: 852)
+    // `mainScreenSize` is in pixels on Xcode 26+ (e.g. iPhone 16 reports
+    // 1179x2556) but `IndigoHIDMessageForMouseNSEvent` expects the screen
+    // size in the same unit as the point coords opensafari hands in.
+    // Divide by `mainScreenScale` (3.0 on recent iPhones) when present so
+    // the function sees point-in-point coords on all Xcode versions.
+    // See #491 for the pixel-unit regression investigation.
+    guard let dt = d.perform(NSSelectorFromString("deviceType"))?.takeUnretainedValue() as? NSObject,
+          let sz = dt.value(forKey: "mainScreenSize") as? CGSize else {
+        return CGSize(width: 393, height: 852)
+    }
+    let scale = (dt.value(forKey: "mainScreenScale") as? Double) ?? 1.0
+    guard scale > 1.0 else { return sz }
+    return CGSize(width: sz.width / scale, height: sz.height / scale)
+}
+
+// MARK: - Diagnostics (`diag` subcommand, for issue #491 investigation)
+//
+// Emits a structured JSON report describing which private-framework pieces
+// resolved on this host. No HID injection is attempted — `diag` exists so
+// operators can verify the symbol contract without risking the iOS 26+
+// screen-lock side-effect tracked in #491.
+//
+// Usage:
+//   sim-hid-bridge diag           — framework + symbol probe only
+//   sim-hid-bridge diag <udid>    — also reports device state
+//
+// The `indigoSymbols` list mirrors the C functions used by the production
+// bridge plus candidates worth investigating for the #491 remediation
+// (pointer-service registration, raw HID arbitrary payloads).
+struct DiagJSON: Encodable {
+    let ok: Bool
+    let kind: String
+    let simulatorKit: FrameworkReport
+    let coreSimulator: FrameworkReport
+    let indigoSymbols: [String: Bool]
+    let classes: [String: Bool]
+    let device: DeviceReport?
+    let xcodePath: String
+    let elapsed_ms: Int
+}
+struct FrameworkReport: Encodable { let loaded: Bool; let path: String? }
+struct DeviceReport: Encodable {
+    let udid: String
+    let resolved: Bool
+    let booted: Bool
+    let screenWidth: Double?
+    let screenHeight: Double?
+    let mainScreenScale: Double?
+}
+
+func firstExistingPath(_ candidates: [String]) -> String? {
+    for p in candidates { if FileManager.default.fileExists(atPath: p) { return p } }
+    return nil
+}
+
+func probeFramework(_ candidates: [String], _ handle: UnsafeMutableRawPointer?) -> FrameworkReport {
+    FrameworkReport(loaded: handle != nil, path: firstExistingPath(candidates))
+}
+
+func runDiag(udid: String?) -> Int32 {
+    let start = Date()
+    let skPaths = [
+        "/Library/Developer/PrivateFrameworks/SimulatorKit.framework/SimulatorKit",
+        "/Applications/Xcode.app/Contents/Developer/Library/PrivateFrameworks/SimulatorKit.framework/Versions/A/SimulatorKit",
+        "/Applications/Xcode.app/Contents/Developer/Library/PrivateFrameworks/SimulatorKit.framework/SimulatorKit",
+        "/Applications/Xcode-beta.app/Contents/Developer/Library/PrivateFrameworks/SimulatorKit.framework/Versions/A/SimulatorKit",
+    ]
+    let csPaths = [
+        "/Library/Developer/PrivateFrameworks/CoreSimulator.framework/CoreSimulator",
+        "/Library/Developer/PrivateFrameworks/CoreSimulator.framework/Versions/A/CoreSimulator",
+        "/Applications/Xcode.app/Contents/Developer/Library/PrivateFrameworks/CoreSimulator.framework/CoreSimulator",
+    ]
+    let skH = loadFramework(skPaths)
+    let csH = loadFramework(csPaths)
+
+    let symbolNames = [
+        "IndigoHIDMessageForMouseNSEvent",
+        "IndigoHIDMessageForKeyboardArbitrary",
+        "IndigoHIDMessageForButton",
+        "IndigoHIDMessageForPointerEventFromHIDEventRef",
+        "IndigoHIDMessageToCreatePointerService",
+        "IndigoHIDMessageToRemovePointerService",
+        "IndigoHIDMessageToCreateMouseService",
+        "IndigoHIDMessageToRemoveMouseService",
+        "IndigoHIDMessageForHIDArbitrary",
+        "IndigoHIDMessageForPressureEvent",
+        "IndigoHIDMessageForScrollEvent",
+        "IndigoHIDMessageForTrackpadMoveEvent",
+        "IndigoHIDTargetForScreen",
+        "IndigoHIDGetKeyboardType",
+    ]
+    var symbols: [String: Bool] = [:]
+    for name in symbolNames {
+        symbols[name] = skH.flatMap { dlsym($0, name) } != nil
+    }
+
+    let classNames = [
+        "_TtC12SimulatorKit24SimDeviceLegacyHIDClient",
+        "_TtC12SimulatorKit21SimDigitizerInputView",
+        "SimDeviceSet",
+        "SimServiceContext",
+    ]
+    var classes: [String: Bool] = [:]
+    for name in classNames {
+        classes[name] = NSClassFromString(name) != nil
+    }
+
+    var deviceReport: DeviceReport? = nil
+    if let u = udid {
+        if let dev = resolveDevice(udid: u) {
+            let sz = getScreenSize(dev)
+            let scale = (dev.perform(NSSelectorFromString("deviceType"))?
+                .takeUnretainedValue() as? NSObject)?
+                .value(forKey: "mainScreenScale") as? Double
+            deviceReport = DeviceReport(
+                udid: u, resolved: true, booted: isDeviceBooted(dev),
+                screenWidth: Double(sz.width), screenHeight: Double(sz.height),
+                mainScreenScale: scale,
+            )
+        } else {
+            deviceReport = DeviceReport(
+                udid: u, resolved: false, booted: false,
+                screenWidth: nil, screenHeight: nil, mainScreenScale: nil,
+            )
+        }
+    }
+
+    let ms = Int(Date().timeIntervalSince(start) * 1000)
+    emitJSON(DiagJSON(
+        ok: skH != nil && csH != nil, kind: "diag",
+        simulatorKit: probeFramework(skPaths, skH),
+        coreSimulator: probeFramework(csPaths, csH),
+        indigoSymbols: symbols, classes: classes,
+        device: deviceReport, xcodePath: getDevDir(), elapsed_ms: ms,
+    ))
+    // `diag` is advisory — exit 0 on framework miss too, so callers can
+    // parse the JSON instead of decoding argv vs. exit-code semantics.
+    return 0
 }
 
 // MARK: - Entrypoint
 func run() -> Int32 {
     let argv = CommandLine.arguments; let start = Date()
+    // `diag` bypasses normal command parsing because it does not require a
+    // UDID. See runDiag() above.
+    if argv.count >= 2 && argv[1] == "diag" {
+        let udid = argv.count >= 3 ? argv[2] : nil
+        return runDiag(udid: udid)
+    }
     let parsed: (udid: String, command: Command)
     do { parsed = try parseCommand(argv) }
     catch let ParseError.usage(m) { emitError(m, code: "USAGE"); return 64 }
@@ -271,6 +473,7 @@ func run() -> Int32 {
     let ok: Bool
     switch parsed.command {
     case .tap(let x, let y, let d):       ok = execTap(hid, x: x, y: y, dur: d, sz: sz)
+    case .tapPS(let x, let y, let d):     ok = execTapPS(hid, x: x, y: y, dur: d, sz: sz, skHandle: skH)
     case .swipe(let a, let b, let c, let d, let e): ok = execSwipe(hid, x1: a, y1: b, x2: c, y2: d, dur: e, sz: sz)
     case .key(let u, let d):              ok = execKey(hid, usage: u, dur: d)
     case .button(let n, let d):           ok = execButton(hid, name: n, dur: d)

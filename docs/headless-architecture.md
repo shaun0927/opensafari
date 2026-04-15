@@ -27,35 +27,72 @@ These guarantees are enforced by the input-backend tier system. The non-headless
 
 Native input tools (`app_tap`, `app_swipe_native`, `app_scroll_native`,
 `app_double_tap`, `app_type_text`, `app_key_input`) are dispatched through a
-3-tier fallback chain defined in `src/tools/native-input-backend.ts`.
+5-tier fallback chain defined in `src/tools/native-input-backend.ts`.
 
 ### Routing table
 
-| Tier | Backend | `kind` | Headless | Selection Condition | Status |
-|------|---------|--------|----------|---------------------|--------|
-| 1 | `SimctlInputBackend` | `simctl` | Yes | `xcrun simctl io input` probe succeeds (Xcode ≤ 16) | Production |
-| 2 | `WebKitInputBackend` | `webkit` | Yes | Active or reconnectable WebKit connection present (Xcode 26+, Safari/WebView only) | Production |
-| 3 | `AppleScriptInputBackend` | `applescript` | **No** | Opt-in only (`OPENSAFARI_ALLOW_FOCUS_INPUT=1`); throws `HeadlessInputUnavailableError` otherwise | Legacy/opt-in |
+| Tier | Backend | `kind` | Target apps | Headless | Xcode 26+ | Selection Condition | Status |
+|------|---------|--------|-------------|----------|-----------|---------------------|--------|
+| 0 | `FlutterVMInputBackend` | `flutter-vm` | Flutter only | Yes | Yes | Flutter VM Service reachable within 1.5 s discovery timeout | Production |
+| 1 | `SimulatorKitHIDInputBackend` | `simhid` | Any app | Yes | Partial | `sim-hid-bridge` binary resolves and `SimulatorKit.framework` loads via `dlopen`. **Tap/swipe routing is currently disabled** on Xcode 26+ — see note below. Keyboard and hardware-button synthesis still route through this tier. | Partial (tap/swipe disabled on Xcode 26+) |
+| 2 | `SimctlInputBackend` | `simctl` | Any app | Yes | **Removed** | `xcrun simctl io input` probe succeeds (Xcode ≤ 16) | Legacy |
+| 3 | `WebKitInputBackend` | `webkit` | Safari / WebView | Yes | Yes | Active or reconnectable WebKit connection present | Production |
+| 4 | `AppleScriptInputBackend` | `applescript` | Any app | **No** | Yes | Opt-in only (`OPENSAFARI_ALLOW_FOCUS_INPUT=1`); throws `HeadlessInputUnavailableError` otherwise | Legacy / opt-in |
 
-A fourth backend (`SimulatorKitHIDInputBackend`, `kind: 'simhid'`) is shipped in
-`src/tools/sim-hid-input-backend.ts` as a PoC. It is **not yet wired into
-`getInputBackend()`** — see the `TODO(#483)` comment in the source. When activated
-it is intended to replace Tier 1 and provide headless HID events for any app type
-on all Xcode versions.
+Tier 0 (`FlutterVMInputBackend`) ships production-ready for Flutter apps
+launched under `flutter run` with the Dart VM Service (and DDS) enabled.
+Tier 1 (`SimulatorKitHIDInputBackend`) `dlopen`s `SimulatorKit.framework` at
+runtime and is the only path that survives `simctl io input` removal. See
+[`docs/private-apis.md`](private-apis.md) for the private-framework contract.
+
+> **Tier 1 tap/swipe — temporarily disabled on Xcode 26+.** As of
+> [#537](https://github.com/shaun0927/opensafari/pull/537), `getInputBackend()`
+> no longer returns `SimulatorKitHIDInputBackend` for tap/swipe operations:
+> `IndigoHIDMessageForMouseNSEvent` in SimulatorKit is broken on Xcode 26 /
+> iOS 26 — routed touches are consumed by the system gesture recogniser and
+> the simulator screen goes black instead of delivering a tap. Digitizer,
+> pointer-service, and pre-registered-pointer variants all reproduce the same
+> device-lock symptom. `sim-hid-bridge` is still probed and cached (so
+> `kind === 'simhid'` appears in `diagnose` output), and keyboard (`key`) plus
+> hardware-button (`button`) injection still use it — only tap/swipe fall
+> through to the next tier. Integration coverage is tracked in
+> [#491](https://github.com/shaun0927/opensafari/issues/491); the tier flip
+> back to "Production" will land the day Apple fixes the mouse-event pipeline
+> or we finish a replacement touch path.
+
+> **Practical impact on Xcode 26+.** Native (non-Flutter) taps and swipes now
+> fall through Tier 0 → Tier 1 (skipped for tap/swipe) → Tier 2 (removed on
+> Xcode 26+) → Tier 3 (only when a WebKit client is attached) → Tier 4 (opt-in
+> AppleScript). On stock Xcode 26 this means native app taps require either
+> `set_active_context({ context: 'safari' })` for a WebKit path or
+> `OPENSAFARI_ALLOW_FOCUS_INPUT=1` for the focus-stealing fallback. Flutter
+> apps (Tier 0) and all non-tap SimHID operations (Tier 1 keys/buttons) are
+> unaffected.
 
 ### Decision flowchart
 
 ```mermaid
 flowchart TD
-    A([getInputBackend called]) --> B{simctl probe cached?}
-    B -- No --> C[probeSimctlInput — xcrun simctl io input tap 0 0]
-    C --> D{exit 0?}
-    D -- Yes --> E[simctlAvailable = true]
-    D -- No --> F[simctlAvailable = false]
-    B -- Yes --> G{simctlAvailable?}
-    E --> G
-    F --> G
-    G -- Yes --> H[return SimctlInputBackend]
+    A([getInputBackend called]) --> F0{Flutter VM reachable?}
+    F0 -- Yes --> F0y[return FlutterVMInputBackend]
+    F0 -- No --> S0{simctl probe cached?}
+    S0 -- No --> S1[probeSimctlInput — xcrun simctl io input tap 0 0]
+    S1 --> S2{exit 0?}
+    S2 -- Yes --> S3[simctlAvailable = true]
+    S2 -- No --> S4[simctlAvailable = false]
+    S0 -- Yes --> H0{sim-hid-bridge probed?}
+    S3 --> H0
+    S4 --> H0
+    H0 -- No --> H1[tryCreateSimulatorKitHIDBackend]
+    H1 --> H2{bridge resolvable?}
+    H2 -- Yes --> Hd{op is tap/swipe on Xcode 26+?}
+    H2 -- No --> G{simctlAvailable?}
+    H0 -- Yes and cached --> H4{cached backend?}
+    H4 -- Yes --> Hd
+    H4 -- No --> G
+    Hd -- No e.g. key/button --> H3[return SimulatorKitHIDInputBackend]
+    Hd -- Yes disabled --> G
+    G -- Yes --> G1[return SimctlInputBackend]
     G -- No --> I{webkitClient provided?}
     I -- No --> N
     I -- Yes --> J{isConnected?}
@@ -63,15 +100,19 @@ flowchart TD
     J -- No --> L[tryReconnectWebKit — one attempt]
     L --> M{reconnected?}
     M -- Yes --> K
-    M -- No --> N{isFocusInputAllowed?}
-    N -- No --> O[throw HeadlessInputUnavailableError]
-    N -- Yes --> P[log one-time warning to stderr]
+    M -- No --> N{OPENSAFARI_HEADLESS_ONLY=1?}
+    N -- Yes --> O[throw HeadlessInputUnavailableError reason=headless-only]
+    N -- No --> N2{isFocusInputAllowed?}
+    N2 -- No --> O2[throw HeadlessInputUnavailableError]
+    N2 -- Yes --> P[log one-time warning to stderr]
     P --> Q[return AppleScriptInputBackend]
 ```
 
-The simctl probe result is **cached for the process lifetime**. WebKit connection
-state is checked on every call because a Safari tab can be closed and reopened
-between tool calls.
+The simctl probe result and the sim-hid-bridge lookup result are both
+**cached for the process lifetime**. WebKit connection state is checked on
+every call because a Safari tab can be closed and reopened between tool
+calls. Flutter VM discovery has a per-device 30 s negative cache so native
+iOS apps do not pay the discovery cost on every call.
 
 ---
 
@@ -79,13 +120,16 @@ between tool calls.
 
 | Scenario | Query (AX) | Input | Headless | Backend Used | Notes |
 |----------|-----------|-------|----------|--------------|-------|
-| Safari web automation (Xcode ≤ 16) | WebKit Protocol | `simctl` | Yes | `SimctlInputBackend` | Default for Xcode 15 / 16 |
+| Safari web automation (Xcode ≤ 16) | WebKit Protocol | `simctl` | Yes | `SimctlInputBackend` | Default Tier 2 for Xcode 15 / 16 |
 | Safari web automation (Xcode 26+) | WebKit Protocol | `webkit` | Yes | `WebKitInputBackend` | `simctl io input` was removed in Xcode 26 |
-| Flutter app (Xcode ≤ 16) | AX bridge (`ax-bridge`) | `simctl` | Yes | `SimctlInputBackend` | Flutter semantics must be active |
-| Flutter app (Xcode 26+, no simhid) | AX bridge | — | **No** | Throws `HeadlessInputUnavailableError` unless `OPENSAFARI_ALLOW_FOCUS_INPUT=1` | simhid PoC targets this gap (#483) |
-| Native iOS / SwiftUI app (Xcode ≤ 16) | AX bridge | `simctl` | Yes | `SimctlInputBackend` | Works for any app |
-| Native iOS / SwiftUI app (Xcode 26+, no simhid) | AX bridge | — | **No** | Throws `HeadlessInputUnavailableError` | Same gap as Flutter above |
+| Flutter app (debug / profile build, `flutter run`) | AX bridge (`ax-bridge`) | `flutter-vm` | Yes | `FlutterVMInputBackend` | Requires Dart VM Service + DDS reachable |
+| Flutter app (release build or no VM Service, Xcode ≤ 16) | AX bridge | `simhid` | Yes | `SimulatorKitHIDInputBackend` | Falls through Tier 0 → Tier 1 |
+| Flutter app (release build or no VM Service, Xcode 26+) | AX bridge | `simhid` (keys/buttons) / `applescript` (tap) | Partial | Tier 1 for keys/buttons; tap/swipe falls to opt-in Tier 4 | Tap/swipe requires `OPENSAFARI_ALLOW_FOCUS_INPUT=1` until Tier 1 tap re-enables ([#491](https://github.com/shaun0927/opensafari/issues/491)) |
+| Native iOS / SwiftUI app (Xcode ≤ 16) | AX bridge | `simhid` or `simctl` | Yes | Tier 1 preferred, Tier 2 fallback | Tier 1 works on every Xcode version |
+| Native iOS / SwiftUI app (Xcode 26+) | AX bridge | `simhid` keys/buttons; `applescript` tap/swipe with opt-in | Partial | Tier 1 for keys/buttons; tap/swipe currently falls through to Tier 4 | See "Tier 1 tap/swipe — temporarily disabled" note above and [#491](https://github.com/shaun0927/opensafari/issues/491) |
 | WebView inside native app | AX bridge + WebKit | `webkit` | Yes | `WebKitInputBackend` via `app_webview_connect` | Requires an active WebKit connection |
+| GUI-less CI (no display, Xcode 26+, native tap) | AX bridge | none | No | `HeadlessInputUnavailableError` unless a WebKit client is attached | Blocked until Tier 1 tap re-enables; use Flutter (Tier 0) or WebKit (Tier 3) paths meanwhile |
+| GUI-less CI (no display, Xcode 26+, native keys/buttons) | AX bridge | `simhid` | Yes | `SimulatorKitHIDInputBackend` | Hardware-button / keyboard injection still headless |
 | GUI-less CI (no display, Xcode 26+, Safari) | WebKit Protocol | `webkit` | Yes | `WebKitInputBackend` | Fully headless; recommended CI setup |
 
 ---
@@ -110,19 +154,36 @@ Status: **Production** (default Tier 1 on Xcode ≤ 16).
 Spawns the `sim-hid-bridge` Swift helper as a short-lived child process. The bridge
 uses `dlopen` to load `SimulatorKit.framework` and `CoreSimulator.framework` at
 runtime (never link-time), resolves a booted `SimDevice` from the UDID, then
-injects HID events directly via the private `SimulatorKit` API — the same technique
-used by Facebook's `idb` (MIT). All private-symbol resolution is confined to the
-Swift bridge; the TypeScript side treats the bridge as an opaque child process.
+injects real `IOHIDEvent`s via the private `SimDeviceLegacyHIDClient` and
+`IndigoHIDMessage*` C functions — the same technique used by Facebook's `idb`
+(MIT). All private-symbol resolution is confined to the Swift bridge; the
+TypeScript side treats the bridge as an opaque child process.
 
 The bridge communicates exclusively via argv (command) and newline-terminated JSON
-on stdout. Exit codes are a stable contract (see `docs/private-apis.md`).
+on stdout. Exit codes are a stable contract:
 
-The current Swift implementation exits `99 NOT_IMPLEMENTED` — the PoC proves the
-`dlopen` path works, but the actual HID injection is not yet shipped. Routing
-activation and the sentinel CI job land in follow-up PRs.
+| Exit | Meaning | TypeScript code |
+|------|---------|-----------------|
+| 0 | success | n/a |
+| 64 | usage / bad args | `BAD_ARGS` |
+| 69 | `SimDevice` not booted | `DEVICE_NOT_BOOTED` |
+| 78 | `SimulatorKit.framework` (or HID symbols) missing | `SIMULATORKIT_UNAVAILABLE` |
 
-Status: **PoC** — not yet wired into `getInputBackend()`. Tracked in
-[#483](https://github.com/shaun0927/opensafari/issues/483).
+See [`docs/private-apis.md`](private-apis.md) for the full symbol manifest, the
+BC-break monitoring strategy, and the policy contract with reviewers.
+
+Status: **Partial** (Tier 1). Activated in
+[#490](https://github.com/shaun0927/opensafari/pull/511); tap/swipe routing
+subsequently disabled on Xcode 26+ in
+[#537](https://github.com/shaun0927/opensafari/pull/537) because
+`IndigoHIDMessageForMouseNSEvent`, `IOHIDEventCreateDigitizerFingerEvent` +
+`IndigoHIDMessageForHIDArbitrary`, and the pre-registered pointer-service
+variant all reproduce the same device-lock bug on iOS 26 (the mouse event
+reaches the system gesture recogniser instead of the foreground app, leaving
+the screen black). Keyboard (`key`) and hardware-button (`button`) injection
+are unaffected and continue to route through this tier — `sim-hid-bridge` is
+still probed, cached, and surfaced in `diagnose` output. Re-enabling tap/swipe
+is tracked in [#491](https://github.com/shaun0927/opensafari/issues/491).
 
 ### WebKitInputBackend (`kind: 'webkit'`)
 
@@ -156,15 +217,27 @@ one-time warning is logged to `stderr` at the first tool call.
 
 Status: **Legacy opt-in only**.
 
-### FlutterVMInputBackend (planned)
+### FlutterVMInputBackend (`kind: 'flutter-vm'`)
 
-A planned backend that would inject touch events by sending `PointerDataPacket`
-messages directly to the Dart VM Service running inside the Flutter engine. This
-path would be fully headless and would work for Flutter apps without requiring the
-`simctl io input` subcommand or a WebKit connection.
+Injects touch events by sending synthesized `PointerDataPacket` messages,
+platform `TextInput.updateEditingState` messages, and `HardwareKeyboard` events
+through the Dart VM Service running inside the Flutter engine — no CGEvent
+synthesis, no Simulator.app foregrounding, no HID bridge required. Each
+operation is dispatched via a library-scoped `evaluate` so the required Dart
+symbols (`PlatformDispatcher`, `PointerDataPacket`, `EditableTextState`,
+`HardwareKeyboard`, `LogicalKeyboardKey`) are in lexical scope.
 
-Status: **Not yet implemented**. Tracked in
-[#484](https://github.com/shaun0927/opensafari/issues/484).
+The backend requires that the Flutter app was launched via `flutter run` (in
+debug or profile mode) so both the Dart VM Service and the Dart Development
+Service (DDS) are available — apps launched with `xcrun simctl launch` expose
+the socket but lack the compilation service needed for `evaluate`.
+
+A 1.5 s discovery probe bounds the cost of detecting a Flutter VM, and a
+per-device 30 s negative cache prevents native iOS apps from paying repeated
+probe latency.
+
+Status: **Production** (Tier 0). Shipped in
+[#481 / #486](https://github.com/shaun0927/opensafari/pull/486).
 
 ---
 
@@ -173,6 +246,7 @@ Status: **Not yet implemented**. Tracked in
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `OPENSAFARI_ALLOW_FOCUS_INPUT` | unset (deny) | Set to `1` or `true` to enable `AppleScriptInputBackend`. **Will move the physical mouse cursor and activate `Simulator.app`.** Accepted values: `1`, `true`; anything else is ignored. A one-time warning is logged to `stderr` at the first use. |
+| `OPENSAFARI_HEADLESS_ONLY` | unset | Set to `1` or `true` to block the `AppleScriptInputBackend` fallback even when `OPENSAFARI_ALLOW_FOCUS_INPUT` is also set. Recommended for CI — `getInputBackend()` throws `HeadlessInputUnavailableError` with `reason: 'headless-only'` instead of ever returning the focus-stealing backend. Overrides `ALLOW_FOCUS_INPUT` with a warning log when both are set. |
 | `OPENSAFARI_ALLOW_SWIFT_INTERPRETER` | unset (deny) | Set to `1` to include the `src/native/sim-hid-bridge.swift` source-tree path in the `tryCreateSimulatorKitHIDBackend()` candidate list. Development-only; skipped in production installs because the repo-relative path escapes `dist/` and executing unsigned Swift source sidesteps future codesigning. |
 | `OPENSAFARI_PROXY_PORT` | `9322` | WebKit debug proxy port. Overrides the default port used by `ios_webkit_debug_proxy`. Port resolution order: explicit `port` option → `OPENSAFARI_PROXY_PORT` → `9322`. |
 
@@ -189,7 +263,11 @@ caller has not opted in to the focus-stealing fallback.
 export class HeadlessInputUnavailableError extends Error {
   readonly name = 'HeadlessInputUnavailableError';
   readonly deviceId: string;          // Simulator UDID
-  readonly reason: 'no-simctl' | 'no-webkit' | 'webkit-disconnected';
+  readonly reason:
+    | 'no-simctl'
+    | 'no-webkit'
+    | 'webkit-disconnected'
+    | 'headless-only';
   readonly remediation: readonly string[];
 }
 ```
@@ -198,22 +276,34 @@ export class HeadlessInputUnavailableError extends Error {
 
 - `deviceId` — the Simulator UDID that was passed to `getInputBackend()`.
 - `reason` — machine-readable cause:
-  - `no-webkit` — no `webkitClient` was supplied (caller did not open Safari/WebView).
-  - `webkit-disconnected` — a client was supplied but failed to reconnect.
+  - `no-simctl` — `simctl io input` was removed (Xcode 26+) and no higher tier
+    matched.
+  - `no-webkit` — no `webkitClient` was supplied (caller did not open
+    Safari / WebView) after Tier 0 and Tier 1 declined.
+  - `webkit-disconnected` — a WebKit client was supplied but failed to reconnect.
+  - `headless-only` — `OPENSAFARI_HEADLESS_ONLY=1` blocked the opt-in
+    `AppleScriptInputBackend` fallback even though `OPENSAFARI_ALLOW_FOCUS_INPUT`
+    was set.
 - `remediation` — ordered list of actionable suggestions surfaced in the error
   message and available for structured handling by MCP clients:
   1. For Safari QA: call `set_active_context({ context: 'safari' })` to enable
      `WebKitInputBackend`.
-  2. For native apps: set `OPENSAFARI_ALLOW_FOCUS_INPUT=1` (with the documented
-     side-effects).
+  2. For native apps on Xcode 26+: install `sim-hid-bridge` (ships with
+     `npm install opensafari-mcp` — verify with `diagnose`).
+  3. As a last resort: set `OPENSAFARI_ALLOW_FOCUS_INPUT=1` (with the documented
+     side-effects) and ensure `OPENSAFARI_HEADLESS_ONLY` is not set.
 
 **When it is thrown:**
 
-`getInputBackend()` throws this error when all three conditions hold:
-1. `simctlAvailable` is `false` (Xcode 26+ where `simctl io input` was removed).
-2. No usable WebKit connection is available (either none provided, or reconnect
-   failed).
-3. `OPENSAFARI_ALLOW_FOCUS_INPUT` is not set to `1` or `true`.
+`getInputBackend()` throws this error when every tier declines:
+1. No Flutter VM is reachable on the device (Tier 0 skipped).
+2. `sim-hid-bridge` is not present or `SimulatorKit.framework` could not be
+   loaded (Tier 1 skipped).
+3. `simctlAvailable` is `false` — Xcode 26+ where `simctl io input` was removed
+   (Tier 2 skipped).
+4. No usable WebKit connection is available (Tier 3 skipped).
+5. `OPENSAFARI_ALLOW_FOCUS_INPUT` is unset OR `OPENSAFARI_HEADLESS_ONLY` is set
+   (Tier 4 blocked).
 
 **How to handle it:**
 
@@ -254,9 +344,11 @@ Key policies:
   not remove `SimctlInputBackend`, `WebKitInputBackend`, or
   `AppleScriptInputBackend`. If the private-framework path breaks (exit code `78`
   or `99`), `getInputBackend()` drops to the next tier automatically.
-- **Sentinel CI job (planned)** — a nightly workflow will run a smoke-tap against a
-  matrix of (macOS, Xcode) runners. A regression on any previously-passing version
-  fails loudly while existing tiers continue serving users.
+- **Sentinel CI job** — `tests/ci/sim-hid-sentinel.test.ts` probes framework
+  availability and symbol resolution on a daily cron (see
+  `.github/workflows/sim-hid-sentinel.yml`). A regression on any previously-passing
+  (macOS, Xcode) combination fails loudly while existing tiers continue serving
+  users.
 - **Update obligation** — any PR that adds or removes a private-symbol dependency
   must update `docs/private-apis.md` in the same change. Reviewers block merges
   that skip this step.
@@ -289,6 +381,8 @@ When Apple breaks a private API in a new Xcode release, the recommended response
 | Issue | Topic |
 |-------|-------|
 | [#481](https://github.com/shaun0927/opensafari/issues/481) | Remove `simctl io input` dependency for Xcode 26 compatibility |
-| [#483](https://github.com/shaun0927/opensafari/issues/483) | `SimulatorKitHIDInputBackend` PoC — private HID injection via `SimulatorKit.framework` |
+| [#483](https://github.com/shaun0927/opensafari/issues/483) | `SimulatorKitHIDInputBackend` — private HID injection via `SimulatorKit.framework` |
 | [#484](https://github.com/shaun0927/opensafari/issues/484) | `FlutterVMInputBackend` — headless input via Dart VM Service `PointerDataPacket` |
+| [#491](https://github.com/shaun0927/opensafari/issues/491) | SimulatorKitHID integration coverage (blocked on Xcode 26+ tap pipeline) |
 | [#496](https://github.com/shaun0927/opensafari/issues/496) | This document |
+| [#537](https://github.com/shaun0927/opensafari/pull/537) | Disable SimHID tap/swipe routing on Xcode 26+ while the Apple regression is open |

@@ -1,9 +1,11 @@
 # Private Apple Frameworks Used by OpenSafari
 
-> Status: PoC (tracked in [#483](https://github.com/shaun0927/opensafari/issues/483)).
-> The SimulatorKit HID path is **not yet activated** in the routing layer. This
-> document describes the contract so future work (and code reviewers) know what
-> guarantees the rest of the codebase may rely on.
+> Status: **Production** — `SimulatorKitHIDInputBackend` ships as Tier 1 of
+> `getInputBackend()` (activated in #490). A daily
+> [`sim-hid-sentinel` CI job](../.github/workflows/sim-hid-sentinel.yml) guards
+> against Apple BC breaks. This document is the stability contract: every
+> private symbol the project touches is listed here, together with the
+> fallback plan if Apple changes or removes it.
 
 OpenSafari keeps the set of private-framework dependencies small and
 auditable. Every private symbol we touch is listed here together with:
@@ -73,7 +75,7 @@ sim-hid-bridge <udid> button <home|lock|sound-up|sound-down> [duration]
 | `64` | Bad / missing arguments | `InputBackendError("BAD_ARGS")` |
 | `69` | Sim device not found or not booted | `InputBackendError("DEVICE_NOT_BOOTED")` |
 | `78` | Private framework failed to `dlopen` | `InputBackendError("SIMULATORKIT_UNAVAILABLE")` |
-| `99` | PoC stub — HID injection not yet implemented | `InputBackendError("NOT_IMPLEMENTED")` |
+| `99` | Reserved — legacy PoC stub code (no longer emitted by the shipped bridge) | `InputBackendError("NOT_IMPLEMENTED")` |
 | other | Unexpected | `InputBackendError("UNKNOWN")` with `stderr` surfaced |
 
 Timeouts are enforced on the Node side (`SPAWN_TIMEOUT_MS = 10_000`). A
@@ -84,22 +86,97 @@ killed child classifies as `InputBackendError("SPAWN_TIMEOUT")`.
 Private API behaviour can drift silently between Xcode releases. We mitigate
 that risk with three independent layers:
 
-1. **Sentinel CI job (daily)** — A nightly workflow will run
-   `sim-hid-bridge <udid> tap 10 10` against a matrix of (macOS, Xcode)
-   runners. If exit code `78` or `99` bubbles up on a version that used to
-   return `0`, the job fails loudly and the existing tiers keep serving
-   users. (Tracked in follow-up PR after #483 activation.)
-2. **Fallback tiers stay wired** — The PoC does **not** remove
+1. **Sentinel CI job (daily)** — `.github/workflows/sim-hid-sentinel.yml`
+   runs `tests/ci/sim-hid-sentinel.test.ts` across a matrix of macOS
+   runners every day at 06:00 UTC (and on any push touching
+   `src/native/sim-hid-bridge.swift`). The sentinel probes
+   `dlopen` for `SimulatorKit.framework` / `CoreSimulator.framework` and
+   checks for the `IndigoHIDMessage*` symbols. A failure on a scheduled run
+   opens (or updates) a `sentinel`-labelled GitHub issue so on-call sees it
+   on github.com without Slack access.
+2. **Fallback tiers stay wired** — Tier 1 activation does **not** remove
    `SimctlInputBackend`, `WebKitInputBackend`, or `AppleScriptInputBackend`.
-   `getInputBackend()` will only prefer `SimulatorKitHIDInputBackend` when
-   the helper is present and its smoke-tap succeeds; otherwise it drops to
-   the next tier. This is the same default-deny pattern used for the
+   `getInputBackend()` only prefers `SimulatorKitHIDInputBackend` when the
+   helper is present and resolvable; on exit `78`, on a missing binary, or
+   on `OPENSAFARI_HEADLESS_ONLY=1` without a simhid backend, it drops to
+   the next tier. This mirrors the default-deny pattern used for the
    AppleScript fallback introduced in #405.
 3. **Structured error codes** — Every private-symbol entry point returns a
    stable exit code defined above. Consumers of `InputBackendError` can
    decide routing ("fall through on `SIMULATORKIT_UNAVAILABLE` or
    `NOT_IMPLEMENTED`, surface on `DEVICE_NOT_BOOTED`") without string
-   parsing.
+   parsing. Error messages for `SIMULATORKIT_UNAVAILABLE` /
+   `NOT_IMPLEMENTED` embed a pointer to this document so CI operators can
+   jump straight to the response playbook.
+4. **One-time stderr notice** — The first time a process actually spawns
+   `sim-hid-bridge`, `SimulatorKitHIDInputBackend` emits a single
+   `[opensafari] SimulatorKitHIDInputBackend uses Apple private
+   frameworks …` line via `console.error`. This makes the private-API
+   dependency visible in MCP server logs and CI output without drowning
+   them with per-call repetition.
+
+## `idb` call-pattern comparison
+
+Facebook's [`idb`](https://github.com/facebook/idb) (MIT) has used the same
+private `SimulatorKit` HID path in production since 2018. OpenSafari's
+bridge is **independently written** but follows the same Apple-maintained
+symbol surface, so it's useful to know where the two implementations agree
+and where they diverge. Divergences exist only when OpenSafari's
+single-binary CLI contract (argv in, JSON on stdout) demands a simpler
+dispatch shape than `idb`'s long-running Objective-C runtime.
+
+| Aspect | `idb_companion` | `opensafari` (`sim-hid-bridge`) | Rationale |
+|---|---|---|---|
+| Framework loading | Link-time + weak symbols across `FBSimulatorControl` | Runtime `dlopen` of `/Library/Developer/PrivateFrameworks/SimulatorKit.framework` and `/…/CoreSimulator.framework` | We want to ship a single Mach-O that refuses to boot (exit 78) on a machine without Xcode, rather than failing at dyld load. |
+| `SimDevice` resolution | `FBSimulatorSet` + Objective-C runtime walk | `SimServiceContext.sharedServiceContextForDeveloperDir:error:` → `defaultDeviceSetWithError:` → `availableDevices`/`devices` via `NSSelectorFromString` | Same symbols, different call shape — we avoid linking FB's wrapper classes so the bridge has no non-Apple dependencies. |
+| HID client | `FBSimulatorHIDClient` (wraps `SimDeviceLegacyHIDClient`) | `_TtC12SimulatorKit24SimDeviceLegacyHIDClient` class name resolved via `NSClassFromString`, `initWithDevice:error:` called through `method_getImplementation` + `unsafeBitCast` | Drop FB's wrapper layer because we need exactly one code path per command; the raw legacy client is enough. |
+| Tap event | `IndigoHIDMessageForMouseNSEvent(sp, wp, 0, kMouseDown/Up, screenSize, 0)` | Same C function, same arg layout. `screenSize` resolved from `SimDeviceType.mainScreenSize`. | Identical wire format — this is the arg shape Apple's daemon actually consumes. |
+| Swipe event | `kMouseDragged` between `Down` / `Up`, interpolated over N steps | Same pattern, default 10 steps over 0.3 s | Matching step count keeps behaviour consistent with idb-trained users. |
+| Key event | `IndigoHIDMessageForKeyboardArbitrary(hidUsage, down)` + `…(hidUsage, up)` | Same. | HID usage values come from the Apple HID Usage Tables (public spec). |
+| Button event | `IndigoHIDMessageForButton(code, down)` / `(code, up)` | Same. `home=1, lock=2, soundUp=3, soundDown=4`. | Codes match the internal `FBSimulatorHIDButton` enum. |
+| Send channel | `SimDeviceLegacyHIDClient sendMessage:freeWhenDone:completionQueue:completion:` | Same selector via `method_getImplementation` + `unsafeBitCast`. `freeWhenDone` is `false` — we let ARC own the message buffer so a crash in the daemon doesn't leak. | Same selector. |
+| Transport | Persistent gRPC + long-running Obj-C server process | Short-lived child process per call; stdout = JSON, argv = command | MCP expects stateless tool invocations; a daemon would need a supervisor we don't want to own. |
+| Arg encoding | Protobuf (`RawHIDEventRequest`) | CLI argv + JSON stdout envelope | Matches the existing `ax-bridge` contract in the same repo — reviewers only learn one pattern. |
+| Timing | Tap dwell 0.08 s default | Tap dwell 0.05 s default, swipe dwell total/(steps+2) per segment | Our dwell is tuned against the simulator frame cadence, not gesture recognisers. |
+| License | MIT | MIT | OpenSafari does **not** copy `idb` source. Cross-references in reviews must cite commit + file, never paste code. |
+
+When in doubt — if a simulator rejects a message shape — the `idb` source
+is the authoritative reference for the Apple contract. Re-read the matching
+FB file, compare symbol layout, and update this table if we diverge. See
+the `idb` directories `FBSimulatorControl/Session`, `CompanionLib`, and
+`PrivateHeaders` for the canonical call paths.
+
+## idb vs. opensafari call patterns
+
+> **Disclaimer**: This table is a behavioural comparison drawn from public idb
+> source references and opensafari's own code. No source was copied from idb.
+> When refreshing this table, reviewers must re-cite the exact idb commit they
+> used for reference in the PR description.
+
+| Aspect | idb | opensafari sim-hid-bridge |
+|---|---|---|
+| Framework loading | Static link at build time | `dlopen` at runtime (`loadSimulatorKit` / `loadCoreSimulator` — `src/native/sim-hid-bridge.swift:49,:57`) |
+| SimDevice resolution | `FBSimulatorSet` | CoreSimulator `dlsym` → `SimServiceContext` → `defaultDeviceSetWithError:` (`src/native/sim-hid-bridge.swift:127`) |
+| Tap event | `IndigoHIDData` + `IOHIDEvent` via `FBSimulatorHIDEvent` | `IndigoHIDMessageForMouseNSEvent` resolved via `dlsym` (`src/native/sim-hid-bridge.swift:170`) |
+| Key event | `FBKeyboardCommand` / `FBSimulatorHIDEvent` | `IndigoHIDMessageForKeyboardArbitrary` resolved via `dlsym` (`src/native/sim-hid-bridge.swift:171`) |
+| Button event | `FBSimulatorButton` enum + `FBSimulatorHIDEvent` | `IndigoHIDMessageForButton` resolved via `dlsym` (`src/native/sim-hid-bridge.swift:172`) |
+| Arg encoding | Protobuf over a gRPC/socket transport | CLI argv + JSON stdout (newline-terminated envelope) |
+| Process model | Long-lived `FBSimulator` session | Short-lived `execFile` per call (`src/tools/sim-hid-input-backend.ts`) |
+| Spawn timeout | idb default 10 s | `SPAWN_TIMEOUT_MS = 10_000` (`src/tools/sim-hid-input-backend.ts:35`) |
+
+### Rationale for deliberate divergences
+
+opensafari uses `execFile` per call for **process isolation and crash
+containment**: a misbehaving or crashing Swift helper cannot corrupt the
+long-lived Node MCP server process. idb's Protobuf transport is not adopted
+because opensafari is a single-language (TypeScript) wrapper — the overhead of
+a schema registry and generated types is unjustified for a thin argv/JSON
+contract. `SPAWN_TIMEOUT_MS` is deliberately kept at 10 000 ms to match idb's
+default so operators who already know idb have a familiar mental model for
+latency budgets. Finally, frameworks are `dlopen`ed rather than linked so that
+a binary-incompatible Apple framework update cannot take the Node process down
+at dyld time — failure surfaces as a structured `SIMULATORKIT_UNAVAILABLE`
+error and the routing layer falls through to the next input tier.
 
 ## License note
 
@@ -113,7 +190,9 @@ the exact file and commit in the PR description — do not paste code.
 ## Maintenance contract
 
 - Update this document in the same PR that adds or removes a private-symbol
-  dependency. CI will grow a check for this once the sentinel job lands.
+  dependency. The `sim-hid-sentinel` workflow already fires on
+  `src/native/sim-hid-bridge.swift` edits to catch drift; reviewers should
+  treat a missing update to this file as a blocking comment.
 - Bump the exit-code table above whenever a new failure mode is introduced.
   The Node side's `InputBackendErrorCode` union must stay in sync.
 - Keep the Swift bridge defensive: every private symbol call must be
@@ -122,8 +201,18 @@ the exact file and commit in the PR description — do not paste code.
 
 ## Tracking
 
-All work in this area is tracked under issue
-[#483 — `SimulatorKitHIDInputBackend`](https://github.com/shaun0927/opensafari/issues/483).
-The PoC PR (this document's introduction) ships the Swift bridge, the Node
-wrapper, and unit tests; routing activation and the sentinel CI job land in
-follow-up PRs.
+All work in this area is tracked under the
+[SimulatorKitHIDInputBackend umbrella issue (#483)](https://github.com/shaun0927/opensafari/issues/483).
+Relevant shipped PRs:
+
+- [#487](https://github.com/shaun0927/opensafari/pull/487) — PoC: Swift
+  bridge, Node wrapper, unit tests.
+- [#510](https://github.com/shaun0927/opensafari/pull/510) — Swift bridge
+  implementation (`IOHIDEvent` injection via `SimDeviceLegacyHIDClient`).
+- [#511](https://github.com/shaun0927/opensafari/pull/511) — Tier 1
+  activation in `getInputBackend()`.
+- [#513](https://github.com/shaun0927/opensafari/pull/513) — Sentinel test
+  suite (`tests/ci/sim-hid-sentinel.test.ts`).
+- [#493](https://github.com/shaun0927/opensafari/issues/493) — Daily cron
+  workflow + idb-pattern comparison (this document) + one-time stderr
+  notice.

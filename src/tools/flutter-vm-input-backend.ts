@@ -27,6 +27,7 @@
 import type { FlutterVMClient } from '../flutter';
 import { FlutterVMError } from '../flutter';
 import type { InputBackend, InputBackendKind } from './native-input-backend';
+import { timedInput } from '../metrics/input-telemetry';
 
 /**
  * Structured error surfaced by FlutterVMInputBackend when the underlying VM
@@ -164,7 +165,15 @@ export class FlutterVMInputBackend implements InputBackend {
    * the event queue even in a quiescent state.
    */
   async tap(
-    _deviceId: string,
+    deviceId: string,
+    x: number,
+    y: number,
+    duration?: number,
+  ): Promise<void> {
+    await timedInput(this.kind, 'tap', deviceId, () => this.tapInternal(x, y, duration));
+  }
+
+  private async tapInternal(
     x: number,
     y: number,
     duration?: number,
@@ -222,7 +231,19 @@ export class FlutterVMInputBackend implements InputBackend {
    * the gesture arena classifies it as a swipe rather than a flick or tap.
    */
   async swipe(
-    _deviceId: string,
+    deviceId: string,
+    startX: number,
+    startY: number,
+    endX: number,
+    endY: number,
+    duration?: number,
+  ): Promise<void> {
+    await timedInput(this.kind, 'swipe', deviceId, () =>
+      this.swipeInternal(startX, startY, endX, endY, duration),
+    );
+  }
+
+  private async swipeInternal(
     startX: number,
     startY: number,
     endX: number,
@@ -290,7 +311,11 @@ export class FlutterVMInputBackend implements InputBackend {
    * callbacks fire naturally. Falls through silently (no-op) if nothing is
    * focused — same behaviour as WebKitInputBackend.
    */
-  async typeText(_deviceId: string, text: string): Promise<void> {
+  async typeText(deviceId: string, text: string): Promise<void> {
+    await timedInput(this.kind, 'typeText', deviceId, () => this.typeTextInternal(text));
+  }
+
+  private async typeTextInternal(text: string): Promise<void> {
     const textLit = dartStringLiteral(text);
 
     // Read the live TextInputConnection client id so the platform message
@@ -353,7 +378,11 @@ export class FlutterVMInputBackend implements InputBackend {
    * Dispatch a HID key code through `HardwareKeyboard`. Only a curated set of
    * control keys is supported — matches the WebKit/AppleScript backends.
    */
-  async keypress(_deviceId: string, keyCode: string): Promise<void> {
+  async keypress(deviceId: string, keyCode: string): Promise<void> {
+    await timedInput(this.kind, 'keypress', deviceId, () => this.keypressInternal(keyCode));
+  }
+
+  private async keypressInternal(keyCode: string): Promise<void> {
     const entry = HID_TO_LOGICAL_KEY[keyCode];
     if (!entry) {
       throw new Error(
@@ -365,7 +394,11 @@ export class FlutterVMInputBackend implements InputBackend {
   }
 
   /** Dispatch a named key ("Return", "Escape", ...) through HardwareKeyboard. */
-  async sendKey(_deviceId: string, keyName: string): Promise<void> {
+  async sendKey(deviceId: string, keyName: string): Promise<void> {
+    await timedInput(this.kind, 'sendKey', deviceId, () => this.sendKeyInternal(keyName));
+  }
+
+  private async sendKeyInternal(keyName: string): Promise<void> {
     const entry = SENDKEY_TO_LOGICAL_KEY[keyName];
     if (!entry) {
       throw new Error(

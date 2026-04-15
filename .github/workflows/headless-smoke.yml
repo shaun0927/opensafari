@@ -1,0 +1,446 @@
+name: Headless Smoke Tests
+
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch: {}
+  pull_request:
+    branches: [develop, main]
+    paths:
+      - '.github/workflows/headless-smoke.yml'
+      - 'cli/**'
+      - 'src/qa/**'
+      - 'src/webkit/**'
+
+concurrency:
+  group: headless-smoke-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: '20'
+  OPENSAFARI_HEADLESS_ONLY: '1'
+  OPENSAFARI_PROXY_PORT: '9322'
+
+jobs:
+  safari-smoke:
+    name: Safari — headless QA audit
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Assert headless posture
+        run: |
+          set -euo pipefail
+          if [ -n "${OPENSAFARI_ALLOW_FOCUS_INPUT:-}" ]; then
+            echo "::error::OPENSAFARI_ALLOW_FOCUS_INPUT must NOT be set in the headless smoke workflow."
+            exit 1
+          fi
+          if [ "${OPENSAFARI_HEADLESS_ONLY:-}" != "1" ]; then
+            echo "::error::OPENSAFARI_HEADLESS_ONLY=1 must be set workflow-level."
+            exit 1
+          fi
+          echo "Headless posture OK (HEADLESS_ONLY=1, ALLOW_FOCUS_INPUT unset)"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Install ios-webkit-debug-proxy
+        run: brew install ios-webkit-debug-proxy
+
+      - name: Pick and boot iOS simulator
+        run: |
+          set -euo pipefail
+          UDID=$(xcrun simctl list devices available -j | node -e '
+            const d = JSON.parse(require("fs").readFileSync(0, "utf8"));
+            const runtimes = Object.keys(d.devices)
+              .filter(r => r.includes("iOS"))
+              .sort();
+            for (const r of runtimes.slice().reverse()) {
+              const iphone = (d.devices[r] || []).find(x => /iPhone/.test(x.name) && x.isAvailable);
+              if (iphone) { process.stdout.write(iphone.udid); process.exit(0); }
+            }
+            console.error("No available iPhone simulator for any iOS runtime");
+            process.exit(1);
+          ')
+          echo "SIMULATOR_UDID=$UDID" >> "$GITHUB_ENV"
+          xcrun simctl boot "$UDID"
+          for i in $(seq 1 30); do
+            if xcrun simctl list devices booted | grep -q "$UDID"; then
+              echo "Booted $UDID"
+              break
+            fi
+            sleep 2
+          done
+          xcrun simctl list devices booted
+
+      - name: Start ios-webkit-debug-proxy
+        run: |
+          set -euo pipefail
+          ios_webkit_debug_proxy -c "$SIMULATOR_UDID:$OPENSAFARI_PROXY_PORT" &
+          echo $! > /tmp/iwdp.pid
+          for i in $(seq 1 20); do
+            if curl --silent --fail "http://localhost:$OPENSAFARI_PROXY_PORT/json/list" >/dev/null; then
+              echo "Proxy reachable on :$OPENSAFARI_PROXY_PORT"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::ios-webkit-debug-proxy failed to respond on :$OPENSAFARI_PROXY_PORT"
+          exit 1
+
+      - name: Open Safari on smoke target URL
+        run: |
+          set -euo pipefail
+          xcrun simctl openurl "$SIMULATOR_UDID" https://example.com
+          for i in $(seq 1 20); do
+            COUNT=$(curl --silent --fail "http://localhost:$OPENSAFARI_PROXY_PORT/json/list" \
+              | node -e 'const t = JSON.parse(require("fs").readFileSync(0,"utf8")); process.stdout.write(String(Array.isArray(t) ? t.length : 0));')
+            if [ "$COUNT" != "0" ] && [ -n "$COUNT" ]; then
+              echo "Safari WebKit target visible ($COUNT)"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::Safari did not expose a WebInspector target within timeout"
+          curl --silent "http://localhost:$OPENSAFARI_PROXY_PORT/json/list" || true
+          exit 1
+
+      - name: Run Safari QA audit (headless)
+        run: |
+          set -euo pipefail
+          mkdir -p qa-results
+          node dist/cli/index.js audit \
+            --url https://example.com \
+            --format junit \
+            --output qa-results/safari-audit.junit.xml
+
+      - name: Upload JUnit artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: safari-smoke-junit
+          path: qa-results/
+          if-no-files-found: warn
+
+      - name: Upload proxy log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: safari-smoke-diagnostics
+          path: |
+            ~/Library/Logs/CoreSimulator/**/system.log
+          if-no-files-found: ignore
+
+      - name: Shutdown simulator and proxy
+        if: always()
+        run: |
+          if [ -f /tmp/iwdp.pid ]; then
+            kill "$(cat /tmp/iwdp.pid)" 2>/dev/null || true
+          fi
+          if [ -n "${SIMULATOR_UDID:-}" ]; then
+            xcrun simctl shutdown "$SIMULATOR_UDID" 2>/dev/null || true
+          fi
+
+  flutter-smoke:
+    name: Flutter — headless VM-Service input
+    runs-on: macos-latest
+    timeout-minutes: 35
+    env:
+      FLUTTER_CHANNEL: 'stable'
+      OSF_BUNDLE_ID: 'com.example.osftest'
+      FIXTURE_DIR: 'tests/integration/fixtures/flutter_sample'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Assert headless posture
+        run: |
+          set -euo pipefail
+          if [ -n "${OPENSAFARI_ALLOW_FOCUS_INPUT:-}" ]; then
+            echo "::error::OPENSAFARI_ALLOW_FOCUS_INPUT must NOT be set."
+            exit 1
+          fi
+          if [ "${OPENSAFARI_HEADLESS_ONLY:-}" != "1" ]; then
+            echo "::error::OPENSAFARI_HEADLESS_ONLY=1 must be set."
+            exit 1
+          fi
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: ${{ env.FLUTTER_CHANNEL }}
+          cache: true
+
+      - name: Flutter doctor
+        run: flutter --version && flutter doctor -v
+
+      - name: Pick and boot iOS simulator
+        run: |
+          set -euo pipefail
+          UDID=$(xcrun simctl list devices available -j | node -e '
+            const d = JSON.parse(require("fs").readFileSync(0, "utf8"));
+            const runtimes = Object.keys(d.devices)
+              .filter(r => r.includes("iOS"))
+              .sort();
+            for (const r of runtimes.slice().reverse()) {
+              const iphone = (d.devices[r] || []).find(x => /iPhone/.test(x.name) && x.isAvailable);
+              if (iphone) { process.stdout.write(iphone.udid); process.exit(0); }
+            }
+            console.error("No available iPhone simulator");
+            process.exit(1);
+          ')
+          echo "SIMULATOR_UDID=$UDID" >> "$GITHUB_ENV"
+          xcrun simctl boot "$UDID"
+          for i in $(seq 1 30); do
+            if xcrun simctl list devices booted | grep -q "$UDID"; then
+              break
+            fi
+            sleep 2
+          done
+          xcrun simctl list devices booted
+
+      - name: Launch Flutter fixture (flutter run with DDS)
+        run: |
+          set -euo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/flutter-smoke-logs"
+          pushd "$FIXTURE_DIR" >/dev/null
+          flutter pub get
+          nohup flutter run -d "$SIMULATOR_UDID" --no-hot --machine \
+            > "$GITHUB_WORKSPACE/flutter-smoke-logs/flutter-run.log" 2>&1 &
+          echo $! > /tmp/flutter.pid
+          popd >/dev/null
+          # Wait for fixture app install + launch (listapps is eventually consistent).
+          for i in $(seq 1 120); do
+            if xcrun simctl listapps "$SIMULATOR_UDID" 2>/dev/null | grep -q "$OSF_BUNDLE_ID"; then
+              echo "Fixture app installed"
+              break
+            fi
+            sleep 2
+          done
+          # Wait for the flutter --machine bridge to emit a VM Service / DDS URL.
+          for i in $(seq 1 120); do
+            if grep -Eo '"(wsUri|ddsUri|observatoryUri|vmServiceUri)"[^,}]*' \
+                 "$GITHUB_WORKSPACE/flutter-smoke-logs/flutter-run.log" >/dev/null 2>&1; then
+              echo "VM Service / DDS URL detected"
+              break
+            fi
+            sleep 2
+          done
+          head -n 40 "$GITHUB_WORKSPACE/flutter-smoke-logs/flutter-run.log" || true
+
+      - name: Run Flutter VM headless input live test
+        env:
+          OPENSAFARI_LIVE_VM: '1'
+          OSF_DEVICE_ID: ${{ env.SIMULATOR_UDID }}
+          JEST_JUNIT_OUTPUT_DIR: test-results
+          JEST_JUNIT_OUTPUT_NAME: flutter-smoke.junit.xml
+          JEST_JUNIT_CLASSNAME: '{filepath}'
+          JEST_JUNIT_SUITE_NAME: 'Flutter VM headless smoke'
+        run: |
+          set -euo pipefail
+          mkdir -p test-results
+          npx jest \
+            --config jest.config.js \
+            --testPathIgnorePatterns='/node_modules/' \
+            --testTimeout=180000 \
+            --runInBand \
+            --reporters=default \
+            --reporters=jest-junit \
+            tests/integration/flutter-vm-input.live.test.ts
+
+      - name: Verify no AppleScript fallback was loaded
+        if: always()
+        run: |
+          set -euo pipefail
+          LOG="$HOME/.opensafari/audit.log"
+          if [ ! -f "$LOG" ]; then
+            echo "audit log not present — HEADLESS_ONLY=1 blocks the AppleScript backend at construction time."
+            exit 0
+          fi
+          if grep -q -i 'applescript' "$LOG"; then
+            echo "::error::audit.log references applescript — headless posture violated."
+            grep -n -i 'applescript' "$LOG" | head -20
+            exit 1
+          fi
+          echo "audit log free of applescript references"
+
+      - name: Capture screenshot on failure
+        if: failure()
+        run: |
+          mkdir -p flutter-smoke-logs
+          xcrun simctl io "$SIMULATOR_UDID" screenshot \
+            "flutter-smoke-logs/failure-screenshot.png" || true
+
+      - name: Upload JUnit + flutter-run logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flutter-smoke-artifacts
+          path: |
+            test-results/
+            flutter-smoke-logs/
+          if-no-files-found: warn
+
+      - name: Shutdown
+        if: always()
+        run: |
+          if [ -f /tmp/flutter.pid ]; then
+            kill "$(cat /tmp/flutter.pid)" 2>/dev/null || true
+          fi
+          if [ -n "${SIMULATOR_UDID:-}" ]; then
+            xcrun simctl shutdown "$SIMULATOR_UDID" 2>/dev/null || true
+          fi
+
+  native-smoke:
+    name: Native — SimulatorKit HID (Tier 1)
+    runs-on: macos-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Assert headless posture
+        run: |
+          set -euo pipefail
+          if [ -n "${OPENSAFARI_ALLOW_FOCUS_INPUT:-}" ]; then
+            echo "::error::OPENSAFARI_ALLOW_FOCUS_INPUT must NOT be set."
+            exit 1
+          fi
+          if [ "${OPENSAFARI_HEADLESS_ONLY:-}" != "1" ]; then
+            echo "::error::OPENSAFARI_HEADLESS_ONLY=1 must be set."
+            exit 1
+          fi
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Build (including dist/sim-hid-bridge)
+        run: npm run build
+
+      - name: Ensure sim-hid-bridge binary is present
+        run: |
+          set -euo pipefail
+          if [ ! -x dist/sim-hid-bridge ]; then
+            echo "::error::dist/sim-hid-bridge was not produced by npm run build — SimulatorKitHID backend cannot be exercised."
+            ls -la dist/ || true
+            exit 1
+          fi
+          file dist/sim-hid-bridge
+
+      - name: Pick and boot iOS simulator
+        run: |
+          set -euo pipefail
+          UDID=$(xcrun simctl list devices available -j | node -e '
+            const d = JSON.parse(require("fs").readFileSync(0, "utf8"));
+            const runtimes = Object.keys(d.devices)
+              .filter(r => r.includes("iOS"))
+              .sort();
+            for (const r of runtimes.slice().reverse()) {
+              const iphone = (d.devices[r] || []).find(x => /iPhone/.test(x.name) && x.isAvailable);
+              if (iphone) { process.stdout.write(iphone.udid); process.exit(0); }
+            }
+            console.error("No available iPhone simulator");
+            process.exit(1);
+          ')
+          echo "SIMULATOR_UDID=$UDID" >> "$GITHUB_ENV"
+          xcrun simctl boot "$UDID"
+          for i in $(seq 1 30); do
+            if xcrun simctl list devices booted | grep -q "$UDID"; then
+              break
+            fi
+            sleep 2
+          done
+          xcrun simctl list devices booted
+
+      - name: Run Tier-1 simhid smoke (backend selection + headless + hardware + perf)
+        env:
+          OSF_DEVICE_ID: ${{ env.SIMULATOR_UDID }}
+          JEST_JUNIT_OUTPUT_DIR: test-results
+          JEST_JUNIT_OUTPUT_NAME: native-smoke.junit.xml
+          JEST_JUNIT_SUITE_NAME: 'SimulatorKit HID headless smoke'
+        run: |
+          set -euo pipefail
+          mkdir -p test-results
+          # Skip the "Settings.app automation" describe: known-failing on iOS 26 per
+          # test file docstring — mouse-HID events are swallowed by the system
+          # gesture recogniser instead of the UIKit responder. The remaining
+          # describes cover the load-bearing headless claims:
+          #   - simhid is selected (Tier 1) without OPENSAFARI_ALLOW_FOCUS_INPUT
+          #   - physical mouse cursor does not move
+          #   - Simulator.app never comes to the foreground
+          #   - hardware button / keyboard HID events succeed via the bridge
+          #   - single-tap + spawn overhead stay within the documented envelope
+          npx jest \
+            --config jest.config.js \
+            --testPathIgnorePatterns='/node_modules/' \
+            --testTimeout=180000 \
+            --runInBand \
+            --reporters=default \
+            --reporters=jest-junit \
+            -t 'backend selection|headless characteristics|hardware buttons|performance' \
+            tests/integration/sim-hid-input.live.test.ts
+
+      - name: Verify no AppleScript fallback was loaded
+        if: always()
+        run: |
+          set -euo pipefail
+          LOG="$HOME/.opensafari/audit.log"
+          if [ ! -f "$LOG" ]; then
+            echo "audit log not present — HEADLESS_ONLY=1 blocks the AppleScript backend at construction time."
+            exit 0
+          fi
+          if grep -q -i 'applescript' "$LOG"; then
+            echo "::error::audit.log references applescript — headless posture violated."
+            grep -n -i 'applescript' "$LOG" | head -20
+            exit 1
+          fi
+          echo "audit log free of applescript references"
+
+      - name: Capture screenshot on failure
+        if: failure()
+        run: |
+          mkdir -p native-smoke-logs
+          xcrun simctl io "$SIMULATOR_UDID" screenshot \
+            "native-smoke-logs/failure-screenshot.png" || true
+
+      - name: Upload JUnit + diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-smoke-artifacts
+          path: |
+            test-results/
+            native-smoke-logs/
+          if-no-files-found: warn
+
+      - name: Shutdown
+        if: always()
+        run: |
+          if [ -n "${SIMULATOR_UDID:-}" ]; then
+            xcrun simctl shutdown "$SIMULATOR_UDID" 2>/dev/null || true
+          fi

@@ -2,7 +2,7 @@ import { MCPServer } from '../mcp-server';
 import { getSessionManager } from '../session-manager';
 import { SimulatorManager } from '../simulator';
 import { getInputBackend } from './native-input-backend';
-import { buildInputMeta } from './native-input-utils';
+import { runInputOp } from './native-input-utils';
 
 export function registerAppDismissKeyboardTool(server: MCPServer): void {
   server.registerTool(
@@ -40,11 +40,13 @@ export function registerAppDismissKeyboardTool(server: MCPServer): void {
 
       // Primary method: send Escape key to dismiss keyboard
       try {
-        await backend.sendKey(deviceId, 'Escape');
+        const { meta } = await runInputOp(backend, deviceId, () =>
+          backend.sendKey(deviceId, 'Escape'),
+        );
         return {
           content: [{
             type: 'text' as const,
-            text: JSON.stringify({ dismissed: true, deviceId, method: 'sendkey', _meta: buildInputMeta(backend, deviceId) }),
+            text: JSON.stringify({ dismissed: true, deviceId, method: 'sendkey', _meta: meta }),
           }],
         };
       } catch (err) {
@@ -53,11 +55,13 @@ export function registerAppDismissKeyboardTool(server: MCPServer): void {
 
       // Fallback: tap on status bar area to defocus text fields
       try {
-        await backend.tap(deviceId, 195, 50);
+        const { meta } = await runInputOp(backend, deviceId, () =>
+          backend.tap(deviceId, 195, 50),
+        );
         return {
           content: [{
             type: 'text' as const,
-            text: JSON.stringify({ dismissed: true, deviceId, method: 'tap_fallback', _meta: buildInputMeta(backend, deviceId) }),
+            text: JSON.stringify({ dismissed: true, deviceId, method: 'tap_fallback', _meta: meta }),
           }],
         };
       } catch (err) {

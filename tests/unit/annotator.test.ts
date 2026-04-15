@@ -10,8 +10,8 @@ function decodePNG(b: string): PNG { return PNG.sync.read(Buffer.from(b, 'base64
 function getPixel(png: PNG, x: number, y: number) { const i = (y * png.width + x) * 4; return { r: png.data[i], g: png.data[i+1], b: png.data[i+2], a: png.data[i+3] }; }
 
 describe('annotateScreenshot', () => {
-  const img = createTestPNG(200, 200);
-  it('returns valid PNG', () => { const r = annotateScreenshot(img, [{ boundingBox: { x: 10, y: 10, width: 50, height: 30 }, severity: 'high', label: 't' }]); expect(r.width).toBe(200); expect(decodePNG(r.annotatedImage).width).toBe(200); });
+  const img = createTestPNG(130, 130);
+  it('returns valid PNG', () => { const r = annotateScreenshot(img, [{ boundingBox: { x: 10, y: 10, width: 50, height: 30 }, severity: 'high', label: 't' }]); expect(r.width).toBe(130); expect(decodePNG(r.annotatedImage).width).toBe(130); });
   it('draws severity colors', () => {
     const e: Record<string, {r:number;g:number;b:number}> = { critical:{r:255,g:0,b:0}, high:{r:255,g:51,b:51}, medium:{r:255,g:136,b:0}, low:{r:255,g:215,b:0} };
     for (const s of ['critical','high','medium','low'] as const) { const r = annotateScreenshot(img, [{ boundingBox:{x:50,y:80,width:60,height:40}, severity:s, label:'t' }], { showLabels:false }); const p = getPixel(decodePNG(r.annotatedImage), 50, 80); expect(p.r).toBe(e[s].r); expect(p.g).toBe(e[s].g); }
@@ -20,7 +20,7 @@ describe('annotateScreenshot', () => {
   it('handles empty issues', () => { const r = annotateScreenshot(img, []); expect(r.legend).toHaveLength(0); });
   it('clamps out-of-bounds', () => { expect(annotateScreenshot(img, [{ boundingBox:{x:-10,y:-5,width:300,height:250}, severity:'high', label:'o' }]).legend).toHaveLength(1); });
   it('handles fractional coords', () => { expect(annotateScreenshot(img, [{ boundingBox:{x:10.7,y:20.3,width:50.5,height:30.9}, severity:'medium', label:'t' }]).annotatedImage).toBeTruthy(); });
-  it('draws safe area', () => { const r = annotateScreenshot(img, [], { safeArea:{top:44,bottom:34,left:0,right:0} }); const p = getPixel(decodePNG(r.annotatedImage), 100, 10); expect(p.r !== 200 || p.g !== 200 || p.b !== 200).toBe(true); });
+  it('draws safe area', () => { const r = annotateScreenshot(img, [], { safeArea:{top:44,bottom:34,left:0,right:0} }); const p = getPixel(decodePNG(r.annotatedImage), 65, 10); expect(p.r !== 200 || p.g !== 200 || p.b !== 200).toBe(true); });
   it('respects lineWidth', () => {
     const t = decodePNG(annotateScreenshot(img, [{ boundingBox:{x:50,y:50,width:40,height:40}, severity:'high', label:'t' }], { showLabels:false, lineWidth:1 }).annotatedImage);
     const k = decodePNG(annotateScreenshot(img, [{ boundingBox:{x:50,y:50,width:40,height:40}, severity:'high', label:'t' }], { showLabels:false, lineWidth:5 }).annotatedImage);

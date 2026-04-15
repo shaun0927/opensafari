@@ -9,7 +9,7 @@ function createTestPNG(w: number, h: number): string {
 }
 
 describe('QA audit annotation integration', () => {
-  const screenshot = createTestPNG(390, 844);
+  const screenshot = createTestPNG(100, 212);
 
   it('converts detector results to annotations and annotates screenshot', () => {
     const detectorResults: DetectorResult[] = [
@@ -17,8 +17,8 @@ describe('QA audit annotation integration', () => {
         detector: 'touch_targets',
         severity: 'high',
         issues: [
-          { selector: '#btn', problem: '32x28px below 44px minimum', fix: 'Increase size', boundingBox: { x: 100, y: 200, width: 32, height: 28 } },
-          { selector: '#link', problem: '38x20px below 44px minimum', fix: 'Increase size', boundingBox: { x: 50, y: 400, width: 38, height: 20 } },
+          { selector: '#btn', problem: '32x28px below 44px minimum', fix: 'Increase size', boundingBox: { x: 25, y: 50, width: 8, height: 7 } },
+          { selector: '#link', problem: '38x20px below 44px minimum', fix: 'Increase size', boundingBox: { x: 13, y: 100, width: 10, height: 5 } },
         ],
         passed: false,
         totalScanned: 10,
@@ -28,7 +28,7 @@ describe('QA audit annotation integration', () => {
         detector: 'safe_area',
         severity: 'high',
         issues: [
-          { selector: '.footer', problem: 'Missing safe-area-inset-bottom', fix: 'Add padding', rect: { x: 0, y: 800, width: 390, height: 44 } },
+          { selector: '.footer', problem: 'Missing safe-area-inset-bottom', fix: 'Add padding', rect: { x: 0, y: 200, width: 100, height: 11 } },
         ],
         passed: false,
         totalScanned: 5,
@@ -70,18 +70,18 @@ describe('QA audit annotation integration', () => {
 
     // Annotate the screenshot
     const result = annotateScreenshot(screenshot, annotations, {
-      safeArea: { top: 47, bottom: 34, left: 0, right: 0 },
+      safeArea: { top: 12, bottom: 9, left: 0, right: 0 },
     });
 
-    expect(result.width).toBe(390);
-    expect(result.height).toBe(844);
+    expect(result.width).toBe(100);
+    expect(result.height).toBe(212);
     expect(result.legend).toHaveLength(3);
     expect(result.annotatedImage).toBeTruthy();
 
     // Verify annotated image is valid PNG
     const decoded = PNG.sync.read(Buffer.from(result.annotatedImage, 'base64'));
-    expect(decoded.width).toBe(390);
-    expect(decoded.height).toBe(844);
+    expect(decoded.width).toBe(100);
+    expect(decoded.height).toBe(212);
   });
 
   it('handles audit with no issues gracefully', () => {
@@ -104,10 +104,10 @@ describe('QA audit annotation integration', () => {
 
   it('handles mixed severity annotations on real-size screenshot', () => {
     const annotations: AnnotationIssue[] = [
-      { boundingBox: { x: 10, y: 50, width: 100, height: 40 }, severity: 'critical', label: 'keyboard_overlap', description: 'Input hidden' },
-      { boundingBox: { x: 200, y: 300, width: 30, height: 25 }, severity: 'high', label: 'touch_targets', description: 'Too small' },
-      { boundingBox: { x: 0, y: 780, width: 390, height: 64 }, severity: 'medium', label: 'safe_area', description: 'No bottom inset' },
-      { boundingBox: { x: 150, y: 500, width: 80, height: 15 }, severity: 'low', label: 'auto_zoom', description: 'Font too small' },
+      { boundingBox: { x: 3, y: 13, width: 25, height: 10 }, severity: 'critical', label: 'keyboard_overlap', description: 'Input hidden' },
+      { boundingBox: { x: 50, y: 75, width: 8, height: 6 }, severity: 'high', label: 'touch_targets', description: 'Too small' },
+      { boundingBox: { x: 0, y: 195, width: 100, height: 16 }, severity: 'medium', label: 'safe_area', description: 'No bottom inset' },
+      { boundingBox: { x: 38, y: 125, width: 20, height: 4 }, severity: 'low', label: 'auto_zoom', description: 'Font too small' },
     ];
 
     const result = annotateScreenshot(screenshot, annotations);
@@ -131,10 +131,10 @@ describe('QA audit annotation integration', () => {
 
   it('handles mixed severity annotations', () => {
     const annotations: AnnotationIssue[] = [
-      { boundingBox: { x: 10, y: 50, width: 100, height: 40 }, severity: 'critical', label: 'keyboard_overlap' },
-      { boundingBox: { x: 200, y: 300, width: 30, height: 25 }, severity: 'high', label: 'touch_targets' },
-      { boundingBox: { x: 0, y: 780, width: 390, height: 64 }, severity: 'medium', label: 'safe_area' },
-      { boundingBox: { x: 150, y: 500, width: 80, height: 15 }, severity: 'low', label: 'auto_zoom' },
+      { boundingBox: { x: 3, y: 13, width: 25, height: 10 }, severity: 'critical', label: 'keyboard_overlap' },
+      { boundingBox: { x: 50, y: 75, width: 8, height: 6 }, severity: 'high', label: 'touch_targets' },
+      { boundingBox: { x: 0, y: 195, width: 100, height: 16 }, severity: 'medium', label: 'safe_area' },
+      { boundingBox: { x: 38, y: 125, width: 20, height: 4 }, severity: 'low', label: 'auto_zoom' },
     ];
     const result = annotateScreenshot(screenshot, annotations);
     expect(result.legend).toHaveLength(4);

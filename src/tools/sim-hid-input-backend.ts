@@ -28,11 +28,27 @@ import { promisify } from 'util';
 import { existsSync } from 'fs';
 import * as path from 'path';
 import type { InputBackend } from './native-input-backend';
+import { timedInput } from '../metrics/input-telemetry';
 
 const execFileAsync = promisify(execFile);
 
+/** Reference appended to error messages for private-framework failures. */
+const PRIVATE_API_DOC_REF = 'See docs/private-apis.md';
+
+/** Latch so the private-API warning is emitted only once per process. */
+let warnedAboutPrivateAPI = false;
+
+/**
+ * Reset the private-API warning latch. Exported for unit tests only — do not
+ * call from production code.
+ */
+export function resetSimHidPrivateAPIWarning(): void {
+  warnedAboutPrivateAPI = false;
+}
+
 /** Spawn timeout for the Swift helper. Matches idb's default. */
 const SPAWN_TIMEOUT_MS = 10_000;
+
 
 /** HID usage page 0x07 (Keyboard/Keypad) — subset we map for pressKey(). */
 const KEY_NAME_TO_HID_USAGE: Record<string, number> = {
@@ -111,11 +127,13 @@ export class SimulatorKitHIDInputBackend implements InputBackend {
   constructor(private readonly bridgePath: string) {}
 
   async tap(deviceId: string, x: number, y: number, duration?: number): Promise<void> {
-    const args = [deviceId, 'tap', String(x), String(y)];
-    if (duration !== undefined && duration > 0) {
-      args.push(String(duration));
-    }
-    await this.run(args);
+    await timedInput(this.kind, 'tap', deviceId, async () => {
+      const args = [deviceId, 'tap', String(x), String(y)];
+      if (duration !== undefined && duration > 0) {
+        args.push(String(duration));
+      }
+      await this.run(args);
+    });
   }
 
   async swipe(
@@ -126,62 +144,70 @@ export class SimulatorKitHIDInputBackend implements InputBackend {
     endY: number,
     duration?: number,
   ): Promise<void> {
-    const args = [
-      deviceId, 'swipe',
-      String(startX), String(startY),
-      String(endX), String(endY),
-    ];
-    if (duration !== undefined && duration > 0) {
-      args.push(String(duration));
-    }
-    await this.run(args);
+    await timedInput(this.kind, 'swipe', deviceId, async () => {
+      const args = [
+        deviceId, 'swipe',
+        String(startX), String(startY),
+        String(endX), String(endY),
+      ];
+      if (duration !== undefined && duration > 0) {
+        args.push(String(duration));
+      }
+      await this.run(args);
+    });
   }
 
   async typeText(deviceId: string, text: string): Promise<void> {
-    // PoC: ASCII-only. Each character is converted to a HID usage and sent
-    // as an independent `key` event. Non-ASCII characters are rejected until
-    // the Swift bridge gains a text-composition path.
-    for (const ch of text) {
-      const usage = asciiToHidUsage(ch);
-      if (usage === null) {
+    await timedInput(this.kind, 'typeText', deviceId, async () => {
+      // PoC: ASCII-only. Each character is converted to a HID usage and sent
+      // as an independent `key` event. Non-ASCII characters are rejected until
+      // the Swift bridge gains a text-composition path.
+      for (const ch of text) {
+        const usage = asciiToHidUsage(ch);
+        if (usage === null) {
+          throw new InputBackendError(
+            `SimulatorKitHIDInputBackend.typeText: non-ASCII character '${ch}' ` +
+              'is not supported in the PoC. Track follow-up in issue #483.',
+            'BAD_ARGS',
+          );
+        }
+        await this.run([deviceId, 'key', String(usage)]);
+      }
+    });
+  }
+
+  async keypress(deviceId: string, keyCode: string): Promise<void> {
+    await timedInput(this.kind, 'keypress', deviceId, async () => {
+      // Accept either a decimal HID usage code or a key name known to our map.
+      const parsed = Number.parseInt(keyCode, 10);
+      const usage = Number.isNaN(parsed) ? KEY_NAME_TO_HID_USAGE[keyCode] : parsed;
+      if (usage === undefined) {
         throw new InputBackendError(
-          `SimulatorKitHIDInputBackend.typeText: non-ASCII character '${ch}' ` +
-            'is not supported in the PoC. Track follow-up in issue #483.',
+          `SimulatorKitHIDInputBackend.keypress: unknown HID key code "${keyCode}"`,
           'BAD_ARGS',
         );
       }
       await this.run([deviceId, 'key', String(usage)]);
-    }
-  }
-
-  async keypress(deviceId: string, keyCode: string): Promise<void> {
-    // Accept either a decimal HID usage code or a key name known to our map.
-    const parsed = Number.parseInt(keyCode, 10);
-    const usage = Number.isNaN(parsed) ? KEY_NAME_TO_HID_USAGE[keyCode] : parsed;
-    if (usage === undefined) {
-      throw new InputBackendError(
-        `SimulatorKitHIDInputBackend.keypress: unknown HID key code "${keyCode}"`,
-        'BAD_ARGS',
-      );
-    }
-    await this.run([deviceId, 'key', String(usage)]);
+    });
   }
 
   async sendKey(deviceId: string, keyName: string): Promise<void> {
-    await this.pressKey(deviceId, keyName);
+    await timedInput(this.kind, 'sendKey', deviceId, async () => {
+      const usage = KEY_NAME_TO_HID_USAGE[keyName];
+      if (usage === undefined) {
+        throw new InputBackendError(
+          `SimulatorKitHIDInputBackend.pressKey: unknown key "${keyName}". ` +
+            `Supported: ${Object.keys(KEY_NAME_TO_HID_USAGE).join(', ')}`,
+          'BAD_ARGS',
+        );
+      }
+      await this.run([deviceId, 'key', String(usage)]);
+    });
   }
 
   /** Convenience alias: resolve a symbolic key name to its HID usage. */
   async pressKey(deviceId: string, key: string): Promise<void> {
-    const usage = KEY_NAME_TO_HID_USAGE[key];
-    if (usage === undefined) {
-      throw new InputBackendError(
-        `SimulatorKitHIDInputBackend.pressKey: unknown key "${key}". ` +
-          `Supported: ${Object.keys(KEY_NAME_TO_HID_USAGE).join(', ')}`,
-        'BAD_ARGS',
-      );
-    }
-    await this.run([deviceId, 'key', String(usage)]);
+    await this.sendKey(deviceId, key);
   }
 
   /**
@@ -190,6 +216,15 @@ export class SimulatorKitHIDInputBackend implements InputBackend {
    * structured `InputBackendError`.
    */
   private async run(args: string[]): Promise<unknown> {
+    if (!warnedAboutPrivateAPI) {
+      warnedAboutPrivateAPI = true;
+      console.error(
+        '[opensafari] SimulatorKitHIDInputBackend uses private Apple frameworks ' +
+          '(SimulatorKit.framework, CoreSimulator.framework) via dlopen. ' +
+          'These APIs are undocumented and Xcode updates may break them. ' +
+          PRIVATE_API_DOC_REF,
+      );
+    }
     const { cmd, cmdArgs } = this.resolveSpawn(args);
     let stdout = '';
     let stderr = '';
@@ -221,8 +256,15 @@ export class SimulatorKitHIDInputBackend implements InputBackend {
       const exit = typeof e.code === 'number' ? e.code : undefined;
       const classified = codeForExit(exit);
       const hint = stderr.trim() || stdout.trim() || e.message;
+      // Attach the private-APIs doc pointer to every SimulatorKit-layer
+      // failure so MCP clients / CI logs link directly to the BC-break
+      // response playbook rather than surfacing a bare exit code.
+      const docSuffix =
+        classified === 'SIMULATORKIT_UNAVAILABLE' || classified === 'NOT_IMPLEMENTED'
+          ? ` (${PRIVATE_API_DOC_REF})`
+          : '';
       throw new InputBackendError(
-        `sim-hid-bridge exited ${exit ?? '?'}: ${hint}`,
+        `sim-hid-bridge exited ${exit ?? '?'}: ${hint}${docSuffix}`,
         classified,
         stderr,
       );
@@ -236,9 +278,17 @@ export class SimulatorKitHIDInputBackend implements InputBackend {
     try {
       const parsed = JSON.parse(stdout) as { ok?: boolean; error?: string; code?: string };
       if (parsed.ok === false) {
+        const okFalseCode = (parsed.code as InputBackendErrorCode | undefined) ?? 'UNKNOWN';
+        const frameworkFailureCodes = new Set<string>([
+          'SIMULATORKIT_MISSING',
+          'CORESIMULATOR_MISSING',
+          'HID_CLIENT_FAILED',
+          'HID_FUNCTIONS_MISSING',
+        ]);
+        const okFalseDocSuffix = frameworkFailureCodes.has(parsed.code ?? '') ? ` (${PRIVATE_API_DOC_REF})` : '';
         throw new InputBackendError(
-          parsed.error ?? 'sim-hid-bridge reported ok=false',
-          (parsed.code as InputBackendErrorCode | undefined) ?? 'UNKNOWN',
+          `${parsed.error ?? 'sim-hid-bridge reported ok=false'}${okFalseDocSuffix}`,
+          okFalseCode,
           stderr,
         );
       }

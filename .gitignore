@@ -8,6 +8,9 @@ dist-test/
 # Coverage
 coverage/
 
+# Integration-test failure artifacts (screenshot-failure-reporter, etc.)
+test-output/
+
 # OS files
 .DS_Store
 Thumbs.db

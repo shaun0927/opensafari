@@ -4,6 +4,75 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.4.8] - 2026-04-15
+
+This release is a **stabilization + observability cut** focused on the Xcode 26 headless-input regression discovered after v0.4.6/v0.4.7 shipped. It disables the one SimulatorKitHID code path that silently misses target (native tap/swipe on Xcode 26+), hardens the remaining tiers with telemetry and daily CI probes, documents the investigation in full, and adds three new `sim-hid-bridge` subcommands for on-device diagnosis. No new MCP tools are added — the surface stays compatible with 0.4.7, but `_meta` now carries `_telemetry` latency/routing info for every input call.
+
+### Fixed — Xcode 26 native tap regression mitigation (Epic #491)
+
+- **Disable SimHID tap/swipe routing on Xcode 26+** (#491, #537, #62034af3): `getInputBackend()` now skips the `SimulatorKitHIDInputBackend` for `tap`/`swipe` operations when the simulator's parent Xcode is 26.0 or newer. Apple's iOS 26.x Simulator runtime drops `IndigoHIDMessageForMouseNSEvent` handling in CoreSimulator's `SimDevice`, so `IOHIDEvent` injection succeeds at the HID layer but never reaches the app's hit-test (the tap is ack'd, the UI does not respond). Keys, buttons, and text input remain on Tier 1 — only pointer ops fall through. Falls through to Tier 2 `simctl io input` (absent on Xcode 26), then Tier 3 AppleScript/CGEvent (focus-stealing, but functional). `HeadlessInputUnavailableError.reason` gains the new `'simhid-gated'` variant (#547) so callers can distinguish a cache hit that was intentionally skipped from a true unavailability.
+- **`sim-hid-bridge` reports screen size in points, not pixels** (#491, f4368f4c): The SimulatorKit HID probe previously reported physical pixel bounds from `CoreSimulator`'s display service. All callers were dividing by `scale` again, double-scaling the result on any Retina simulator. The bridge now returns logical point dimensions directly and all routing-layer coordinate math was adjusted accordingly.
+- **Native Settings.app test locale-aware** (#423, #535): `tests/integration/issue-423-native.live.test.ts` no longer hard-codes the English string `"General"` when walking Settings. It reads `com.apple.Preferences` localization at runtime and falls back to the button's accessibility identifier, so the suite passes on non-English simulators and in locale-randomized CI.
+
+### Added — iOS 26 investigation tooling (#491)
+
+- **`sim-hid-bridge diag` subcommand** (#491, #551, a83fe57b): New read-only diagnostic command that reports SimulatorKit availability, device boot state, display bounds, scale, screen-size-in-points, and the resolved `hidProbeFn` symbol in one JSON payload. Exits with the same classification as other subcommands (0 success, 64 BAD_ARGS, 69 DEVICE_NOT_BOOTED, 78 SIMULATORKIT_UNAVAILABLE). Used by the new daily sentinel probes and surfaced via `diagnose` MCP tool.
+- **`sim-hid-bridge tap-ps` subcommand** (#491, #555, 128e96fb): Experimental alternative tap implementation that drives Apple's Pointer Service (`CoreSimulator.framework`'s `SimPointerClient`) instead of `IOHIDEvent`. Ships as an investigation tool — not wired into the routing chain — so the #491 investigation can A/B compare IOHIDEvent vs PointerService against the same simulator. Paired with the tap-digitizer probe (#556, still in review) and the synthesis doc (#557, still in review) to form the public investigation artifact.
+- **Live integration suite for SimulatorKitHID** (#491, #536): `tests/integration/sim-hid-live-integration.test.ts` boots two simulators in parallel (one Flutter fixture, one native fixture), drives `app_tap`/`app_swipe`/`app_key_input` through each, and asserts `_meta.backendKind`, `_meta.headless`, and tap-landed verification via post-tap screenshot diff. Gated behind `OPENSAFARI_LIVE_SIMHID=1` so the default `npm test` stays headless; used by the new daily sentinel workflow.
+- **Screenshot-on-failure reporter** (#491, #548): Live integration suites now auto-save a simulator screenshot to `artifacts/test-failures/` on every failed assertion, so regressions in headless tap routing surface with the actual pixel state rather than just a stack trace. The reporter is a Jest custom reporter and is a no-op when `process.env.CI !== 'true'`.
+- **Dual-boot routing tests** (#491, #549): `tests/unit/dual-boot-routing.test.ts` covers the case where Flutter and native simulators are booted simultaneously under different UDIDs — validates that per-device backend caches (`cachedSimHidBackend`, FlutterVM negative cache) do not leak across device IDs.
+- **Live integration alignment post-#537** (#491, #546): After #537 disabled SimHID tap/swipe on Xcode 26+, `tests/integration/sim-hid-live.test.ts` was rewritten to assert the post-disablement routing contract (SimHID only for keys/buttons, AppleScript for tap/swipe) instead of the pre-#537 all-headless claim.
+
+### Added — Private API safety + sentinel CI (Epic #493)
+
+- **Private API sentinel workflow** (#493, #541, #542, 70afa2b1): New `.github/workflows/private-api-sentinel.yml` runs daily at 07:00 UTC with six independent probes: `SimulatorKit.framework` reachable, `CoreSimulator.framework` reachable, `dlopen(SimulatorKit)` + `dlsym(SimulatorKitHIDInputBackend)`, `sim-hid-bridge diag` device-not-booted exit, `sim-hid-bridge diag` against a booted simulator, and `tap-ps` PointerService symbol probe. Alerts to the `#opensafari-sentinels` Slack channel with the probe name and the exact error on any red probe, so macOS / Xcode updates that break the private-API contract are caught in ≤24h instead of in a customer repro.
+- **Sentinel probe tests** (#493, #520): `tests/sentinel/private-api-probe.test.ts` is a TypeScript-level mirror of the workflow probes — six probes that run under `npm run test:sentinel` so local repros can validate the same gates the workflow enforces. Excluded from the default jest run (`tests/ci/` + `tests/sentinel/` both removed from default `testPathIgnorePatterns`-driven test globs).
+- **One-time private API warning** (#493, #527, 898f799a): The first time per-process that `SimulatorKitHIDInputBackend` or `AccessibilityBridge` actually dispatches, `sim-hid-input-backend.ts` and `accessibility-bridge.ts` emit a single `console.error` informational line pointing at `docs/private-apis.md`. Subsequent calls stay silent. The message includes the Apple framework path, the documented BC-break monitoring strategy (sentinel CI + fallback tiers), and the license note vs Facebook idb. Error responses also now reference `docs/private-apis.md` in their `remediation` field.
+- **idb vs OpenSafari call-pattern comparison** (#493, #529, fa20d179): `docs/private-apis.md` gains a side-by-side comparison of which private frameworks each project loads, the tap dispatch call pattern (idb: `SimDeviceIOClient` via idb_direct + XPC; OpenSafari: `dlopen(SimulatorKit)` + SimulatorKitHIDInputBackend), and a license-independence note (idb is MIT, OpenSafari's `sim-hid-bridge.swift` was written from Apple's public headers without reading idb source).
+- **CI hardening: daily sentinel + one-time private-API notice** (#493, #532, af22ca7e, 68747103): `--passWithNoTests` added to the sentinel workflow so empty probe suites don't fail the run while the workflow is being bootstrapped. Telemetry tests (`tests/unit/mcp-telemetry-metadata.test.ts`) adapted so they coexist with the one-time private-API warning log line.
+
+### Added — Structured telemetry (Epic #502)
+
+- **`timedInput` wrapper + JSON telemetry sink for native input backends** (#502, ae378394): `src/metrics/input-telemetry.ts` wraps every `InputBackend.{tap,swipe,key,button,typeText}` call with a monotonic-clock duration measurement and a structured JSON payload (`{backend, op, device_id, duration_ms, headless, outcome, error_reason?}`). The sink writes to `OPENSAFARI_TELEMETRY_PATH` when set (default: unset → in-memory only) and is wired into `SimulatorKitHIDInputBackend`, `SimctlIOInputBackend`, `AppleScriptInputBackend`, and `NativeInputBackend`.
+- **FlutterVMInputBackend telemetry** (#502, db534caa): `FlutterVMInputBackend` now emits the same `timedInput` envelope so Tier-0 dispatches appear alongside Tier-1 in the aggregate view. Failure modes (VM Service disconnect, DDS probe fail, library-scope evaluate error) surface as `outcome: 'error'` with the `error_reason` set to the structured `FlutterVMError.code`.
+- **Opt-in `_telemetry` metadata on MCP input tools** (#502 Phase 2, #528, 55b2bb8c): All 10 input tool responses (`app_tap`, `app_swipe`, `app_scroll_native`, `app_key_input`, `app_double_tap`, `app_type_text`, `app_tap_element`, `app_type_element`, `app_dismiss_keyboard`, `app_alert_handle`) now include `_meta._telemetry: {duration_ms, backend_kind, op, outcome}` when `OPENSAFARI_TELEMETRY_META=1` is set. Off by default so the MCP response envelope stays minimal; CI and benchmarking harnesses flip it on.
+- **p50/p95/p99 latency rollup aggregator** (#502, #544, 033f6db8): `src/metrics/latency-rollup.ts` reads the JSON telemetry sink, groups by `(backend × op)`, and emits p50/p95/p99 rollups plus per-bucket error-rate. Exported as `rollupLatency()` for in-process use and exposed via the `diagnose` MCP tool's new `latency_rollup` block when `OPENSAFARI_TELEMETRY_PATH` is readable.
+
+### Added — CI headless smoke jobs (Epic #501)
+
+- **Daily Safari headless smoke** (#501, #524, 38f4af87): New `.github/workflows/headless-smoke.yml` runs daily against a booted simulator + ios-webkit-debug-proxy + a `qa_*` audit suite. Asserts zero `AppleScriptInputBackend` calls in the telemetry log and uploads screenshots on failure. Serves as the headless contract for the Safari audit path.
+- **Flutter headless smoke job** (#501, #526, bd11d9c8): Second job in `headless-smoke.yml` that boots a simulator, installs the Flutter QA fixture, runs `app_tap`/`app_tap_element`/`app_type_element` through the FlutterVM Tier-0 backend, and asserts `_meta.headless === true` on every response.
+- **Native SimulatorKitHID headless smoke** (#501, #530, c617aa9f): Third job that targets a native UIKit app (`com.apple.Preferences`) on Xcode 26+, validates the post-#537 routing (keys via Tier 1, tap via Tier 3 with AppleScript fallback), and asserts the sentinel path produces a `_meta.backendKind` for every response.
+- **`node -e` return statement fix** (#501, #545, 259db32f): UDID picker shell snippets used `return` at the top level of a `node -e` expression, which is a syntax error under Node 20+. Replaced with `process.exit(code)`. The pre-fix jobs were silently selecting the first simulator in the list instead of the matching Xcode-26 runtime, which masked the #491 regression for a week.
+
+### Changed
+
+- **Documentation: headless architecture Tier 0/1 activation** (#492, #525): `docs/headless-architecture.md` no longer describes SimulatorKitHID as a PoC — it now documents the 5-tier routing table (Flutter VM → SimulatorKit HID → simctl → WebKit → AppleScript), an updated Mermaid decision flowchart, the Xcode-26-vs-legacy scenario matrix, the full `sim-hid-bridge` exit-code contract, and the `OPENSAFARI_HEADLESS_ONLY` environment variable. `FlutterVMInputBackend` is reclassified from "planned" to "Production (Tier 0)" and `HeadlessInputUnavailableError.reason` documents the `'headless-only'` variant.
+- **README tier table + comparison refresh** (#492, #525): The Input Backend Selection table lists all five tiers (0–4) with the new Tier-0 Flutter and Tier-1 SimulatorKit HID rows, example tool responses include the `_meta.backendKind` / `_meta.headless` envelope, and the Headless Capabilities section includes a dedicated comparison vs Appium, idb, and XCUITest.
+- **Xcode 26+ SimHID tap/swipe caveat** (#492, refs #491, #537, #550): `docs/headless-architecture.md` reflects that `getInputBackend()` skips Tier 1 for tap/swipe on Xcode 26+ pending the Apple `IndigoHIDMessageForMouseNSEvent` regression fix. The Tier-1 status row is downgraded from "Production" to "Partial (tap/swipe disabled on Xcode 26+)", the Mermaid flowchart branches on op kind before returning `SimulatorKitHIDInputBackend`, and the scenario matrix rows for native iOS on Xcode 26+ are split into keys/buttons (headless) vs tap/swipe (blocked). README "Headless Capabilities" and "Headless input vs other iOS automation tools" tables carry the matching ⚠️ caveat with a link to #491.
+- **SimulatorKitHIDInputBackend marked as production Tier 1** (#492, #534): Status in `docs/headless-architecture.md` upgraded from "PoC" (v0.4.5 language) to "Production (Tier 1, partial on Xcode 26+)" to reflect the v0.4.6 shipping contract.
+
+### Test Coverage
+
+- **1558 tests across 106 suites** (up from 1510/103 in v0.4.7).
+- New test files: `mcp-telemetry-metadata.test.ts`, `input-telemetry.test.ts`, `latency-rollup.test.ts`, `sim-hid-live-integration.test.ts`, `dual-boot-routing.test.ts`, `screenshot-reporter.test.ts`, `private-api-probe.test.ts` (sentinel), updated `sim-hid-sentinel.test.ts`.
+- Extended: `native-input-backend.test.ts` (simhid-gated reason), `sim-hid-input-backend.test.ts` (one-time warning + screen-size-in-points), `accessibility-bridge.test.ts` (one-time warning), `diagnose.test.ts` (latency rollup block), `issue-423-native.live.test.ts` (locale-aware).
+- All tests green on develop. `npm run lint` shows 0 errors, 455 pre-existing warnings (no new regressions).
+
+### Upgrade Notes
+
+- **No breaking API changes.** MCP clients on 0.4.7 continue to work without modification.
+- **Xcode 26+ users regain the focus-stealing fallback for tap/swipe.** If `OPENSAFARI_HEADLESS_ONLY=1` is set on Xcode 26+, native-app tap/swipe now throws `HeadlessInputUnavailableError` with `reason: 'headless-only'` instead of silently missing target. CI jobs that rely on headless native tap should pin to Xcode 16.x or switch to the Flutter VM Tier 0 path where possible.
+- **Telemetry is opt-in.** Set `OPENSAFARI_TELEMETRY_PATH=<file>` to enable the JSON sink, and `OPENSAFARI_TELEMETRY_META=1` to have `_telemetry` appear in MCP response envelopes.
+- **Sentinel workflow requires a `SLACK_WEBHOOK_URL` secret** for alerting. Without it the workflow still runs but alert notifications are skipped.
+
+### Release metadata
+
+- npm: [`opensafari-mcp@0.4.8`](https://www.npmjs.com/package/opensafari-mcp/v/0.4.8)
+- git tag: `v0.4.8`
+- compare: [`v0.4.7…v0.4.8`](https://github.com/shaun0927/opensafari/compare/v0.4.7...v0.4.8)
+- merged PRs: #520, #524, #526, #527, #528, #529, #530, #532, #534, #535, #536, #537, #541, #542, #544, #545, #546, #547, #548, #549, #550, #551, #555 (plus fix commits f4368f4c, ae378394, db534caa, 70afa2b1)
+
 ## [0.4.7] - 2026-04-15
 
 ### Added — FlutterVMInputBackend (Tier 0) ships in production (Epic #484, Issue #481)

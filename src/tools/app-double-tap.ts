@@ -5,7 +5,7 @@
  */
 
 import { MCPServer, getWebKitClient } from '../mcp-server';
-import { resolveDeviceId, getInputBackend, buildInputMeta } from './native-input-utils';
+import { resolveDeviceId, getInputBackend, runInputOp } from './native-input-utils';
 
 /** Delay between the two taps (ms). 50 ms matches typical double-tap cadence. */
 const INTER_TAP_DELAY_MS = 50;
@@ -53,11 +53,13 @@ export function registerAppDoubleTapTool(server: MCPServer): void {
 
         const backend = await getInputBackend(deviceId, getWebKitClient(deviceId));
 
-        // First tap
-        await backend.tap(deviceId, x, y);
-        await delay(INTER_TAP_DELAY_MS);
-        // Second tap
-        await backend.tap(deviceId, x, y);
+        const { meta } = await runInputOp(backend, deviceId, async () => {
+          // First tap
+          await backend.tap(deviceId, x, y);
+          await delay(INTER_TAP_DELAY_MS);
+          // Second tap
+          await backend.tap(deviceId, x, y);
+        });
 
         return {
           content: [
@@ -69,7 +71,7 @@ export function registerAppDoubleTapTool(server: MCPServer): void {
                 y,
                 deviceId,
                 backend: backend.kind,
-                _meta: buildInputMeta(backend, deviceId),
+                _meta: meta,
               }),
             },
           ],
