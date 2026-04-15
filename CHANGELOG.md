@@ -4,33 +4,33 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-### Added — Memory tracker + `diagnose` memory block (#554, slice 1)
+## [0.4.9] - 2026-04-15
 
-- **New `src/metrics/memory-tracker.ts`** — process-wide RSS peak tracker. `recordMemorySample()` is called from every `emitInputTelemetry()` tick (cheap fast-path: `process.memoryUsage.rss()` when available, single syscall, < 1 µs on macOS/Linux) so the peak RSS is always observable without scheduling its own poller.
-- **`diagnose` MCP tool** now returns a `memory` block: `{ rss_mb, peak_rss_mb, heap_used_mb, heap_total_mb, external_mb, array_buffers_mb, sample_count }`. Heap fields come from a fresh `process.memoryUsage()` call so callers see accurate V8 numbers regardless of whether the per-op sampler has ticked. `peak_rss_mb` answers "did this process ever grow to X MB" without forcing a soak test.
-- **New env var `OPENSAFARI_INPUT_TELEMETRY_MEMORY`** — set to `0` / `false` / `off` to disable the per-op sampler. Default-on because the cost is below the noise floor of the existing `timedInput` wrapper. The full `diagnose` snapshot bypasses the gate so the read-only diagnose tool stays useful even when the hot-path sampler is silenced.
-
-This is the first slice of the holistic memory SLO plan in #554. A follow-up PR will add the per-backend RSS rollup, the gated long-session soak test, the `OPENSAFARI_MEMORY_SOFT_CAP_MB` watchdog, and `docs/memory-budget.md` as the SSOT.
-
-### Added — Flutter release / no-DDS routing polish (#553)
-
-- **`FlutterVMClient.probeEvaluateCompile()`** — issues a minimal `evaluate('1')` against the root library and reports whether the VM can compile expressions. Returns `{ available: true }` on success, `{ available: false, reason: 'compile-error-113' }` when the VM Service rejects with code 113 (release builds, `simctl launch` without `flutter run`, any app without DDS + frontend compiler), and `{ available: false, reason: 'other' }` for other rejections. Designed to be cheap (< 500 ms p95) so it fits inside `getInputBackend()`'s Tier-0 discovery path.
-- **Tier-0 routing now gates on compile-capability**, not just VM reachability. `defaultFlutterVMResolver` calls `probeEvaluateCompile()` after the initial connect and treats `compile-error-113` as a negative cache entry — which means release-mode Flutter apps fall through to the coordinate tier (and via the `app_tap_element` / `app_type_element` path, land on Tier 1.5 AX press from #552) instead of trying Tier 0 and surfacing a raw `code 113` error to the user. A one-time `[input-backend] Flutter VM on <id> rejects evaluate (code 113)` diagnostic is logged so the fall-through is observable.
-- **`FlutterVMInputBackendError.code`** is now a structured union — `'VM_NO_EVALUATE' | 'DART_ERROR' | 'UNKNOWN'`. The user-facing message for `VM_NO_EVALUATE` carries remediation ("release build or `simctl launch` — use Tier 1.5 AX press or relaunch under `flutter run --debug`") rather than echoing the raw JSON-RPC payload.
+This release closes the **Xcode 26+ headless tap gap** with a new Tier 1.5 AX press backend, hardens Flutter VM routing for release builds, adds process-wide memory tracking to `diagnose`, and ships the complete iOS 26 investigation synthesis. Together with the Tier-1 SimHID gating from v0.4.8, element-targeted native automation (`app_tap_element`, `app_type_element`) is now fully headless on Xcode 26+ — no Simulator.app focus required.
 
 ### Added — Tier 1.5 AX press, headless native tap on Xcode 26+ (#552)
 
-- **`AccessibilityPressInputBackend` — Tier 1.5 headless element-targeted tap/focus.** `app_tap_element` and `app_type_element` now invoke `AXUIElementPerformAction(element, kAXPressAction)` through the existing `ax-bridge` Swift helper before falling through to the coordinate-based backend chain. The path does not synthesise OS-level input, so the physical mouse cursor never moves and `Simulator.app` does not need to be foregrounded — and critically it works on Xcode 26+ where Tier-1 SimHID tap/swipe is disabled pending the Apple `IndigoHIDMessageForMouseNSEvent` regression (#537). This closes the bulk of the native-automation gap that epic #484 tracks; coordinate-only `app_tap({x, y})` and long-press (`duration > 0`) still need Tier 1 / 2 / 4.
-  - New `ax-bridge press --path <index-path> --device <udid>` sub-command resolves a live `AXUIElement` from the element index path and invokes `AXPress`. Emits a uniform response on stdout: `{ ok, code, path, actions, role, identifier, label, message, axErrorCode }`. `PRESS_NOT_ACTIONABLE` (element does not advertise `AXPress`) and `PRESS_FAILED` (action fired but returned non-success) are reported in-band with exit 0 so the TS caller can transparently fall back to coordinate tap; bridge-level errors (permission denied, device not found) still exit non-zero and throw `AccessibilityBridgeError`.
-  - New `AccessibilityBridge.press(path, deviceId?)` wrapper returns the typed `AXPressResponse`.
-  - `app_tap_element` tries Tier 1.5 when `duration === 0`, the resolved element has a non-empty path, and `OPENSAFARI_DISABLE_AX_PRESS` is not set. On success the response carries `backend: 'ax-press'`, `_meta.backendKind: 'ax-press'`, `_meta.headless: true`, and `_meta.axActions` listing every action the element advertised.
-  - `app_type_element` uses AX press for the tap-to-focus step when the field is AX-pressable; typing still flows through the selected input backend (Tier 1 SimHID keys on Xcode 26+). Response adds a `focusBackend` field so callers can distinguish the headless focus path from the coordinate tap focus.
-  - New `OPENSAFARI_DISABLE_AX_PRESS=1` env var disables the Tier 1.5 path entirely — useful for regression-testing the fallback or isolating an AX-press failure mode.
-- **`InputBackendKind` gains the `'ax-press'` variant** so telemetry (#502) and the `_meta.backendKind` envelope (#504) surface the new path consistently across tools.
+- **`AccessibilityPressInputBackend` — Tier 1.5 headless element-targeted tap/focus.** `app_tap_element` and `app_type_element` now invoke `AXUIElementPerformAction(element, kAXPressAction)` through the existing `ax-bridge` Swift helper before falling through to the coordinate-based backend chain. The path does not synthesise OS-level input, so the physical mouse cursor never moves and `Simulator.app` does not need to be foregrounded — and critically it works on Xcode 26+ where Tier-1 SimHID tap/swipe is disabled (#537). This closes the bulk of the native-automation gap that epic #484 tracks.
+  - New `ax-bridge press --path <index-path> --device <udid>` sub-command with uniform JSON response (`{ ok, code, path, actions, role, identifier, label, message, axErrorCode }`). `PRESS_NOT_ACTIONABLE` and `PRESS_FAILED` are in-band with exit 0 for transparent fallback; bridge-level errors exit non-zero.
+  - `app_tap_element` tries Tier 1.5 when `duration === 0` and the element has a path. Response carries `backend: 'ax-press'`, `_meta.headless: true`.
+  - `app_type_element` uses AX press for tap-to-focus; typing flows through the selected input backend.
+  - New `OPENSAFARI_DISABLE_AX_PRESS=1` env var to disable the Tier 1.5 path.
+- **`InputBackendKind` gains the `'ax-press'` variant** for telemetry and `_meta.backendKind` consistency.
+
+### Added — Flutter release / no-DDS routing polish (#553)
+
+- **`FlutterVMClient.probeEvaluateCompile()`** — cheap evaluate probe (< 500 ms p95) that gates Tier-0 on compile capability, not just VM reachability. Release-mode Flutter apps and `simctl launch` without `flutter run` now fall through to lower tiers instead of surfacing a raw `code 113` error.
+- **`FlutterVMInputBackendError.code`** is a structured union (`VM_NO_EVALUATE | DART_ERROR | UNKNOWN`) with actionable remediation messages.
+- **WebSocket leak fix** — orphaned `FlutterVMClient` connections on negative probe results are now closed via `removeFlutterVMClient()` to prevent file descriptor leaks on release-mode apps.
+
+### Added — iOS 26 investigation tooling (#491)
+
+- **`sim-hid-bridge tap-digitizer` subcommand** (#491, #556): IOHIDEvent digitizer probe that synthesises `kIOHIDEventTypeDigitizer` and wraps with `IndigoHIDMessageForPointerEventFromHIDEventRef`. Hypothesis falsified (wrapper returns nil for digitizer events) — shipped as negative-result evidence with reusable IOKit scaffolding for next investigation candidate.
+- **iOS 26 tap regression synthesis document** (#491, #557): `docs/simhid-ios26-investigation.md` — comprehensive investigation synthesis covering symptom, reproduction, falsification log for 4 candidates, shipped tooling catalogue, remaining candidates ranked by feasibility, and actionable next-step checklist. Cross-referenced from `docs/private-apis.md`.
 
 ### Changed
 
-- **Headless SSOT reflects Tier 1.5.** `docs/headless-architecture.md` adds a Tier 1.5 routing-table row, a dedicated backend-details section (`AccessibilityPressInputBackend`), an updated "Practical impact on Xcode 26+" blockquote that recognises AX press as the primary tap path for element-targeted automation, scenario-matrix rows that split native Xcode 26+ into element-targeted (✅ headless) and coordinate-only (⚠️ opt-in), an `OPENSAFARI_DISABLE_AX_PRESS` entry in the environment-variables table, and #552 in the Related-issues index.
+- **Headless SSOT reflects Tier 1.5.** `docs/headless-architecture.md` adds a Tier 1.5 routing-table row, backend details for `AccessibilityPressInputBackend`, updated "Practical impact on Xcode 26+" blockquote, scenario-matrix rows splitting native Xcode 26+ into element-targeted (headless) and coordinate-only (opt-in), and `OPENSAFARI_DISABLE_AX_PRESS` in the environment-variables table.
 
 ## [0.4.8] - 2026-04-15
 
