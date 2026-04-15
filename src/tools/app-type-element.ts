@@ -14,7 +14,7 @@
 import { MCPServer, getWebKitClient } from '../mcp-server';
 import { getAccessibilityBridge, ensureSemanticsActive } from '../native';
 import type { AXNode, AXQuery } from '../native';
-import { resolveDeviceId, getInputBackend, buildInputMeta } from './native-input-utils';
+import { resolveDeviceId, getInputBackend, runInputOp } from './native-input-utils';
 
 const DEFAULT_TIMEOUT_MS = 5000;
 const DEFAULT_FOCUS_DELAY_MS = 150;
@@ -135,13 +135,13 @@ export function registerAppTypeElementTool(server: MCPServer): void {
         const centerY = match.frame.y + match.frame.height / 2;
 
         const backend = await getInputBackend(deviceId, getWebKitClient(deviceId));
-        await backend.tap(deviceId, centerX, centerY);
-
-        if (focusDelay > 0) {
-          await sleep(focusDelay);
-        }
-
-        await backend.typeText(deviceId, textToType);
+        const { meta } = await runInputOp(backend, deviceId, async () => {
+          await backend.tap(deviceId, centerX, centerY);
+          if (focusDelay > 0) {
+            await sleep(focusDelay);
+          }
+          await backend.typeText(deviceId, textToType);
+        });
 
         return {
           content: [
@@ -159,7 +159,7 @@ export function registerAppTypeElementTool(server: MCPServer): void {
                 length: textToType.length,
                 backend: backend.kind,
                 deviceId,
-                _meta: buildInputMeta(backend, deviceId),
+                _meta: meta,
               }),
             },
           ],

@@ -7,7 +7,7 @@
  */
 
 import { MCPServer, getWebKitClient } from '../mcp-server';
-import { resolveDeviceId, getInputBackend, buildInputMeta } from './native-input-utils';
+import { resolveDeviceId, getInputBackend, runInputOp } from './native-input-utils';
 
 export function registerAppTapTool(server: MCPServer): void {
   server.registerTool(
@@ -53,7 +53,9 @@ export function registerAppTapTool(server: MCPServer): void {
         }
 
         const backend = await getInputBackend(deviceId, getWebKitClient(deviceId));
-        await backend.tap(deviceId, x, y, duration > 0 ? duration : undefined);
+        const { meta } = await runInputOp(backend, deviceId, () =>
+          backend.tap(deviceId, x, y, duration > 0 ? duration : undefined),
+        );
 
         return {
           content: [
@@ -66,7 +68,7 @@ export function registerAppTapTool(server: MCPServer): void {
                 duration,
                 deviceId,
                 backend: backend.kind,
-                _meta: buildInputMeta(backend, deviceId),
+                _meta: meta,
               }),
             },
           ],

@@ -6,7 +6,7 @@
  */
 
 import { MCPServer, getWebKitClient } from '../mcp-server';
-import { resolveDeviceId, getInputBackend, buildInputMeta } from './native-input-utils';
+import { resolveDeviceId, getInputBackend, runInputOp } from './native-input-utils';
 
 export function registerAppTypeTextTool(server: MCPServer): void {
   server.registerTool(
@@ -47,7 +47,9 @@ export function registerAppTypeTextTool(server: MCPServer): void {
         }
 
         const backend = await getInputBackend(deviceId, getWebKitClient(deviceId));
-        await backend.typeText(deviceId, text);
+        const { meta } = await runInputOp(backend, deviceId, () =>
+          backend.typeText(deviceId, text),
+        );
 
         return {
           content: [
@@ -58,7 +60,7 @@ export function registerAppTypeTextTool(server: MCPServer): void {
                 length: text.length,
                 deviceId,
                 backend: backend.kind,
-                _meta: buildInputMeta(backend, deviceId),
+                _meta: meta,
               }),
             },
           ],
