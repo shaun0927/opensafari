@@ -108,6 +108,12 @@ export function isUserDefinedWidget(node: WidgetSummary | null | undefined): boo
 /**
  * Extract `{ type, description, creation_location, widget_id }` from an
  * inspector payload (already one-level summarised).
+ *
+ * The raw inspector node wraps every widget in `_ElementDiagnosticableTreeNode`,
+ * so `summary.type` carries the wrapper class, not the Flutter widget name.
+ * Prefer `widgetRuntimeType` (always the user-visible widget, e.g.
+ * `"ElevatedButton"`), then `description`, and fall back to `type` only when
+ * neither is present so the public `widget_type` identifies the widget.
  */
 function toPublicShape(summary: WidgetSummary): {
   widget_type: string;
@@ -116,7 +122,7 @@ function toPublicShape(summary: WidgetSummary): {
   creation_location?: { file: string; line: number; column: number };
 } {
   return {
-    widget_type: summary.type,
+    widget_type: summary.widgetRuntimeType ?? summary.description ?? summary.type,
     description: summary.description,
     widget_id: summary.valueId,
     creation_location: summary.creationLocation,
