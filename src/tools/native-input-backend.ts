@@ -851,9 +851,10 @@ export async function getInputBackend(
       cachedSimHidBackend = null;
     }
   }
-  if (cachedSimHidBackend) {
-    return cachedSimHidBackend;
-  }
+  // SimHID tap/swipe broken on Xcode 26+ (locks screen). TODO(#491): re-enable.
+  // if (cachedSimHidBackend) {
+  //   return cachedSimHidBackend;
+  // }
 
   // Tier 2: simctl io input (headless, works with any app — Xcode ≤16)
   if (simctlAvailable) {
