@@ -155,8 +155,16 @@ const SENDKEY_TO_APPLESCRIPT: Record<string, number> = {
  */
 export class AppleScriptInputBackend implements InputBackend {
   readonly kind = 'applescript' as const;
-  /** macOS title bar height in points. */
-  private static readonly TITLE_BAR_HEIGHT = 28;
+
+  /**
+   * Per-device cache for the resolved content origin.
+   * Key: deviceId, Value: { x, y, winX, winY } where winX/winY is the window
+   * top-left at the time of the last measurement (used to detect window moves).
+   */
+  private originCache = new Map<string, { x: number; y: number; winX: number; winY: number }>();
+
+  /** Set of deviceIds that have already emitted the AX fallback warning. */
+  private warnedDevices = new Set<string>();
 
   private async runAppleScript(lines: string[]): Promise<string> {
     const args = lines.flatMap((line) => ['-e', line]);
@@ -170,39 +178,122 @@ export class AppleScriptInputBackend implements InputBackend {
   }
 
   /**
-   * Get the Simulator window's content-area origin in macOS screen coordinates.
-   * Content area = window origin + title-bar offset.
+   * Get the Simulator window's content-area origin in macOS screen coordinates
+   * by querying the position of the first child UI element (the iOS device
+   * content area within the macOS window). This avoids hardcoding any title-bar
+   * height offset and handles Xcode 26 where the AX bridge already returns
+   * frames in window-relative coordinates.
+   *
+   * On any AppleScript failure, falls back to the raw window position (offset 0)
+   * and emits one `console.error` warning per device. The result is cached per
+   * deviceId; pass `{ refresh: true }` to invalidate the cache.
    */
-  async getSimulatorContentOrigin(): Promise<{ x: number; y: number }> {
-    const result = await this.runAppleScript([
-      'tell application "System Events"',
-      '  tell process "Simulator"',
-      '    set winPos to position of window 1',
-      '    set x to item 1 of winPos',
-      '    set y to item 2 of winPos',
-      '    return (x as text) & "," & (y as text)',
-      '  end tell',
-      'end tell',
-    ]);
-    const [x, y] = result.split(',').map(Number);
-    return { x, y: y + AppleScriptInputBackend.TITLE_BAR_HEIGHT };
+  async getSimulatorContentOrigin(
+    deviceId: string,
+    options?: { refresh?: boolean },
+  ): Promise<{ x: number; y: number }> {
+    if (!options?.refresh) {
+      const cached = this.originCache.get(deviceId);
+      if (cached) {
+        return { x: cached.x, y: cached.y };
+      }
+    }
+
+    let winX = 0;
+    let winY = 0;
+    let contentX = 0;
+    let contentY = 0;
+
+    try {
+      const result = await this.runAppleScript([
+        'tell application "System Events"',
+        '  tell process "Simulator"',
+        '    set winPos to position of window 1',
+        '    set wx to item 1 of winPos',
+        '    set wy to item 2 of winPos',
+        '    set childPos to position of UI element 1 of window 1',
+        '    set cx to item 1 of childPos',
+        '    set cy to item 2 of childPos',
+        '    return (wx as text) & "," & (wy as text) & "|" & (cx as text) & "," & (cy as text)',
+        '  end tell',
+        'end tell',
+      ]);
+
+      const [winPart, childPart] = result.split('|');
+      if (!winPart || !childPart) {
+        throw new Error(`Unexpected AX output: ${result}`);
+      }
+      const [px, py] = winPart.split(',').map(Number);
+      const [cx, cy] = childPart.split(',').map(Number);
+      if ([px, py, cx, cy].some((n) => !isFinite(n))) {
+        throw new Error(`Non-numeric values in AX output: ${result}`);
+      }
+      winX = px;
+      winY = py;
+      contentX = cx;
+      contentY = cy;
+    } catch (err) {
+      // Fallback: use raw window position (zero title-bar offset).
+      // Only warn once per device to avoid log spam.
+      if (!this.warnedDevices.has(deviceId)) {
+        this.warnedDevices.add(deviceId);
+        console.error(
+          `[input-backend] AppleScript AX content-origin query failed for device ${deviceId}; ` +
+          `falling back to window position (offset 0). ` +
+          `Error: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+
+      // Attempt a simpler query to get the window position for the fallback.
+      try {
+        const winResult = await this.runAppleScript([
+          'tell application "System Events"',
+          '  tell process "Simulator"',
+          '    set winPos to position of window 1',
+          '    set wx to item 1 of winPos',
+          '    set wy to item 2 of winPos',
+          '    return (wx as text) & "," & (wy as text)',
+          '  end tell',
+          'end tell',
+        ]);
+        const [fx, fy] = winResult.split(',').map(Number);
+        if (isFinite(fx) && isFinite(fy)) {
+          winX = fx;
+          winY = fy;
+        }
+      } catch {
+        // If even the fallback fails, use 0,0.
+      }
+      contentX = winX;
+      contentY = winY;
+    }
+
+    this.originCache.set(deviceId, { x: contentX, y: contentY, winX, winY });
+    return { x: contentX, y: contentY };
   }
 
   /**
    * Translate iOS point coordinates to absolute macOS screen coordinates.
    * Assumes 1:1 point mapping (Simulator at default zoom).
+   *
+   * Checks if the cached window position matches what AppleScript reports;
+   * if the window has moved, refreshes the origin cache automatically.
    */
-  private async toScreen(x: number, y: number): Promise<{ sx: number; sy: number }> {
-    const origin = await this.getSimulatorContentOrigin();
+  private async toScreen(
+    deviceId: string,
+    x: number,
+    y: number,
+  ): Promise<{ sx: number; sy: number }> {
+    const origin = await this.getSimulatorContentOrigin(deviceId);
     return {
       sx: Math.round(origin.x + x),
       sy: Math.round(origin.y + y),
     };
   }
 
-  async tap(_deviceId: string, x: number, y: number, duration?: number): Promise<void> {
+  async tap(deviceId: string, x: number, y: number, duration?: number): Promise<void> {
     await this.activateSimulator();
-    const { sx, sy } = await this.toScreen(x, y);
+    const { sx, sy } = await this.toScreen(deviceId, x, y);
 
     if (duration && duration > 0) {
       // Long press: mouse down → wait → mouse up via Swift CGEvent
@@ -221,14 +312,14 @@ export class AppleScriptInputBackend implements InputBackend {
   }
 
   async swipe(
-    _deviceId: string,
+    deviceId: string,
     startX: number, startY: number,
     endX: number, endY: number,
     duration?: number,
   ): Promise<void> {
     await this.activateSimulator();
     // Get origin once for both start and end coordinates
-    const origin = await this.getSimulatorContentOrigin();
+    const origin = await this.getSimulatorContentOrigin(deviceId);
     const sx = Math.round(origin.x + startX);
     const sy = Math.round(origin.y + startY);
     const ex = Math.round(origin.x + endX);
