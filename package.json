@@ -26,6 +26,7 @@
     "test:unit": "jest --config jest.config.js",
     "test:integration": "jest --preset ts-jest --testEnvironment node --roots tests/integration --testPathIgnorePatterns '/node_modules/' --testPathIgnorePatterns 'webkit-connection' --testTimeout=120000 --runInBand",
     "test:ci": "jest --config jest.ci.config.js",
+    "test:sentinel": "jest --config jest.sentinel.config.js",
     "test:coverage": "jest --coverage",
     "lint": "eslint 'src/**/*.ts' 'cli/**/*.ts' 'tests/**/*.ts'",
     "lint:fix": "eslint --fix 'src/**/*.ts' 'cli/**/*.ts' 'tests/**/*.ts'",
