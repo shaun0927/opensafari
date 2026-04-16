@@ -97,7 +97,7 @@ jobs:
           # Poll for webinspectord_sim socket (bash-based — webpack bundles prevent require)
           SOCKET_PATH=""
           for i in $(seq 1 40); do
-            SOCKET_PATH=$(find /private/var/tmp /private/tmp -name "com.apple.webinspectord_sim.socket" 2>/dev/null | head -1)
+            SOCKET_PATH=$(find /private/var/tmp /private/tmp -name "com.apple.webinspectord_sim.socket" 2>/dev/null | head -1 || true)
             if [ -n "$SOCKET_PATH" ]; then
               break
             fi
@@ -105,7 +105,7 @@ jobs:
           done
           # Fallback: lsof-based socket discovery
           if [ -z "$SOCKET_PATH" ]; then
-            SOCKET_PATH=$(lsof -U 2>/dev/null | grep webinspectord_sim | awk '{print $NF}' | head -1)
+            SOCKET_PATH=$(lsof -U 2>/dev/null | grep webinspectord_sim | awk '{print $NF}' | head -1 || true)
           fi
           DEVICE_LIST_PORT=$((OPENSAFARI_PROXY_PORT - 1))
           if [ -n "$SOCKET_PATH" ]; then
@@ -332,6 +332,27 @@ jobs:
           else
             echo "::warning::Could not extract VM Service URL from flutter-run.log — test will rely on runtime discovery"
           fi
+
+      - name: Wait for DDS frontend compiler warmup
+        run: |
+          set -euo pipefail
+          if [ -z "${OPENSAFARI_VM_SERVICE_URL:-}" ]; then
+            echo "No VM Service URL — skipping warmup"
+            exit 0
+          fi
+          WS_URL=$(echo "$OPENSAFARI_VM_SERVICE_URL" | sed 's|^http|ws|;s|/$|/ws|')
+          echo "Probing VM Service at $OPENSAFARI_VM_SERVICE_URL ..."
+          for i in $(seq 1 20); do
+            # Check if the HTTP endpoint is responsive
+            if curl --silent --max-time 2 "${OPENSAFARI_VM_SERVICE_URL}" 2>/dev/null | grep -q "Dart"; then
+              echo "DDS HTTP endpoint responsive (attempt $i)"
+              # Give the frontend compiler extra time to initialize
+              sleep 5
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::warning::DDS HTTP endpoint did not respond within warmup window — test may fail"
 
       - name: Run Flutter VM headless input live test
         env:
@@ -619,7 +640,7 @@ jobs:
           # Poll for webinspectord_sim socket (bash-based — webpack bundles prevent require)
           SOCKET_PATH=""
           for i in $(seq 1 40); do
-            SOCKET_PATH=$(find /private/var/tmp /private/tmp -name "com.apple.webinspectord_sim.socket" 2>/dev/null | head -1)
+            SOCKET_PATH=$(find /private/var/tmp /private/tmp -name "com.apple.webinspectord_sim.socket" 2>/dev/null | head -1 || true)
             if [ -n "$SOCKET_PATH" ]; then
               break
             fi
@@ -627,7 +648,7 @@ jobs:
           done
           # Fallback: lsof-based socket discovery
           if [ -z "$SOCKET_PATH" ]; then
-            SOCKET_PATH=$(lsof -U 2>/dev/null | grep webinspectord_sim | awk '{print $NF}' | head -1)
+            SOCKET_PATH=$(lsof -U 2>/dev/null | grep webinspectord_sim | awk '{print $NF}' | head -1 || true)
           fi
           DEVICE_LIST_PORT=$((OPENSAFARI_PROXY_PORT - 1))
           if [ -n "$SOCKET_PATH" ]; then
