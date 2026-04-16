@@ -292,9 +292,23 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$GITHUB_WORKSPACE/flutter-smoke-logs"
+          # Use --vmservice-out-file so we get the resolved URL from a file
+          # instead of scraping the --machine JSON stream. The previous
+          # approach combined `--no-hot` (to keep `flutter run` non-blocking
+          # without stdin) with log-scraping for the VM service URL, but
+          # `--no-hot` disables the DDS frontend compiler service that
+          # FlutterVMInputBackend's `probeEvaluateCompile` requires
+          # (returns error 113 → backend is rejected → no Tier-0 routing).
+          # `--vmservice-out-file` works in both hot and no-hot modes and
+          # avoids the parse fragility entirely.
+          VM_SERVICE_FILE="$GITHUB_WORKSPACE/flutter-smoke-logs/vmservice.uri"
+          rm -f "$VM_SERVICE_FILE"
           pushd "$FIXTURE_DIR" >/dev/null
           flutter pub get
-          nohup flutter run -d "$SIMULATOR_UDID" --no-hot --machine \
+          nohup flutter run -d "$SIMULATOR_UDID" \
+            --machine \
+            --vmservice-out-file "$VM_SERVICE_FILE" \
+            </dev/null \
             > "$GITHUB_WORKSPACE/flutter-smoke-logs/flutter-run.log" 2>&1 &
           echo $! > /tmp/flutter.pid
           popd >/dev/null
@@ -306,80 +320,66 @@ jobs:
             fi
             sleep 2
           done
-          # Wait for the flutter --machine bridge to emit a VM Service / DDS URL.
+          # Wait for `flutter run` to write the resolved VM service URI.
+          # `--vmservice-out-file` only appears once the engine has actually
+          # bound the port and DDS is ready to accept clients.
           for i in $(seq 1 120); do
-            if grep -Eo '"(wsUri|ddsUri|observatoryUri|vmServiceUri)"[^,}]*' \
-                 "$GITHUB_WORKSPACE/flutter-smoke-logs/flutter-run.log" >/dev/null 2>&1; then
-              echo "VM Service / DDS URL detected"
+            if [ -s "$VM_SERVICE_FILE" ]; then
+              echo "VM service file written after ${i}s: $(cat "$VM_SERVICE_FILE")"
               break
             fi
             sleep 2
           done
-          head -n 40 "$GITHUB_WORKSPACE/flutter-smoke-logs/flutter-run.log" || true
+          if [ ! -s "$VM_SERVICE_FILE" ]; then
+            echo "::error::flutter run did not write VM service URI within timeout"
+            tail -100 "$GITHUB_WORKSPACE/flutter-smoke-logs/flutter-run.log" || true
+            exit 1
+          fi
 
       - name: Export Flutter VM Service URL
         run: |
           set -euo pipefail
-          LOG_FILE="$GITHUB_WORKSPACE/flutter-smoke-logs/flutter-run.log"
-          echo "=== flutter-run.log tail (debug) ==="
-          tail -80 "$LOG_FILE" 2>/dev/null || true
-          echo "=== end log tail ==="
-          VM_SERVICE_URL=$(node - <<'NODE'
-          const fs = require('fs');
-          const path = process.env.GITHUB_WORKSPACE + '/flutter-smoke-logs/flutter-run.log';
-          const raw = fs.readFileSync(path, 'utf8');
-          // Try JSON --machine output patterns first
-          const match =
-            raw.match(/"vmServiceUri"\s*:\s*"(http:\/\/127\.0\.0\.1:\d+\/[A-Za-z0-9_-]+=\/?)"/) ||
-            raw.match(/"observatoryUri"\s*:\s*"(http:\/\/127\.0\.0\.1:\d+\/[A-Za-z0-9_-]+=\/?)"/) ||
-            raw.match(/"ddsUri"\s*:\s*"(http:\/\/127\.0\.0\.1:\d+\/[A-Za-z0-9_-]+=\/?)"/) ||
-            raw.match(/"wsUri"\s*:\s*"(ws:\/\/127\.0\.0\.1:\d+\/[A-Za-z0-9_-]+=\/ws)"/) ||
-            // Fallback: plain-text "listening on" line
-            raw.match(/(?:VM service|Observatory|Dart VM).*?(http:\/\/127\.0\.0\.1:\d+\/[A-Za-z0-9_-]+=\/?)/i) ||
-            // Broad fallback: any http URL that looks like a VM service URL
-            raw.match(/(http:\/\/127\.0\.0\.1:\d+\/[A-Za-z0-9_-]+=\/)/);
-          if (!match) {
-            process.stderr.write('No VM Service URL found in flutter-run.log\n');
-            process.exit(1);
-          }
-          let value = match[1];
-          if (value.startsWith('ws://')) {
-            value = value.replace(/^ws/, 'http').replace(/\/ws\/?$/, '/');
-          }
-          if (!value.endsWith('/')) value += '/';
-          process.stdout.write(value);
-          NODE
-          ) || true
-          if [ -n "$VM_SERVICE_URL" ]; then
-            echo "OPENSAFARI_VM_SERVICE_URL=$VM_SERVICE_URL" >> "$GITHUB_ENV"
-            echo "Discovered VM Service URL: $VM_SERVICE_URL"
-          else
-            echo "::warning::Could not extract VM Service URL from flutter-run.log — test will rely on runtime discovery"
+          VM_SERVICE_FILE="$GITHUB_WORKSPACE/flutter-smoke-logs/vmservice.uri"
+          if [ ! -s "$VM_SERVICE_FILE" ]; then
+            echo "::error::VM service URI file missing or empty"
+            exit 1
           fi
+          # Trim trailing newline / whitespace; --vmservice-out-file writes
+          # the URL with a trailing newline.
+          VM_SERVICE_URL=$(cat "$VM_SERVICE_FILE" | tr -d '\n\r ' )
+          # Ensure trailing slash so downstream HTTP probes resolve correctly.
+          case "$VM_SERVICE_URL" in
+            */) ;;
+            *) VM_SERVICE_URL="${VM_SERVICE_URL}/" ;;
+          esac
+          echo "OPENSAFARI_VM_SERVICE_URL=$VM_SERVICE_URL" >> "$GITHUB_ENV"
+          echo "Discovered VM Service URL: $VM_SERVICE_URL"
 
       - name: Wait for DDS frontend compiler warmup
         run: |
           set -euo pipefail
           if [ -z "${OPENSAFARI_VM_SERVICE_URL:-}" ]; then
-            echo "No VM Service URL — skipping warmup"
-            exit 0
+            echo "::error::No VM Service URL exported — cannot warm up DDS"
+            exit 1
           fi
-          WS_URL=$(echo "$OPENSAFARI_VM_SERVICE_URL" | sed 's|^http|ws|;s|/$|/ws|')
           echo "Probing VM Service at $OPENSAFARI_VM_SERVICE_URL ..."
-          for i in $(seq 1 20); do
-            # Check if the HTTP endpoint is responsive
-            if curl --silent --max-time 2 "${OPENSAFARI_VM_SERVICE_URL}" 2>/dev/null | grep -q "Dart"; then
+          # The DDS HTTP endpoint becomes responsive a few seconds after the
+          # URL is written. Wait for *any* 200 response before letting jest
+          # connect — `compileExpression` (the call probeEvaluateCompile
+          # uses) requires the frontend compiler to have completed its
+          # initial compile pass, which the warmup sleep covers.
+          for i in $(seq 1 30); do
+            if curl --silent --max-time 2 --output /dev/null --write-out '%{http_code}' "${OPENSAFARI_VM_SERVICE_URL}" | grep -q '^200$'; then
               echo "DDS HTTP endpoint responsive (attempt $i)"
-              # Give the frontend compiler extra time to initialize
-              sleep 5
+              sleep 8
               exit 0
             fi
             sleep 2
           done
-          echo "::warning::DDS HTTP endpoint did not respond within warmup window — test may fail"
+          echo "::error::DDS HTTP endpoint did not respond within warmup window"
+          exit 1
 
       - name: Run Flutter VM headless input live test
-        continue-on-error: true  # Flutter VM probeEvaluateCompile returns error 113 with --no-hot; hot-reload mode hangs the DDS connection on CI. Track in a follow-up issue.
         env:
           OPENSAFARI_LIVE_VM: '1'
           OSF_DEVICE_ID: ${{ env.SIMULATOR_UDID }}
