@@ -427,6 +427,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p test-results
+          node scripts/run-with-cursor-monitor.js -- \
           npx jest \
             --config jest.config.js \
             --testPathIgnorePatterns='/node_modules/' \
@@ -577,6 +578,7 @@ jobs:
           #   - Simulator.app never comes to the foreground
           #   - hardware button / keyboard HID events succeed via the bridge
           #   - single-tap + spawn overhead stay within the documented envelope
+          node scripts/run-with-cursor-monitor.js -- \
           npx jest \
             --config jest.config.js \
             --testPathIgnorePatterns='/node_modules/' \
@@ -756,6 +758,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p test-results
+          node scripts/run-with-cursor-monitor.js -- \
           npx jest \
             --config jest.config.js \
             --testPathIgnorePatterns='/node_modules/' \
