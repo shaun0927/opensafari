@@ -103,6 +103,7 @@ export type InputBackendErrorCode =
   | 'NOT_IMPLEMENTED'
   | 'SPAWN_TIMEOUT'
   | 'BRIDGE_NOT_FOUND'
+  | 'HID_BRIDGE_MISSING'
   | 'JSON_PARSE_FAILURE'
   | 'UNKNOWN';
 
@@ -356,5 +357,10 @@ export async function tryCreateSimulatorKitHIDBackend(): Promise<
       return new SimulatorKitHIDInputBackend(candidate);
     }
   }
-  return null;
+  const searched = candidates.map((c) => `  - ${c}`).join('\n');
+  throw new InputBackendError(
+    `sim-hid-bridge not found. Searched:\n${searched}\n` +
+      'Run npm run build or set OPENSAFARI_ALLOW_SWIFT_INTERPRETER=1 for dev mode.',
+    'HID_BRIDGE_MISSING',
+  );
 }

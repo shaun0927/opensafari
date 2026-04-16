@@ -129,6 +129,25 @@ describe('SimulatorKitHIDInputBackend', () => {
     expect(args).toEqual([DEVICE, 'swipe', '10', '20', '30', '40', '0.75']);
   });
 
+  test('swipe delegates N-step interpolation to bridge — single call with start/end coords', async () => {
+    // Design: The Node wrapper sends only start and end coordinates to the
+    // Swift bridge as a single `swipe` command. The bridge internally
+    // interpolates N intermediate points (default: 10 steps over the given
+    // duration) using kMouseDown -> N x kMouseDragged -> kMouseUp.
+    // This test documents that the Node side does NOT decompose the swipe
+    // into multiple bridge calls — interpolation is the bridge's responsibility.
+    execFileMock.mockResolvedValueOnce({
+      stdout: '{"ok":true,"kind":"swipe","udid":"x","elapsed_ms":50}',
+      stderr: '',
+    });
+    await backend.swipe(DEVICE, 0, 500, 0, 100, 0.3);
+    // Exactly one bridge invocation for the entire swipe gesture.
+    expect(execFileMock).toHaveBeenCalledTimes(1);
+    const [, args] = execFileMock.mock.calls[0];
+    // Only start (0,500) and end (0,100) are passed — no intermediate coords.
+    expect(args).toEqual([DEVICE, 'swipe', '0', '500', '0', '100', '0.3']);
+  });
+
   test('pressKey("Enter") sends HID usage 0x28 (40)', async () => {
     execFileMock.mockResolvedValueOnce({
       stdout: '{"ok":true,"kind":"key","udid":"x","elapsed_ms":1}',
@@ -354,10 +373,19 @@ describe('tryCreateSimulatorKitHIDBackend', () => {
     existsSyncMock.mockReset();
   });
 
-  test('returns null when no bridge artifact is present', async () => {
+  test('throws InputBackendError HID_BRIDGE_MISSING when no bridge artifact is present', async () => {
     existsSyncMock.mockReturnValue(false);
-    const result = await tryCreateSimulatorKitHIDBackend();
-    expect(result).toBeNull();
+    await expect(tryCreateSimulatorKitHIDBackend()).rejects.toMatchObject({
+      name: 'InputBackendError',
+      code: 'HID_BRIDGE_MISSING',
+    });
+  });
+
+  test('HID_BRIDGE_MISSING error message lists searched paths', async () => {
+    existsSyncMock.mockReturnValue(false);
+    await expect(tryCreateSimulatorKitHIDBackend()).rejects.toThrow(
+      /sim-hid-bridge not found/,
+    );
   });
 
   test('returns a backend when a candidate file exists', async () => {
