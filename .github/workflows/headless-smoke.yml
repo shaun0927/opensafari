@@ -401,19 +401,7 @@ jobs:
 
       - name: Verify no AppleScript fallback was loaded
         if: always()
-        run: |
-          set -euo pipefail
-          LOG="$HOME/.opensafari/audit.log"
-          if [ ! -f "$LOG" ]; then
-            echo "audit log not present — HEADLESS_ONLY=1 blocks the AppleScript backend at construction time."
-            exit 0
-          fi
-          if grep -q -i 'applescript' "$LOG"; then
-            echo "::error::audit.log references applescript — headless posture violated."
-            grep -n -i 'applescript' "$LOG" | head -20
-            exit 1
-          fi
-          echo "audit log free of applescript references"
+        run: node scripts/assert-no-applescript.js
 
       - name: Capture screenshot on failure
         if: failure()
@@ -560,19 +548,7 @@ jobs:
 
       - name: Verify no AppleScript fallback was loaded
         if: always()
-        run: |
-          set -euo pipefail
-          LOG="$HOME/.opensafari/audit.log"
-          if [ ! -f "$LOG" ]; then
-            echo "audit log not present — HEADLESS_ONLY=1 blocks the AppleScript backend at construction time."
-            exit 0
-          fi
-          if grep -q -i 'applescript' "$LOG"; then
-            echo "::error::audit.log references applescript — headless posture violated."
-            grep -n -i 'applescript' "$LOG" | head -20
-            exit 1
-          fi
-          echo "audit log free of applescript references"
+        run: node scripts/assert-no-applescript.js
 
       - name: Capture screenshot on failure
         if: failure()
@@ -746,19 +722,7 @@ jobs:
 
       - name: Verify no AppleScript fallback was loaded
         if: always()
-        run: |
-          set -euo pipefail
-          LOG="$HOME/.opensafari/audit.log"
-          if [ ! -f "$LOG" ]; then
-            echo "audit log not present — HEADLESS_ONLY=1 blocks the AppleScript backend at construction time."
-            exit 0
-          fi
-          if grep -q -i 'applescript' "$LOG"; then
-            echo "::error::audit.log references applescript — headless posture violated."
-            grep -n -i 'applescript' "$LOG" | head -20
-            exit 1
-          fi
-          echo "audit log free of applescript references"
+        run: node scripts/assert-no-applescript.js
 
       - name: Capture screenshot on failure
         if: failure()
