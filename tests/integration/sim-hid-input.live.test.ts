@@ -342,8 +342,14 @@ describe('SimulatorKitHIDInputBackend — hardware buttons', () => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Performance budgets.
+//
+// GitHub-hosted macOS runners have shown multi-second variance for the private
+// bridge process even when the functional headless path is healthy. Keep the
+// load-bearing routing and hardware checks in CI smoke, but reserve the tight
+// latency/RSS envelopes for local or dedicated perf environments.
 // ─────────────────────────────────────────────────────────────────────────────
-describe('SimulatorKitHIDInputBackend — performance', () => {
+const describePerformance = SIMHID_SMOKE ? describe.skip : describe;
+describePerformance('SimulatorKitHIDInputBackend — performance', () => {
   test('single tap (bridge spawn + HID injection) completes under 600 ms', async () => {
     const start = Date.now();
     await runBridge([DEVICE_ID, 'tap', '200', '500']);
