@@ -136,8 +136,11 @@ jobs:
               status: 'completed',
             });
 
-            const consecutiveFailures = runs.data.workflow_runs
-              .filter(r => r.conclusion === 'failure').length;
+            let consecutiveFailures = 0;
+            for (const r of runs.data.workflow_runs) {
+              if (r.conclusion === 'failure') consecutiveFailures++;
+              else break;
+            }
 
             if (consecutiveFailures >= 7) {
               // Open a labelled regression issue if none is already open.
