@@ -190,6 +190,30 @@ jobs:
             --format junit \
             --output qa-results/safari-audit.junit.xml
 
+      - name: Run Safari explicit tap/type/scroll scenarios
+        env:
+          OPENSAFARI_LIVE_VM: '1'
+          OSF_DEVICE_ID: ${{ env.SIMULATOR_UDID }}
+          SAFARI_SMOKE_URL: https://example.com
+          JEST_JUNIT_OUTPUT_DIR: qa-results
+          JEST_JUNIT_OUTPUT_NAME: safari-scenarios.junit.xml
+          JEST_JUNIT_CLASSNAME: '{filepath}'
+          JEST_JUNIT_SUITE_NAME: 'Safari headless smoke (tap/type/scroll)'
+        run: |
+          set -euo pipefail
+          # Epic #484 acceptance: "Safari 자동화 — 임의 페이지 탭/입력/스크롤 통과".
+          # The audit step above is a one-shot QA scan; this step exercises
+          # each interaction explicitly via the WebKit Remote Debugging
+          # Protocol so the checkbox can be flipped honestly.
+          npx jest \
+            --config jest.config.js \
+            --testPathIgnorePatterns='/node_modules/' \
+            --testTimeout=180000 \
+            --runInBand \
+            --runTestsByPath tests/integration/safari-smoke.live.test.ts \
+            --reporters=default \
+            --reporters=jest-junit
+
       - name: Upload JUnit artifact
         if: always()
         uses: actions/upload-artifact@v4
