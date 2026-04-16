@@ -10,7 +10,7 @@ All notable changes to this project will be documented in this file.
 - **Per-cache memory budget documentation.** `docs/memory-budget.md` catalogues every module-level cache and singleton in `src/`, with eviction policy, max-size target, and source-file link. A contract test (`tests/unit/memory-budget.test.ts`) keeps the doc in sync with code.
 - **Memory soft-cap watchdog.** Optional `OPENSAFARI_MEMORY_SOFT_CAP_MB` env var — when RSS crosses the cap, the telemetry sink emits a structured warning and `diagnose` reports `memory_status: "warn"`.
 - **Enhanced `diagnose` memory block.** Now includes `rss_growth_mb_per_hour`, `soft_cap_mb`, and `notes` array for cache-budget violations.
-- **60-minute soak test.** `tests/soak/long-session.soak.test.ts` round-robins across all backend tiers, asserting RSS delta ≤ 100 MB and rolling growth rate ≤ 3 MB/min. Gated by `OPENSAFARI_RUN_SOAK=1`.
+- **60-minute soak test.** `tests/soak/long-session.soak.test.ts` round-robins across all backend tiers, asserting RSS delta ≤ 100 MB, rolling growth rate ≤ 3 MB/min, and — new — that no retained-object class grows by more than 1000 instances between the 30-minute and 60-minute marks. Heap snapshots at 0 / 30 / 60 min are written via `v8.writeHeapSnapshot()` (no `--expose-gc` flag required) and, on any SLO miss, the test emits the snapshot paths plus the top-20 class growers for triage. Gated by `OPENSAFARI_RUN_SOAK=1`.
 - **Nightly CI workflow.** `.github/workflows/memory-soak.yml` runs the soak test daily at 03:00 UTC. Seven consecutive failures auto-open a `memory-regression` issue.
 - **Developer script.** `scripts/memory-inspect.ts` — one-shot 10-minute mixed-call session that prints a per-backend RSS/heap table for local triage.
 

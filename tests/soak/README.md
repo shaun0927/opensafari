@@ -12,10 +12,18 @@ asserts that resident-set-size (RSS) growth stays within defined SLOs:
 |-----|-----------|
 | Absolute RSS growth (final - initial) | ≤ 100 MB |
 | Rolling 10-minute RSS growth rate | ≤ 3 MB/min |
+| Retained-object class growth (30 min → 60 min) | ≤ 1000 instances / class |
 
 The test samples RSS every 60 seconds using `process.memoryUsage()` and
 persists the full sample array to `tests/soak/output/rss-baseline.json`
 so CI can upload it as a workflow artifact for trend analysis.
+
+Three V8 heap snapshots are written via `v8.writeHeapSnapshot()` (no
+`--expose-gc` required) at the 0 / 30 / 60-minute marks to
+`tests/soak/output/heap-{0,30,60}min.heapsnapshot`. The test asserts
+that no retained-object class grows by more than 1000 instances between
+the 30-minute and 60-minute marks — the window after caches are warm
+but while leaks would be compounding.
 
 Four backend tiers are exercised in round-robin order:
 
@@ -66,9 +74,22 @@ this indicates a local leak correlated with one of the backend tiers.
 2. Correlate with which tier was running at that time (tiers rotate every
    3 seconds, so a spike in minute *N* implicates calls *N*×20 through
    *(N+1)*×20).
-3. Capture a heap snapshot: re-run with `node --expose-gc` and enable the
-   `v8.writeHeapSnapshot()` path (currently marked TODO in the test).
-   Heap snapshots are written to `process.cwd()` by default.
+3. On any SLO failure, the test already logs the three heap-snapshot paths
+   and the top-20 retained-class growers (0 → 60 min and 30 → 60 min) to
+   stderr. Download them from the `rss-baseline-*` CI artifact and open in
+   Chrome DevTools → Memory → Load profile.
+
+### Retained-class growth exceeds 1000 instances
+
+1. The failure log lists the top-20 growers directly — look for unexpected
+   app-level classes (`FlutterVMClient`, `WebKitClient`, any MCP tool
+   response type) or oversized internal arrays.
+2. Cross-reference against `docs/memory-budget.md`: if the class is backed
+   by one of the documented caches, the cache's eviction policy likely has
+   a bug.
+3. Inspect the `heap-30min.heapsnapshot` → `heap-60min.heapsnapshot` pair
+   in DevTools using "Comparison" mode to see which specific objects are
+   retained.
 
 ### Growth rate exceeds 3 MB/min
 

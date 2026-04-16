@@ -11,11 +11,16 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import * as path from 'path';
 import * as fs from 'fs';
+import * as v8 from 'v8';
 import {
   getMemorySnapshot,
   resetMemoryTracker,
   bytesToMB,
 } from '../../src/metrics/memory-tracker';
+import {
+  diffHeapSnapshotFiles,
+  type HeapClassDelta,
+} from '../../src/metrics/heap-snapshot-diff';
 
 const execFileAsync = promisify(execFile);
 
@@ -24,9 +29,13 @@ const DURATION_MS = 60 * 60 * 1000; // 1 hour
 const CALL_INTERVAL_MS = 3000; // 1 call per 3 seconds
 const RSS_DELTA_LIMIT_MB = 100;
 const RSS_GROWTH_RATE_LIMIT_MB_PER_MIN = 3;
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-const HEAP_CLASS_GROWTH_LIMIT = 1000; // reserved for future v8 heap diff
+/** Hard cap on retained-object class growth between the 30-min and 60-min marks. */
+const HEAP_CLASS_GROWTH_LIMIT = 1000;
 const SAMPLE_INTERVAL_MS = 60 * 1000; // sample RSS every 60s
+/** Mark at which to write the mid-run heap snapshot (minutes since start). */
+const MID_HEAP_SNAPSHOT_MINUTE = 30;
+/** Number of top growers to emit on failure for triage. */
+const TOP_GROWER_COUNT = 20;
 
 /** One periodic RSS reading. */
 interface RssSample {
@@ -58,6 +67,66 @@ function saveRssSamples(samples: RssSample[]): void {
     fs.writeFileSync(outPath, JSON.stringify(samples, null, 2), 'utf8');
   } catch (err) {
     console.error('[soak] Failed to write RSS baseline:', err);
+  }
+}
+
+/** One heap snapshot captured during the soak run. */
+interface HeapSnapshotRecord {
+  label: '0min' | '30min' | '60min';
+  path: string;
+}
+
+/**
+ * Write a V8 heap snapshot to the soak output directory and return its path.
+ * `v8.writeHeapSnapshot` does NOT require `--expose-gc`; it synchronously
+ * serialises the current heap to disk. The call briefly pauses the event
+ * loop (seconds), so we only invoke it at the 0 / 30 / 60 minute marks.
+ */
+function writeHeapSnapshotAt(label: HeapSnapshotRecord['label']): HeapSnapshotRecord {
+  ensureOutputDir();
+  const snapshotPath = path.join(OUTPUT_DIR, `heap-${label}.heapsnapshot`);
+  v8.writeHeapSnapshot(snapshotPath);
+  return { label, path: snapshotPath };
+}
+
+/**
+ * Emit the path list + the top-N retained-class growers from a before/after
+ * heap-snapshot pair to stderr. Always tries both (0→60) and (30→60) diffs
+ * because they answer subtly different questions — the first shows cumulative
+ * retention, the second shows steady-state growth once caches are warm.
+ */
+function logHeapDiffOnFailure(snapshots: HeapSnapshotRecord[]): void {
+  if (snapshots.length === 0) return;
+  console.error('[soak] Heap snapshot paths:');
+  for (const s of snapshots) {
+    console.error(`[soak]   ${s.label}: ${s.path}`);
+  }
+  const find = (label: HeapSnapshotRecord['label']) =>
+    snapshots.find((s) => s.label === label)?.path;
+  for (const [beforeLabel, afterLabel] of [
+    ['0min', '60min'] as const,
+    ['30min', '60min'] as const,
+  ]) {
+    const before = find(beforeLabel);
+    const after = find(afterLabel);
+    if (!before || !after) continue;
+    try {
+      const rows = diffHeapSnapshotFiles(before, after);
+      console.error(
+        `[soak] Top-${TOP_GROWER_COUNT} retained-class growth (${beforeLabel} → ${afterLabel}):`,
+      );
+      if (rows.length === 0) {
+        console.error('[soak]   (no classes grew — possibly a wash with GC noise)');
+        continue;
+      }
+      for (const r of rows.slice(0, TOP_GROWER_COUNT)) {
+        console.error(
+          `[soak]   ${r.className}: +${r.delta} (${r.before} → ${r.after})`,
+        );
+      }
+    } catch (err) {
+      console.error(`[soak]   diff ${beforeLabel} → ${afterLabel} failed:`, err);
+    }
   }
 }
 
@@ -240,6 +309,8 @@ describe('long-session soak test', () => {
   describeOrSkip('memory SLO', () => {
     let simulatorUdid = '';
     const rssSamples: RssSample[] = [];
+    const heapSnapshots: HeapSnapshotRecord[] = [];
+    let soakAssertionFailed = false;
     const startMs = Date.now();
 
     // -----------------------------------------------------------------------
@@ -284,18 +355,19 @@ describe('long-session soak test', () => {
           console.error(
             `[soak] FAIL: RSS delta ${delta.toFixed(2)} MB > limit ${RSS_DELTA_LIMIT_MB} MB`,
           );
-          console.error(
-            `[soak] Hint: capture a heap snapshot with --expose-gc and v8.writeHeapSnapshot()`,
-          );
-          console.error(
-            `[soak] Hint: heap snapshots are written to process.cwd() by default`,
-          );
         }
         if (worstRate > RSS_GROWTH_RATE_LIMIT_MB_PER_MIN) {
           console.error(
             `[soak] FAIL: worst 10-min growth rate ${worstRate.toFixed(3)} MB/min > limit ${RSS_GROWTH_RATE_LIMIT_MB_PER_MIN} MB/min`,
           );
         }
+      }
+
+      // On any SLO miss, surface the three heap-snapshot paths plus the
+      // top-20 retained-class growers so CI triage is one log away from
+      // knowing *which* class leaked.
+      if (soakAssertionFailed) {
+        logHeapDiffOnFailure(heapSnapshots);
       }
 
       if (simulatorUdid) {
@@ -313,6 +385,7 @@ describe('long-session soak test', () => {
         const deadline = startMs + DURATION_MS;
         let operationIndex = 0;
         let lastSampleMs = Date.now();
+        let midSnapshotWritten = false;
 
         // Record initial baseline before any operations.
         const initialSnapshot = getMemorySnapshot();
@@ -321,6 +394,14 @@ describe('long-session soak test', () => {
           elapsedMinutes: 0,
           rssMB: bytesToMB(initialSnapshot.rssBytes),
         });
+
+        // Heap snapshot #1 — t=0. `writeHeapSnapshot` does NOT require
+        // `--expose-gc`; it serialises the heap via V8's built-in profiler.
+        try {
+          heapSnapshots.push(writeHeapSnapshotAt('0min'));
+        } catch (err) {
+          console.error('[soak] Failed to write 0min heap snapshot:', err);
+        }
 
         while (Date.now() < deadline) {
           const op = OPERATIONS[operationIndex % OPERATIONS.length];
@@ -347,6 +428,17 @@ describe('long-session soak test', () => {
             lastSampleMs = now;
           }
 
+          // Mid-run heap snapshot (#2) once we cross the 30-minute mark.
+          const elapsedMinutes = (now - startMs) / 60_000;
+          if (!midSnapshotWritten && elapsedMinutes >= MID_HEAP_SNAPSHOT_MINUTE) {
+            midSnapshotWritten = true;
+            try {
+              heapSnapshots.push(writeHeapSnapshotAt('30min'));
+            } catch (err) {
+              console.error('[soak] Failed to write 30min heap snapshot:', err);
+            }
+          }
+
           // Pace the loop.
           const elapsed = Date.now() - now;
           const waitMs = Math.max(0, CALL_INTERVAL_MS - elapsed);
@@ -363,25 +455,70 @@ describe('long-session soak test', () => {
           rssMB: bytesToMB(finalSnapshot.rssBytes),
         });
 
+        // Heap snapshot #3 — t=60min. Capture even if RSS assertions fail so
+        // the on-failure reporter in `afterAll` has a diff to work from.
+        try {
+          heapSnapshots.push(writeHeapSnapshotAt('60min'));
+        } catch (err) {
+          console.error('[soak] Failed to write 60min heap snapshot:', err);
+        }
+
         // ----------------------------------------------------------------
         // Assertions
         // ----------------------------------------------------------------
+        // Track failures manually: if any `expect` throws, `afterAll` still
+        // runs but cannot easily ask Jest whether the test is red. Wrap each
+        // assertion so the on-failure heap reporter fires reliably.
+
+        const assertSLO = (predicate: () => void): void => {
+          try {
+            predicate();
+          } catch (err) {
+            soakAssertionFailed = true;
+            throw err;
+          }
+        };
 
         const initialRssMB = rssSamples[0].rssMB;
         const finalRssMB = rssSamples[rssSamples.length - 1].rssMB;
         const rssDeltaMB = finalRssMB - initialRssMB;
 
         // SLO 1: absolute RSS growth must stay under 100 MB.
-        expect(rssDeltaMB).toBeLessThanOrEqual(RSS_DELTA_LIMIT_MB);
+        assertSLO(() =>
+          expect(rssDeltaMB).toBeLessThanOrEqual(RSS_DELTA_LIMIT_MB),
+        );
 
         // SLO 2: rolling 10-minute growth rate must not exceed 3 MB/min.
         const worstRate = maxRollingGrowthRate(rssSamples);
-        expect(worstRate).toBeLessThanOrEqual(RSS_GROWTH_RATE_LIMIT_MB_PER_MIN);
+        assertSLO(() =>
+          expect(worstRate).toBeLessThanOrEqual(RSS_GROWTH_RATE_LIMIT_MB_PER_MIN),
+        );
 
-        // TODO(#554): SLO 3 (heap class growth diff) is aspirational.
-        // v8.writeHeapSnapshot() requires --expose-gc which cannot be passed
-        // to jest without a custom runner. Implement in a follow-up once the
-        // test infrastructure supports it.
+        // SLO 3: between the 30-minute and 60-minute marks, no retained-object
+        // class should grow by more than HEAP_CLASS_GROWTH_LIMIT instances.
+        // Caches are still warming in the first 30 minutes; the steady-state
+        // comparison captures leaks that only manifest during long sessions.
+        const snap30 = heapSnapshots.find((s) => s.label === '30min')?.path;
+        const snap60 = heapSnapshots.find((s) => s.label === '60min')?.path;
+        if (snap30 && snap60) {
+          try {
+            const growers: HeapClassDelta[] = diffHeapSnapshotFiles(
+              snap30,
+              snap60,
+            );
+            const worstGrower = growers[0];
+            assertSLO(() =>
+              expect(worstGrower ? worstGrower.delta : 0).toBeLessThanOrEqual(
+                HEAP_CLASS_GROWTH_LIMIT,
+              ),
+            );
+          } catch (err) {
+            if (err instanceof Error && /toBeLessThanOrEqual/.test(err.message)) {
+              throw err;
+            }
+            console.error('[soak] Heap diff failed to run:', err);
+          }
+        }
       },
       DURATION_MS + 5 * 60 * 1000, // test-level timeout: run duration + 5 min buffer
     );
