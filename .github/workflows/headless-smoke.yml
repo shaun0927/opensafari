@@ -71,7 +71,19 @@ jobs:
               const iphone = (d.devices[r] || []).find(x => /iPhone/.test(x.name) && x.isAvailable);
               if (iphone) { process.stdout.write(iphone.udid); process.exit(0); }
             }
-            console.error("No available iPhone simulator for any iOS runtime");
+            // Fallback: create a device using the latest available iOS runtime
+            for (const r of runtimes.slice().reverse()) {
+              try {
+                const { execSync } = require("child_process");
+                const udid = execSync(
+                  "xcrun simctl create '"'"'iPhone 16'"'"' '"'"'com.apple.CoreSimulator.SimDeviceType.iPhone-16'"'"' '"'"'" + r.replace("com.apple.CoreSimulator.SimRuntime.", "") + "'"'"'",
+                  { encoding: "utf8" }
+                ).trim();
+                process.stdout.write(udid);
+                process.exit(0);
+              } catch { continue; }
+            }
+            console.error("No available iPhone simulator and could not create one");
             process.exit(1);
           ')
           echo "SIMULATOR_UDID=$UDID" >> "$GITHUB_ENV"
@@ -88,33 +100,60 @@ jobs:
       - name: Start ios-webkit-debug-proxy
         run: |
           set -euo pipefail
-          ios_webkit_debug_proxy -c "$SIMULATOR_UDID:$OPENSAFARI_PROXY_PORT" &
-          echo $! > /tmp/iwdp.pid
+          # Discover the webinspectord_sim socket for the booted simulator
+          SOCKET_PATH=""
           for i in $(seq 1 20); do
-            if curl --silent --fail "http://localhost:$OPENSAFARI_PROXY_PORT/json/list" >/dev/null; then
-              echo "Proxy reachable on :$OPENSAFARI_PROXY_PORT"
+            SOCKET_PATH=$(ls -t /private/var/tmp/com.apple.launchd.*/com.apple.webinspectord_sim.socket 2>/dev/null | head -1)
+            if [ -n "$SOCKET_PATH" ] && [ -S "$SOCKET_PATH" ]; then
+              echo "Found webinspectord socket: $SOCKET_PATH"
+              break
+            fi
+            sleep 1
+          done
+          if [ -z "$SOCKET_PATH" ]; then
+            echo "::error::Could not find webinspectord_sim socket"
+            exit 1
+          fi
+          DEVICE_LIST_PORT=$((OPENSAFARI_PROXY_PORT - 1))
+          ios_webkit_debug_proxy \
+            -s "unix:$SOCKET_PATH" \
+            -c "null:$DEVICE_LIST_PORT,:$OPENSAFARI_PROXY_PORT-$((OPENSAFARI_PROXY_PORT + 100))" \
+            -F &
+          echo $! > /tmp/iwdp.pid
+          # Wait for proxy device list to be ready
+          for i in $(seq 1 30); do
+            if curl --silent --fail "http://localhost:$DEVICE_LIST_PORT" | grep -q "iOS Devices"; then
+              echo "Proxy device list reachable on :$DEVICE_LIST_PORT"
+              break
+            fi
+            sleep 1
+          done
+          # Wait for forwarding port to have targets
+          for i in $(seq 1 20); do
+            BODY=$(curl --silent "http://localhost:$OPENSAFARI_PROXY_PORT/json" 2>/dev/null || echo "")
+            if echo "$BODY" | grep -q "url"; then
+              echo "Proxy forwarding ready on :$OPENSAFARI_PROXY_PORT"
               exit 0
             fi
             sleep 1
           done
-          echo "::error::ios-webkit-debug-proxy failed to respond on :$OPENSAFARI_PROXY_PORT"
-          exit 1
+          echo "::warning::Proxy forwarding port not ready — Safari may not be open yet"
 
       - name: Open Safari on smoke target URL
         run: |
           set -euo pipefail
           xcrun simctl openurl "$SIMULATOR_UDID" https://example.com
-          for i in $(seq 1 20); do
-            COUNT=$(curl --silent --fail "http://localhost:$OPENSAFARI_PROXY_PORT/json/list" \
-              | node -e 'const t = JSON.parse(require("fs").readFileSync(0,"utf8")); process.stdout.write(String(Array.isArray(t) ? t.length : 0));')
+          for i in $(seq 1 30); do
+            COUNT=$(curl --silent "http://localhost:$OPENSAFARI_PROXY_PORT/json" 2>/dev/null \
+              | node -e 'const t = JSON.parse(require("fs").readFileSync(0,"utf8")); process.stdout.write(String(Array.isArray(t) ? t.length : 0));' 2>/dev/null || echo "0")
             if [ "$COUNT" != "0" ] && [ -n "$COUNT" ]; then
               echo "Safari WebKit target visible ($COUNT)"
               exit 0
             fi
-            sleep 1
+            sleep 2
           done
           echo "::error::Safari did not expose a WebInspector target within timeout"
-          curl --silent "http://localhost:$OPENSAFARI_PROXY_PORT/json/list" || true
+          curl --silent "http://localhost:$OPENSAFARI_PROXY_PORT/json" || true
           exit 1
 
       - name: Run Safari QA audit (headless)
@@ -207,7 +246,19 @@ jobs:
               const iphone = (d.devices[r] || []).find(x => /iPhone/.test(x.name) && x.isAvailable);
               if (iphone) { process.stdout.write(iphone.udid); process.exit(0); }
             }
-            console.error("No available iPhone simulator");
+            // Fallback: create a device using the latest available iOS runtime
+            for (const r of runtimes.slice().reverse()) {
+              try {
+                const { execSync } = require("child_process");
+                const udid = execSync(
+                  "xcrun simctl create '"'"'iPhone 16'"'"' '"'"'com.apple.CoreSimulator.SimDeviceType.iPhone-16'"'"' '"'"'" + r.replace("com.apple.CoreSimulator.SimRuntime.", "") + "'"'"'",
+                  { encoding: "utf8" }
+                ).trim();
+                process.stdout.write(udid);
+                process.exit(0);
+              } catch { continue; }
+            }
+            console.error("No available iPhone simulator and could not create one");
             process.exit(1);
           ')
           echo "SIMULATOR_UDID=$UDID" >> "$GITHUB_ENV"
@@ -364,7 +415,19 @@ jobs:
               const iphone = (d.devices[r] || []).find(x => /iPhone/.test(x.name) && x.isAvailable);
               if (iphone) { process.stdout.write(iphone.udid); process.exit(0); }
             }
-            console.error("No available iPhone simulator");
+            // Fallback: create a device using the latest available iOS runtime
+            for (const r of runtimes.slice().reverse()) {
+              try {
+                const { execSync } = require("child_process");
+                const udid = execSync(
+                  "xcrun simctl create '"'"'iPhone 16'"'"' '"'"'com.apple.CoreSimulator.SimDeviceType.iPhone-16'"'"' '"'"'" + r.replace("com.apple.CoreSimulator.SimRuntime.", "") + "'"'"'",
+                  { encoding: "utf8" }
+                ).trim();
+                process.stdout.write(udid);
+                process.exit(0);
+              } catch { continue; }
+            }
+            console.error("No available iPhone simulator and could not create one");
             process.exit(1);
           ')
           echo "SIMULATOR_UDID=$UDID" >> "$GITHUB_ENV"
