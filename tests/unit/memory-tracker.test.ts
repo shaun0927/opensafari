@@ -4,6 +4,7 @@
 
 import {
   recordMemorySample,
+  recordMemorySampleFromRss,
   getMemorySnapshot,
   resetMemoryTracker,
   bytesToMB,
@@ -83,19 +84,51 @@ describe('memory-tracker', () => {
     expect(bytesToMB(1_153_434)).toBe(1.1); // 1.1000... → 1.1
   });
 
-  test('recordMemorySample + memory field extraction < 50 µs per call (microbench)', () => {
+  test('recordMemorySampleFromRss ticks peak + sampleCount without a syscall', () => {
+    // No prior samples — tracker starts clean (resetMemoryTracker ran in beforeEach).
+    expect(getMemorySnapshot().sampleCount).toBe(0);
+
+    recordMemorySampleFromRss(10 * 1_048_576);
+    recordMemorySampleFromRss(42 * 1_048_576);
+
+    const snap = getMemorySnapshot();
+    // sampleCount is bumped even though we never called process.memoryUsage.rss().
+    expect(snap.sampleCount).toBe(2);
+    // Peak tracks the larger of the two feeds (42 MB > 10 MB).
+    expect(snap.peakRssBytes).toBeGreaterThanOrEqual(42 * 1_048_576);
+  });
+
+  test('recordMemorySampleFromRss is a no-op for non-finite / negative inputs', () => {
+    recordMemorySampleFromRss(Number.NaN);
+    recordMemorySampleFromRss(-1);
+    recordMemorySampleFromRss(Number.POSITIVE_INFINITY);
+    expect(getMemorySnapshot().sampleCount).toBe(0);
+  });
+
+  test('recordMemorySampleFromRss respects the tracking-disabled kill switch', () => {
+    process.env[OPENSAFARI_INPUT_TELEMETRY_MEMORY_ENV] = '0';
+    recordMemorySampleFromRss(999 * 1_048_576);
+    // Snapshot bumps peak from the live usage, so we only assert the counter.
+    expect(getMemorySnapshot().sampleCount).toBe(0);
+  });
+
+  test('single-syscall memory sampling + field extraction < 50 µs per call (microbench)', () => {
+    // Mirrors the optimized per-op hot path that `timedInput` exercises when
+    // memory tracking is enabled: ONE `process.memoryUsage()` call feeding
+    // both the telemetry event (rss_mb/heap_used_mb) and the peak tracker
+    // (via `recordMemorySampleFromRss`). This is what the issue #554 budget
+    // (< 50 µs / call) measures — not two independent syscalls.
     const iterations = 10_000;
     const start = process.hrtime.bigint();
     for (let i = 0; i < iterations; i++) {
-      recordMemorySample();
       const usage = process.memoryUsage();
-      // Mirror the same bytesToMB conversions done in timedInput.
+      recordMemorySampleFromRss(usage.rss);
       void bytesToMB(usage.rss);
       void bytesToMB(usage.heapUsed);
     }
     const elapsedNs = Number(process.hrtime.bigint() - start);
     const perCallUs = elapsedNs / iterations / 1_000;
-    // Allow generous headroom for CI machines; the budget is 50 µs / call.
+    // Budget is 50 µs / call per the issue; assert against it directly.
     expect(perCallUs).toBeLessThan(50);
   });
 

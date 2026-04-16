@@ -129,6 +129,32 @@ function maybeRecordTimeSeries(rssBytes: number, nowMs: number): void {
 // ── public API ────────────────────────────────────────────────────────────────
 
 /**
+ * Internal: apply tracker bookkeeping (peak, counter, time-series, soft-cap
+ * watchdog) for a pre-observed RSS reading. Split out of `recordMemorySample`
+ * so hot-path callers that have already produced an RSS number (e.g. from a
+ * shared `process.memoryUsage()` call in `sampleMemoryFields`) can avoid a
+ * second syscall per tool call.
+ */
+function applySample(rss: number, nowMs: number): void {
+  if (rss > peakRssBytes) peakRssBytes = rss;
+  sampleCount += 1;
+
+  maybeRecordTimeSeries(rss, nowMs);
+
+  // Soft-cap watchdog — rate-limited to one warning per 60 s.
+  const capMB = getMemorySoftCapMB();
+  if (capMB !== null) {
+    const rssMB = bytesToMB(rss);
+    if (rssMB > capMB && nowMs - lastCapWarningMs >= CAP_WARNING_COOLDOWN_MS) {
+      lastCapWarningMs = nowMs;
+      console.error(
+        `[memory-watchdog] RSS crossed soft cap: ${rssMB} MB > ${capMB} MB`,
+      );
+    }
+  }
+}
+
+/**
  * Record one RSS sample against the peak tracker. Safe to call from any
  * hot path — constant-time work, never throws. The caller does not need
  * to check the env var first; that gate is applied here.
@@ -142,24 +168,23 @@ function maybeRecordTimeSeries(rssBytes: number, nowMs: number): void {
 export function recordMemorySample(): void {
   if (!isMemoryTrackingEnabled()) return;
   try {
-    const rss = readRssBytes();
-    const nowMs = Date.now();
-    if (rss > peakRssBytes) peakRssBytes = rss;
-    sampleCount += 1;
+    applySample(readRssBytes(), Date.now());
+  } catch {
+    // Memory sampling must never mask an input-backend failure.
+  }
+}
 
-    maybeRecordTimeSeries(rss, nowMs);
-
-    // Soft-cap watchdog — rate-limited to one warning per 60 s.
-    const capMB = getMemorySoftCapMB();
-    if (capMB !== null) {
-      const rssMB = bytesToMB(rss);
-      if (rssMB > capMB && nowMs - lastCapWarningMs >= CAP_WARNING_COOLDOWN_MS) {
-        lastCapWarningMs = nowMs;
-        console.error(
-          `[memory-watchdog] RSS crossed soft cap: ${rssMB} MB > ${capMB} MB`,
-        );
-      }
-    }
+/**
+ * Record a sample using an already-observed RSS reading. Used by callers
+ * (e.g. `timedInput`) that need the full `process.memoryUsage()` breakdown
+ * for telemetry and can feed its `rss` back to the tracker for free,
+ * eliminating a redundant syscall on the per-op hot path.
+ */
+export function recordMemorySampleFromRss(rssBytes: number): void {
+  if (!isMemoryTrackingEnabled()) return;
+  if (!Number.isFinite(rssBytes) || rssBytes < 0) return;
+  try {
+    applySample(rssBytes, Date.now());
   } catch {
     // Memory sampling must never mask an input-backend failure.
   }

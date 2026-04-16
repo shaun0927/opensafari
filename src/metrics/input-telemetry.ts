@@ -14,7 +14,12 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { InputBackendKind } from '../tools/native-input-backend';
 import { accumulateInputTelemetry } from './input-telemetry-rollup';
-import { recordMemorySample, bytesToMB, isMemoryTrackingEnabled } from './memory-tracker';
+import {
+  recordMemorySample,
+  recordMemorySampleFromRss,
+  bytesToMB,
+  isMemoryTrackingEnabled,
+} from './memory-tracker';
 
 /**
  * Stable set of operations we time. Matches the `InputBackend` interface
@@ -124,11 +129,16 @@ export function emitInputTelemetry(event: InputTelemetryEvent): void {
   } catch {
     // Ditto — rollup failures stay invisible to the caller.
   }
-  // Piggyback a cheap RSS sample on every telemetry tick so peak memory
-  // is observable from `diagnose` without any separate scheduling. The
-  // tracker guards itself with its own env var and try/catch, so this
-  // call cannot destabilise the telemetry path.
-  recordMemorySample();
+  // Piggyback peak-RSS tracking on every telemetry tick so `diagnose`
+  // observes memory without any separate scheduling. When the caller
+  // already sampled a full `process.memoryUsage()` (e.g. `timedInput`
+  // via `sampleMemoryFields`) we reuse its RSS reading to avoid a
+  // redundant syscall on the per-op hot path (#554 microbench budget).
+  if (event.rss_mb !== undefined) {
+    recordMemorySampleFromRss(event.rss_mb * 1_048_576);
+  } else {
+    recordMemorySample();
+  }
   const buf = captureStore.getStore();
   if (buf) buf.push(event);
 }
