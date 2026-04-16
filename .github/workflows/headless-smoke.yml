@@ -444,3 +444,148 @@ jobs:
           if [ -n "${SIMULATOR_UDID:-}" ]; then
             xcrun simctl shutdown "$SIMULATOR_UDID" 2>/dev/null || true
           fi
+
+  webview-smoke:
+    name: WebView — hybrid native + WebView headless
+    runs-on: macos-latest
+    timeout-minutes: 30
+    env:
+      FIXTURE_DIR: 'tests/integration/fixtures/webview_sample'
+      OSF_BUNDLE_ID: 'com.opensafari.fixtures.webview'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Assert headless posture
+        run: |
+          set -euo pipefail
+          if [ -n "${OPENSAFARI_ALLOW_FOCUS_INPUT:-}" ]; then
+            echo "::error::OPENSAFARI_ALLOW_FOCUS_INPUT must NOT be set."
+            exit 1
+          fi
+          if [ "${OPENSAFARI_HEADLESS_ONLY:-}" != "1" ]; then
+            echo "::error::OPENSAFARI_HEADLESS_ONLY=1 must be set."
+            exit 1
+          fi
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Install ios-webkit-debug-proxy
+        run: brew install ios-webkit-debug-proxy
+
+      - name: Pick and boot iOS simulator
+        run: |
+          set -euo pipefail
+          UDID=$(xcrun simctl list devices available -j | node -e '
+            const d = JSON.parse(require("fs").readFileSync(0, "utf8"));
+            const runtimes = Object.keys(d.devices)
+              .filter(r => r.includes("iOS"))
+              .sort();
+            for (const r of runtimes.slice().reverse()) {
+              const iphone = (d.devices[r] || []).find(x => /iPhone/.test(x.name) && x.isAvailable);
+              if (iphone) { process.stdout.write(iphone.udid); process.exit(0); }
+            }
+            console.error("No available iPhone simulator");
+            process.exit(1);
+          ')
+          echo "SIMULATOR_UDID=$UDID" >> "$GITHUB_ENV"
+          xcrun simctl boot "$UDID"
+          for i in $(seq 1 30); do
+            if xcrun simctl list devices booted | grep -q "$UDID"; then
+              break
+            fi
+            sleep 2
+          done
+          xcrun simctl list devices booted
+
+      - name: Build and install WebView fixture
+        run: |
+          set -euo pipefail
+          chmod +x "$FIXTURE_DIR/build.sh"
+          "$FIXTURE_DIR/build.sh" --install --device-id "$SIMULATOR_UDID"
+
+      - name: Start ios-webkit-debug-proxy
+        run: |
+          set -euo pipefail
+          ios_webkit_debug_proxy -c "$SIMULATOR_UDID:$OPENSAFARI_PROXY_PORT" &
+          echo $! > /tmp/iwdp.pid
+          for i in $(seq 1 20); do
+            if curl --silent --fail "http://localhost:$OPENSAFARI_PROXY_PORT/json/list" >/dev/null; then
+              echo "Proxy reachable on :$OPENSAFARI_PROXY_PORT"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::ios-webkit-debug-proxy failed to respond on :$OPENSAFARI_PROXY_PORT"
+          exit 1
+
+      - name: Run WebView headless smoke live test
+        env:
+          OPENSAFARI_LIVE_VM: '1'
+          OSF_DEVICE_ID: ${{ env.SIMULATOR_UDID }}
+          JEST_JUNIT_OUTPUT_DIR: test-results
+          JEST_JUNIT_OUTPUT_NAME: webview-smoke.junit.xml
+          JEST_JUNIT_CLASSNAME: '{filepath}'
+          JEST_JUNIT_SUITE_NAME: 'WebView headless smoke'
+        run: |
+          set -euo pipefail
+          mkdir -p test-results
+          npx jest \
+            --config jest.config.js \
+            --testPathIgnorePatterns='/node_modules/' \
+            --testTimeout=180000 \
+            --runInBand \
+            --reporters=default \
+            --reporters=jest-junit \
+            tests/integration/webview-smoke.live.test.ts
+
+      - name: Verify no AppleScript fallback was loaded
+        if: always()
+        run: |
+          set -euo pipefail
+          LOG="$HOME/.opensafari/audit.log"
+          if [ ! -f "$LOG" ]; then
+            echo "audit log not present — HEADLESS_ONLY=1 blocks the AppleScript backend at construction time."
+            exit 0
+          fi
+          if grep -q -i 'applescript' "$LOG"; then
+            echo "::error::audit.log references applescript — headless posture violated."
+            grep -n -i 'applescript' "$LOG" | head -20
+            exit 1
+          fi
+          echo "audit log free of applescript references"
+
+      - name: Capture screenshot on failure
+        if: failure()
+        run: |
+          mkdir -p webview-smoke-logs
+          xcrun simctl io "$SIMULATOR_UDID" screenshot \
+            "webview-smoke-logs/failure-screenshot.png" || true
+
+      - name: Upload JUnit + diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: webview-smoke-artifacts
+          path: |
+            test-results/
+            webview-smoke-logs/
+          if-no-files-found: warn
+
+      - name: Shutdown
+        if: always()
+        run: |
+          if [ -f /tmp/iwdp.pid ]; then
+            kill "$(cat /tmp/iwdp.pid)" 2>/dev/null || true
+          fi
+          if [ -n "${SIMULATOR_UDID:-}" ]; then
+            xcrun simctl shutdown "$SIMULATOR_UDID" 2>/dev/null || true
+          fi
