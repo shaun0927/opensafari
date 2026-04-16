@@ -599,8 +599,7 @@ export class HeadlessInputUnavailableError extends Error {
     | 'no-simctl'
     | 'no-webkit'
     | 'webkit-disconnected'
-    | 'headless-only'
-    | 'simhid-gated';
+    | 'headless-only';
   readonly remediation: readonly string[];
 
   constructor(
@@ -614,19 +613,7 @@ export class HeadlessInputUnavailableError extends Error {
             'Ensure a headless backend (simctl, webkit, flutter-vm, simhid) is available.',
             `To allow focus-stealing input, unset ${OPENSAFARI_HEADLESS_ONLY_ENV}.`,
           ] as const)
-        : reason === 'simhid-gated'
-          ? ([
-              'SimulatorKitHID (Tier 1) is probed and cached on this host, but the ' +
-                'tap/swipe return path in `getInputBackend()` is commented out while ' +
-                'issue #491 fixes `IndigoHIDMessageForMouseNSEvent` locking the Simulator ' +
-                'screen on Xcode 26+.',
-              'Track progress: https://github.com/shaun0927/opensafari/issues/491',
-              'Hardware buttons and keyboard input via simhid are unaffected — only ' +
-                'tap/swipe are gated.',
-              `Temporary workaround: set ${OPENSAFARI_ALLOW_FOCUS_INPUT_ENV}=1 to route ` +
-                'tap/swipe through the focus-stealing AppleScript/CGEvent backend until #491 ships.',
-            ] as const)
-          : ([
+        : ([
               "Safari QA: call `set_active_context({ context: 'safari' })` to enable WebKitInputBackend",
               `Native apps: opt in to the CGEvent fallback by setting ${OPENSAFARI_ALLOW_FOCUS_INPUT_ENV}=1 ` +
                 '(WARNING: will move the mouse cursor and bring Simulator.app to the foreground)',
@@ -895,12 +882,12 @@ export async function getInputBackend(
       cachedSimHidBackend = null;
     }
   }
-  // SimHID tap/swipe broken on Xcode 26+ (locks screen). TODO(#491): re-enable.
-  // `cachedSimHidBackend` is read below when picking the error reason, so the
-  // probe is not dead code even while the return path is commented out.
-  // if (cachedSimHidBackend) {
-  //   return cachedSimHidBackend;
-  // }
+  // Tier 1: SimulatorKit HID — re-enabled after #491 resolved the Xcode 26
+  // gesture-recognizer regression. Provides headless coordinate-based
+  // tap/swipe/scroll for any app (native, Flutter, Safari).
+  if (cachedSimHidBackend) {
+    return cachedSimHidBackend;
+  }
 
   // Tier 2: simctl io input (headless, works with any app — Xcode ≤16)
   if (simctlAvailable) {
@@ -942,13 +929,8 @@ export async function getInputBackend(
   // Without explicit opt-in, refuse to return a backend that would move the
   // mouse cursor or steal Simulator focus. See issue #405.
   if (!isFocusInputAllowed()) {
-    // Prefer the 'simhid-gated' reason when the Tier-1 probe succeeded on
-    // this host — pointing users at #491 is more actionable than the
-    // WebKit-oriented 'no-webkit' reason for a native-app call site.
     let reason: HeadlessInputUnavailableError['reason'];
-    if (cachedSimHidBackend) {
-      reason = 'simhid-gated';
-    } else if (!webkitClient) {
+    if (!webkitClient) {
       reason = 'no-webkit';
     } else {
       reason = 'webkit-disconnected';
