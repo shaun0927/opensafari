@@ -8,6 +8,8 @@ import WebKit
 ///   can discover it and opensafari can bridge into it via `app_webview_connect`.
 /// - Every interactive element has an `accessibilityIdentifier` so the
 ///   accessibility bridge can target it headlessly.
+/// - The status label uses `accessibilityValue` for the dynamic state so the
+///   AX bridge can read it (accessibilityLabel is fixed for query stability).
 class ViewController: UIViewController, WKNavigationDelegate {
     private let statusLabel = UILabel()
     private let loadButton = UIButton(type: .system)
@@ -37,7 +39,7 @@ class ViewController: UIViewController, WKNavigationDelegate {
 
         statusLabel.text = "Status: idle"
         statusLabel.accessibilityIdentifier = "status_label"
-        statusLabel.accessibilityLabel = "Status"
+        statusLabel.accessibilityValue = "idle"
         statusLabel.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(statusLabel)
 
@@ -73,6 +75,7 @@ class ViewController: UIViewController, WKNavigationDelegate {
 
     @objc private func loadTapped() {
         statusLabel.text = "Status: loading"
+        statusLabel.accessibilityValue = "loading"
         // Use file:// baseURL so ios-webkit-debug-proxy classifies the target as
         // a WebView (not a Safari tab) when opensafari calls classifyTarget().
         webView.loadHTMLString(
@@ -83,10 +86,12 @@ class ViewController: UIViewController, WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         statusLabel.text = "Status: loaded"
+        statusLabel.accessibilityValue = "loaded"
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         statusLabel.text = "Status: error"
+        statusLabel.accessibilityValue = "error"
     }
 
     func webView(
@@ -95,5 +100,6 @@ class ViewController: UIViewController, WKNavigationDelegate {
         withError error: Error
     ) {
         statusLabel.text = "Status: error"
+        statusLabel.accessibilityValue = "error"
     }
 }
