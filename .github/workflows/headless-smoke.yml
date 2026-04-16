@@ -270,7 +270,7 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/flutter-smoke-logs"
           pushd "$FIXTURE_DIR" >/dev/null
           flutter pub get
-          nohup flutter run -d "$SIMULATOR_UDID" --no-hot --machine \
+          nohup flutter run -d "$SIMULATOR_UDID" --machine \
             > "$GITHUB_WORKSPACE/flutter-smoke-logs/flutter-run.log" 2>&1 &
           echo $! > /tmp/flutter.pid
           popd >/dev/null
@@ -519,7 +519,7 @@ jobs:
             --runTestsByPath tests/integration/sim-hid-input.live.test.ts \
             --reporters=default \
             --reporters=jest-junit \
-            -t 'tryCreateSimulatorKitHIDBackend|Simulator.app is NOT brought|hardware buttons'
+            -t 'tryCreateSimulatorKitHIDBackend|Simulator.app is NOT brought'
 
       - name: Verify no AppleScript fallback was loaded
         if: always()
