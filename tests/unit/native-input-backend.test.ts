@@ -640,18 +640,16 @@ describe('getInputBackend', () => {
     }
   });
 
-  // ── simhid-gated reason (issue #491) ────────────────────────────────────
+  // ── SimHID Tier-1 return path (re-enabled after #491 resolution) ───────────
   //
-  // When the Tier-1 SimHID probe succeeds but the return path in
-  // `getInputBackend()` is commented out (see TODO(#491) referencing the
-  // Xcode 26+ screen-lock regression), the thrown error should surface the
-  // #491 link instead of the WebKit-oriented 'no-webkit' reason. We drive
-  // the probe to a non-null backend by enabling the Swift-source candidate
-  // path — that affordance is already gated behind
-  // OPENSAFARI_ALLOW_SWIFT_INTERPRETER=1 and resolves to the in-tree
-  // `src/native/sim-hid-bridge.swift`, so no build step is required.
+  // After #491 resolved the Xcode 26+ gesture-recognizer regression, the
+  // SimHID return path is unconditionally enabled. When the probe succeeds,
+  // `getInputBackend()` must return the SimHID backend directly rather than
+  // falling through to lower tiers or throwing. We drive the probe by enabling
+  // the Swift-source candidate path via OPENSAFARI_ALLOW_SWIFT_INTERPRETER=1,
+  // which resolves to `src/native/sim-hid-bridge.swift` in the source tree.
 
-  describe('simhid-gated reason (issue #491)', () => {
+  describe('SimHID Tier-1 return path (re-enabled after #491)', () => {
     const ALLOW_SWIFT = 'OPENSAFARI_ALLOW_SWIFT_INTERPRETER';
     let originalAllowSwift: string | undefined;
 
@@ -670,31 +668,20 @@ describe('getInputBackend', () => {
       resetInputBackend();
     });
 
-    test('reason is simhid-gated when SimHID probe succeeds and no webkitClient', async () => {
+    test('returns SimHID backend when probe succeeds (no webkitClient)', async () => {
       execMock.mockRejectedValueOnce(new Error('not supported'));
-      try {
-        await getInputBackend(DEVICE);
-        fail('expected HeadlessInputUnavailableError');
-      } catch (err) {
-        const hErr = err as HeadlessInputUnavailableError;
-        expect(hErr.reason).toBe('simhid-gated');
-      }
+      const backend = await getInputBackend(DEVICE);
+      expect(backend.kind).toBe('simhid');
     });
 
-    test('remediation references issue #491 and mentions the ALLOW_FOCUS_INPUT workaround', async () => {
+    test('returns SimHID backend ahead of WebKit when probe succeeds', async () => {
       execMock.mockRejectedValueOnce(new Error('not supported'));
-      try {
-        await getInputBackend(DEVICE);
-        fail('expected HeadlessInputUnavailableError');
-      } catch (err) {
-        const hErr = err as HeadlessInputUnavailableError;
-        expect(hErr.message).toContain('#491');
-        expect(hErr.message).toContain('IndigoHIDMessageForMouseNSEvent');
-        expect(hErr.message).toContain(OPENSAFARI_ALLOW_FOCUS_INPUT_ENV);
-        // The simhid-gated remediation is deliberately longer than the
-        // two-line webkit fallback; assert the minimum shape.
-        expect(hErr.remediation.length).toBeGreaterThanOrEqual(4);
-      }
+      const mockClient = {
+        isConnected: jest.fn().mockReturnValue(true),
+        connect: jest.fn().mockResolvedValue(undefined),
+      } as any;
+      const backend = await getInputBackend(DEVICE, mockClient);
+      expect(backend.kind).toBe('simhid');
     });
   });
 
