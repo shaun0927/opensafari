@@ -430,7 +430,13 @@ When Apple breaks a private API in a new Xcode release, the recommended response
 
 ---
 
-## 8. References
+## 8. Memory management
+
+See [Memory Budget](memory-budget.md) for the per-cache retention budget and eviction policies.
+
+---
+
+## 9. References
 
 ### Related source files
 

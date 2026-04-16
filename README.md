@@ -62,6 +62,8 @@ OpenSafari runs fully headless on CI — no display server, no mouse focus, no `
 
 For CI setup recipes (GitHub Actions, Buildkite, GitLab CI), see [docs/ci-recipes.md](docs/ci-recipes.md).
 
+Long-running MCP sessions are soak-tested nightly — see [memory-soak workflow](.github/workflows/memory-soak.yml).
+
 ---
 
 ## What is OpenSafari?
@@ -612,6 +614,8 @@ Together, they provide **complete browser coverage** — Chrome for desktop, Saf
 | [Troubleshooting](docs/troubleshooting.md) | Common issues and solutions |
 | [CI Integration](docs/ci-integration.md) | Using OpenSafari in CI pipelines |
 | [CI Recipes](docs/ci-recipes.md) | Copy-paste GitHub Actions, Buildkite, and GitLab CI recipes |
+| [Memory Budget](docs/memory-budget.md) | Per-cache retention budgets and eviction policies |
+| [Diagnose Tool Reference](docs/diagnose.md) | `diagnose` output schema and memory block reference |
 | [RFC: Native App Backend](docs/rfc-native-app-backend.md) | Architecture RFC for native-app automation in Xcode Simulator |
 | [Native App Tool Surface](docs/native-app-tool-surface.md) | Proposed MCP tool surface for native-app automation |
 | [WebKit Protocol Research](docs/webkit-protocol-research.md) | WebKit Remote Debugging Protocol research notes |

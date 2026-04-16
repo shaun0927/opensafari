@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added — Memory SLO infrastructure (#554)
+
+- **Process-wide memory instrumentation.** `timedInput` now records `{rss_mb, heap_used_mb}` on every input-backend call. The telemetry rollup exposes per-backend `p50_rss_mb` / `p95_rss_mb` / `max_rss_mb` percentiles alongside the existing latency percentiles. Memory fields in tool responses are opt-in via `OPENSAFARI_TELEMETRY_INCLUDE_MEMORY=1`.
+- **Per-cache memory budget documentation.** `docs/memory-budget.md` catalogues every module-level cache and singleton in `src/`, with eviction policy, max-size target, and source-file link. A contract test (`tests/unit/memory-budget.test.ts`) keeps the doc in sync with code.
+- **Memory soft-cap watchdog.** Optional `OPENSAFARI_MEMORY_SOFT_CAP_MB` env var — when RSS crosses the cap, the telemetry sink emits a structured warning and `diagnose` reports `memory_status: "warn"`.
+- **Enhanced `diagnose` memory block.** Now includes `rss_growth_mb_per_hour`, `soft_cap_mb`, and `notes` array for cache-budget violations.
+- **60-minute soak test.** `tests/soak/long-session.soak.test.ts` round-robins across all backend tiers, asserting RSS delta ≤ 100 MB and rolling growth rate ≤ 3 MB/min. Gated by `OPENSAFARI_RUN_SOAK=1`.
+- **Nightly CI workflow.** `.github/workflows/memory-soak.yml` runs the soak test daily at 03:00 UTC. Seven consecutive failures auto-open a `memory-regression` issue.
+- **Developer script.** `scripts/memory-inspect.ts` — one-shot 10-minute mixed-call session that prints a per-backend RSS/heap table for local triage.
+
 ## [0.4.9] - 2026-04-15
 
 This release closes the **Xcode 26+ headless tap gap** with a new Tier 1.5 AX press backend, hardens Flutter VM routing for release builds, adds process-wide memory tracking to `diagnose`, and ships the complete iOS 26 investigation synthesis. Together with the Tier-1 SimHID gating from v0.4.8, element-targeted native automation (`app_tap_element`, `app_type_element`) is now fully headless on Xcode 26+ — no Simulator.app focus required.
