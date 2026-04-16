@@ -104,23 +104,15 @@ jobs:
           # that ios-webkit-debug-proxy binds to on CI runners.
           xcrun simctl openurl "$SIMULATOR_UDID" https://example.com || true
           sleep 5
-          SOCKET_PATH=$(node - <<'NODE'
-          const { waitForSocketPath } = require('./dist/simulator/socket-finder');
-          (async () => {
-            const socket = await waitForSocketPath({
-              targetUdid: process.env.SIMULATOR_UDID,
-              timeout: 20_000,
-              interval: 1_000,
-            });
-            if (socket) {
-              process.stdout.write(socket);
-            }
-          })().catch((error) => {
-            console.error(error);
-            process.exit(1);
-          });
-          NODE
-          )
+          # Poll for webinspectord_sim socket (bash-based — webpack bundles prevent require)
+          SOCKET_PATH=""
+          for i in $(seq 1 20); do
+            SOCKET_PATH=$(find /private/var/tmp /private/tmp -name "com.apple.webinspectord_sim.socket" 2>/dev/null | head -1)
+            if [ -n "$SOCKET_PATH" ]; then
+              break
+            fi
+            sleep 1
+          done
           if [ -z "$SOCKET_PATH" ]; then
             echo "::error::Could not find webinspectord_sim socket"
             exit 1
@@ -429,9 +421,16 @@ jobs:
       - name: Ensure sim-hid-bridge binary is present
         run: |
           set -euo pipefail
+          if [ -x dist/sim-hid-bridge ]; then
+            echo "sim-hid-bridge binary present"
+            file dist/sim-hid-bridge
+            exit 0
+          fi
+          echo "::warning::sim-hid-bridge not produced by npm run build — retrying without stderr suppression"
+          swiftc -O src/native/sim-hid-bridge.swift -o dist/sim-hid-bridge
+          codesign --sign - dist/sim-hid-bridge || echo "::warning::ad-hoc codesign skipped (binary may still work unsigned)"
           if [ ! -x dist/sim-hid-bridge ]; then
-            echo "::error::dist/sim-hid-bridge was not produced by npm run build — SimulatorKitHID backend cannot be exercised."
-            ls -la dist/ || true
+            echo "::error::sim-hid-bridge could not be compiled — SimulatorKitHID backend cannot be exercised"
             exit 1
           fi
           file dist/sim-hid-bridge

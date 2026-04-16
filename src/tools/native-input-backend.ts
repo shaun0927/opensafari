@@ -706,7 +706,7 @@ async function defaultFlutterVMResolver(
         );
       });
       try {
-        await Promise.race([client.connect({ deviceId }), timeout]);
+        await Promise.race([client.connect({ deviceId, vmServiceUrl: process.env.OPENSAFARI_VM_SERVICE_URL || undefined }), timeout]);
       } finally {
         if (timeoutId) clearTimeout(timeoutId);
       }
