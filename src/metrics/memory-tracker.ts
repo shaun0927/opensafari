@@ -13,10 +13,11 @@
  * RSS-only variant is available) so it can safely ride on top of every
  * `timedInput` invocation without a measurable latency impact.
  *
- * A follow-up issue will add:
- *   - Per-backend rollup (avg / p95 / max RSS delta per op)
- *   - Soak-test hook that asserts growth-rate SLOs
- *   - Optional `OPENSAFARI_MEMORY_SOFT_CAP_MB` watchdog + `diagnose` warning
+ * This module also provides:
+ *   - A circular buffer of RSS time-series samples (6 slots, ≥60 s apart)
+ *     used to compute an MB/hour growth rate via `getRssGrowthPerHour()`.
+ *   - A soft-cap watchdog driven by `OPENSAFARI_MEMORY_SOFT_CAP_MB` that
+ *     emits a rate-limited `console.error` when RSS exceeds the cap.
  */
 
 /**
@@ -30,6 +31,15 @@
  */
 export const OPENSAFARI_INPUT_TELEMETRY_MEMORY_ENV =
   'OPENSAFARI_INPUT_TELEMETRY_MEMORY';
+
+/**
+ * Env var for the optional memory soft-cap watchdog. When set to a positive
+ * integer (MB), `recordMemorySample()` emits a rate-limited `console.error`
+ * warning whenever the process RSS exceeds this threshold.
+ *
+ * Example: `OPENSAFARI_MEMORY_SOFT_CAP_MB=512`
+ */
+export const OPENSAFARI_MEMORY_SOFT_CAP_MB_ENV = 'OPENSAFARI_MEMORY_SOFT_CAP_MB';
 
 export interface MemorySnapshot {
   /** Current resident set size in bytes. */
@@ -52,8 +62,34 @@ export interface MemorySnapshot {
   sampleCount: number;
 }
 
+/** One slot in the RSS time-series circular buffer. */
+interface RssSample {
+  rssBytes: number;
+  timestampMs: number;
+}
+
+// ── module-level state ────────────────────────────────────────────────────────
+
 let peakRssBytes = 0;
 let sampleCount = 0;
+
+/** Circular buffer of up to 6 RSS time-series entries spaced ≥ 60 s apart. */
+const RSS_BUFFER_SIZE = 6;
+const rssTimeSeries: RssSample[] = [];
+
+/** Timestamp of the last entry written to the time-series buffer (ms). */
+let lastTimeSeriesMs = 0;
+
+/** Minimum gap between time-series entries (60 seconds). */
+const TIME_SERIES_MIN_GAP_MS = 60_000;
+
+/** Timestamp of the last soft-cap warning emission (ms). Rate-limited to 60 s. */
+let lastCapWarningMs = 0;
+
+/** Minimum gap between successive soft-cap warnings (60 seconds). */
+const CAP_WARNING_COOLDOWN_MS = 60_000;
+
+// ── private helpers ───────────────────────────────────────────────────────────
 
 export function isMemoryTrackingEnabled(): boolean {
   const value = process.env[OPENSAFARI_INPUT_TELEMETRY_MEMORY_ENV];
@@ -75,16 +111,55 @@ function readRssBytes(): number {
 }
 
 /**
+ * Append an RSS entry to the time-series circular buffer, but only when the
+ * previous entry is at least `TIME_SERIES_MIN_GAP_MS` old. The buffer is
+ * capped at `RSS_BUFFER_SIZE` — the oldest entry is evicted when full.
+ */
+function maybeRecordTimeSeries(rssBytes: number, nowMs: number): void {
+  if (rssTimeSeries.length > 0 && nowMs - lastTimeSeriesMs < TIME_SERIES_MIN_GAP_MS) {
+    return;
+  }
+  if (rssTimeSeries.length >= RSS_BUFFER_SIZE) {
+    rssTimeSeries.shift();
+  }
+  rssTimeSeries.push({ rssBytes, timestampMs: nowMs });
+  lastTimeSeriesMs = nowMs;
+}
+
+// ── public API ────────────────────────────────────────────────────────────────
+
+/**
  * Record one RSS sample against the peak tracker. Safe to call from any
  * hot path — constant-time work, never throws. The caller does not need
  * to check the env var first; that gate is applied here.
+ *
+ * Also:
+ *   - Appends to the time-series buffer when ≥ 60 s have elapsed since the
+ *     last entry (used by `getRssGrowthPerHour()`).
+ *   - Emits a rate-limited `console.error` warning if the RSS exceeds the
+ *     soft cap set via `OPENSAFARI_MEMORY_SOFT_CAP_MB`.
  */
 export function recordMemorySample(): void {
   if (!isMemoryTrackingEnabled()) return;
   try {
     const rss = readRssBytes();
+    const nowMs = Date.now();
     if (rss > peakRssBytes) peakRssBytes = rss;
     sampleCount += 1;
+
+    maybeRecordTimeSeries(rss, nowMs);
+
+    // Soft-cap watchdog — rate-limited to one warning per 60 s.
+    const capMB = getMemorySoftCapMB();
+    if (capMB !== null) {
+      const rssMB = bytesToMB(rss);
+      if (rssMB > capMB && nowMs - lastCapWarningMs >= CAP_WARNING_COOLDOWN_MS) {
+        lastCapWarningMs = nowMs;
+        console.error(
+          `[memory-watchdog] RSS crossed soft cap: ${rssMB} MB > ${capMB} MB`,
+        );
+      }
+    }
   } catch {
     // Memory sampling must never mask an input-backend failure.
   }
@@ -114,13 +189,58 @@ export function getMemorySnapshot(): MemorySnapshot {
 }
 
 /**
+ * Compute the RSS growth rate in MB/hour from the time-series circular
+ * buffer. Returns `null` when fewer than 2 entries have been recorded.
+ *
+ * The formula extrapolates linearly from the oldest to the newest entry:
+ *   growth = (newest.rss − oldest.rss) / (newest.time − oldest.time) × 3600000
+ */
+export function getRssGrowthPerHour(): number | null {
+  if (rssTimeSeries.length < 2) return null;
+  const oldest = rssTimeSeries[0];
+  const newest = rssTimeSeries[rssTimeSeries.length - 1];
+  const deltaMs = newest.timestampMs - oldest.timestampMs;
+  if (deltaMs <= 0) return null;
+  const deltaBytes = newest.rssBytes - oldest.rssBytes;
+  return bytesToMB(deltaBytes) / deltaMs * 3_600_000;
+}
+
+/**
+ * Parse `OPENSAFARI_MEMORY_SOFT_CAP_MB` from the environment.
+ * Returns the cap in MB, or `null` if the env var is unset or invalid.
+ */
+export function getMemorySoftCapMB(): number | null {
+  const raw = process.env[OPENSAFARI_MEMORY_SOFT_CAP_MB_ENV];
+  if (!raw) return null;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return parsed;
+}
+
+/**
+ * Returns `true` if the current process RSS exceeds the configured soft cap.
+ * Always returns `false` when the env var is unset.
+ */
+export function isMemoryCapExceeded(): boolean {
+  const capMB = getMemorySoftCapMB();
+  if (capMB === null) return false;
+  return bytesToMB(readRssBytes()) > capMB;
+}
+
+/**
  * Reset the peak tracker. Intended for tests that want isolated windows
  * and for long-running daemons that want to measure growth within a
  * known period (e.g., the per-session soak test in a follow-up PR).
+ *
+ * Also clears the time-series buffer and soft-cap warning state so tests
+ * get a fully isolated view of the tracker.
  */
 export function resetMemoryTracker(): void {
   peakRssBytes = 0;
   sampleCount = 0;
+  rssTimeSeries.length = 0;
+  lastTimeSeriesMs = 0;
+  lastCapWarningMs = 0;
 }
 
 /**

@@ -25,6 +25,10 @@ import { registerDiagnoseTool } from '../../src/tools/diagnose';
 import { getSessionManager } from '../../src/session-manager';
 import { peekProxyForDevice } from '../../src/simulator/proxy-manager';
 import { tryCreateSimulatorKitHIDBackend } from '../../src/tools/sim-hid-input-backend';
+import {
+  resetMemoryTracker,
+  OPENSAFARI_MEMORY_SOFT_CAP_MB_ENV,
+} from '../../src/metrics/memory-tracker';
 import type { BrowserBackend } from '../../src/types/browser-backend';
 
 // ── typed mocks ──────────────────────────────────────────────────────────────
@@ -121,6 +125,13 @@ describe('diagnose tool', () => {
     delete process.env.OPENSAFARI_HEADLESS_ONLY;
     delete process.env.OPENSAFARI_PROXY_PORT;
     delete process.env.OPENSAFARI_ALLOW_SWIFT_INTERPRETER;
+    delete process.env[OPENSAFARI_MEMORY_SOFT_CAP_MB_ENV];
+    resetMemoryTracker();
+  });
+
+  afterEach(() => {
+    delete process.env[OPENSAFARI_MEMORY_SOFT_CAP_MB_ENV];
+    resetMemoryTracker();
   });
 
   // ── Test: all backends available ─────────────────────────────────────────
@@ -304,5 +315,85 @@ describe('diagnose tool', () => {
     const backends = report.backends as Record<string, Record<string, unknown>>;
     expect(backends.simctl.available).toBe(false);
     expect(backends.simctl.reason).toMatch(/Xcode 26/);
+  });
+
+  // ── Test: enhanced memory block fields ──────────────────────────────────
+
+  it('memory block includes rss_growth_mb_per_hour, soft_cap_mb, notes', async () => {
+    mockGetSessionManager.mockReturnValue(makeSessionManager({}) as never);
+    mockPeekProxyForDevice.mockReturnValue(null);
+    mockTryCreateSimHid.mockResolvedValue(null);
+    stubSimctlNotFound();
+
+    const report = await runDiagnose(server);
+    const memory = report.memory as Record<string, unknown>;
+
+    // New fields must be present.
+    expect('rss_growth_mb_per_hour' in memory).toBe(true);
+    expect('soft_cap_mb' in memory).toBe(true);
+    expect('notes' in memory).toBe(true);
+    // No soft cap configured → null cap, empty notes.
+    expect(memory.soft_cap_mb).toBeNull();
+    expect(Array.isArray(memory.notes)).toBe(true);
+    expect((memory.notes as unknown[]).length).toBe(0);
+    // With no time-series data, growth is null.
+    expect(memory.rss_growth_mb_per_hour).toBeNull();
+  });
+
+  it('memory_status is ok when no soft cap is configured', async () => {
+    mockGetSessionManager.mockReturnValue(makeSessionManager({}) as never);
+    mockPeekProxyForDevice.mockReturnValue(null);
+    mockTryCreateSimHid.mockResolvedValue(null);
+    stubSimctlNotFound();
+
+    const report = await runDiagnose(server);
+    expect(report.memory_status).toBe('ok');
+  });
+
+  it('memory_status is warn and notes contain message when soft cap is exceeded', async () => {
+    mockGetSessionManager.mockReturnValue(makeSessionManager({}) as never);
+    mockPeekProxyForDevice.mockReturnValue(null);
+    mockTryCreateSimHid.mockResolvedValue(null);
+    stubSimctlNotFound();
+
+    // Set a cap so small that the real process RSS always exceeds it.
+    process.env[OPENSAFARI_MEMORY_SOFT_CAP_MB_ENV] = '0.000001';
+
+    const report = await runDiagnose(server);
+    expect(report.memory_status).toBe('warn');
+
+    const memory = report.memory as Record<string, unknown>;
+    const notes = memory.notes as string[];
+    expect(notes.length).toBeGreaterThan(0);
+    expect(notes[0]).toMatch(/RSS exceeds soft cap/);
+  });
+
+  it('memory_status is ok when RSS is within the soft cap', async () => {
+    mockGetSessionManager.mockReturnValue(makeSessionManager({}) as never);
+    mockPeekProxyForDevice.mockReturnValue(null);
+    mockTryCreateSimHid.mockResolvedValue(null);
+    stubSimctlNotFound();
+
+    // Cap so large the real process RSS never exceeds it.
+    process.env[OPENSAFARI_MEMORY_SOFT_CAP_MB_ENV] = '99999';
+
+    const report = await runDiagnose(server);
+    expect(report.memory_status).toBe('ok');
+
+    const memory = report.memory as Record<string, unknown>;
+    expect((memory.notes as unknown[]).length).toBe(0);
+  });
+
+  it('soft_cap_mb in report reflects the env var', async () => {
+    mockGetSessionManager.mockReturnValue(makeSessionManager({}) as never);
+    mockPeekProxyForDevice.mockReturnValue(null);
+    mockTryCreateSimHid.mockResolvedValue(null);
+    stubSimctlNotFound();
+
+    process.env[OPENSAFARI_MEMORY_SOFT_CAP_MB_ENV] = '256';
+
+    const report = await runDiagnose(server);
+    const memory = report.memory as Record<string, unknown>;
+    expect(memory.soft_cap_mb).toBe(256);
   });
 });
