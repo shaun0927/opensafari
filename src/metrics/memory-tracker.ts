@@ -55,7 +55,7 @@ export interface MemorySnapshot {
 let peakRssBytes = 0;
 let sampleCount = 0;
 
-function isMemoryTrackingEnabled(): boolean {
+export function isMemoryTrackingEnabled(): boolean {
   const value = process.env[OPENSAFARI_INPUT_TELEMETRY_MEMORY_ENV];
   if (value === '0' || value === 'false' || value === 'off') return false;
   return true;

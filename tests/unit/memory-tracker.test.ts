@@ -75,4 +75,20 @@ describe('memory-tracker', () => {
     expect(bytesToMB(1_572_864)).toBe(1.5);
     expect(bytesToMB(1_153_434)).toBe(1.1); // 1.1000... → 1.1
   });
+
+  test('recordMemorySample + memory field extraction < 50 µs per call (microbench)', () => {
+    const iterations = 10_000;
+    const start = process.hrtime.bigint();
+    for (let i = 0; i < iterations; i++) {
+      recordMemorySample();
+      const usage = process.memoryUsage();
+      // Mirror the same bytesToMB conversions done in timedInput.
+      void bytesToMB(usage.rss);
+      void bytesToMB(usage.heapUsed);
+    }
+    const elapsedNs = Number(process.hrtime.bigint() - start);
+    const perCallUs = elapsedNs / iterations / 1_000;
+    // Allow generous headroom for CI machines; the budget is 50 µs / call.
+    expect(perCallUs).toBeLessThan(50);
+  });
 });

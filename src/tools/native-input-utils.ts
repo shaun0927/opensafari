@@ -11,6 +11,7 @@ import type { InputBackend } from './native-input-backend';
 import {
   captureInputTelemetry,
   isInputTelemetryMetaEnabled,
+  isMemoryMetaEnabled,
   type InputTelemetryEvent,
 } from '../metrics/input-telemetry';
 
@@ -26,7 +27,9 @@ export type { InputBackend, InputBackendKind } from './native-input-backend';
 export {
   captureInputTelemetry,
   isInputTelemetryMetaEnabled,
+  isMemoryMetaEnabled,
   OPENSAFARI_INPUT_TELEMETRY_META_ENV,
+  OPENSAFARI_TELEMETRY_INCLUDE_MEMORY,
 } from '../metrics/input-telemetry';
 export type { InputTelemetryEvent } from '../metrics/input-telemetry';
 export {
@@ -54,6 +57,8 @@ export interface InputMeta {
   headless: boolean;
   deviceId: string;
   _telemetry?: InputTelemetryMeta[];
+  /** Present when `OPENSAFARI_TELEMETRY_INCLUDE_MEMORY=1`. */
+  memory?: { rss_mb: number; heap_used_mb: number };
 }
 
 function compactTelemetry(events: InputTelemetryEvent[]): InputTelemetryMeta[] {
@@ -86,6 +91,17 @@ export function buildInputMeta(
   };
   if (telemetry && telemetry.length > 0 && isInputTelemetryMetaEnabled()) {
     meta._telemetry = compactTelemetry(telemetry);
+  }
+  if (isMemoryMetaEnabled()) {
+    try {
+      const usage = process.memoryUsage();
+      meta.memory = {
+        rss_mb: Math.round((usage.rss / 1_048_576) * 100) / 100,
+        heap_used_mb: Math.round((usage.heapUsed / 1_048_576) * 100) / 100,
+      };
+    } catch {
+      // Memory sampling must never mask an input-backend failure.
+    }
   }
   return meta;
 }

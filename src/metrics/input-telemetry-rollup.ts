@@ -42,6 +42,12 @@ export interface InputTelemetryRollup {
   p99_ms: number;
   /** Wall-clock epoch ms of the most recent sample (success or failure). */
   lastUpdated: number;
+  /** Median RSS in MB across successful calls that reported memory. `0` when none. */
+  p50_rss_mb: number;
+  /** 95th-percentile RSS in MB across successful calls that reported memory. `0` when none. */
+  p95_rss_mb: number;
+  /** Maximum RSS in MB observed across successful calls that reported memory. `0` when none. */
+  max_rss_mb: number;
 }
 
 interface Bucket {
@@ -52,6 +58,9 @@ interface Bucket {
   errorCount: number;
   sum: number; // running sum of successful elapsed_ms (for mean)
   lastUpdated: number;
+  rssSamples: number[]; // ring buffer of rss_mb for successful calls that reported memory
+  rssStart: number; // ring buffer head offset for RSS
+  rssSize: number; // RSS samples actually populated
 }
 
 const buckets = new Map<string, Bucket>();
@@ -74,6 +83,9 @@ function newBucket(): Bucket {
     errorCount: 0,
     sum: 0,
     lastUpdated: 0,
+    rssSamples: new Array<number>(INPUT_TELEMETRY_ROLLUP_CAP),
+    rssStart: 0,
+    rssSize: 0,
   };
 }
 
@@ -108,6 +120,17 @@ export function accumulateInputTelemetry(event: InputTelemetryEvent): void {
     b.start = (b.start + 1) % INPUT_TELEMETRY_ROLLUP_CAP;
     b.sum += ms - evicted;
   }
+  // Accumulate RSS sample when the event carries memory fields.
+  if (event.rss_mb !== undefined) {
+    const rss = event.rss_mb;
+    if (b.rssSize < INPUT_TELEMETRY_ROLLUP_CAP) {
+      b.rssSamples[(b.rssStart + b.rssSize) % INPUT_TELEMETRY_ROLLUP_CAP] = rss;
+      b.rssSize += 1;
+    } else {
+      b.rssSamples[b.rssStart] = rss;
+      b.rssStart = (b.rssStart + 1) % INPUT_TELEMETRY_ROLLUP_CAP;
+    }
+  }
 }
 
 /** Nearest-rank percentile — simple and stable for small/medium samples. */
@@ -131,6 +154,14 @@ function snapshotBucket(
   }
   sorted.sort((a, x) => a - x);
   const mean = successCount === 0 ? 0 : b.sum / successCount;
+
+  // Compute RSS percentiles from the RSS ring buffer.
+  const rssSorted: number[] = new Array(b.rssSize);
+  for (let i = 0; i < b.rssSize; i++) {
+    rssSorted[i] = b.rssSamples[(b.rssStart + i) % INPUT_TELEMETRY_ROLLUP_CAP];
+  }
+  rssSorted.sort((a, x) => a - x);
+
   return {
     backendKind,
     operation,
@@ -142,6 +173,9 @@ function snapshotBucket(
     p95_ms: percentile(sorted, 0.95),
     p99_ms: percentile(sorted, 0.99),
     lastUpdated: b.lastUpdated,
+    p50_rss_mb: percentile(rssSorted, 0.5),
+    p95_rss_mb: percentile(rssSorted, 0.95),
+    max_rss_mb: rssSorted.length > 0 ? rssSorted[rssSorted.length - 1] : 0,
   };
 }
 
