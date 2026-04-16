@@ -86,6 +86,11 @@ export function httpToWsUrl(httpUrl: string): string {
   return `${base}/ws`;
 }
 
+export function wsToHttpUrl(wsUrl: string): string {
+  const base = wsUrl.replace(/^ws/, 'http').replace(/\/ws\/?$/, '/');
+  return base.endsWith('/') ? base : `${base}/`;
+}
+
 /**
  * Convert a VM Service WebSocket URL to its HTTP equivalent.
  *
