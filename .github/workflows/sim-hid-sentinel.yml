@@ -38,7 +38,13 @@ jobs:
       fail-fast: false
       matrix:
         runner:
+          # Each runner ships a different Xcode/macOS combination so we detect
+          # version-specific private-framework regressions:
+          #   macos-14  → macOS 14 (Sonoma)  / Xcode 15–16
+          #   macos-15  → macOS 15 (Sequoia) / Xcode 16–17
+          #   macos-latest → latest GA (currently macOS 15)
           - macos-latest
+          - macos-15
           - macos-14
     runs-on: ${{ matrix.runner }}
     name: sentinel (${{ matrix.runner }})
