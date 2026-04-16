@@ -970,5 +970,15 @@ export function resetInputBackend(): void {
   cachedSimHidBackend = null;
 }
 
+/**
+ * Current number of entries in the Flutter VM discovery cache (includes both
+ * positive hits and negative entries that have not yet expired). Exposed for
+ * the cache-budget survey (#554) so `diagnose` can flag this cache when it
+ * outgrows the budget documented in `docs/memory-budget.md`.
+ */
+export function getFlutterClientCacheSize(): number {
+  return flutterClientCache.size;
+}
+
 // Re-export for convenience
 export { HID_TO_APPLESCRIPT, SENDKEY_TO_APPLESCRIPT, HID_TO_WEBKIT_KEY, SENDKEY_TO_WEBKIT_KEY };
