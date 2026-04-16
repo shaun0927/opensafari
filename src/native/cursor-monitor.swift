@@ -57,8 +57,8 @@ if !monitorActive {
 }
 
 let process = Process()
-process.executableURL = URL(fileURLWithPath: childCmd)
-process.arguments = childArgs
+process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+process.arguments = [childCmd] + childArgs
 process.environment = ProcessInfo.processInfo.environment
 process.standardInput = FileHandle.standardInput
 process.standardOutput = FileHandle.standardOutput
