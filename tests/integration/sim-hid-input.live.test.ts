@@ -66,6 +66,7 @@ const MAPS_BUNDLE = 'com.apple.Maps';
 // Flutter sample app installed by `tests/integration/fixtures/flutter_sample`.
 // Override with `OSF_FLUTTER_BUNDLE_ID` if a different fixture is deployed.
 const FLUTTER_BUNDLE = process.env.OSF_FLUTTER_BUNDLE_ID ?? 'com.example.osftest';
+const SIMHID_SMOKE = process.env.OPENSAFARI_SIMHID_SMOKE === '1';
 
 const SETTINGS_GENERAL = process.env.SETTINGS_GENERAL ?? '일반';
 const SETTINGS_ABOUT = process.env.SETTINGS_ABOUT ?? '정보';
@@ -196,7 +197,9 @@ beforeAll(async () => {
   // Start every run from a clean routing cache so backend selection is not
   // poisoned by tests that previously ran in the same Jest process.
   resetInputBackend();
-  await relaunchSettings();
+  if (!SIMHID_SMOKE) {
+    await relaunchSettings();
+  }
 });
 
 afterAll(() => {
