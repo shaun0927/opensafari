@@ -92,20 +92,22 @@ if monitorActive {
     }
 }
 
+// Forward SIGINT / SIGTERM to the child so Ctrl-C propagates cleanly.
+// Registered *before* process.run() to close the race window where a
+// signal arriving between run() and registration would kill the parent
+// without forwarding to the child. kill(0, sig) sends to the whole
+// process group, so it is safe to call even before the child exists.
+let forwarder: @convention(c) (Int32) -> Void = { sig in
+    _ = kill(0, sig)
+}
+signal(SIGINT, forwarder)
+signal(SIGTERM, forwarder)
+
 do {
     try process.run()
 } catch {
     die("failed to spawn child '\(childCmd)': \(error.localizedDescription)")
 }
-
-// Forward SIGINT / SIGTERM to the child so Ctrl-C propagates cleanly.
-let forwarder: @convention(c) (Int32) -> Void = { sig in
-    // Can't access Swift variables from a C handler; kill(0, sig) reaches
-    // the whole process group.
-    _ = kill(0, sig)
-}
-signal(SIGINT, forwarder)
-signal(SIGTERM, forwarder)
 
 process.waitUntilExit()
 
@@ -115,7 +117,7 @@ let maxDelta = maxDeltaSq.squareRoot()
 let sampleCount = samples
 lock.unlock()
 
-// Small grace period for the sampler goroutine to see the stop flag.
+// Small grace period for the sampler dispatch block to see the stop flag.
 Thread.sleep(forTimeInterval: intervalSec)
 
 let report: [String: Any] = [
