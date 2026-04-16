@@ -13,7 +13,13 @@ import {
   getInputTelemetryRollup,
   type InputTelemetryRollup,
 } from '../metrics/input-telemetry-rollup';
-import { getMemorySnapshot, bytesToMB } from '../metrics/memory-tracker';
+import {
+  getMemorySnapshot,
+  bytesToMB,
+  getRssGrowthPerHour,
+  getMemorySoftCapMB,
+  isMemoryCapExceeded,
+} from '../metrics/memory-tracker';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 
@@ -69,6 +75,11 @@ interface DiagnoseReport {
    * are taken from `process.memoryUsage()` at diagnose-time so callers
    * always see a fresh V8 heap breakdown regardless of whether the
    * per-op sampler has ticked.
+   *
+   * `rss_growth_mb_per_hour` is computed from the time-series circular
+   * buffer in memory-tracker; `null` until at least 2 entries exist.
+   * `soft_cap_mb` mirrors `OPENSAFARI_MEMORY_SOFT_CAP_MB`; `null` when
+   * unset. `notes` surfaces actionable warnings (e.g., cap exceeded).
    */
   memory: {
     rss_mb: number;
@@ -78,7 +89,15 @@ interface DiagnoseReport {
     external_mb: number;
     array_buffers_mb: number;
     sample_count: number;
+    rss_growth_mb_per_hour: number | null;
+    soft_cap_mb: number | null;
+    notes: string[];
   };
+  /**
+   * Quick memory health indicator. `'warn'` when RSS exceeds the configured
+   * soft cap; `'ok'` otherwise (including when no cap is configured).
+   */
+  memory_status: 'ok' | 'warn';
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -230,6 +249,13 @@ export function registerDiagnoseTool(server: MCPServer): void {
       const nativeVerdict = simctlStatus.available || simhidStatus.available;
 
       const memorySnapshot = getMemorySnapshot();
+      const softCapMB = getMemorySoftCapMB();
+      const capExceeded = isMemoryCapExceeded();
+      const memoryNotes: string[] = [];
+      if (softCapMB !== null && capExceeded) {
+        const rssMB = bytesToMB(memorySnapshot.rssBytes);
+        memoryNotes.push(`RSS exceeds soft cap (${rssMB} > ${softCapMB} MB)`);
+      }
 
       const report: DiagnoseReport = {
         device,
@@ -255,7 +281,11 @@ export function registerDiagnoseTool(server: MCPServer): void {
           external_mb: bytesToMB(memorySnapshot.externalBytes),
           array_buffers_mb: bytesToMB(memorySnapshot.arrayBuffersBytes),
           sample_count: memorySnapshot.sampleCount,
+          rss_growth_mb_per_hour: getRssGrowthPerHour(),
+          soft_cap_mb: softCapMB,
+          notes: memoryNotes,
         },
+        memory_status: capExceeded ? 'warn' : 'ok',
       };
 
       return {
