@@ -13,6 +13,8 @@ const execFileAsync = promisify(execFile);
 
 const VM_SERVICE_URL_PATTERN = /https?:\/\/127\.0\.0\.1:\d+\/[a-zA-Z0-9_-]+=\//;
 const DEFAULT_TIMEOUT_MS = 10000;
+const VM_SERVICE_URL_ENV = 'OPENSAFARI_VM_SERVICE_URL';
+const VM_SERVICE_WS_URL_ENV = 'OPENSAFARI_VM_SERVICE_WS_URL';
 
 /**
  * Discover the Dart VM Service URL from simulator logs.
@@ -30,6 +32,10 @@ export async function discoverVMServiceUrl(
   options?: { bundleId?: string; timeout?: number },
 ): Promise<string | null> {
   const timeout = options?.timeout ?? DEFAULT_TIMEOUT_MS;
+  const envOverride = getEnvOverrideUrl();
+  if (envOverride) {
+    return envOverride;
+  }
 
   // Strategy: Search recent logs for observatory URL
   try {
@@ -80,9 +86,31 @@ export function httpToWsUrl(httpUrl: string): string {
   return `${base}/ws`;
 }
 
+export function wsToHttpUrl(wsUrl: string): string {
+  const base = wsUrl.replace(/^ws/, 'http').replace(/\/ws\/?$/, '/');
+  return base.endsWith('/') ? base : `${base}/`;
+}
+
 /**
  * Validate that a URL looks like a Dart VM Service URL.
  */
 export function isValidVMServiceUrl(url: string): boolean {
   return VM_SERVICE_URL_PATTERN.test(url);
+}
+
+function getEnvOverrideUrl(): string | null {
+  const httpUrl = process.env[VM_SERVICE_URL_ENV];
+  if (httpUrl && isValidVMServiceUrl(httpUrl)) {
+    return httpUrl;
+  }
+
+  const wsUrl = process.env[VM_SERVICE_WS_URL_ENV];
+  if (wsUrl) {
+    const normalized = wsToHttpUrl(wsUrl);
+    if (isValidVMServiceUrl(normalized)) {
+      return normalized;
+    }
+  }
+
+  return null;
 }
