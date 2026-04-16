@@ -201,3 +201,21 @@ export function getInputTelemetryRollup(): InputTelemetryRollup[] {
 export function resetInputTelemetryRollup(): void {
   buckets.clear();
 }
+
+/**
+ * Return the total number of retained latency samples across every bucket.
+ * Used by the cache-budget survey (#554) to check this cache's memory
+ * footprint against its documented budget in `docs/memory-budget.md`.
+ */
+export function getInputTelemetryRollupSampleCount(): number {
+  let total = 0;
+  for (const b of buckets.values()) {
+    total += b.size + b.rssSize;
+  }
+  return total;
+}
+
+/** Current number of distinct `${backendKind}:${operation}` buckets. */
+export function getInputTelemetryRollupBucketCount(): number {
+  return buckets.size;
+}

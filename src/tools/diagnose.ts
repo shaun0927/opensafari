@@ -20,6 +20,7 @@ import {
   getMemorySoftCapMB,
   isMemoryCapExceeded,
 } from '../metrics/memory-tracker';
+import { getCacheBudgetNotes } from '../metrics/cache-budget';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 
@@ -255,6 +256,11 @@ export function registerDiagnoseTool(server: MCPServer): void {
       if (softCapMB !== null && capExceeded) {
         const rssMB = bytesToMB(memorySnapshot.rssBytes);
         memoryNotes.push(`RSS exceeds soft cap (${rssMB} > ${softCapMB} MB)`);
+      }
+      // Per-cache budget survey (#554) — lists any cache whose current
+      // footprint exceeds the budget row in `docs/memory-budget.md`.
+      for (const note of getCacheBudgetNotes()) {
+        memoryNotes.push(note);
       }
 
       const report: DiagnoseReport = {

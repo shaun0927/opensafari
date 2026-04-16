@@ -56,3 +56,19 @@ threshold). Update the line number when you move code.
 `scripts/check-memory-budget.ts` provides a complementary advisory scan: it greps
 all `src/**/*.ts` files for module-level `new Map<` / `new Set<` patterns and warns
 (without failing) about any cache that does not appear in this document.
+
+## Runtime survey
+
+`src/metrics/cache-budget.ts` hosts a small registry of caches that are
+actively surveyed at every `diagnose` call. When any surveyed cache's
+estimated byte footprint exceeds its budget, `diagnose.memory.notes`
+emits a line of the form:
+
+```
+telemetry-rollup: 1.3 MB (over budget 1 MB)
+```
+
+Adding a cache to the survey is two lines in `src/metrics/cache-budget.ts`
+plus a one-line exported size accessor on the cache's source module. The
+`maxBytes` value must match the "Max size (target)" column above so the
+doc and runtime stay in lockstep.
