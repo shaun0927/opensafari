@@ -27,7 +27,16 @@ env:
 jobs:
   safari-smoke:
     name: Safari — headless QA audit
-    runs-on: macos-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Baseline cell. Additional cells (macos-14, macos-15, macos-16,
+        # Xcode / device / Flutter-version dimensions) land in follow-up PRs
+        # — adding them before the runner images are proven stable would
+        # keep the cron red and reset the 30-day green countdown from #540.
+        # See epic #540 + child issue #574 for the staged rollout plan.
+        os: [macos-latest]
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -210,7 +219,11 @@ jobs:
 
   flutter-smoke:
     name: Flutter — headless VM-Service input
-    runs-on: macos-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest]
     timeout-minutes: 35
     env:
       FLUTTER_CHANNEL: 'stable'
@@ -444,7 +457,11 @@ jobs:
 
   native-smoke:
     name: Native — SimulatorKit HID (Tier 1)
-    runs-on: macos-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest]
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
@@ -600,7 +617,11 @@ jobs:
 
   webview-smoke:
     name: WebView — hybrid native + WebView headless
-    runs-on: macos-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest]
     timeout-minutes: 30
     env:
       FIXTURE_DIR: 'tests/integration/fixtures/webview_sample'
