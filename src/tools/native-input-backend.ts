@@ -699,10 +699,12 @@ async function defaultFlutterVMResolver(
     const client = getFlutterVMClient(deviceId);
     if (!client.isConnected()) {
       let timeoutId: ReturnType<typeof setTimeout> | undefined;
+      const explicitUrl = process.env.OPENSAFARI_VM_SERVICE_URL;
+      const effectiveTimeout = explicitUrl ? 10_000 : DISCOVERY_TIMEOUT_MS;
       const timeout = new Promise<void>((_, reject) => {
         timeoutId = setTimeout(
           () => reject(new Error('flutter-vm-discovery-timeout')),
-          DISCOVERY_TIMEOUT_MS,
+          effectiveTimeout,
         );
       });
       try {
