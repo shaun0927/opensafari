@@ -66,6 +66,7 @@ const MAPS_BUNDLE = 'com.apple.Maps';
 // Flutter sample app installed by `tests/integration/fixtures/flutter_sample`.
 // Override with `OSF_FLUTTER_BUNDLE_ID` if a different fixture is deployed.
 const FLUTTER_BUNDLE = process.env.OSF_FLUTTER_BUNDLE_ID ?? 'com.example.osftest';
+const SIMHID_SMOKE = process.env.OPENSAFARI_SIMHID_SMOKE === '1';
 
 const SETTINGS_GENERAL = process.env.SETTINGS_GENERAL ?? '일반';
 const SETTINGS_ABOUT = process.env.SETTINGS_ABOUT ?? '정보';
@@ -196,7 +197,9 @@ beforeAll(async () => {
   // Start every run from a clean routing cache so backend selection is not
   // poisoned by tests that previously ran in the same Jest process.
   resetInputBackend();
-  await relaunchSettings();
+  if (!SIMHID_SMOKE) {
+    await relaunchSettings();
+  }
 });
 
 afterAll(() => {
@@ -339,8 +342,14 @@ describe('SimulatorKitHIDInputBackend — hardware buttons', () => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Performance budgets.
+//
+// GitHub-hosted macOS runners have shown multi-second variance for the private
+// bridge process even when the functional headless path is healthy. Keep the
+// load-bearing routing and hardware checks in CI smoke, but reserve the tight
+// latency/RSS envelopes for local or dedicated perf environments.
 // ─────────────────────────────────────────────────────────────────────────────
-describe('SimulatorKitHIDInputBackend — performance', () => {
+const describePerformance = SIMHID_SMOKE ? describe.skip : describe;
+describePerformance('SimulatorKitHIDInputBackend — performance', () => {
   test('single tap (bridge spawn + HID injection) completes under 600 ms', async () => {
     const start = Date.now();
     await runBridge([DEVICE_ID, 'tap', '200', '500']);
