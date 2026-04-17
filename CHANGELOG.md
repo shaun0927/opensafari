@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Docs — Private-API deployment-scope guidance (#601, #610)
+
+- **`docs/private-apis.md` gains a "Deployment scope" section** drawing the host-vs-device line explicitly: ✅ allowed on developer Macs / macOS CI runners / internal dev tooling; ❌ not allowed bundled inside an iOS `.ipa` (App Store / TestFlight / Ad Hoc / Enterprise). Rationale cites App Review Guideline 2.5.1 / 2.5.2, `/Library/Developer/PrivateFrameworks/` provenance, and the same host-side posture Facebook's `idb` takes.
+- **License-interaction note** clarifies that the MIT grant on OpenSafari's source does not sublicense Apple's `SimulatorKit` / `CoreSimulator` frameworks — consumers remain bound by the Xcode / macOS license agreements for the loaded frameworks themselves.
+- **One-time private-API warning updated.** `SimulatorKitHIDInputBackend` now prints `Where can I use this? macOS host / CI only — never bundle inside an iOS .ipa …` alongside the existing `docs/private-apis.md` pointer, with a `(see "Deployment scope")` anchor hint. Content asserted by `tests/unit/sim-hid-input-backend.test.ts` (3 new assertions tagged `Issue #601`).
+- **No behavior change** — informational only. No runtime code paths altered.
+
 ### Changed — `_meta._telemetry` is on by default (#595)
 
 - **Input tool responses now carry `_meta._telemetry` without opt-in.** All 10 MCP input tools (`app_tap`, `app_swipe`, `app_scroll_native`, `app_key_input`, `app_double_tap`, `app_type_text`, `app_tap_element`, `app_type_element`, `app_dismiss_keyboard`, `app_alert_handle`) emit the compact per-call projection (`operation`, `elapsed_ms`, `ok`, `error?`) by default. CI and benchmarking harnesses no longer need to discover and flip `OPENSAFARI_INPUT_TELEMETRY_META=1` after hitting a mystery slowdown — observability is now Pareto-default.
