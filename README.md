@@ -43,7 +43,8 @@ OpenSafari runs fully headless on CI — no display server, no mouse focus, no `
 | Safari (Web) | ✅ | ✅ | ✅ | WebKit Remote Debug |
 | Flutter App | ✅ | ✅ | ✅ | FlutterVMInputBackend |
 | Native iOS App (Xcode ≤ 16) | ✅ | ✅ | ✅ | SimulatorKitHID (Tier 1) / `simctl` |
-| Native iOS App (Xcode 26+) | ✅ | ⚠️ Partial | ⚠️ | Keys/buttons headless via SimHID; tap/swipe pending — see [#491](https://github.com/shaun0927/opensafari/issues/491) |
+| Native iOS App (Xcode 26+, element-targeted) | ✅ | ✅ | ✅ | AX-press (Tier 1.5) for `app_tap_element` / `app_type_element` when the element advertises `AXPress` — see [docs/headless-architecture.md](docs/headless-architecture.md) |
+| Native iOS App (Xcode 26+, coordinate `app_tap({x,y})`) | ✅ | ⚠️ Partial | ⚠️ | Keys/buttons headless via SimHID; raw coordinate tap/swipe falls through to AppleScript fallback — see [#491](https://github.com/shaun0927/opensafari/issues/491) |
 | WebView in Native | ✅ | ⚠️ Partial | ⚠️ | WebKit + Native |
 
 > ✅ Supported and stable. ⚠️ Partially supported — see linked docs for current status and limitations.
@@ -52,8 +53,8 @@ OpenSafari runs fully headless on CI — no display server, no mouse focus, no `
 
 |  | OpenSafari | Appium | idb | XCUITest |
 |---|:---:|:---:|:---:|:---:|
-| **Headless native input** (no mouse focus, no `Simulator.app` activation) | **⚠️ SimulatorKit HID** (keys/buttons on Xcode 26+; tap/swipe pending [#491](https://github.com/shaun0927/opensafari/issues/491)) | ❌ ([XCUI focus](https://appium.io/docs/en/2.0/ecosystem/drivers/)) | ✅ `FBSimulatorHID` | ❌ |
-| **Works on Xcode 26+** (after `simctl io input` removal) | ⚠️ Safari & Flutter fully; native tap/swipe pending | ⚠️ driver-dependent | ✅ | ✅ |
+| **Headless native input** (no mouse focus, no `Simulator.app` activation) | **✅ AX-press + SimulatorKit HID** (element-targeted tap & keys/buttons headless on Xcode 26+; coordinate-only tap/swipe pending [#491](https://github.com/shaun0927/opensafari/issues/491)) | ❌ ([XCUI focus](https://appium.io/docs/en/2.0/ecosystem/drivers/)) | ✅ `FBSimulatorHID` | ❌ |
+| **Works on Xcode 26+** (after `simctl io input` removal) | ✅ Safari, Flutter, and element-targeted native taps; ⚠️ coordinate-only native tap/swipe pending | ⚠️ driver-dependent | ✅ | ✅ |
 | **Flutter native taps** (no OS-level input) | ✅ Dart VM `PointerDataPacket` | ⚠️ 3rd-party plugin | ❌ | ❌ |
 | **MCP / LLM integration** | ✅ native | ❌ | ❌ | ❌ |
 | **Private API dependency** | SimulatorKit (documented, sentinel-guarded) | UIAutomation / XCUI | SimulatorKit | none |
