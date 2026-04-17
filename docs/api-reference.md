@@ -83,14 +83,21 @@ Reset app state: terminate, reset privacy permissions, uninstall. The app must b
 - **Output:** `{ reset: boolean, bundleId, deviceId, steps: string[] }`
 - **Steps:** `terminated` → `privacy_reset` → `uninstalled` (each step proceeds independently)
 
-#### app_webview_connect
-Detect WebView targets inside a running native app and list available ones.
-- **Input:** `{ bundleId?: string, deviceId?: string }`
-- **Output:** `{ deviceId, targets: [{ id, title, url, type, classificationReason }], count }`
+Detect WebView targets inside a running native app and list available ones via
+ios-webkit-debug-proxy. Use the returned `webSocketDebuggerUrl` with
+`WebKitClient.connectToUrl()` to run `Runtime.evaluate` calls inside the
+WebView, then call `WebKitClient.disconnect()` to bounce back to the native
+AX context.
+- **Input:** `{ bundleId?: string, deviceId?: string, proxyPort?: number }`
+- **Output:** `{ deviceId, targets: [{ id, title, url, webSocketDebuggerUrl, type, classificationReason }], count }`
 - **`classificationReason`** values: `bundle_match` | `proxy_type` | `url_scheme`
   - `bundle_match` — target matched via `bundleId` parameter (metadata fields or title/url substring). When `bundleId` is provided, HTTPS WebViews such as payment-return pages or OAuth callbacks are promoted from `safari` to `webview` classification via this reason.
   - `proxy_type` — proxy-supplied `type` field on the target determined classification (e.g. `type: 'WebView'` overrides URL-scheme heuristics).
   - `url_scheme` — fallback heuristic: non-http(s) schemes → `webview`; http(s) or empty/about:blank → `safari`.
+
+The canonical end-to-end example for WebView ↔ Native switching is
+`tests/integration/webview-native-context.live.test.ts` (opt-in via
+`OPENSAFARI_LIVE_WEBVIEW=1`).
 
 #### app_alert_handle
 Accept, dismiss, or press a named button on a system alert/dialog on a booted iOS Simulator.

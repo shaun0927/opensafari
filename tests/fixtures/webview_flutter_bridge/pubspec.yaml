@@ -1,0 +1,24 @@
+name: webview_flutter_bridge
+description: "Minimal Flutter fixture that embeds a local HTML asset via webview_flutter for OpenSafari E2E tests."
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  webview_flutter: ^4.7.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    - assets/index.html
