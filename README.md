@@ -43,11 +43,13 @@ OpenSafari runs fully headless on CI — no display server, no mouse focus, no `
 | Safari (Web) | ✅ | ✅ | ✅ | WebKit Remote Debug |
 | Flutter App | ✅ | ✅ | ✅ | FlutterVMInputBackend |
 | Native iOS App (Xcode ≤ 16) | ✅ | ✅ | ✅ | SimulatorKitHID (Tier 1) / `simctl` |
-| Native iOS App (Xcode 26+, element-targeted) | ✅ | ✅ | ✅ | AX-press (Tier 1.5) for `app_tap_element` / `app_type_element` when the element advertises `AXPress` — see [docs/headless-architecture.md](docs/headless-architecture.md) |
-| Native iOS App (Xcode 26+, coordinate `app_tap({x,y})`) | ✅ | ⚠️ Partial | ⚠️ | Keys/buttons headless via SimHID; raw coordinate tap/swipe falls through to AppleScript fallback — see [#491](https://github.com/shaun0927/opensafari/issues/491) |
+| Native iOS App (Xcode 26+, element-targeted `app_tap_element` / `app_type_element`) | ✅ | ✅ | ✅ | AX-press (Tier 1.5) when the element advertises `AXPress` — see [docs/headless-architecture.md](docs/headless-architecture.md) |
+| Native iOS App (Xcode 26+, coordinate `app_tap({x,y})` / `app_swipe_native`) | ✅ | ⚠️ Experimental (opt-in) | ⚠️ | PointerService opt-in via `OPENSAFARI_ENABLE_POINTERSERVICE=1` — see [#590](https://github.com/shaun0927/opensafari/issues/590); AppleScript fallback otherwise ([#491](https://github.com/shaun0927/opensafari/issues/491)) |
 | WebView in Native | ✅ | ⚠️ Partial | ⚠️ | WebKit + Native |
 
 > ✅ Supported and stable. ⚠️ Partially supported — see linked docs for current status and limitations.
+
+Stability commitments (stable vs opt-in vs experimental) are catalogued in [docs/simhid-ios26-investigation.md#stability-commitments](docs/simhid-ios26-investigation.md#stability-commitments).
 
 ### Headless input vs other iOS automation tools
 

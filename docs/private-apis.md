@@ -286,7 +286,11 @@ Relevant shipped PRs:
 
 The Xcode 26 tap regression + the candidates we have already falsified
 (mouse NSEvent coord units, `CreatePointerService` bracket, digitizer
-IOHIDEvent → pointer wrapper) are tracked in
+IOHIDEvent → pointer wrapper) are catalogued in
 [docs/simhid-ios26-investigation.md](./simhid-ios26-investigation.md).
-Read that file before adding a new candidate path so we don't reproduce
-work already ruled out.
+That document is the canonical synthesis: it carries the
+falsification log, remaining candidates ranked by effort × yield, and
+the [stability commitments](./simhid-ios26-investigation.md#stability-commitments)
+for coordinate tap vs element-targeted input on Xcode 26+. Read it
+before adding a new candidate path so we don't reproduce work already
+ruled out.
