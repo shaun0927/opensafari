@@ -44,6 +44,7 @@ describe('src/ci/audit-log-posture', () => {
       '{"tool":"app_tap","backendKind":"simhid"}',
       '{"tool":"navigate","backendKind":"webkit"}',
       '{"tool":"flutter_tap","backendKind":"flutter-vm"}',
+      '{"tool":"app_tap_element","backendKind":"ax-press"}',
     ]);
     const report = scanAuditLog(file);
     expect(report.backendKinds).toEqual(
@@ -71,6 +72,16 @@ describe('src/ci/audit-log-posture', () => {
     expect(report.backendKinds.sort()).toEqual(['applescript', 'simctl', 'simhid']);
     expect(report.disallowedBackendKinds.sort()).toEqual(['applescript', 'simctl']);
     expect(report.applescriptHits).toBe(1);
+  });
+
+  it('treats ax-press as an allowed headless backend', () => {
+    const file = writeLog('ax-press.log', [
+      '{"tool":"app_tap_element","backendKind":"ax-press"}',
+    ]);
+    const report = scanAuditLog(file);
+    expect(report.backendKinds).toEqual(['ax-press']);
+    expect(report.disallowedBackendKinds).toEqual([]);
+    expect(report.applescriptHits).toBe(0);
   });
 
   it('is case-insensitive for applescript detection', () => {
@@ -110,9 +121,9 @@ describe('src/ci/audit-log-posture', () => {
   it('assertAuditLogPosture names every disallowed kind in its error message', () => {
     const file = writeLog('multi-bad.log', [
       '{"tool":"app_tap","backendKind":"simctl"}',
-      '{"tool":"app_tap","backendKind":"ax-press"}',
+      '{"tool":"app_tap","backendKind":"applescript"}',
     ]);
     expect(() => assertAuditLogPosture(file)).toThrow(/simctl/);
-    expect(() => assertAuditLogPosture(file)).toThrow(/ax-press/);
+    expect(() => assertAuditLogPosture(file)).toThrow(/applescript/);
   });
 });
