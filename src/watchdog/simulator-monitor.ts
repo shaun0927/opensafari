@@ -1,9 +1,6 @@
 import { EventEmitter } from 'events';
-import { execFile } from 'child_process';
-import { promisify } from 'util';
 import { DEFAULT_MEMORY_WARN_MB, DEFAULT_MEMORY_KILL_MB, DEFAULT_RESOURCE_CHECK_INTERVAL_MS } from '../config/defaults';
-
-const execFileAsync = promisify(execFile);
+import { execWithTimeout } from '../lib/exec-with-timeout';
 
 export class SimulatorMonitor extends EventEmitter {
   private interval: ReturnType<typeof setInterval> | null = null;
@@ -32,12 +29,12 @@ export class SimulatorMonitor extends EventEmitter {
 
   private async check(): Promise<void> {
     try {
-      const { stdout } = await execFileAsync('pgrep', ['-f', 'SimulatorTrampoline']);
+      const { stdout } = await execWithTimeout('pgrep', ['-f', 'SimulatorTrampoline']);
       const pids = stdout.trim().split('\n').filter(Boolean);
 
       for (const pid of pids) {
         try {
-          const { stdout: rssStr } = await execFileAsync('ps', ['-o', 'rss=', '-p', pid]);
+          const { stdout: rssStr } = await execWithTimeout('ps', ['-o', 'rss=', '-p', pid]);
           const rssMB = Math.floor(parseInt(rssStr.trim(), 10) / 1024);
 
           if (rssMB > this.killMB) {

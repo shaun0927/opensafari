@@ -46,6 +46,44 @@ jest.mock('child_process', () => ({
   }),
 }));
 
+// xcode-check.ts now routes exec calls through exec-with-timeout. Mock it here
+// so the same logic as the child_process mock above is exercised. The factory
+// must be fully self-contained (no outer-scope references) because jest.mock
+// factories are hoisted before module evaluation.
+jest.mock('../../src/lib/exec-with-timeout', () => {
+  function execWithTimeout(cmd: string, args: string[], _opts?: unknown): Promise<{ stdout: string; stderr: string }> {
+    return new Promise((resolve, reject) => {
+      if (cmd === 'xcrun' && args[0] === '--version') {
+        return resolve({ stdout: 'xcrun version 78.\n', stderr: '' });
+      }
+      if (cmd === 'xcodebuild') {
+        return resolve({ stdout: 'Xcode 16.3\nBuild version 16E140\n', stderr: '' });
+      }
+      if (cmd === 'xcrun' && args.includes('list') && args.includes('-j') && !args.includes('runtimes')) {
+        return resolve({ stdout: '{"devices":{}}', stderr: '' });
+      }
+      if (cmd === 'xcrun' && args.includes('runtimes')) {
+        return resolve({ stdout: '{"runtimes":[{"isAvailable":true,"version":"18.4","platform":"iOS"}]}', stderr: '' });
+      }
+      if (cmd === 'which') {
+        return resolve({ stdout: '/opt/homebrew/bin/ios_webkit_debug_proxy\n', stderr: '' });
+      }
+      reject(new Error(`mock: unknown command ${cmd} ${(args as string[]).join(' ')}`));
+    });
+  }
+  class ExecTimeoutError extends Error {
+    readonly command: string;
+    readonly timeoutMs: number;
+    constructor(command: string, timeoutMs: number) {
+      super(`${command} timed out after ${timeoutMs}ms`);
+      this.name = 'ExecTimeoutError';
+      this.command = command;
+      this.timeoutMs = timeoutMs;
+    }
+  }
+  return { execWithTimeout, ExecTimeoutError, DEFAULT_EXEC_TIMEOUT_MS: 30000 };
+});
+
 jest.mock('../../src/simulator/socket-finder', () => ({
   findSocketPath: jest.fn().mockResolvedValue(null),
 }));

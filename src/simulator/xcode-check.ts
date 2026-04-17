@@ -1,9 +1,6 @@
-import { execFile } from 'child_process';
-import { promisify } from 'util';
 import * as http from 'http';
 import { findSocketPath } from './socket-finder';
-
-const execFileAsync = promisify(execFile);
+import { execWithTimeout } from '../lib/exec-with-timeout';
 // Device-list ports serve the "iOS Devices" HTML listing.
 // 9321 = opensafari default, 9221 = traditional ios_webkit_debug_proxy default.
 const PROXY_DEVICE_LIST_PORTS = [9321, 9221];
@@ -45,7 +42,7 @@ export async function checkXcodeInstallation(): Promise<XcodeCheckResult> {
 
   // Check xcrun
   try {
-    await execFileAsync('xcrun', ['--version']);
+    await execWithTimeout('xcrun', ['--version']);
     result.installed = true;
   } catch {
     result.issues.push('xcrun not found — Xcode or Command Line Tools not installed');
@@ -55,7 +52,7 @@ export async function checkXcodeInstallation(): Promise<XcodeCheckResult> {
 
   // Check Xcode version
   try {
-    const { stdout } = await execFileAsync('xcodebuild', ['-version']);
+    const { stdout } = await execWithTimeout('xcodebuild', ['-version']);
     const match = stdout.match(/Xcode (\d+\.\d+)/);
     if (match) {
       result.version = match[1];
@@ -67,7 +64,7 @@ export async function checkXcodeInstallation(): Promise<XcodeCheckResult> {
 
   // Check simctl
   try {
-    await execFileAsync('xcrun', ['simctl', 'list', '-j']);
+    await execWithTimeout('xcrun', ['simctl', 'list', '-j']);
     result.simulatorAvailable = true;
   } catch {
     result.issues.push('Simulator runtime not available');
@@ -76,7 +73,7 @@ export async function checkXcodeInstallation(): Promise<XcodeCheckResult> {
 
   // Check iOS runtimes
   try {
-    const { stdout } = await execFileAsync('xcrun', ['simctl', 'list', 'runtimes', '-j']);
+    const { stdout } = await execWithTimeout('xcrun', ['simctl', 'list', 'runtimes', '-j']);
     const data = JSON.parse(stdout);
     const runtimes = (data.runtimes ?? []) as Array<{ isAvailable: boolean; version: string; platform: string }>;
     result.iosRuntimes = runtimes
@@ -100,7 +97,7 @@ export async function checkXcodeInstallation(): Promise<XcodeCheckResult> {
 
   // Check ios_webkit_debug_proxy
   try {
-    await execFileAsync('which', ['ios_webkit_debug_proxy']);
+    await execWithTimeout('which', ['ios_webkit_debug_proxy']);
   } catch {
     result.issues.push('ios_webkit_debug_proxy not found');
     result.suggestions.push('Install with: brew install ios-webkit-debug-proxy');

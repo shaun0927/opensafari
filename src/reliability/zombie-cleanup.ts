@@ -1,9 +1,6 @@
-import { execFile } from 'child_process';
-import { promisify } from 'util';
 import * as fs from 'fs';
 import * as path from 'path';
-
-const execFileAsync = promisify(execFile);
+import { execWithTimeout } from '../lib/exec-with-timeout';
 
 /** Path to the shared device registry used for cross-process coordination. */
 const REGISTRY_PATH = '/tmp/opensafari-managed-devices.json';
@@ -302,7 +299,7 @@ export async function cleanupZombieProcesses(knownDeviceIds?: Set<string>): Prom
  */
 async function detectOrphanedProcesses(): Promise<number> {
   try {
-    const { stdout } = await execFileAsync('pgrep', ['-f', 'CoreSimulator']);
+    const { stdout } = await execWithTimeout('pgrep', ['-f', 'CoreSimulator']);
     const pids = stdout.trim().split('\n').filter(Boolean);
     if (pids.length > 0) {
       console.error(`[ZombieCleanup] Found ${pids.length} CoreSimulator processes`);
@@ -324,7 +321,7 @@ async function detectOrphanedProcesses(): Promise<number> {
 async function cleanupOrphanedSimulators(knownDeviceIds: Set<string>): Promise<number> {
   let cleaned = 0;
   try {
-    const { stdout } = await execFileAsync('xcrun', ['simctl', 'list', 'devices', 'booted', '--json']);
+    const { stdout } = await execWithTimeout('xcrun', ['simctl', 'list', 'devices', 'booted', '--json']);
     const data = JSON.parse(stdout);
 
     // Single locked read: partition registry into orphaned and live device sets
@@ -337,7 +334,7 @@ async function cleanupOrphanedSimulators(knownDeviceIds: Set<string>): Promise<n
             && orphanedIds.has(device.udid)
             && !protectedIds.has(device.udid)) {
           try {
-            await execFileAsync('xcrun', ['simctl', 'shutdown', device.udid]);
+            await execWithTimeout('xcrun', ['simctl', 'shutdown', device.udid]);
             cleaned++;
             console.error(`[ZombieCleanup] Shut down orphaned simulator: ${device.name} (${device.udid})`);
           } catch {

@@ -1,10 +1,7 @@
-import { execFile } from 'child_process';
-import { promisify } from 'util';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as net from 'net';
-
-const execFileAsync = promisify(execFile);
+import { execWithTimeout } from '../lib/exec-with-timeout';
 
 const SOCKET_NAME = 'com.apple.webinspectord_sim.socket';
 const SOCKET_SEARCH_DIRS = ['/private/var/tmp', '/private/tmp'];
@@ -88,7 +85,7 @@ export function probeSocket(socketPath: string): Promise<boolean> {
 
 async function findViaLsof(targetUdid?: string): Promise<string | null> {
   try {
-    const { stdout } = await execFileAsync('lsof', ['-U'], { timeout: 5000 });
+    const { stdout } = await execWithTimeout('lsof', ['-U'], { timeout: 5000 });
     const lines = stdout.split('\n');
 
     // Collect sockets owned by launchd_sim (truncated to "launchd_s" in lsof output)
@@ -109,7 +106,7 @@ async function findViaLsof(targetUdid?: string): Promise<string | null> {
     if (targetUdid) {
       for (const { pid, socketPath } of candidates) {
         try {
-          const { stdout: cmdline } = await execFileAsync('ps', ['-p', String(pid), '-o', 'args=']);
+          const { stdout: cmdline } = await execWithTimeout('ps', ['-p', String(pid), '-o', 'args=']);
           if (cmdline.includes(targetUdid)) {
             if (await probeSocket(socketPath)) return socketPath;
           }

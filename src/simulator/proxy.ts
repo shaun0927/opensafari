@@ -1,11 +1,9 @@
-import { spawn, ChildProcess, execFile } from 'child_process';
-import { promisify } from 'util';
+import { spawn, ChildProcess } from 'child_process';
 import { readFileSync, writeFileSync, unlinkSync } from 'fs';
 import * as http from 'http';
 import * as net from 'net';
 import { findSocketPath, waitForSocketPath } from './socket-finder';
-
-const execFileAsync = promisify(execFile);
+import { execWithTimeout } from '../lib/exec-with-timeout';
 
 export interface ProxyOptions {
   /**
@@ -104,7 +102,7 @@ export class WebInspectorProxy {
     }
 
     try {
-      await execFileAsync('which', ['ios_webkit_debug_proxy']);
+      await execWithTimeout('which', ['ios_webkit_debug_proxy']);
     } catch {
       throw new Error('ios_webkit_debug_proxy not found. Install: brew install ios-webkit-debug-proxy');
     }

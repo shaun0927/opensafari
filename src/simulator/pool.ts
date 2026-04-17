@@ -1,6 +1,4 @@
 import { EventEmitter } from 'events';
-import { execFile } from 'child_process';
-import { promisify } from 'util';
 import { SimulatorManager } from './manager';
 import { SimulatorDevice } from './types';
 import { DEVICE_PRESETS } from './presets';
@@ -18,8 +16,7 @@ import {
 import { registerManagedDevices, unregisterManagedDevices } from '../reliability/zombie-cleanup';
 import { CircuitBreakerRegistry } from '../reliability/circuit-breaker';
 import { getSessionManager } from '../session-manager';
-
-const execFileAsync = promisify(execFile);
+import { execWithTimeout } from '../lib/exec-with-timeout';
 
 /** Ensures the process exit handler is registered only once across all pool instances. */
 let exitHandlerRegistered = false;
@@ -459,12 +456,12 @@ export class SimulatorPool extends EventEmitter {
 
   private async getSimulatorMemory(deviceId: string): Promise<number> {
     try {
-      const { stdout } = await execFileAsync('pgrep', ['-f', deviceId]);
+      const { stdout } = await execWithTimeout('pgrep', ['-f', deviceId]);
       const pids = stdout.trim().split('\n').filter(Boolean);
       let totalKB = 0;
       for (const pid of pids) {
         try {
-          const { stdout: rss } = await execFileAsync('ps', ['-o', 'rss=', '-p', pid]);
+          const { stdout: rss } = await execWithTimeout('ps', ['-o', 'rss=', '-p', pid]);
           totalKB += parseInt(rss.trim(), 10) || 0;
         } catch { /* process gone */ }
       }

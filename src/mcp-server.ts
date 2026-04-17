@@ -21,6 +21,7 @@ import { BrowserBackend } from './types/browser-backend';
 import { logAuditEntry } from './security/audit-logger';
 import { getSessionManager } from './session-manager';
 import { getVersion } from './version';
+import { traceToolHandler } from './server/tool-trace';
 
 // Re-export so callers can use canonical names without knowing the internal alias
 export type { MCPToolDefinition as ToolDefinition, ToolHandler };
@@ -109,7 +110,8 @@ export class MCPServer {
 
   registerTool(definition: MCPToolDefinition, handler: ToolHandler): void {
     const tier = getToolTier(definition.name);
-    this.tools.set(definition.name, { definition, handler, tier });
+    const tracedHandler = traceToolHandler(definition.name, handler);
+    this.tools.set(definition.name, { definition, handler: tracedHandler, tier });
   }
 
   getToolHandler(name: string): ToolHandler | undefined {

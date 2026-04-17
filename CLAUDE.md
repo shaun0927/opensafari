@@ -32,6 +32,10 @@ npm install && npm run build && npm test
 - `/release-os` — Full release workflow (triage → review → merge → publish)
 - `/pr-review-os` — PR code review with P0/P1/P2 classification
 
+## Debugging
+
+- Set `OPENSAFARI_TRACE=1` to log MCP tool args + entry/exit timings to stderr.
+
 ## Key Architecture
 
 ```
