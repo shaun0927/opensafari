@@ -485,13 +485,19 @@ export OPENSAFARI_HEADLESS_ONLY=1
 
 ### QA-ready Flutter build
 
-**Recommendation:** build "QA" simulator artifacts with `flutter build ios --simulator --profile` instead of `--release`. Profile mode runs close to release performance **and** keeps the Dart VM Service online, so `FlutterVMInputBackend` (Tier 0) stays the active input path.
-
 Release builds compile Dart to AOT and reject runtime `evaluate` calls with `code 113`, which surfaces as `FlutterVMInputBackendError { code: 'VM_NO_EVALUATE' }`. The router then falls through to Tier 1.5 AX-press (element-targeted tools only) and ultimately AppleScript for coordinate gestures — the slowest and most fragile path, and — on Xcode 26+ where Tier-1 SimHID tap/swipe is disabled pending #491 — the only remaining coordinate fallback. See [Build-mode × Xcode tier matrix](./flutter-inspector.md#build-mode--xcode-tier-matrix-596) for the full routing table.
 
+The right "QA-ready" build differs by target. The Flutter toolchain blocks `--profile` for simulator targets, so simulator QA must use `--debug`; profile mode is reserved for physical-device QA.
+
+#### iOS Simulator — use `--debug`
+
+**Recommendation:** build simulator QA artifacts with `flutter build ios --simulator --debug`. This is the only mode the Flutter toolchain accepts for `--simulator` targets and keeps `FlutterVMInputBackend` (Tier 0) active.
+
+Trying `--profile` against the simulator fails fast — Flutter exits with *"Profile mode is not supported for simulators."* (verified against Flutter 3.41.5 / Dart 3.11.3 on iPhone 17 Pro Sim, iOS 26.4). Use `--debug` for the simulator and reserve `--profile` for physical-device runs.
+
 ```bash
-# Build a profile-mode simulator bundle (keeps VM Service; runs near release perf).
-flutter build ios --simulator --profile --target lib/main_qa.dart
+# Build a debug-mode simulator bundle (only mode the Flutter toolchain accepts; keeps Tier 0).
+flutter build ios --simulator --debug --target lib/main_qa.dart
 
 # Install and launch so flutter_connect lands on Tier 0.
 APP=build/ios/iphonesimulator/Runner.app
@@ -501,8 +507,8 @@ xcrun simctl launch --console booted "$(plutil -extract CFBundleIdentifier raw "
 
 ```yaml
 # GitHub Actions — QA-ready Flutter simulator build
-- name: Build Flutter (profile mode)
-  run: flutter build ios --simulator --profile --target lib/main_qa.dart
+- name: Build Flutter (debug mode for simulator)
+  run: flutter build ios --simulator --debug --target lib/main_qa.dart
 
 - name: Install + launch on booted simulator
   run: |
@@ -512,7 +518,18 @@ xcrun simctl launch --console booted "$(plutil -extract CFBundleIdentifier raw "
     xcrun simctl launch booted "$BUNDLE"
 ```
 
-> **Why not `--release`?** The Dart AOT runtime in release mode has no expression compiler, so Tier 0 probes fail and every subsequent tap/swipe degrades to AppleScript (or silently fails under `OPENSAFARI_HEADLESS_ONLY=1`). Profile mode keeps the tree-shaker and AOT-compatible optimisations while preserving the VM Service — the same trade-off that `flutter run --profile` makes for Flutter's own tooling.
+#### Physical iOS device — use `--profile`
+
+**Recommendation:** for physical-device QA where you want perf parity with release, use `flutter build ios --profile`. Profile mode keeps the Dart VM Service online (so Tier 0 remains active) while running close to release performance — the same trade-off `flutter run --profile` makes for Flutter's own tooling.
+
+```bash
+# Build a profile-mode IPA for a physical device (keeps VM Service; runs near release perf).
+flutter build ios --profile --target lib/main_qa.dart
+
+# Install and launch via your usual device tooling (Xcode, ios-deploy, devicectl, etc.).
+```
+
+> **Why not `--release` on either target?** The Dart AOT runtime in release mode has no expression compiler, so Tier 0 probes fail and every subsequent tap/swipe degrades to AppleScript (or silently fails under `OPENSAFARI_HEADLESS_ONLY=1`). Choose `--debug` for simulator QA and `--profile` for device QA to keep Tier 0 alive.
 
 ### Reading `_meta._telemetry` in CI
 

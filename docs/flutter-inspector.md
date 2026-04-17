@@ -13,13 +13,23 @@ Both tools require an active Flutter VM Service connection via `flutter_connect`
 
 Flutter build mode determines which input tier the router lands on. **Release builds on Xcode 26+ land on the slowest and most fragile path** — AX-press for element-targeted tools only, AppleScript for coordinate tools — because Tier 0 (`FlutterVMInputBackend`) requires `evaluate` support (Dart AOT cannot compile expressions at runtime) and Tier 1 SimHID tap/swipe is disabled on Xcode 26+ pending the `IndigoHIDMessageForMouseNSEvent` regression fix (#491, #537).
 
-Consumers often pick release mode for "QA" simulator builds to match production performance — and silently forfeit headless coverage. Use `flutter build ios --simulator --profile` instead: it keeps the VM Service online so Tier 0 stays available, while running close to release perf. See the [QA-ready Flutter build recipe](./ci-recipes.md#qa-ready-flutter-build).
+Consumers often pick release mode for "QA" simulator builds to match production performance — and silently forfeit headless coverage. The Flutter toolchain blocks `--profile` for simulator targets (`flutter build ios --simulator --profile` exits with *"Profile mode is not supported for simulators."*), so the only Tier-0-keeping mode on the simulator is `--debug`. Profile mode still applies to physical-device QA. See the [QA-ready Flutter build recipe](./ci-recipes.md#qa-ready-flutter-build) for both flows.
+
+**iOS Simulator (Xcode Simulator runtimes):**
 
 | Build mode | Xcode ≤ 25 | Xcode 26+ | VM Service | Tier 0 (`FlutterVMInputBackend`) |
 | --- | --- | --- | --- | --- |
 | `debug` | **Tier 0** (all gestures via VM Service) | **Tier 0** (all gestures via VM Service) | ✅ | ✅ `evaluate` available |
-| `profile` | **Tier 0** (recommended for perf-parity QA) | **Tier 0** (recommended for perf-parity QA) | ✅ | ✅ `evaluate` available |
+| `profile` | n/a — *"Profile mode is not supported for simulators."* | n/a — same toolchain block | n/a | n/a — use `--debug` instead |
 | `release` | Tier 1/2/3 (SimHID → simctl → WebKit) | ⚠️ **AX-press for element, AppleScript for coords** | ❌ (AOT) | ❌ falls through (`VM_NO_EVALUATE`) |
+
+**Physical iOS devices:**
+
+| Build mode | VM Service | Tier 0 (`FlutterVMInputBackend`) | Notes |
+| --- | --- | --- | --- |
+| `debug` | ✅ | ✅ `evaluate` available | Slowest runtime; use only when you need full inspector tooling. |
+| `profile` | ✅ | ✅ `evaluate` available | **Recommended for perf-parity device QA** — keeps Tier 0 while running close to release perf. |
+| `release` | ❌ (AOT) | ❌ falls through (`VM_NO_EVALUATE`) | Same fall-through behaviour as a release-mode simulator build. |
 
 Legend:
 
