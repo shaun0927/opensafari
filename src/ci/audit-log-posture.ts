@@ -20,10 +20,18 @@ import * as fs from 'node:fs';
 
 /**
  * The only `InputBackendKind` values that satisfy the #540 acceptance
- * criterion. Keep this list narrow — any legacy backend (`applescript`,
- * `simctl`, `ax-press`) should be rejected by the posture check.
+ * criterion. Keep this list narrow — legacy foreground-coupled backends
+ * (`applescript`, `simctl`) must stay rejected.
+ *
+ * `ax-press` is allowed because PR #587's ADR on #573 established that the
+ * ax-bridge AX channel is already GUI-less: `AXUIElementCreateApplication(pid)`
+ * targets Simulator.app by PID and does not require it to be the macOS
+ * frontmost application. `app-tap-element` stamps `headless: true` on every
+ * ax-press result (src/tools/app-tap-element.ts), so the posture check
+ * treats it as a first-class headless backend.
  */
 export const ALLOWED_BACKEND_KINDS: readonly string[] = Object.freeze([
+  'ax-press',
   'flutter-vm',
   'simhid',
   'webkit',

@@ -16,8 +16,10 @@ import {
  * an alternate collector). Otherwise fall back to the runtime location.
  *
  * Refs: #540 acceptance criterion
- *   "Telemetry: backendKind in {'flutter-vm','simhid','webkit'} only
- *    (applescript = 0)"
+ *   "Telemetry: backendKind in {'ax-press','flutter-vm','simhid','webkit'}
+ *    only (applescript = 0)".  `ax-press` is admitted because PR #587's ADR
+ *    on #573 established that the ax-bridge AX channel is already GUI-less
+ *    — the allow-list is maintained in `src/ci/audit-log-posture.ts`.
  */
 describe('audit.log posture — backendKind constraint', () => {
   const logPath =
