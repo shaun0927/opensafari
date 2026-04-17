@@ -10,6 +10,7 @@ name: SimulatorKit HID Sentinel
 #   exit 78 CORESIMULATOR_MISSING     — CoreSimulator.framework moved or gone
 #   exit 78 HID_CLIENT_FAILED         — SimDeviceLegacyHIDClient class gone
 #   exit 78 HID_FUNCTIONS_MISSING     — IndigoHIDMessage* symbols gone
+#   diag indigoSymbols false/missing  — IndigoHIDMessageToCreate/RemovePointerService gone (#590 Phase 1)
 #
 # When the job fails we open (or update) a tracking issue so the on-call
 # engineer sees it on github.com without needing Slack access.

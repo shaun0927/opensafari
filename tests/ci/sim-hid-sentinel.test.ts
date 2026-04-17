@@ -188,3 +188,56 @@ describe('SimulatorKit HID Sentinel', () => {
     expect(result.exitCode).toBe(64);
   }, SLOW_BRIDGE_TIMEOUT_MS);
 });
+
+describe('SimulatorKit HID Sentinel — PointerService probe (#590 Phase 1)', () => {
+  test(
+    'IndigoHIDMessageToCreatePointerService and IndigoHIDMessageToRemovePointerService resolve via diag',
+    async () => {
+      const result = await runBridge(['diag']);
+
+      let parsed: {
+        simulatorKit?: { loaded?: boolean };
+        indigoSymbols?: Record<string, boolean>;
+      } = {};
+      try {
+        parsed = JSON.parse(result.stdout);
+      } catch {
+        fail(
+          'sim-hid-bridge diag did not produce valid JSON. ' +
+            'stdout: ' +
+            result.stdout +
+            ' stderr: ' +
+            result.stderr,
+        );
+      }
+
+      // Precondition: SimulatorKit must be loaded for symbol probes to be meaningful.
+      expect(parsed.simulatorKit?.loaded).toBe(true);
+
+      const createPS = parsed.indigoSymbols?.IndigoHIDMessageToCreatePointerService;
+      const removePS = parsed.indigoSymbols?.IndigoHIDMessageToRemovePointerService;
+
+      if (createPS !== true) {
+        fail(
+          'IndigoHIDMessageToCreatePointerService did not resolve (#590 Phase 1). ' +
+            'Apple may have removed or renamed this PointerService symbol. ' +
+            'indigoSymbols: ' +
+            JSON.stringify(parsed.indigoSymbols),
+        );
+      }
+
+      if (removePS !== true) {
+        fail(
+          'IndigoHIDMessageToRemovePointerService did not resolve (#590 Phase 1). ' +
+            'Apple may have removed or renamed this PointerService symbol. ' +
+            'indigoSymbols: ' +
+            JSON.stringify(parsed.indigoSymbols),
+        );
+      }
+
+      expect(createPS).toBe(true);
+      expect(removePS).toBe(true);
+    },
+    SLOW_BRIDGE_TIMEOUT_MS,
+  );
+});
