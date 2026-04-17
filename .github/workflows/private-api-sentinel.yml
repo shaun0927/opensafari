@@ -12,6 +12,9 @@ name: Private API Sentinel
 #   4. ax-bridge AXUIElement dump returns non-empty JSON
 #   5. webinspectord_sim socket — findSocketPath() resolves
 #   6. ios_webkit_debug_proxy binary on PATH
+#   7. ax-bridge GUI-less invariant — source resolves the AX root via
+#      AXUIElementCreateApplication(pid) and runtime dumps still succeed
+#      when Simulator.app is not the macOS frontmost app (#573 ADR).
 #
 # On scheduled failures the job opens / updates a tracking issue labeled
 # `sentinel` with the failing probe name and jest error message so the
