@@ -83,21 +83,35 @@ Reset app state: terminate, reset privacy permissions, uninstall. The app must b
 - **Output:** `{ reset: boolean, bundleId, deviceId, steps: string[] }`
 - **Steps:** `terminated` → `privacy_reset` → `uninstalled` (each step proceeds independently)
 
-Detect WebView targets inside a running native app and list available ones via
-ios-webkit-debug-proxy. Use the returned `webSocketDebuggerUrl` with
-`WebKitClient.connectToUrl()` to run `Runtime.evaluate` calls inside the
-WebView, then call `WebKitClient.disconnect()` to bounce back to the native
-AX context.
-- **Input:** `{ bundleId?: string, deviceId?: string, proxyPort?: number }`
-- **Output:** `{ deviceId, targets: [{ id, title, url, webSocketDebuggerUrl, type, classificationReason }], count }`
-- **`classificationReason`** values: `bundle_match` | `proxy_type` | `url_scheme`
-  - `bundle_match` — target matched via `bundleId` parameter (metadata fields or title/url substring). When `bundleId` is provided, HTTPS WebViews such as payment-return pages or OAuth callbacks are promoted from `safari` to `webview` classification via this reason.
-  - `proxy_type` — proxy-supplied `type` field on the target determined classification (e.g. `type: 'WebView'` overrides URL-scheme heuristics).
-  - `url_scheme` — fallback heuristic: non-http(s) schemes → `webview`; http(s) or empty/about:blank → `safari`.
+#### app_webview_connect
+Detect WebView targets inside a running native iOS app and list available ones. Classifies each target as `safari` vs `webview` and surfaces a `classificationReason` for debuggability. Uses ios-webkit-debug-proxy to enumerate all open debugging targets on the device.
 
-The canonical end-to-end example for WebView ↔ Native switching is
-`tests/integration/webview-native-context.live.test.ts` (opt-in via
-`OPENSAFARI_LIVE_WEBVIEW=1`).
+- **Input:**
+  - `bundleId?: string` — Optional. When provided, targets whose proxy-supplied metadata (`appId`, `bundleId`, or `app_id` fields) matches the value, or whose `title`/`url` contains it as a substring, are promoted to `webview` via the `bundle_match` rule. The result list is then restricted to those bundle-matched WebViews.
+  - `deviceId?: string` — Optional simulator UDID. Defaults to the active device when omitted.
+- **Output:**
+  ```json
+  {
+    "deviceId": "string",
+    "targets": [
+      {
+        "id": "string",
+        "title": "string",
+        "url": "string",
+        "type": "safari | webview",
+        "classificationReason": "bundle_match | proxy_type | url_scheme"
+      }
+    ],
+    "count": "number"
+  }
+  ```
+- **Classification priority** (first match wins):
+  1. `bundle_match` — `bundleId` argument matches the target's proxy metadata or appears as a substring in the `title`/`url`. Classifies the target as `webview`. HTTPS WebViews such as payment-return pages or OAuth callbacks are promoted via this rule when `bundleId` is supplied.
+  2. `proxy_type` — proxy emits a `type` field: `safari`/`mobilesafari` → `safari`; any value containing `webview` → `webview`.
+  3. `url_scheme` (fallback) — empty URL or `about:blank` → `safari`; non-`http(s)` scheme → `webview`; `http(s)` → `safari`.
+- **Notes:**
+  - `webSocketDebuggerUrl` is intentionally stripped from the response. Use `set_active_context` with the returned `id` to switch into a WebView target.
+  - See also: `set_active_context`.
 
 #### app_alert_handle
 Accept, dismiss, or press a named button on a system alert/dialog on a booted iOS Simulator.
