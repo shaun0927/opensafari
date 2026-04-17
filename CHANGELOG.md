@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed — `_meta._telemetry` is on by default (#595)
+
+- **Input tool responses now carry `_meta._telemetry` without opt-in.** All 10 MCP input tools (`app_tap`, `app_swipe`, `app_scroll_native`, `app_key_input`, `app_double_tap`, `app_type_text`, `app_tap_element`, `app_type_element`, `app_dismiss_keyboard`, `app_alert_handle`) emit the compact per-call projection (`operation`, `elapsed_ms`, `ok`, `error?`) by default. CI and benchmarking harnesses no longer need to discover and flip `OPENSAFARI_INPUT_TELEMETRY_META=1` after hitting a mystery slowdown — observability is now Pareto-default.
+- **Opt-out preserved** for consumers who care about payload size: set `OPENSAFARI_INPUT_TELEMETRY_META=0` (or `false`) to suppress `_meta._telemetry`. Any other value — including unset — enables it.
+- **Response-size overhead** is ~100 bytes per call (one telemetry record). See `docs/ci-recipes.md` for a paste-able CI recipe.
+
 ### Added — Memory SLO infrastructure (#554)
 
 - **Process-wide memory instrumentation.** `timedInput` now records `{rss_mb, heap_used_mb}` on every input-backend call. The telemetry rollup exposes per-backend `p50_rss_mb` / `p95_rss_mb` / `max_rss_mb` percentiles alongside the existing latency percentiles. Memory fields in tool responses are opt-in via `OPENSAFARI_TELEMETRY_INCLUDE_MEMORY=1`.

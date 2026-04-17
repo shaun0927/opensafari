@@ -231,7 +231,7 @@ describe('input-telemetry / meta opt-in flag', () => {
     delete process.env[OPENSAFARI_INPUT_TELEMETRY_META_ENV];
   });
 
-  test.each(['1', 'true'])(
+  test.each(['1', 'true', 'yes', ''])(
     'isInputTelemetryMetaEnabled returns true for OPENSAFARI_INPUT_TELEMETRY_META=%s',
     (value) => {
       process.env[OPENSAFARI_INPUT_TELEMETRY_META_ENV] = value;
@@ -239,13 +239,13 @@ describe('input-telemetry / meta opt-in flag', () => {
     },
   );
 
-  test('is false by default (opt-in)', () => {
+  test('is true by default (opt-out since 0.5.0, #595)', () => {
     delete process.env[OPENSAFARI_INPUT_TELEMETRY_META_ENV];
-    expect(isInputTelemetryMetaEnabled()).toBe(false);
+    expect(isInputTelemetryMetaEnabled()).toBe(true);
   });
 
-  test.each(['0', 'false', 'yes', ''])(
-    'is false for OPENSAFARI_INPUT_TELEMETRY_META=%s (strict)',
+  test.each(['0', 'false'])(
+    'is false for OPENSAFARI_INPUT_TELEMETRY_META=%s (explicit opt-out)',
     (value) => {
       process.env[OPENSAFARI_INPUT_TELEMETRY_META_ENV] = value;
       expect(isInputTelemetryMetaEnabled()).toBe(false);
