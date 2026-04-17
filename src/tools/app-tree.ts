@@ -54,13 +54,21 @@ export function registerAppTreeTool(server: MCPServer): void {
 
         const tree = await bridge.dumpTree({ deviceId, maxDepth });
 
+        // Preserve the top-level AX node shape (`role`, `children`, …) on
+        // both the success and fallback paths so existing consumers that
+        // read root-level fields keep working. Attach `semanticsWarning`
+        // as a sibling field rather than wrapping the tree, which would
+        // silently break the response contract on the fallback path.
+        const payload = semanticsWarning
+          ? (tree && typeof tree === 'object' && !Array.isArray(tree)
+              ? { ...(tree as unknown as Record<string, unknown>), semanticsWarning }
+              : { semanticsWarning, tree })
+          : tree;
+
         return {
           content: [{
             type: 'text' as const,
-            text: JSON.stringify(
-              semanticsWarning ? { semanticsWarning, tree } : tree,
-              null, 2,
-            ),
+            text: JSON.stringify(payload, null, 2),
           }],
         };
       } catch (err) {

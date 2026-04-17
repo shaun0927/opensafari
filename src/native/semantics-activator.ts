@@ -51,6 +51,15 @@ const HARD_TIMEOUT_MS: number = (() => {
 /** How long a negative-cache entry stays hot (30 s). */
 const NEGATIVE_CACHE_TTL_MS = 30_000;
 
+/**
+ * Minimum spacing between fresh AX-tree probes when a cache entry is hot.
+ * Without this, conditions improving mid-TTL (e.g. user re-launches via
+ * `flutter run`) keep being masked by the cached failure for the full 30 s.
+ * With this, cache hits trigger a quick re-probe at most once every N ms so
+ * the negative cache stops poisoning the device once the tree responds again.
+ */
+const NEGATIVE_CACHE_RECHECK_INTERVAL_MS = 3000;
+
 // ── Typed error ──────────────────────────────────────────────────────────────
 
 /** Reason codes for why Flutter Semantics could not be activated. */
@@ -76,6 +85,12 @@ export class FlutterSemanticsUnavailableError extends Error {
 interface NegativeCacheEntry {
   reason: FlutterSemanticsUnavailableReason;
   expiresAt: number;
+  /**
+   * Earliest time at which the next fresh AX-tree probe is allowed.
+   * Set on cache creation and bumped after each unsuccessful re-probe so
+   * cache hits cannot probe more than once per `NEGATIVE_CACHE_RECHECK_INTERVAL_MS`.
+   */
+  nextRecheckAt: number;
 }
 
 const negativeCache = new Map<string, NegativeCacheEntry>();
@@ -132,14 +147,40 @@ export async function ensureSemanticsActive(
   deviceId: string,
   options?: EnsureSemanticsOptions,
 ): Promise<boolean> {
-  // A. Negative-cache hit — return without re-probing.
+  // A. Negative-cache hit — re-probe AX tree before honoring the cache so
+  //    transient failures cannot poison the device for the full TTL once
+  //    conditions improve (e.g. user re-launches via `flutter run`). The
+  //    re-probe is rate-limited to at most once per
+  //    NEGATIVE_CACHE_RECHECK_INTERVAL_MS so we don't pay the probe cost on
+  //    every call for genuinely-failing devices.
   const now = Date.now();
   const cached = negativeCache.get(deviceId);
   if (cached && cached.expiresAt > now) {
-    throw new FlutterSemanticsUnavailableError(
-      cached.reason,
-      `Flutter Semantics unavailable (cached reason: ${cached.reason}) — will retry after cache expires`,
-    );
+    if (now < cached.nextRecheckAt) {
+      // Inside the back-off window — honor the cache without probing.
+      throw new FlutterSemanticsUnavailableError(
+        cached.reason,
+        `Flutter Semantics unavailable (cached reason: ${cached.reason}) — will retry after cache expires`,
+      );
+    }
+
+    // Back-off elapsed — try a single fresh AX-tree probe before honoring.
+    const probeBridge = getAccessibilityBridge();
+    const probeMinNodes = options?.minNodes ?? MIN_NODE_THRESHOLD;
+    if (await treeIsPopulated(probeBridge, deviceId, probeMinNodes)) {
+      // Conditions improved — evict the stale cache and proceed normally.
+      // The downstream quick-check (step B in `_runActivation`) will hit the
+      // populated tree and return success without re-paying activation cost.
+      negativeCache.delete(deviceId);
+    } else {
+      // Still failing — extend the back-off so subsequent calls within the
+      // next interval honor the cache without probing again.
+      cached.nextRecheckAt = now + NEGATIVE_CACHE_RECHECK_INTERVAL_MS;
+      throw new FlutterSemanticsUnavailableError(
+        cached.reason,
+        `Flutter Semantics unavailable (cached reason: ${cached.reason}) — will retry after cache expires`,
+      );
+    }
   }
 
   // Race the full activation attempt against the hard timeout.
@@ -165,10 +206,14 @@ export async function ensureSemanticsActive(
     return result;
   } catch (err) {
     if (err instanceof FlutterSemanticsUnavailableError) {
-      // Cache the negative result.
+      // Cache the negative result. Defer the first re-probe by the back-off
+      // interval so callers that hammer ensureSemanticsActive immediately
+      // after a failure don't pay the probe cost repeatedly.
+      const nowMs = Date.now();
       negativeCache.set(deviceId, {
         reason: err.reason,
-        expiresAt: Date.now() + NEGATIVE_CACHE_TTL_MS,
+        expiresAt: nowMs + NEGATIVE_CACHE_TTL_MS,
+        nextRecheckAt: nowMs + NEGATIVE_CACHE_RECHECK_INTERVAL_MS,
       });
     }
     throw err;

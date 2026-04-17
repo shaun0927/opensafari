@@ -1,8 +1,25 @@
 import { MCPServer } from '../../src/mcp-server';
 import { registerAppTreeTool } from '../../src/tools/app-tree';
-import { AccessibilityBridge, getAccessibilityBridge } from '../../src/native';
+import {
+  AccessibilityBridge,
+  getAccessibilityBridge,
+  ensureSemanticsActive,
+  FlutterSemanticsUnavailableError,
+} from '../../src/native';
 
-jest.mock('../../src/native');
+// Preserve the real FlutterSemanticsUnavailableError class (so it carries the
+// `.reason` field) while mocking AccessibilityBridge / getAccessibilityBridge
+// / ensureSemanticsActive. A bare `jest.mock('../../src/native')` would
+// auto-mock the error class too, dropping the constructor body.
+jest.mock('../../src/native', () => {
+  const actual = jest.requireActual('../../src/native');
+  return {
+    ...actual,
+    AccessibilityBridge: jest.fn(),
+    getAccessibilityBridge: jest.fn(),
+    ensureSemanticsActive: jest.fn(),
+  };
+});
 jest.mock('../../src/session-manager', () => ({
   getSessionManager: () => ({
     getSoleDeviceId: () => 'mock-device-id',
@@ -18,6 +35,11 @@ describe('app_tree tool', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+
+    // Default ensureSemanticsActive to a successful no-op so existing tests
+    // exercise the success path. The fallback-shape test below overrides this
+    // to reject with FlutterSemanticsUnavailableError.
+    (ensureSemanticsActive as jest.Mock).mockResolvedValue(true);
 
     server = {
       registerTool: jest.fn((_def, h) => { handler = h; }),
@@ -61,6 +83,41 @@ describe('app_tree tool', () => {
     await handler('session-1', { device_id: 'custom-udid', max_depth: 3 });
 
     expect(dumpMock).toHaveBeenCalledWith({ deviceId: 'custom-udid', maxDepth: 3 });
+  });
+
+  it('preserves top-level AX node shape (role/children) when Semantics fallback fires', async () => {
+    // Fallback path: ensureSemanticsActive throws FlutterSemanticsUnavailableError.
+    // The response must keep root-level role/children/path so existing
+    // consumers (e.g. assert_element, query) continue to work, while
+    // surfacing a `semanticsWarning` field as a sibling.
+    const fallbackTree = {
+      role: 'AXGroup',
+      label: 'Fallback root',
+      path: '',
+      children: [{ role: 'AXButton', label: 'Cancel', path: '0' }],
+    };
+
+    (ensureSemanticsActive as jest.Mock).mockRejectedValue(
+      new FlutterSemanticsUnavailableError('timeout', 'simulated activation timeout'),
+    );
+    MockBridge.prototype.dumpTree = jest.fn().mockResolvedValue(fallbackTree);
+    mockGetBridge.mockReturnValue(new MockBridge());
+
+    const result = await handler('session-1', {});
+
+    expect(result.isError).toBeUndefined();
+    const parsed = JSON.parse(result.content[0].text!);
+    // Top-level fields must be preserved (back-compat).
+    expect(parsed.role).toBe('AXGroup');
+    expect(parsed.label).toBe('Fallback root');
+    expect(parsed.path).toBe('');
+    expect(parsed.children).toHaveLength(1);
+    expect(parsed.children[0].role).toBe('AXButton');
+    // The new warning field must be present.
+    expect(typeof parsed.semanticsWarning).toBe('string');
+    expect(parsed.semanticsWarning).toContain('reason: timeout');
+    // The fallback must NOT wrap the tree in a new envelope.
+    expect(parsed.tree).toBeUndefined();
   });
 
   it('returns error on bridge failure', async () => {

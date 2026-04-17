@@ -248,15 +248,17 @@ describe('ensureSemanticsActive', () => {
 
   // ── Negative cache tests ────────────────────────────────────────────────
 
-  it('returns the cached negative result immediately on second call within TTL', async () => {
+  it('returns the cached negative result on second call within back-off window', async () => {
     mockDumpTree.mockResolvedValue(makeTree(2));
     mockExecFile.mockResolvedValue({ stdout: '', stderr: '' });
     mockDiscoverVMServiceUrl.mockResolvedValue(null);
 
-    // First call — hits the timeout path and caches the result.
+    // First call — hits the per-call timeout path (~300 ms after start) and
+    // caches the result. Advance just past the per-call timeout so subsequent
+    // calls fall within the 3 s re-probe back-off.
     let err1: unknown;
     const p1 = ensureSemanticsActive('cached-device', { timeout: 200 }).catch((e) => { err1 = e; });
-    await jest.advanceTimersByTimeAsync(6000);
+    await jest.advanceTimersByTimeAsync(500);
     await p1;
     expect(err1).toBeInstanceOf(FlutterSemanticsUnavailableError);
 
@@ -264,13 +266,99 @@ describe('ensureSemanticsActive', () => {
     jest.clearAllMocks();
     mockDumpTree.mockResolvedValue(makeTree(2));
 
-    // Second call — should throw immediately from cache, no dumpTree calls.
+    // Second call within the back-off window — should throw from cache
+    // without invoking the AX bridge.
     let err2: unknown;
     const p2 = ensureSemanticsActive('cached-device', { timeout: 200 }).catch((e) => { err2 = e; });
     await p2;
     expect(err2).toBeInstanceOf(FlutterSemanticsUnavailableError);
 
     // The cache hit must not have called dumpTree again.
+    expect(mockDumpTree).not.toHaveBeenCalled();
+  });
+
+  it('re-probes AX tree on cache hit after the back-off interval and evicts cache when populated', async () => {
+    // First call fails and caches the negative result.
+    mockDumpTree.mockResolvedValue(makeTree(2));
+    mockExecFile.mockResolvedValue({ stdout: '', stderr: '' });
+    mockDiscoverVMServiceUrl.mockResolvedValue(null);
+
+    let err1: unknown;
+    const p1 = ensureSemanticsActive('recover-device', { timeout: 200 }).catch((e) => { err1 = e; });
+    await jest.advanceTimersByTimeAsync(6000);
+    await p1;
+    expect(err1).toBeInstanceOf(FlutterSemanticsUnavailableError);
+
+    // Advance past the re-probe back-off (3 s) but stay well under the 30 s TTL.
+    await jest.advanceTimersByTimeAsync(4000);
+
+    // Conditions improved — the AX tree now responds with enough nodes.
+    jest.clearAllMocks();
+    mockDumpTree.mockResolvedValue(makeTree(10));
+
+    const result = await ensureSemanticsActive('recover-device', { timeout: 200 });
+    expect(result).toBe(true);
+    // The fresh probe (cache-hit re-check) must have called dumpTree.
+    expect(mockDumpTree).toHaveBeenCalled();
+  });
+
+  it('honors back-off interval and does NOT re-probe on rapid repeat calls within the interval', async () => {
+    mockDumpTree.mockResolvedValue(makeTree(2));
+    mockExecFile.mockResolvedValue({ stdout: '', stderr: '' });
+    mockDiscoverVMServiceUrl.mockResolvedValue(null);
+
+    let err1: unknown;
+    const p1 = ensureSemanticsActive('rapid-device', { timeout: 200 }).catch((e) => { err1 = e; });
+    // Advance just past the per-call timeout (~300 ms) so the next call fires
+    // well within the 3 s re-probe back-off.
+    await jest.advanceTimersByTimeAsync(500);
+    await p1;
+    expect(err1).toBeInstanceOf(FlutterSemanticsUnavailableError);
+
+    // Second call fires immediately — within the 3 s back-off, so the cache
+    // hit must short-circuit without invoking dumpTree.
+    jest.clearAllMocks();
+    mockDumpTree.mockResolvedValue(makeTree(2));
+
+    let err2: unknown;
+    const p2 = ensureSemanticsActive('rapid-device', { timeout: 200 }).catch((e) => { err2 = e; });
+    await p2;
+
+    expect(err2).toBeInstanceOf(FlutterSemanticsUnavailableError);
+    expect(mockDumpTree).not.toHaveBeenCalled();
+  });
+
+  it('rate-limits fresh probes when AX tree stays sparse after back-off', async () => {
+    mockDumpTree.mockResolvedValue(makeTree(2));
+    mockExecFile.mockResolvedValue({ stdout: '', stderr: '' });
+    mockDiscoverVMServiceUrl.mockResolvedValue(null);
+
+    // Seed cache.
+    let err1: unknown;
+    const p1 = ensureSemanticsActive('sparse-device', { timeout: 200 }).catch((e) => { err1 = e; });
+    await jest.advanceTimersByTimeAsync(6000);
+    await p1;
+    expect(err1).toBeInstanceOf(FlutterSemanticsUnavailableError);
+
+    // Advance past back-off, then call again — should re-probe once.
+    await jest.advanceTimersByTimeAsync(4000);
+    jest.clearAllMocks();
+    mockDumpTree.mockResolvedValue(makeTree(2)); // still sparse
+
+    let err2: unknown;
+    const p2 = ensureSemanticsActive('sparse-device', { timeout: 200 }).catch((e) => { err2 = e; });
+    await p2;
+    expect(err2).toBeInstanceOf(FlutterSemanticsUnavailableError);
+    expect(mockDumpTree).toHaveBeenCalledTimes(1);
+
+    // Immediately call again — back-off should suppress the next probe.
+    jest.clearAllMocks();
+    mockDumpTree.mockResolvedValue(makeTree(2));
+
+    let err3: unknown;
+    const p3 = ensureSemanticsActive('sparse-device', { timeout: 200 }).catch((e) => { err3 = e; });
+    await p3;
+    expect(err3).toBeInstanceOf(FlutterSemanticsUnavailableError);
     expect(mockDumpTree).not.toHaveBeenCalled();
   });
 
