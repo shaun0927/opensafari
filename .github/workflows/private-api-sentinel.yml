@@ -36,6 +36,15 @@ permissions:
   contents: read
   issues: write
 
+# Fork-friendly alerting (#599):
+#   - `SENTINEL_WEBHOOK_URL` (secret, optional): Slack / Discord / Mattermost
+#     Incoming Webhook. Missing ⇒ notify step is a no-op, the GitHub tracking
+#     issue still gets opened so a missing secret never masks a regression.
+#   - `SENTINEL_CHANNEL` (variable, optional): Slack channel override. Defaults
+#     to `#opensafari-sentinels`. Ignored by Discord-shaped webhooks, whose
+#     channel routing is baked into the URL.
+# See `docs/ci-integration.md` → "Private API Sentinel alerting" for setup.
+
 jobs:
   sentinel:
     # Matrix across hosted macOS runners so a regression tied to a specific
@@ -200,3 +209,22 @@ jobs:
             }
         env:
           RUNNER_LABEL: ${{ matrix.runner }}
+
+  notify:
+    # Fan-in notifier: posts a single alert per sentinel run to whatever webhook
+    # the fork has configured. Kept as a separate job so the sentinel matrix
+    # itself does not gain network dependencies on Slack / Discord.
+    needs: sentinel
+    if: failure() && github.event_name == 'schedule'
+    uses: ./.github/workflows/_sentinel-notify.yml
+    with:
+      title: 'Private API Sentinel — regression detected'
+      runner: 'fan-in (see workflow run for matrix rows)'
+      run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      body: |
+        One or more probes failed on the daily scheduled sentinel run.
+        Check the `sentinel-*` artifacts on the workflow run for the full jest
+        report and the `sentinel` tracking issue for the triage checklist.
+      channel: ${{ vars.SENTINEL_CHANNEL || '#opensafari-sentinels' }}
+    secrets:
+      webhook-url: ${{ secrets.SENTINEL_WEBHOOK_URL }}
