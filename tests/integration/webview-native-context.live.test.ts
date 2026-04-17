@@ -62,9 +62,9 @@ jest.setTimeout(240_000);
 
 /**
  * Classify a target URL: file:// or custom scheme → webview; http(s) → safari.
- * TODO(#592): once bundle-aware classification lands, prefer
- * app_webview_connect + classificationReason === 'bundle_match' over this
- * URL heuristic.
+ * Bundle-aware classification is exercised separately in
+ * webview-flutter-https-bundleid.live.test.ts (#592); this helper remains as
+ * the simple URL fallback used by this file:// Flutter bridge fixture.
  */
 function isWebViewUrl(url: string): boolean {
   if (!url || url === 'about:blank') return false;
@@ -168,9 +168,9 @@ describe('issue #593 — WebView↔Native cross-context E2E', () => {
     );
 
     // Poll for a WebView target (file:// URL from Flutter asset) up to 30 s.
-    // TODO(#592): once bundle-aware classification lands, prefer
-    // app_webview_connect + classificationReason === 'bundle_match' over this
-    // URL heuristic.
+    // Bundle-aware classification is covered by
+    // webview-flutter-https-bundleid.live.test.ts (#592); this fixture loads
+    // a file:// asset so url_scheme matches directly.
     let webviewTarget:
       | { id: string; title: string; url: string; webSocketDebuggerUrl: string }
       | undefined;
