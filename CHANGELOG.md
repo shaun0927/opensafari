@@ -4,18 +4,50 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-### Docs — Private-API deployment-scope guidance (#601, #610)
+## [0.5.0] - 2026-04-17
 
-- **`docs/private-apis.md` gains a "Deployment scope" section** drawing the host-vs-device line explicitly: ✅ allowed on developer Macs / macOS CI runners / internal dev tooling; ❌ not allowed bundled inside an iOS `.ipa` (App Store / TestFlight / Ad Hoc / Enterprise). Rationale cites App Review Guideline 2.5.1 / 2.5.2, `/Library/Developer/PrivateFrameworks/` provenance, and the same host-side posture Facebook's `idb` takes.
-- **License-interaction note** clarifies that the MIT grant on OpenSafari's source does not sublicense Apple's `SimulatorKit` / `CoreSimulator` frameworks — consumers remain bound by the Xcode / macOS license agreements for the loaded frameworks themselves.
-- **One-time private-API warning updated.** `SimulatorKitHIDInputBackend` now prints `Where can I use this? macOS host / CI only — never bundle inside an iOS .ipa …` alongside the existing `docs/private-apis.md` pointer, with a `(see "Deployment scope")` anchor hint. Content asserted by `tests/unit/sim-hid-input-backend.test.ts` (3 new assertions tagged `Issue #601`).
-- **No behavior change** — informational only. No runtime code paths altered.
+**OpenSafari 0.5.0 is a *stability-commitments* release.** It closes out the Xcode 26 investigation epic with an authoritative stability table, makes cross-context automation first-class (WebView-in-Flutter and WebView-in-native live harnesses land as product-grade E2E tests), expands alert / PointerService / IAP coverage, and — because we would rather ship truthful docs than broken tools — reverts the `simctl storekit` bindings that could not be made to work against real Xcode. Input telemetry is now on by default for every MCP input tool. Private-API deployment scope, StoreKit posture, and fork-friendly sentinel routing are all documented so teams operating forks or inside regulated orgs get clean upgrade guidance from the release notes alone.
 
-### Changed — Fork-friendly sentinel alert destination (#599)
+**Breaking**: `app_storekit_configure`, `app_storekit_test_session`, and `app_storekit_receipt` are **removed** (#588, #623). They depended on `simctl storekit` subcommands that do not exist / do not behave as documented against real Xcode. Teams that relied on these tools should either (a) pin to `opensafari-mcp@0.4.9` and follow the new `docs/recipes/flutter-iap-ko-kr.md` recipe until an AX-based replacement ships, or (b) drive StoreKit via `app_alert_handle` + `app_tap_element` against the localized sheet directly (see `docs/storekit-automation.md`). No other public tool or env var has changed.
 
-- **Private API Sentinel alerts are now parameterized.** `.github/workflows/private-api-sentinel.yml` no longer hard-codes the `#opensafari-sentinels` Slack channel. Forks and downstream orgs configure `secrets.SENTINEL_WEBHOOK_URL` (Slack / Discord / Mattermost Incoming Webhook) plus optional `vars.SENTINEL_CHANNEL` to redirect alerts without patching the workflow.
-- **Reusable notify workflow.** `.github/workflows/_sentinel-notify.yml` switches payload shape on webhook host — `hooks.slack.com` receives Slack's `{channel, text}` schema, everything else gets Discord's `{content}` schema (Mattermost and Rocket.Chat compatible).
-- **Missing secret is a no-op.** When `SENTINEL_WEBHOOK_URL` is unset the notify job logs the reason and exits 0; the sentinel matrix status is unaffected and the GitHub tracking issue still gets opened, so a missing webhook never silently masks a regression. See `docs/ci-integration.md` → "Private API Sentinel alerting" for setup and the fork checklist.
+**Default behavior change**: `_meta._telemetry` is emitted on every MCP input tool response (#595). Opt out with `OPENSAFARI_INPUT_TELEMETRY_META=0`. Response envelopes grow ~100 bytes/call.
+
+**Headline additions** (all headless, all live-tested where applicable):
+
+- Production-grade **WebView ↔ native** and **WebView-in-Flutter HTTPS bundle_match** live suites (#592).
+- **PointerService live coverage + sentinel probe** (#590 Phase 1) so the experimental `OPENSAFARI_ENABLE_POINTERSERVICE` backend has a stability track.
+- **ko-KR `app_alert_handle` live suites** — 2-button + semantic-key paths + sentinel label-match probe (#589).
+- **Flutter + IAP ko-KR end-to-end recipe** pinned to 0.4.9 (#597).
+- **Flutter simulator QA recipe corrections** (`--debug` build, split device profile path) (#596).
+- **WebView fixture AX identifiers + bundle-ID alignment** (#593).
+- **`app_webview_connect` documented** in `docs/api-reference.md` (#592).
+- **Private-API deployment-scope guidance** + license-interaction notes (#601, #610).
+- **Fork-friendly sentinel alerting** via `SENTINEL_WEBHOOK_URL` / `SENTINEL_CHANNEL` (#599).
+- **iOS 26 investigation synthesis** finalized with a stability-commitments table (#591, #557).
+
+### Breaking — `simctl storekit` tool surface removed (#588, #623)
+
+- **Removed tools**: `app_storekit_configure`, `app_storekit_test_session`, `app_storekit_receipt`. Related `src/tools/app-storekit-*.ts` and `src/native/simctl-storekit.ts` deleted; `tests/unit/app-storekit.test.ts` removed; prior `docs/storekit-automation.md` and api-reference entries dropped.
+- **Why**: the `simctl storekit` subcommands we relied on (config load, sandbox-transaction list/approve, sandbox receipt extraction) either do not exist in released Xcode or do not respond to flags in the way Apple's release notes imply. Rather than ship tools that silently no-op against a real simulator, 0.5.0 removes them until an AX-based replacement can be authored.
+- **Forward path**: `docs/recipes/flutter-iap-ko-kr.md` (new in this release, #597) documents the full IAP flow using `app_launch` + `app_deeplink` + `app_tap_element` + `app_alert_handle` against the localized StoreKit sheet. The recipe is pinned to `opensafari-mcp@0.4.9` so teams who need the removed tools have a clean pin path. A new AX-based StoreKit QA pattern lives in the (re-added) `docs/storekit-automation.md` for 0.5.0+.
+
+### Added — WebView-in-Flutter HTTPS bundle_match live harness (#592)
+
+- **New live integration suite `tests/integration/webview-flutter-https-bundleid.live.test.ts`** that boots a Flutter app embedding a real WebView, loads an HTTPS origin, and asserts `app_webview_connect({ bundle_match })` selects the right WebKit debuggee by bundle ID. Complements the native-context live test (`webview-native-context.live.test.ts`, also updated here) with a Flutter host, the harder case — the `flutter_inappwebview`-style bridge surfaces WebKit's page at a different debuggee index and the matching logic has to survive that.
+- **`app_webview_connect` documented** in [`docs/api-reference.md`](docs/api-reference.md#app_webview_connect) (#618).
+- **README Headless Capabilities row for WebView-in-Native** now reads *partial* with a pointer to the exact constraints ([`README.md`](README.md), #631), instead of the previous unqualified ✅.
+- **Fixture corrections (#593)**: webview_flutter_bridge fixture now ships AX identifiers on every actionable button (#633) and the fixture bundle ID lines up with the test expectation so there is a single source of truth (#625).
+
+### Added — PointerService live coverage + sentinel (#590 Phase 1)
+
+- **Live suite `tests/integration/pointer-service.live.test.ts`** covers `app_tap`/`app_swipe` through the experimental PointerService backend (enabled via `OPENSAFARI_ENABLE_POINTERSERVICE=1`) against a Flutter fixture with explicit AX-visible tap targets. Validates that the tap actually lands (post-tap screenshot diff) and not just that IOHIDEvent was ack'd — which is the exact trap Xcode 26's native routing fell into (#491). 405 new lines of assertions across 6 test cases.
+- **CI sentinel probe (#621)**: `tests/ci/sim-hid-sentinel.test.ts` now probes PointerService symbols (`SimPointerClient_create`, `SimPointerClient_postEvent`) alongside the existing SimulatorKit probes. `.github/workflows/sim-hid-sentinel.yml` runs it daily. When a macOS / Xcode update drops one of the PointerService symbols, we find out in ≤24h.
+
+### Added — Alert handle live suites + sentinel probe (#589)
+
+- **2-button alert live suite (#622)**: `tests/integration/issue-589-alert-handle-2button.live.test.ts` drives a ko-KR `UIAlertController` with two localized buttons and exercises `app_alert_handle` via `action: "accept"`, `action: "dismiss"`, and `buttonLabels: ["구입", "Buy"]` — the label-match path that survives future iOS reorderings of alert sheets. 293 new lines.
+- **Semantic-key alert live suite (#620)**: `tests/integration/issue-589-alert-handle-semantic.live.test.ts` covers the ko-KR semantic-key path (e.g., `key: "allow"` mapping to "허용") with 222 new lines of assertions.
+- **Sentinel label-match probe (#619)**: `tests/sentinel/private-api-probe.test.ts` gains 125 new lines of ko-KR label-match assertions that guard against locale-loader regressions in Xcode updates.
 
 ### Added — Flutter + IAP (ko-KR) CI recipe (#597)
 
@@ -23,6 +55,36 @@ All notable changes to this project will be documented in this file.
 - **Linked from [`docs/ci-recipes.md`](docs/ci-recipes.md#specialized-recipes)** under a new "Specialized Recipes" section. Pinned to `opensafari-mcp@0.4.9` so consumers can copy the manifest verbatim and know exactly which APIs it relies on — the StoreKit-configure / receipt / test-session tools were reverted in #623 (unimplementable against Xcode simctl as of 0.5.0), so teams who still need in-simulator IAP coverage can pin to 0.4.9 while an AX-based replacement is authored (see `docs/storekit-automation.md`).
 - **Paste-ready GitHub Actions + generic shell variants.** The shell variant is self-contained and runs from any macOS agent (Buildkite, GitLab self-hosted, a developer's laptop). Both use only tools shipped in `opensafari-mcp@0.4.9` — `app_launch`, `app_deeplink`, `app_storekit_configure`, `app_tap_element`, `app_alert_handle` (with `buttonLabels: ["구입", "Buy"]` from #589), `app_storekit_test_session`, and `app_storekit_receipt` (from #588).
 - **ko-KR gotchas documented.** Set `AppleLocale=ko_KR` before booting (not after — mounted SpringBoard strings do not re-render), match StoreKit sheets by localized label list rather than index, disable Ask to Buy explicitly, use `--profile` Flutter builds to keep the VM Service online, and poll for the sandbox receipt with a short backoff since iOS occasionally flushes it lazily.
+
+### Added — AX-based StoreKit QA pattern (#626, #588)
+
+- **Re-added `docs/storekit-automation.md`** with a minimal AX-only QA pattern: drive the localized StoreKit sheet via `app_tree` → `app_tap_element` (by identifier) → `app_alert_handle` (by label). Replaces the reverted simctl-based tools (#623) with a pattern that works on Xcode 26+ without any private API.
+- **`docs/api-reference.md` cross-reference** points at the new pattern.
+
+### Docs — Flutter simulator QA recipe fix (#596)
+
+- **[`docs/ci-recipes.md`](docs/ci-recipes.md)** and **[`docs/flutter-inspector.md`](docs/flutter-inspector.md)** now instruct `flutter build ios --debug` (not `--release`) for simulator-hosted QA runs — the release AOT path pushes the Dart VM into the `vm-service-unavailable` state the FlutterVM Tier-0 backend cannot route against, and the previous recipe silently demoted QA sessions to Tier-1 without the operator noticing. Device profile recipe split into its own section with the correct `--profile` flag.
+- **Minor `src/tools/flutter-vm-input-backend.ts` comment update** aligns the inline remediation text with the corrected recipe paths.
+
+### Changed — Fork-friendly sentinel alert destination (#599)
+
+- **Private API Sentinel alerts are now parameterized.** `.github/workflows/private-api-sentinel.yml` no longer hard-codes the `#opensafari-sentinels` Slack channel. Forks and downstream orgs configure `secrets.SENTINEL_WEBHOOK_URL` (Slack / Discord / Mattermost Incoming Webhook) plus optional `vars.SENTINEL_CHANNEL` to redirect alerts without patching the workflow.
+- **Reusable notify workflow.** `.github/workflows/_sentinel-notify.yml` switches payload shape on webhook host — `hooks.slack.com` receives Slack's `{channel, text}` schema, everything else gets Discord's `{content}` schema (Mattermost and Rocket.Chat compatible).
+- **Missing secret is a no-op.** When `SENTINEL_WEBHOOK_URL` is unset the notify job logs the reason and exits 0; the sentinel matrix status is unaffected and the GitHub tracking issue still gets opened, so a missing webhook never silently masks a regression. See `docs/ci-integration.md` → "Private API Sentinel alerting" for setup and the fork checklist.
+
+### Changed — iOS 26 investigation synthesis finalized (#591, #557)
+
+- **`docs/simhid-ios26-investigation.md` is now the canonical decision-blocking artifact** for Xcode 26 tap regression. Falsification table reformatted with per-row hypothesis / probe / outcome / evidence columns; remaining candidates ranked by effort (S / M / L) × expected yield with an explicit dependency graph.
+- **Stability commitments section added.** Authoritative table distinguishing stable surfaces (Safari, Flutter, element-targeted native), opt-in experimental (coordinate tap/swipe via `OPENSAFARI_ENABLE_POINTERSERVICE`), opt-in last-resort (AppleScript/CGEvent), and evolving (WebView cross-context). Promotion criterion published for the PointerService backend (≥ 99% success over 2 weeks of nightly sentinel runs on Xcode 26.0 / 26.1 with zero AppleScript fallbacks).
+- **`README.md` Headless Capabilities matrix** split the Xcode 26+ native row into element-targeted (✅ stable via AX press) vs coordinate (⚠ experimental opt-in, tracked in #590).
+- **`docs/private-apis.md` cross-reference updated** — drops the "in review" framing and points at the new stability-commitments anchor.
+
+### Docs — Private-API deployment-scope guidance (#601, #610)
+
+- **`docs/private-apis.md` gains a "Deployment scope" section** drawing the host-vs-device line explicitly: ✅ allowed on developer Macs / macOS CI runners / internal dev tooling; ❌ not allowed bundled inside an iOS `.ipa` (App Store / TestFlight / Ad Hoc / Enterprise). Rationale cites App Review Guideline 2.5.1 / 2.5.2, `/Library/Developer/PrivateFrameworks/` provenance, and the same host-side posture Facebook's `idb` takes.
+- **License-interaction note** clarifies that the MIT grant on OpenSafari's source does not sublicense Apple's `SimulatorKit` / `CoreSimulator` frameworks — consumers remain bound by the Xcode / macOS license agreements for the loaded frameworks themselves.
+- **One-time private-API warning updated.** `SimulatorKitHIDInputBackend` now prints `Where can I use this? macOS host / CI only — never bundle inside an iOS .ipa …` alongside the existing `docs/private-apis.md` pointer, with a `(see "Deployment scope")` anchor hint. Content asserted by `tests/unit/sim-hid-input-backend.test.ts` (3 new assertions tagged `Issue #601`).
+- **No behavior change** — informational only. No runtime code paths altered.
 
 ### Changed — `_meta._telemetry` is on by default (#595)
 
@@ -39,6 +101,22 @@ All notable changes to this project will be documented in this file.
 - **60-minute soak test.** `tests/soak/long-session.soak.test.ts` round-robins across all backend tiers, asserting RSS delta ≤ 100 MB, rolling growth rate ≤ 3 MB/min, and — new — that no retained-object class grows by more than 1000 instances between the 30-minute and 60-minute marks. Heap snapshots at 0 / 30 / 60 min are written via `v8.writeHeapSnapshot()` (no `--expose-gc` flag required) and, on any SLO miss, the test emits the snapshot paths plus the top-20 class growers for triage. Gated by `OPENSAFARI_RUN_SOAK=1`.
 - **Nightly CI workflow.** `.github/workflows/memory-soak.yml` runs the soak test daily at 03:00 UTC. Seven consecutive failures auto-open a `memory-regression` issue.
 - **Developer script.** `scripts/memory-inspect.ts` — one-shot 10-minute mixed-call session that prints a per-backend RSS/heap table for local triage.
+
+### Upgrade Notes
+
+- **If you import any `app_storekit_*` tool**: you will get a "tool not found" error on 0.5.0. Either pin to `opensafari-mcp@0.4.9` (supported via `docs/recipes/flutter-iap-ko-kr.md`), or migrate to the AX-based pattern in `docs/storekit-automation.md` (`app_tree` → `app_tap_element` → `app_alert_handle`).
+- **If you parse MCP input-tool responses**: expect `_meta._telemetry` on every response by default now. Set `OPENSAFARI_INPUT_TELEMETRY_META=0` to restore 0.4.9 behavior.
+- **If you operate a fork** with Private API Sentinel alerting enabled: set `secrets.SENTINEL_WEBHOOK_URL` and (optionally) `vars.SENTINEL_CHANNEL`. Missing secret is a no-op; the tracking issue still opens.
+- **If you ship an iOS app** that bundles any of our code: read `docs/private-apis.md` → "Deployment scope" first. OpenSafari is macOS-host / CI-only — never inside an `.ipa`.
+- **If you rely on `OPENSAFARI_ENABLE_POINTERSERVICE`**: the backend is now covered by a live suite and a daily sentinel, but promotion to default requires 2 weeks at ≥ 99% success on Xcode 26.0 / 26.1 with zero AppleScript fallbacks. Still opt-in in 0.5.0.
+
+### Release metadata
+
+- **Tag:** `v0.5.0`
+- **Branch:** `main` (from `develop` — merged 2026-04-17)
+- **PRs merged into this release:** #618, #619, #620, #621, #622, #623, #625, #626, #627, #628, #629, #630, #631, #632, #633 (15)
+- **Build/lint/test state on publish:** `npm run build` ✅, `npm run lint` ✅, `npm test` ✅ (114 suites / 1686 tests green on develop@9db79f4c)
+- **Required checks on `develop`:** build, lint, test — all pass. Live suites (`Flutter`, `Native`, `WebView`, `Safari`) are not required by branch protection but were green on each constituent PR.
 
 ## [0.4.9] - 2026-04-15
 
