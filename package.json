@@ -27,6 +27,7 @@
     "test:unit": "jest --config jest.config.js",
     "test:integration": "jest --preset ts-jest --testEnvironment node --roots tests/integration --testPathIgnorePatterns '/node_modules/' --testPathIgnorePatterns 'webkit-connection' --testTimeout=120000 --runInBand --reporters=default --reporters=<rootDir>/tests/integration/screenshot-failure-reporter.cjs",
     "test:integration:monitored": "node scripts/run-with-cursor-monitor.js -- npm run test:integration",
+    "test:live": "OSF_LIVE=1 node scripts/run-with-cursor-monitor.js -- npm run test:integration",
     "test:ci": "jest --config jest.ci.config.js",
     "test:sentinel": "jest --config jest.sentinel.config.js",
     "test:coverage": "jest --coverage",
