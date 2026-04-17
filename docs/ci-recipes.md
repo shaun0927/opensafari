@@ -477,6 +477,37 @@ artifacts:
 export OPENSAFARI_HEADLESS_ONLY=1
 ```
 
+### QA-ready Flutter build
+
+**Recommendation:** build "QA" simulator artifacts with `flutter build ios --simulator --profile` instead of `--release`. Profile mode runs close to release performance **and** keeps the Dart VM Service online, so `FlutterVMInputBackend` (Tier 0) stays the active input path.
+
+Release builds compile Dart to AOT and reject runtime `evaluate` calls with `code 113`, which surfaces as `FlutterVMInputBackendError { code: 'VM_NO_EVALUATE' }`. The router then falls through to Tier 1.5 AX-press (element-targeted tools only) and ultimately AppleScript for coordinate gestures — the slowest and most fragile path, and — on Xcode 26+ where Tier-1 SimHID tap/swipe is disabled pending #491 — the only remaining coordinate fallback. See [Build-mode × Xcode tier matrix](./flutter-inspector.md#build-mode--xcode-tier-matrix-596) for the full routing table.
+
+```bash
+# Build a profile-mode simulator bundle (keeps VM Service; runs near release perf).
+flutter build ios --simulator --profile --target lib/main_qa.dart
+
+# Install and launch so flutter_connect lands on Tier 0.
+APP=build/ios/iphonesimulator/Runner.app
+xcrun simctl install booted "$APP"
+xcrun simctl launch --console booted "$(plutil -extract CFBundleIdentifier raw "$APP/Info.plist")"
+```
+
+```yaml
+# GitHub Actions — QA-ready Flutter simulator build
+- name: Build Flutter (profile mode)
+  run: flutter build ios --simulator --profile --target lib/main_qa.dart
+
+- name: Install + launch on booted simulator
+  run: |
+    APP=build/ios/iphonesimulator/Runner.app
+    BUNDLE=$(plutil -extract CFBundleIdentifier raw "$APP/Info.plist")
+    xcrun simctl install booted "$APP"
+    xcrun simctl launch booted "$BUNDLE"
+```
+
+> **Why not `--release`?** The Dart AOT runtime in release mode has no expression compiler, so Tier 0 probes fail and every subsequent tap/swipe degrades to AppleScript (or silently fails under `OPENSAFARI_HEADLESS_ONLY=1`). Profile mode keeps the tree-shaker and AOT-compatible optimisations while preserving the VM Service — the same trade-off that `flutter run --profile` makes for Flutter's own tooling.
+
 ### JUnit output generation
 
 OpenSafari's `qa_full_audit` tool emits JUnit-compatible XML directly. Pass `--format junit` to the CLI or `format: "junit"` via MCP:
