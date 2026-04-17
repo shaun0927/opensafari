@@ -11,6 +11,12 @@ All notable changes to this project will be documented in this file.
 - **One-time private-API warning updated.** `SimulatorKitHIDInputBackend` now prints `Where can I use this? macOS host / CI only — never bundle inside an iOS .ipa …` alongside the existing `docs/private-apis.md` pointer, with a `(see "Deployment scope")` anchor hint. Content asserted by `tests/unit/sim-hid-input-backend.test.ts` (3 new assertions tagged `Issue #601`).
 - **No behavior change** — informational only. No runtime code paths altered.
 
+### Changed — Fork-friendly sentinel alert destination (#599)
+
+- **Private API Sentinel alerts are now parameterized.** `.github/workflows/private-api-sentinel.yml` no longer hard-codes the `#opensafari-sentinels` Slack channel. Forks and downstream orgs configure `secrets.SENTINEL_WEBHOOK_URL` (Slack / Discord / Mattermost Incoming Webhook) plus optional `vars.SENTINEL_CHANNEL` to redirect alerts without patching the workflow.
+- **Reusable notify workflow.** `.github/workflows/_sentinel-notify.yml` switches payload shape on webhook host — `hooks.slack.com` receives Slack's `{channel, text}` schema, everything else gets Discord's `{content}` schema (Mattermost and Rocket.Chat compatible).
+- **Missing secret is a no-op.** When `SENTINEL_WEBHOOK_URL` is unset the notify job logs the reason and exits 0; the sentinel matrix status is unaffected and the GitHub tracking issue still gets opened, so a missing webhook never silently masks a regression. See `docs/ci-integration.md` → "Private API Sentinel alerting" for setup and the fork checklist.
+
 ### Changed — `_meta._telemetry` is on by default (#595)
 
 - **Input tool responses now carry `_meta._telemetry` without opt-in.** All 10 MCP input tools (`app_tap`, `app_swipe`, `app_scroll_native`, `app_key_input`, `app_double_tap`, `app_type_text`, `app_tap_element`, `app_type_element`, `app_dismiss_keyboard`, `app_alert_handle`) emit the compact per-call projection (`operation`, `elapsed_ms`, `ok`, `error?`) by default. CI and benchmarking harnesses no longer need to discover and flip `OPENSAFARI_INPUT_TELEMETRY_META=1` after hitting a mystery slowdown — observability is now Pareto-default.
