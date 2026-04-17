@@ -92,6 +92,37 @@ Detect WebView targets inside a running native app and list available ones.
   - `proxy_type` — proxy-supplied `type` field on the target determined classification (e.g. `type: 'WebView'` overrides URL-scheme heuristics).
   - `url_scheme` — fallback heuristic: non-http(s) schemes → `webview`; http(s) or empty/about:blank → `safari`.
 
+#### app_alert_handle
+Accept, dismiss, or press a named button on a system alert/dialog on a booted iOS Simulator.
+
+- **Input:**
+  - `action?: 'accept' | 'dismiss'` — Accept (Return key) or dismiss (Escape key) the alert. Used only when no `buttonLabel`/`buttonLabels` is provided.
+  - `buttonLabel?: string` — Exact button label to press (case-insensitive, trimmed). Walks the front-most alert's accessibility tree and invokes `AXPress` on the first match. Takes precedence over `action`.
+  - `buttonLabels?: string[]` — Ordered list of candidate labels tried in priority order; the first match is pressed. Takes precedence over `buttonLabel` and `action`. Useful for multi-locale support.
+  - `deviceId?: string` — Simulator UDID. Falls back to the active device if omitted.
+- **Output:** `{ handled: true, buttonLabel?, action?, deviceId, method, _meta }`
+- **Errors:**
+  - `DEVICE_NOT_BOOTED` — No booted simulator found.
+  - `MISSING_PARAMS` — Neither `action` nor `buttonLabel`/`buttonLabels` provided.
+  - `INVALID_ACTION` — `action` is not `"accept"` or `"dismiss"`.
+  - `NO_MATCHING_BUTTON` — None of the supplied labels matched a visible button; the error payload includes `visibleLabels` listing what was found.
+  - `ALERT_HANDLE_FAILED` — Key send or AX press failed.
+- **Examples:**
+  ```json
+  // Keyboard fallback — accept the default button
+  { "action": "accept" }
+
+  // Press a specific button by label (StoreKit, permission sheet, etc.)
+  { "buttonLabel": "Allow While Using App" }
+
+  // Multi-locale: try the localized label first, then English fallback
+  { "buttonLabels": ["앱을 사용하는 동안 허용", "Allow While Using App"] }
+  ```
+- **Notes:**
+  - The `buttonLabel`/`buttonLabels` path uses macOS `AXUIElement` accessibility API (`ax-bridge`) — it works on StoreKit password sheets, 3-button permission dialogs, and any alert where the default button is not the accept action.
+  - `_meta._telemetry[0].backend` is `"ax-press"` on the label path and the backend kind (e.g. `"simctl"`) on the keyboard path.
+  - For non-English simulators, build the candidate list with `resolveLocalizedButtonLabels` from `src/native/localized-button-matcher.ts` or seed it from `src/native/system-button-catalog.ts`.
+
 ### Advanced Tools (Tier 2)
 
 inspect, wait_for, long_press, swipe, press, dismiss_keyboard, select_option, device_list, device_rotate, appearance_toggle
