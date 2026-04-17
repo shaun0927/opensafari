@@ -12,7 +12,7 @@
  */
 
 import { MCPServer, getWebKitClient } from '../mcp-server';
-import { getAccessibilityBridge, ensureSemanticsActive } from '../native';
+import { getAccessibilityBridge, ensureSemanticsActive, FlutterSemanticsUnavailableError } from '../native';
 import type { AXNode, AXQuery } from '../native';
 import { resolveDeviceId, getInputBackend, runInputOp } from './native-input-utils';
 import { tryPress } from './app-tap-element';
@@ -90,7 +90,24 @@ export function registerAppTypeElementTool(server: MCPServer): void {
         const timeout = (params.timeout as number | undefined) ?? DEFAULT_TIMEOUT_MS;
         const focusDelay = (params.focusDelay as number | undefined) ?? DEFAULT_FOCUS_DELAY_MS;
 
-        await ensureSemanticsActive(deviceId);
+        try {
+          await ensureSemanticsActive(deviceId);
+        } catch (semErr) {
+          if (semErr instanceof FlutterSemanticsUnavailableError) {
+            return {
+              content: [{
+                type: 'text' as const,
+                text: JSON.stringify({
+                  error: `Flutter Semantics not available (reason: ${semErr.reason}) — cannot locate element without the Semantics tree. ` +
+                    'Launch the app via `flutter run` for full Semantics support.',
+                  semanticsUnavailableReason: semErr.reason,
+                }),
+              }],
+              isError: true,
+            };
+          }
+          throw semErr;
+        }
 
         const bridge = getAccessibilityBridge();
         // Note: the bridge supports a `text` query param (searches label/value),

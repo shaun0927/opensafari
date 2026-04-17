@@ -1,5 +1,5 @@
 import { MCPServer } from '../mcp-server';
-import { getAccessibilityBridge, ensureSemanticsActive } from '../native';
+import { getAccessibilityBridge, ensureSemanticsActive, FlutterSemanticsUnavailableError } from '../native';
 import { getSessionManager } from '../session-manager';
 
 export function registerAppQueryTool(server: MCPServer): void {
@@ -65,9 +65,25 @@ export function registerAppQueryTool(server: MCPServer): void {
 
         const bridge = getAccessibilityBridge();
 
-        // Ensure Flutter semantics are activated before querying
+        // Ensure Flutter semantics are activated before querying.
+        // If activation fails (simctl-launched app, release build, etc.) we
+        // fall through to the AX-only path and attach a warning so the caller
+        // knows the Flutter Semantics layer is absent.
+        let semanticsWarning: string | undefined;
         if (deviceId) {
-          await ensureSemanticsActive(deviceId, { bundleId });
+          try {
+            await ensureSemanticsActive(deviceId, { bundleId });
+          } catch (semErr) {
+            if (semErr instanceof FlutterSemanticsUnavailableError) {
+              semanticsWarning =
+                `Flutter Semantics not available (reason: ${semErr.reason}) — ` +
+                'falling back to AX-only query. Results may be incomplete for Flutter apps. ' +
+                semErr.message;
+              console.error(`[app_query] ${semanticsWarning}`);
+            } else {
+              throw semErr;
+            }
+          }
         }
 
         const result = await bridge.query(
@@ -81,6 +97,7 @@ export function registerAppQueryTool(server: MCPServer): void {
               type: 'text' as const,
               text: JSON.stringify({
                 warning: `Ambiguous query: identifier "${identifier}" matched ${result.total} elements. Use a more specific query or inspect individual paths.`,
+                ...(semanticsWarning ? { semanticsWarning } : {}),
                 ...result,
               }, null, 2),
             }],
@@ -90,7 +107,10 @@ export function registerAppQueryTool(server: MCPServer): void {
         return {
           content: [{
             type: 'text' as const,
-            text: JSON.stringify(result, null, 2),
+            text: JSON.stringify(
+              semanticsWarning ? { semanticsWarning, ...result } : result,
+              null, 2,
+            ),
           }],
         };
       } catch (err) {

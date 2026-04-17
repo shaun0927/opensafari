@@ -16,6 +16,7 @@ const mockDiscoverVMServiceUrl = jest.fn();
 const mockVMConnect = jest.fn();
 const mockVMGetSemanticsTree = jest.fn();
 const mockVMDisconnect = jest.fn();
+const mockVMProbeEvaluateCompile = jest.fn();
 
 jest.mock('../../src/native/accessibility-bridge', () => ({
   getAccessibilityBridge: () => ({
@@ -40,11 +41,16 @@ jest.mock('../../src/flutter/vm-service-client', () => ({
     connect: (...args: unknown[]) => mockVMConnect(...args),
     getSemanticsTree: (...args: unknown[]) => mockVMGetSemanticsTree(...args),
     disconnect: (...args: unknown[]) => mockVMDisconnect(...args),
+    probeEvaluateCompile: (...args: unknown[]) => mockVMProbeEvaluateCompile(...args),
   })),
 }));
 
 // Import after mocks
-import { ensureSemanticsActive } from '../../src/native/semantics-activator';
+import {
+  ensureSemanticsActive,
+  FlutterSemanticsUnavailableError,
+  _clearNegativeCacheForTest,
+} from '../../src/native/semantics-activator';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -134,15 +140,18 @@ describe('ensureSemanticsActive', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     jest.useFakeTimers();
+    _clearNegativeCacheForTest();
     // Default: VM Service is unavailable (release build or discovery misses)
     mockDiscoverVMServiceUrl.mockResolvedValue(null);
     mockVMConnect.mockResolvedValue({ connected: true });
     mockVMGetSemanticsTree.mockResolvedValue('populated');
     mockVMDisconnect.mockResolvedValue(undefined);
+    mockVMProbeEvaluateCompile.mockResolvedValue({ available: true });
   });
 
   afterEach(() => {
     jest.useRealTimers();
+    _clearNegativeCacheForTest();
   });
 
   it('returns true immediately when tree has enough nodes', async () => {
@@ -193,21 +202,135 @@ describe('ensureSemanticsActive', () => {
     expect(mockDiscoverVMServiceUrl).not.toHaveBeenCalled();
   });
 
-  it('returns false on timeout when tree never populates', async () => {
+  // ── Hard timeout tests ──────────────────────────────────────────────────
+
+  it('throws FlutterSemanticsUnavailableError(timeout) when VM connect never resolves', async () => {
+    // Tree never populates
     mockDumpTree.mockResolvedValue(makeTree(2));
     mockExecFile.mockResolvedValue({ stdout: '', stderr: '' });
-    // VM Service also unavailable — covers release-build scenario
+    // VM discovery returns a URL but connect never resolves
+    mockDiscoverVMServiceUrl.mockResolvedValue('http://127.0.0.1:50001/abc=/');
+    mockVMConnect.mockImplementation(() => new Promise(() => { /* never resolves */ }));
+
+    // Attach the catch handler BEFORE advancing timers so the rejection is
+    // handled synchronously when it fires (avoids PromiseRejectionHandledWarning).
+    let capturedErr: unknown;
+    const promise = ensureSemanticsActive('hanging-device', { timeout: 100 }).catch((e) => {
+      capturedErr = e;
+    });
+
+    // Advance fake timers well past the per-call timeout so the error fires.
+    await jest.advanceTimersByTimeAsync(6000);
+    await promise;
+
+    expect(capturedErr).toBeInstanceOf(FlutterSemanticsUnavailableError);
+    expect(['timeout', 'no-dds']).toContain((capturedErr as FlutterSemanticsUnavailableError).reason);
+  });
+
+  it('throws FlutterSemanticsUnavailableError(timeout) within HARD_TIMEOUT_MS + 200 ms budget', async () => {
+    mockDumpTree.mockResolvedValue(makeTree(2));
+    mockExecFile.mockResolvedValue({ stdout: '', stderr: '' });
     mockDiscoverVMServiceUrl.mockResolvedValue(null);
 
-    const promise = ensureSemanticsActive('test-device-id', { timeout: 600 });
+    const HARD_TIMEOUT_MS = 5000; // matches the module default
 
-    // Advance past timeout
-    await jest.advanceTimersByTimeAsync(1000);
+    let capturedErr: unknown;
+    const promise = ensureSemanticsActive('slow-device', { timeout: 200 }).catch((e) => {
+      capturedErr = e;
+    });
+    // Drive the fake clock past the hard ceiling
+    await jest.advanceTimersByTimeAsync(HARD_TIMEOUT_MS + 200);
+    await promise;
 
-    const result = await promise;
-
-    expect(result).toBe(false);
+    expect(capturedErr).toBeInstanceOf(FlutterSemanticsUnavailableError);
+    expect((capturedErr as FlutterSemanticsUnavailableError).reason).toBe('timeout');
   });
+
+  // ── Negative cache tests ────────────────────────────────────────────────
+
+  it('returns the cached negative result immediately on second call within TTL', async () => {
+    mockDumpTree.mockResolvedValue(makeTree(2));
+    mockExecFile.mockResolvedValue({ stdout: '', stderr: '' });
+    mockDiscoverVMServiceUrl.mockResolvedValue(null);
+
+    // First call — hits the timeout path and caches the result.
+    let err1: unknown;
+    const p1 = ensureSemanticsActive('cached-device', { timeout: 200 }).catch((e) => { err1 = e; });
+    await jest.advanceTimersByTimeAsync(6000);
+    await p1;
+    expect(err1).toBeInstanceOf(FlutterSemanticsUnavailableError);
+
+    // Reset call counters so we can verify the second call does not re-probe.
+    jest.clearAllMocks();
+    mockDumpTree.mockResolvedValue(makeTree(2));
+
+    // Second call — should throw immediately from cache, no dumpTree calls.
+    let err2: unknown;
+    const p2 = ensureSemanticsActive('cached-device', { timeout: 200 }).catch((e) => { err2 = e; });
+    await p2;
+    expect(err2).toBeInstanceOf(FlutterSemanticsUnavailableError);
+
+    // The cache hit must not have called dumpTree again.
+    expect(mockDumpTree).not.toHaveBeenCalled();
+  });
+
+  it('re-probes after the negative cache TTL expires', async () => {
+    mockDumpTree.mockResolvedValue(makeTree(2));
+    mockExecFile.mockResolvedValue({ stdout: '', stderr: '' });
+    mockDiscoverVMServiceUrl.mockResolvedValue(null);
+
+    // First call — populates cache.
+    let err1: unknown;
+    const p1 = ensureSemanticsActive('ttl-device', { timeout: 200 }).catch((e) => { err1 = e; });
+    await jest.advanceTimersByTimeAsync(6000);
+    await p1;
+    expect(err1).toBeInstanceOf(FlutterSemanticsUnavailableError);
+
+    // Advance past the 30 s TTL.
+    await jest.advanceTimersByTimeAsync(31_000);
+
+    // Second call after TTL — should re-probe (dumpTree is called again).
+    jest.clearAllMocks();
+    mockDumpTree.mockResolvedValue(makeTree(10)); // now the tree is populated
+
+    const result = await ensureSemanticsActive('ttl-device', { timeout: 200 });
+    expect(result).toBe(true);
+    expect(mockDumpTree).toHaveBeenCalled();
+  });
+
+  // ── No-DDS fast-fail test ───────────────────────────────────────────────
+
+  it('throws FlutterSemanticsUnavailableError(no-dds) when VM rejects with code 113', async () => {
+    // Tree never populates via simctl.
+    mockDumpTree.mockResolvedValue(makeTree(2));
+    mockExecFile.mockResolvedValue({ stdout: '', stderr: '' });
+    // VM is discoverable and connects but probeEvaluateCompile returns 113.
+    mockDiscoverVMServiceUrl.mockResolvedValue('http://127.0.0.1:50001/abc=/');
+    mockVMConnect.mockResolvedValue({ connected: true });
+    mockVMProbeEvaluateCompile.mockResolvedValue({
+      available: false,
+      reason: 'compile-error-113',
+      message: 'VM Service error: method not found (code: 113)',
+    });
+
+    let capturedErr: unknown;
+    const promise = ensureSemanticsActive('nodds-device', { timeout: 600 }).catch((e) => {
+      capturedErr = e;
+    });
+    // Advance past the simctl poll window (half of 600 ms = 300 ms) so the
+    // VM Service branch is reached, then let promises settle.
+    await jest.advanceTimersByTimeAsync(2000);
+    await promise;
+
+    expect(capturedErr).toBeInstanceOf(FlutterSemanticsUnavailableError);
+    expect((capturedErr as FlutterSemanticsUnavailableError).reason).toBe('no-dds');
+    // Should not have called getSemanticsTree
+    expect(mockVMGetSemanticsTree).not.toHaveBeenCalled();
+    // Should have called disconnect (finally block)
+    expect(mockVMDisconnect).toHaveBeenCalled();
+  });
+
+  // ── Happy-path regression ────────────────────────────────────────────────
 
   it('handles dumpTree failure gracefully on initial check', async () => {
     mockDumpTree
@@ -256,6 +379,7 @@ describe('ensureSemanticsActive', () => {
     mockExecFile.mockResolvedValue({ stdout: '', stderr: '' });
     mockDiscoverVMServiceUrl.mockResolvedValue('http://127.0.0.1:50001/abc=/');
     mockVMConnect.mockResolvedValue({ connected: true });
+    mockVMProbeEvaluateCompile.mockResolvedValue({ available: true });
     mockVMGetSemanticsTree.mockImplementation(async () => {
       semanticsDumped = true;
       return 'populated';
@@ -289,29 +413,33 @@ describe('ensureSemanticsActive', () => {
     mockDumpTree.mockResolvedValue(makeTree(2));
     mockExecFile.mockResolvedValue({ stdout: '', stderr: '' });
 
+    let capturedErr: unknown;
     const promise = ensureSemanticsActive('test-device-id', {
       timeout: 600,
       useVMServiceFallback: false,
-    });
+    }).catch((e) => { capturedErr = e; });
 
-    await jest.advanceTimersByTimeAsync(1000);
-    const result = await promise;
+    await jest.advanceTimersByTimeAsync(6000);
+    await promise;
 
-    expect(result).toBe(false);
+    expect(capturedErr).toBeInstanceOf(FlutterSemanticsUnavailableError);
     expect(mockDiscoverVMServiceUrl).not.toHaveBeenCalled();
   });
 
-  it('swallows VM Service connect errors and still returns false gracefully', async () => {
+  it('swallows VM Service connect errors and still throws FlutterSemanticsUnavailableError gracefully', async () => {
     mockDumpTree.mockResolvedValue(makeTree(2));
     mockExecFile.mockResolvedValue({ stdout: '', stderr: '' });
     mockDiscoverVMServiceUrl.mockResolvedValue('http://127.0.0.1:50001/abc=/');
     mockVMConnect.mockRejectedValue(new Error('ECONNREFUSED'));
 
-    const promise = ensureSemanticsActive('test-device-id', { timeout: 1200 });
-    await jest.advanceTimersByTimeAsync(1500);
-    const result = await promise;
+    let capturedErr: unknown;
+    const promise = ensureSemanticsActive('test-device-id', { timeout: 1200 }).catch((e) => {
+      capturedErr = e;
+    });
+    await jest.advanceTimersByTimeAsync(6000);
+    await promise;
 
-    expect(result).toBe(false);
+    expect(capturedErr).toBeInstanceOf(FlutterSemanticsUnavailableError);
     // disconnect() should still be attempted in the finally block
     expect(mockVMDisconnect).toHaveBeenCalled();
   });

@@ -7,7 +7,7 @@
  */
 
 import { MCPServer } from '../mcp-server';
-import { getAccessibilityBridge, ensureSemanticsActive } from '../native';
+import { getAccessibilityBridge, ensureSemanticsActive, FlutterSemanticsUnavailableError } from '../native';
 import { getSessionManager } from '../session-manager';
 
 type AssertCondition = 'exists' | 'not_exists' | 'visible' | 'enabled' | 'disabled' | 'has_text';
@@ -105,8 +105,27 @@ export function registerAppAssertElementTool(server: MCPServer): void {
           };
         }
 
-        // Ensure Flutter semantics are active
-        await ensureSemanticsActive(deviceId);
+        // Ensure Flutter semantics are active.
+        // If unavailable, surface a structured error rather than asserting
+        // against a potentially incomplete AX tree.
+        try {
+          await ensureSemanticsActive(deviceId);
+        } catch (semErr) {
+          if (semErr instanceof FlutterSemanticsUnavailableError) {
+            return {
+              content: [{
+                type: 'text' as const,
+                text: JSON.stringify({
+                  error: `Flutter Semantics not available (reason: ${semErr.reason}) — cannot assert element state without the Semantics tree. ` +
+                    'Launch the app via `flutter run` for full Semantics support.',
+                  semanticsUnavailableReason: semErr.reason,
+                }),
+              }],
+              isError: true,
+            };
+          }
+          throw semErr;
+        }
 
         const bridge = getAccessibilityBridge();
         const result = await bridge.query(query, { deviceId });

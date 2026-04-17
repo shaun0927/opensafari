@@ -7,7 +7,7 @@
  */
 
 import { MCPServer, getWebKitClient } from '../mcp-server';
-import { getAccessibilityBridge, ensureSemanticsActive } from '../native';
+import { getAccessibilityBridge, ensureSemanticsActive, FlutterSemanticsUnavailableError } from '../native';
 import type { AXNode, AXPressResponse } from '../native';
 import type { AccessibilityBridge } from '../native/accessibility-bridge';
 import { resolveDeviceId, getInputBackend, runInputOp } from './native-input-utils';
@@ -84,8 +84,27 @@ export function registerAppTapElementTool(server: MCPServer): void {
         const timeout = (params.timeout as number | undefined) ?? 5000;
         const duration = (params.duration as number | undefined) ?? 0;
 
-        // Ensure Flutter semantics are active
-        await ensureSemanticsActive(deviceId);
+        // Ensure Flutter semantics are active.
+        // For tap_element the semantics tree is required to locate the element,
+        // so we surface a clear error rather than silently falling back.
+        try {
+          await ensureSemanticsActive(deviceId);
+        } catch (semErr) {
+          if (semErr instanceof FlutterSemanticsUnavailableError) {
+            return {
+              content: [{
+                type: 'text' as const,
+                text: JSON.stringify({
+                  error: `Flutter Semantics not available (reason: ${semErr.reason}) — cannot locate element without the Semantics tree. ` +
+                    'Launch the app via `flutter run` for full Semantics support.',
+                  semanticsUnavailableReason: semErr.reason,
+                }),
+              }],
+              isError: true,
+            };
+          }
+          throw semErr;
+        }
 
         const bridge = getAccessibilityBridge();
         const query = { identifier, label, text, role };

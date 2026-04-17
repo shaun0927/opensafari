@@ -1,5 +1,5 @@
 import { MCPServer } from '../mcp-server';
-import { getAccessibilityBridge, ensureSemanticsActive } from '../native';
+import { getAccessibilityBridge, ensureSemanticsActive, FlutterSemanticsUnavailableError } from '../native';
 import { getSessionManager } from '../session-manager';
 
 export function registerAppInspectTool(server: MCPServer): void {
@@ -44,9 +44,22 @@ export function registerAppInspectTool(server: MCPServer): void {
 
         const bridge = getAccessibilityBridge();
 
-        // Ensure Flutter semantics are activated before inspecting
+        // Ensure Flutter semantics are activated before inspecting.
+        // Fall through to AX-only if unavailable (simctl-launched app, release build).
+        let semanticsWarning: string | undefined;
         if (deviceId) {
-          await ensureSemanticsActive(deviceId, { bundleId });
+          try {
+            await ensureSemanticsActive(deviceId, { bundleId });
+          } catch (semErr) {
+            if (semErr instanceof FlutterSemanticsUnavailableError) {
+              semanticsWarning =
+                `Flutter Semantics not available (reason: ${semErr.reason}) — ` +
+                'falling back to AX-only inspect. Results may be incomplete for Flutter apps.';
+              console.error(`[app_inspect] ${semanticsWarning}`);
+            } else {
+              throw semErr;
+            }
+          }
         }
 
         const node = await bridge.inspect(elementPath, deviceId);
@@ -54,7 +67,10 @@ export function registerAppInspectTool(server: MCPServer): void {
         return {
           content: [{
             type: 'text' as const,
-            text: JSON.stringify(node, null, 2),
+            text: JSON.stringify(
+              semanticsWarning ? { semanticsWarning, ...node } : node,
+              null, 2,
+            ),
           }],
         };
       } catch (err) {

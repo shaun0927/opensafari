@@ -8,26 +8,84 @@
  * Flutter apps.
  *
  * Strategy (ordered by cost and reliability):
- *   A. Quick-check: if the tree already has enough nodes, skip activation.
- *   B. Simctl activation: enable the macOS Accessibility Inspector flag via
+ *   A. Negative-cache check: if a recent attempt already determined that
+ *      semantics are unavailable, return immediately without re-probing.
+ *   B. Quick-check: if the tree already has enough nodes, skip activation.
+ *   C. Simctl activation: enable the macOS Accessibility Inspector flag via
  *      `xcrun simctl spawn defaults write`. This triggers Flutter's
  *      `SemanticsBinding` without full VoiceOver side effects.
- *   C. Dart VM Service fallback (debug/profile builds only): connect to the
+ *   D. Dart VM Service fallback (debug/profile builds only): connect to the
  *      app's VM Service and call `debugDumpSemanticsTreeInTraversalOrder`,
  *      which forces Flutter to materialise the semantics tree even when the
  *      native accessibility flag did not propagate (e.g. when the activation
  *      flag was already set by a previous session and no rebuild fired).
- *   D. Graceful timeout: return `false` and let the caller decide.
+ *   E. Hard timeout: throw `FlutterSemanticsUnavailableError` when the overall
+ *      budget (default 5 s, env-overridable) is exceeded, and cache the
+ *      negative result so the next call does not re-pay the timeout cost.
  */
 
 import { getAccessibilityBridge } from './accessibility-bridge';
 import type { AXNode } from './ax-types';
+
+// ── Constants ────────────────────────────────────────────────────────────────
 
 const DEFAULT_TIMEOUT_MS = 3000;
 const POLL_INTERVAL_MS = 300;
 const MIN_NODE_THRESHOLD = 5;
 const VM_SERVICE_DISCOVERY_TIMEOUT_MS = 3000;
 const VM_SERVICE_CONNECT_TIMEOUT_MS = 3000;
+
+/**
+ * Hard ceiling on the *entire* ensureSemanticsActive call path.
+ * Overridable via OPENSAFARI_SEMANTICS_ACTIVATION_TIMEOUT_MS.
+ */
+const HARD_TIMEOUT_MS: number = (() => {
+  const envVal = process.env.OPENSAFARI_SEMANTICS_ACTIVATION_TIMEOUT_MS;
+  if (envVal) {
+    const parsed = parseInt(envVal, 10);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+  return 5000;
+})();
+
+/** How long a negative-cache entry stays hot (30 s). */
+const NEGATIVE_CACHE_TTL_MS = 30_000;
+
+// ── Typed error ──────────────────────────────────────────────────────────────
+
+/** Reason codes for why Flutter Semantics could not be activated. */
+export type FlutterSemanticsUnavailableReason = 'no-dds' | 'timeout' | 'not-flutter';
+
+/**
+ * Thrown by `ensureSemanticsActive` when semantics cannot be activated within
+ * the allowed budget. Callers should catch this to fall back to AX-only
+ * queries rather than letting the hang propagate to the MCP client.
+ */
+export class FlutterSemanticsUnavailableError extends Error {
+  readonly reason: FlutterSemanticsUnavailableReason;
+
+  constructor(reason: FlutterSemanticsUnavailableReason, message: string) {
+    super(message);
+    this.name = 'FlutterSemanticsUnavailableError';
+    this.reason = reason;
+  }
+}
+
+// ── Negative cache ────────────────────────────────────────────────────────────
+
+interface NegativeCacheEntry {
+  reason: FlutterSemanticsUnavailableReason;
+  expiresAt: number;
+}
+
+const negativeCache = new Map<string, NegativeCacheEntry>();
+
+/** Exposed for tests so they can clear the cache between cases. */
+export function _clearNegativeCacheForTest(): void {
+  negativeCache.clear();
+}
+
+// ── Public API ────────────────────────────────────────────────────────────────
 
 export interface EnsureSemanticsOptions {
   /** Total budget for the activation attempt (default 3000ms). */
@@ -60,28 +118,84 @@ export function countNodes(node: AXNode): number {
 /**
  * Attempt to activate Flutter semantics for a given simulator device.
  *
- * Returns `true` if the accessibility tree has enough nodes (semantics active),
- * `false` if activation failed or timed out.
+ * On success, returns `true`.
+ *
+ * On failure (timeout, no DDS, not a Flutter app), throws
+ * `FlutterSemanticsUnavailableError` and caches the negative result for
+ * `NEGATIVE_CACHE_TTL_MS` milliseconds so subsequent calls return
+ * immediately without re-probing.
  *
  * This is a no-op for native (non-Flutter) apps that already expose a full
- * accessibility tree.
+ * accessibility tree (quick-check A passes immediately).
  */
 export async function ensureSemanticsActive(
   deviceId: string,
   options?: EnsureSemanticsOptions,
 ): Promise<boolean> {
+  // A. Negative-cache hit — return without re-probing.
+  const now = Date.now();
+  const cached = negativeCache.get(deviceId);
+  if (cached && cached.expiresAt > now) {
+    throw new FlutterSemanticsUnavailableError(
+      cached.reason,
+      `Flutter Semantics unavailable (cached reason: ${cached.reason}) — will retry after cache expires`,
+    );
+  }
+
+  // Race the full activation attempt against the hard timeout.
+  const hardDeadline = now + HARD_TIMEOUT_MS;
+
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  const hardTimeoutPromise = new Promise<never>((_, reject) => {
+    timeoutHandle = setTimeout(() => {
+      reject(new FlutterSemanticsUnavailableError(
+        'timeout',
+        `Flutter Semantics activation timed out after ${HARD_TIMEOUT_MS} ms — ` +
+          'the app may have been launched via `xcrun simctl launch` (no DDS) or is a release build. ' +
+          'Use `flutter run` for full Semantics support.',
+      ));
+    }, HARD_TIMEOUT_MS);
+  });
+
+  try {
+    const result = await Promise.race([
+      _runActivation(deviceId, options, hardDeadline),
+      hardTimeoutPromise,
+    ]);
+    return result;
+  } catch (err) {
+    if (err instanceof FlutterSemanticsUnavailableError) {
+      // Cache the negative result.
+      negativeCache.set(deviceId, {
+        reason: err.reason,
+        expiresAt: Date.now() + NEGATIVE_CACHE_TTL_MS,
+      });
+    }
+    throw err;
+  } finally {
+    if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+  }
+}
+
+// ── Internal activation logic ─────────────────────────────────────────────────
+
+async function _runActivation(
+  deviceId: string,
+  options: EnsureSemanticsOptions | undefined,
+  hardDeadline: number,
+): Promise<boolean> {
   const timeout = options?.timeout ?? DEFAULT_TIMEOUT_MS;
   const minNodes = options?.minNodes ?? MIN_NODE_THRESHOLD;
   const useVMServiceFallback = options?.useVMServiceFallback ?? true;
   const bridge = getAccessibilityBridge();
-  const deadline = Date.now() + timeout;
+  const deadline = Math.min(Date.now() + timeout, hardDeadline);
 
-  // A. Quick check — tree already populated?
+  // B. Quick check — tree already populated?
   if (await treeIsPopulated(bridge, deviceId, minNodes)) {
     return true;
   }
 
-  // B. Simctl activation (cheap, works for debug + release).
+  // C. Simctl activation (cheap, works for debug + release).
   await tryActivateViaSimctl(deviceId);
 
   // Split the remaining budget: reserve roughly half for the simctl path,
@@ -92,20 +206,35 @@ export async function ensureSemanticsActive(
     ? Date.now() + Math.max(POLL_INTERVAL_MS, Math.floor(timeout / 2))
     : deadline;
 
-  if (await pollUntilPopulated(bridge, deviceId, minNodes, simctlDeadline)) {
+  if (await pollUntilPopulated(bridge, deviceId, minNodes, Math.min(simctlDeadline, hardDeadline))) {
     return true;
   }
 
-  // C. Dart VM Service fallback — debug/profile builds only.
+  // D. Dart VM Service fallback — debug/profile builds only.
   if (useVMServiceFallback && Date.now() < deadline) {
-    await tryActivateViaVMService(deviceId, options?.bundleId);
+    const vmResult = await tryActivateViaVMService(deviceId, options?.bundleId);
+    if (vmResult === 'no-dds') {
+      throw new FlutterSemanticsUnavailableError(
+        'no-dds',
+        'Flutter VM Service is reachable but the compile/evaluate service (DDS) is absent — ' +
+          'the app was likely launched via `xcrun simctl launch` instead of `flutter run`. ' +
+          'Flutter Semantics require DDS to be activated via the VM Service path.',
+      );
+    }
     if (await pollUntilPopulated(bridge, deviceId, minNodes, deadline)) {
       return true;
     }
   }
 
-  // D. Give up gracefully.
-  return false;
+  // E. Give up — activation timed out within the per-call budget.
+  // The hard-timeout race will fire separately if that budget is also exceeded;
+  // if we get here first it means the per-call timeout elapsed before the hard
+  // ceiling. Either way, surface a timeout error.
+  throw new FlutterSemanticsUnavailableError(
+    'timeout',
+    `Flutter Semantics did not activate within ${timeout} ms. ` +
+      'The app may be a release build or have been launched without `flutter run`.',
+  );
 }
 
 /** Poll the AX bridge until the tree has `minNodes` nodes or the deadline passes. */
@@ -157,13 +286,17 @@ async function tryActivateViaSimctl(deviceId: string): Promise<void> {
 /**
  * Try to materialise Flutter's semantics tree by talking to the Dart VM
  * Service directly. Only works for debug/profile builds (release builds
- * strip the VM Service). Silent on any failure — the caller treats this
- * as best-effort.
+ * strip the VM Service).
+ *
+ * Returns:
+ *   - `'ok'` when the VM Service call succeeded (tree should now be populated)
+ *   - `'no-dds'` when the VM is reachable but rejects evaluate with code 113
+ *   - `'unavailable'` when the VM Service is not discoverable or unreachable
  */
 async function tryActivateViaVMService(
   deviceId: string,
   bundleId: string | undefined,
-): Promise<void> {
+): Promise<'ok' | 'no-dds' | 'unavailable'> {
   let client: { disconnect: () => Promise<void> } | undefined;
   try {
     const { discoverVMServiceUrl } = await import('../flutter/vm-service-discovery');
@@ -171,7 +304,7 @@ async function tryActivateViaVMService(
       bundleId,
       timeout: VM_SERVICE_DISCOVERY_TIMEOUT_MS,
     });
-    if (!vmServiceUrl) return;
+    if (!vmServiceUrl) return 'unavailable';
 
     const { FlutterVMClient } = await import('../flutter/vm-service-client');
     const vmClient = new FlutterVMClient();
@@ -184,12 +317,30 @@ async function tryActivateViaVMService(
       timeout: VM_SERVICE_CONNECT_TIMEOUT_MS,
     });
 
+    // Probe whether compile/evaluate is available (requires DDS).
+    // Apps launched via `xcrun simctl launch` expose the raw VM Service
+    // socket but without the frontend compiler — probeEvaluateCompile will
+    // return `{ available: false, reason: 'compile-error-113' }`.
+    if ('probeEvaluateCompile' in vmClient && typeof (vmClient as unknown as { probeEvaluateCompile: () => Promise<unknown> }).probeEvaluateCompile === 'function') {
+      const probe = await (vmClient as unknown as {
+        probeEvaluateCompile: () => Promise<
+          | { available: true }
+          | { available: false; reason: string; message: string }
+        >;
+      }).probeEvaluateCompile();
+      if (!probe.available && probe.reason === 'compile-error-113') {
+        return 'no-dds';
+      }
+    }
+
     // Dumping the semantics tree forces Flutter to materialise it. The
     // native AX bridge should then see populated nodes on the next read.
     await vmClient.getSemanticsTree();
+    return 'ok';
   } catch {
     // Debug/profile VM Service may be unavailable (release build, URL
     // rotated, WebSocket refused, etc.). Fall through silently.
+    return 'unavailable';
   } finally {
     if (client) {
       try { await client.disconnect(); } catch { /* ignore */ }

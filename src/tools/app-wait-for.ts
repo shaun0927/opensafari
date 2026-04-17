@@ -7,7 +7,7 @@
  */
 
 import { MCPServer } from '../mcp-server';
-import { getAccessibilityBridge, ensureSemanticsActive } from '../native';
+import { getAccessibilityBridge, ensureSemanticsActive, FlutterSemanticsUnavailableError } from '../native';
 import type { AXNode } from '../native';
 import { getSessionManager } from '../session-manager';
 
@@ -97,8 +97,22 @@ export function registerAppWaitForNativeTool(server: MCPServer): void {
         const interval = (params.interval as number | undefined) ?? DEFAULT_INTERVAL_MS;
         const query = { identifier, label, text, role };
 
-        // Ensure Flutter semantics are active
-        await ensureSemanticsActive(deviceId);
+        // Ensure Flutter semantics are active.
+        // If unavailable, fall back to AX-only polling — the element may still
+        // exist in the native AX tree even without Flutter Semantics.
+        let semanticsWarning: string | undefined;
+        try {
+          await ensureSemanticsActive(deviceId);
+        } catch (semErr) {
+          if (semErr instanceof FlutterSemanticsUnavailableError) {
+            semanticsWarning =
+              `Flutter Semantics not available (reason: ${semErr.reason}) — ` +
+              'falling back to AX-only polling. Results may be incomplete for Flutter apps.';
+            console.error(`[app_wait_for] ${semanticsWarning}`);
+          } else {
+            throw semErr;
+          }
+        }
 
         const bridge = getAccessibilityBridge();
         const startTime = Date.now();
@@ -130,6 +144,7 @@ export function registerAppWaitForNativeTool(server: MCPServer): void {
                         path: result.matches[0].path,
                       }
                       : null,
+                    ...(semanticsWarning ? { semanticsWarning } : {}),
                   }),
                 }],
               };
