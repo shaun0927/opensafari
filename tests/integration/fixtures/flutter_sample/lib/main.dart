@@ -57,6 +57,28 @@ class _HomeScreenState extends State<HomeScreen> {
               child: Text('Status: $_status'),
             ),
             const SizedBox(height: 12),
+            // Bare GestureDetector — intentionally NOT wrapped in Semantics so
+            // it exposes a coordinate-only tap surface for the PointerService
+            // live test (#590 Phase 1, `tests/integration/pointer-service.live.test.ts`).
+            // Tap lands are observable via the `status_label` Semantics node
+            // above: onTap sets _status = 'bare:<count>'.
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () => setState(() {
+                _taps++;
+                _status = 'bare:$_taps';
+              }),
+              child: Container(
+                height: 120,
+                color: Colors.amber.shade200,
+                alignment: Alignment.center,
+                child: const Text(
+                  'Bare tap region (no Semantics)',
+                  style: TextStyle(fontWeight: FontWeight.w500),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
             Semantics(
               identifier: 'tap_count',
               label: 'Tap Count',
