@@ -75,9 +75,10 @@ function compactTelemetry(events: InputTelemetryEvent[]): InputTelemetryMeta[] {
 
 /**
  * Build the `_meta` object that input tools include in their response
- * to expose which backend handled the operation. When a list of captured
- * telemetry events is supplied AND `OPENSAFARI_INPUT_TELEMETRY_META=1`, a
- * compact `_telemetry` projection is attached for per-call `elapsed_ms`.
+ * to expose which backend handled the operation. When captured telemetry
+ * events are supplied and the `OPENSAFARI_INPUT_TELEMETRY_META` gate is
+ * enabled (default on since 0.5.0; opt out with `=0`/`=false`), a compact
+ * `_telemetry` projection is attached for per-call `elapsed_ms`.
  */
 export function buildInputMeta(
   backend: InputBackend,
@@ -108,9 +109,10 @@ export function buildInputMeta(
 
 /**
  * Run a backend operation and return its result plus a ready-to-embed
- * `_meta` object. When `OPENSAFARI_INPUT_TELEMETRY_META=1` the operation is
- * wrapped in a telemetry capture scope and the resulting events land under
- * `_meta._telemetry`. Otherwise the operation runs directly (zero overhead).
+ * `_meta` object. When the `OPENSAFARI_INPUT_TELEMETRY_META` gate is enabled
+ * (default on since 0.5.0) the operation is wrapped in a telemetry capture
+ * scope and the resulting events land under `_meta._telemetry`. Setting the
+ * env var to `0` / `false` runs the operation directly (zero overhead).
  *
  * This is the one-line integration path for MCP input tools: they call the
  * helper instead of invoking the backend method by hand, and the `_meta`

@@ -62,13 +62,13 @@ export type InputOperationResult = InputTelemetryEvent;
 export const OPENSAFARI_INPUT_TELEMETRY_ENV = 'OPENSAFARI_INPUT_TELEMETRY';
 
 /**
- * Env var that opts MCP tool responses into the Phase-2 `_telemetry` metadata
- * field. When set to `1` / `true`, each input tool (`app_tap`, `app_swipe`,
- * ...) attaches the captured `InputTelemetryEvent` list under `_meta._telemetry`
- * so clients and CI can assert on `elapsed_ms` without scraping stderr.
+ * Env var that controls the Phase-2 `_telemetry` metadata field on MCP tool
+ * responses. Each input tool (`app_tap`, `app_swipe`, ...) attaches the
+ * captured `InputTelemetryEvent` list under `_meta._telemetry` so clients and
+ * CI can assert on `elapsed_ms` without scraping stderr.
  *
- * Default-off so the field is strictly opt-in and does not inflate payloads
- * for consumers that only care about success/failure.
+ * Default-on since 0.5.0 (issue #595). Set to `0` / `false` to opt out and
+ * suppress the `_telemetry` projection when payload size matters.
  */
 export const OPENSAFARI_INPUT_TELEMETRY_META_ENV = 'OPENSAFARI_INPUT_TELEMETRY_META';
 
@@ -88,7 +88,7 @@ function isTelemetryEnabled(): boolean {
 /** Whether input tool responses should include `_meta._telemetry`. */
 export function isInputTelemetryMetaEnabled(): boolean {
   const value = process.env[OPENSAFARI_INPUT_TELEMETRY_META_ENV];
-  return value === '1' || value === 'true';
+  return value !== '0' && value !== 'false';
 }
 
 /**

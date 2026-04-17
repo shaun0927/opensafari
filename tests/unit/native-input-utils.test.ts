@@ -52,7 +52,7 @@ describe('runInputOp', () => {
     delete process.env[OPENSAFARI_INPUT_TELEMETRY_META_ENV];
   });
 
-  test('omits _telemetry from meta by default (opt-in not set)', async () => {
+  test('attaches _telemetry from meta by default (opt-out since 0.5.0, #595)', async () => {
     const backend = makeBackend('webkit');
     const { meta } = await runInputOp(backend, 'UDID', () =>
       backend.tap('UDID', 10, 20),
@@ -60,6 +60,17 @@ describe('runInputOp', () => {
     expect(meta.backendKind).toBe('webkit');
     expect(meta.headless).toBe(true);
     expect(meta.deviceId).toBe('UDID');
+    expect(Array.isArray(meta._telemetry)).toBe(true);
+    expect(meta._telemetry).toHaveLength(1);
+    expect(meta._telemetry![0].operation).toBe('tap');
+  });
+
+  test('omits _telemetry when OPENSAFARI_INPUT_TELEMETRY_META=0 (explicit opt-out)', async () => {
+    process.env[OPENSAFARI_INPUT_TELEMETRY_META_ENV] = '0';
+    const backend = makeBackend('webkit');
+    const { meta } = await runInputOp(backend, 'UDID', () =>
+      backend.tap('UDID', 10, 20),
+    );
     expect(meta._telemetry).toBeUndefined();
   });
 
@@ -116,8 +127,8 @@ describe('runInputOp', () => {
     expect(buildInputMeta(makeBackend('flutter-vm'), 'D').headless).toBe(true);
   });
 
-  test('buildInputMeta ignores telemetry events when opt-in is off', () => {
-    delete process.env[OPENSAFARI_INPUT_TELEMETRY_META_ENV];
+  test('buildInputMeta ignores telemetry events when explicitly opted out', () => {
+    process.env[OPENSAFARI_INPUT_TELEMETRY_META_ENV] = '0';
     const backend = makeBackend('webkit');
     const meta = buildInputMeta(backend, 'UDID', [
       {

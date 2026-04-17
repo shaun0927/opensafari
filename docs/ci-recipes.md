@@ -474,10 +474,13 @@ artifacts:
 | `OPENSAFARI_SAVE_FAILURE_SCREENSHOTS` | `1` | Local opt-in for the integration-suite screenshot-on-failure reporter. Auto-detects the booted simulator via `xcrun simctl list devices booted` when `OSF_DEVICE_ID` is unset, so devs can triage a red test locally without also exporting `CI=true`. |
 | `OSF_DEVICE_ID` | Simulator UDID | Explicit simulator target for the screenshot reporter and other integration helpers. Set by CI after booting; dev can use `OPENSAFARI_SAVE_FAILURE_SCREENSHOTS=1` instead to skip the export. |
 | `OSF_SCREENSHOT_DIR` | Directory path | Override base directory for failure screenshots (default `test-output/screenshots/`). |
+| `OPENSAFARI_INPUT_TELEMETRY_META` | `0` / `false` to disable | Controls whether input-tool responses carry `_meta._telemetry` (per-call `elapsed_ms`, `ok`, `operation`). **On by default since 0.5.0** (#595). Set to `0` only when payload size matters and you are not inspecting per-call timing. |
 
 ```bash
 # Recommended CI environment
 export OPENSAFARI_HEADLESS_ONLY=1
+# _meta._telemetry is on by default; uncomment to opt out:
+# export OPENSAFARI_INPUT_TELEMETRY_META=0
 ```
 
 ### QA-ready Flutter build
@@ -510,6 +513,37 @@ xcrun simctl launch --console booted "$(plutil -extract CFBundleIdentifier raw "
 ```
 
 > **Why not `--release`?** The Dart AOT runtime in release mode has no expression compiler, so Tier 0 probes fail and every subsequent tap/swipe degrades to AppleScript (or silently fails under `OPENSAFARI_HEADLESS_ONLY=1`). Profile mode keeps the tree-shaker and AOT-compatible optimisations while preserving the VM Service — the same trade-off that `flutter run --profile` makes for Flutter's own tooling.
+
+### Reading `_meta._telemetry` in CI
+
+Every input-tool response (`app_tap`, `app_swipe`, `app_type_text`, `app_tap_element`, etc.) embeds a compact telemetry projection under `result._meta._telemetry`. Use it to assert on per-call latency without scraping stderr.
+
+```js
+// Node — direct invocation
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+
+const res = await client.callTool({ name: 'app_tap', arguments: { x: 100, y: 200 } });
+const events = res._meta?._telemetry ?? [];
+for (const e of events) {
+  if (!e.ok) throw new Error(`app_tap failed: ${e.error}`);
+  if (e.elapsed_ms > 500) console.error(`slow tap: ${e.elapsed_ms}ms`);
+}
+```
+
+```yaml
+# GitHub Actions — failing the job when any op exceeds a budget
+- name: Smoke run with latency budget
+  run: |
+    node scripts/run-smoke.mjs > out.json
+    node -e '
+      const r = JSON.parse(require("fs").readFileSync("out.json", "utf8"));
+      const events = (r._meta && r._meta._telemetry) || [];
+      const slow = events.filter(e => e.elapsed_ms > 500);
+      if (slow.length) { console.error("latency budget exceeded", slow); process.exit(1); }
+    '
+```
+
+To suppress the field (e.g., matching legacy golden files), set `OPENSAFARI_INPUT_TELEMETRY_META=0` at the job or step level.
 
 ### JUnit output generation
 
