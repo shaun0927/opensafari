@@ -124,9 +124,6 @@ import { registerAppTypeElementTool } from './app-type-element';
 import { registerAppWaitForNativeTool } from './app-wait-for';
 import { registerAppAssertElementTool } from './app-assert-element';
 import { registerDiagnoseTool } from './diagnose';
-import { registerAppStorekitConfigureTool } from './app-storekit-configure';
-import { registerAppStorekitTestSessionTool } from './app-storekit-test-session';
-import { registerAppStorekitReceiptTool } from './app-storekit-receipt';
 
 export { setWorkflowEngine } from './orchestration-tools';
 export { setBarrier } from './barrier-tools';
@@ -328,9 +325,4 @@ export function registerAllTools(server: MCPServer): void {
 
   // Tier 1: Diagnostics
   registerDiagnoseTool(server);
-
-  // Tier 2: StoreKit / In-App Purchase automation (#588)
-  registerAppStorekitConfigureTool(server);
-  registerAppStorekitTestSessionTool(server);
-  registerAppStorekitReceiptTool(server);
 }
