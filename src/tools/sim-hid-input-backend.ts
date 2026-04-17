@@ -223,7 +223,10 @@ export class SimulatorKitHIDInputBackend implements InputBackend {
         '[opensafari] SimulatorKitHIDInputBackend uses private Apple frameworks ' +
           '(SimulatorKit.framework, CoreSimulator.framework) via dlopen. ' +
           'These APIs are undocumented and Xcode updates may break them. ' +
-          PRIVATE_API_DOC_REF,
+          'Where can I use this? macOS host / CI only — never bundle inside an ' +
+          'iOS .ipa shipped to the App Store or TestFlight. ' +
+          PRIVATE_API_DOC_REF +
+          ' (see "Deployment scope").',
       );
     }
     const { cmd, cmdArgs } = this.resolveSpawn(args);
