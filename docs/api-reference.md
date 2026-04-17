@@ -129,6 +129,7 @@ Accept, dismiss, or press a named button on a system alert/dialog on a booted iO
   - The `buttonLabel`/`buttonLabels` path uses macOS `AXUIElement` accessibility API (`ax-bridge`) — it works on StoreKit password sheets, 3-button permission dialogs, and any alert where the default button is not the accept action.
   - `_meta._telemetry[0].backend` is `"ax-press"` on the label path and the backend kind (e.g. `"simctl"`) on the keyboard path.
   - For non-English simulators, build the candidate list with `resolveLocalizedButtonLabels` from `src/native/localized-button-matcher.ts` or seed it from `src/native/system-button-catalog.ts`.
+  - For StoreKit / In-App Purchase QA see [StoreKit Automation Guide](storekit-automation.md).
 
 ### Advanced Tools (Tier 2)
 
