@@ -16,9 +16,34 @@ import { promisify } from 'util';
 
 const execFileAsync = promisify(execFile);
 
+const FALLBACK_TIMEOUT_MS = 30_000;
+const MAX_TIMEOUT_MS = 2_147_483_647; // INT32_MAX — Node's execFile upper bound
+
+/**
+ * Parse `OPENSAFARI_EXEC_TIMEOUT_MS` (or any caller-supplied env value) into
+ * a safe execFile timeout. Rejects negative, zero, NaN, decimal, and
+ * out-of-range values — Node's execFile throws `ERR_OUT_OF_RANGE` when
+ * `timeout` is negative or above INT32_MAX, which would make every migrated
+ * call fail immediately instead of falling back to the safe default.
+ *
+ * Exported for test coverage; consumers should use `DEFAULT_EXEC_TIMEOUT_MS`.
+ */
+export function parseEnvTimeout(raw: string | undefined): number {
+  if (raw === undefined || raw === '') return FALLBACK_TIMEOUT_MS;
+  // Use Number() (not parseInt) so decimal strings like "1.5" are rejected
+  // by the integer check rather than being silently truncated to 1.
+  const n = Number(raw);
+  if (Number.isInteger(n) && n > 0 && n <= MAX_TIMEOUT_MS) return n;
+  process.stderr.write(
+    `[exec] invalid OPENSAFARI_EXEC_TIMEOUT_MS=${raw}, falling back to ${FALLBACK_TIMEOUT_MS}ms\n`,
+  );
+  return FALLBACK_TIMEOUT_MS;
+}
+
 /** Default timeout in milliseconds — 30 s, overridable via env. */
-export const DEFAULT_EXEC_TIMEOUT_MS: number =
-  parseInt(process.env.OPENSAFARI_EXEC_TIMEOUT_MS ?? '', 10) || 30_000;
+export const DEFAULT_EXEC_TIMEOUT_MS: number = parseEnvTimeout(
+  process.env.OPENSAFARI_EXEC_TIMEOUT_MS,
+);
 
 export interface ExecResult {
   stdout: string;

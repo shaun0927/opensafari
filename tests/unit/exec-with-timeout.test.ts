@@ -1,4 +1,9 @@
-import { execWithTimeout, ExecTimeoutError, DEFAULT_EXEC_TIMEOUT_MS } from '../../src/lib/exec-with-timeout';
+import {
+  execWithTimeout,
+  ExecTimeoutError,
+  DEFAULT_EXEC_TIMEOUT_MS,
+  parseEnvTimeout,
+} from '../../src/lib/exec-with-timeout';
 
 describe('execWithTimeout', () => {
   test('resolves on fast command', async () => {
@@ -50,5 +55,69 @@ describe('execWithTimeout', () => {
     } catch (err) {
       expect(err).not.toBeInstanceOf(ExecTimeoutError);
     }
+  });
+});
+
+describe('parseEnvTimeout', () => {
+  let stderrSpy: jest.SpyInstance;
+
+  beforeEach(() => {
+    stderrSpy = jest.spyOn(process.stderr, 'write').mockImplementation(() => true);
+  });
+
+  afterEach(() => {
+    stderrSpy.mockRestore();
+  });
+
+  test('returns default when env is undefined (silent)', () => {
+    expect(parseEnvTimeout(undefined)).toBe(30_000);
+    expect(stderrSpy).not.toHaveBeenCalled();
+  });
+
+  test('returns default when env is empty string (silent)', () => {
+    expect(parseEnvTimeout('')).toBe(30_000);
+    expect(stderrSpy).not.toHaveBeenCalled();
+  });
+
+  test('accepts a valid positive integer', () => {
+    expect(parseEnvTimeout('5000')).toBe(5000);
+    expect(stderrSpy).not.toHaveBeenCalled();
+  });
+
+  test('accepts INT32_MAX (2147483647)', () => {
+    expect(parseEnvTimeout('2147483647')).toBe(2_147_483_647);
+    expect(stderrSpy).not.toHaveBeenCalled();
+  });
+
+  test('rejects negative value, warns, falls back to default', () => {
+    expect(parseEnvTimeout('-1')).toBe(30_000);
+    expect(stderrSpy).toHaveBeenCalledTimes(1);
+    expect(stderrSpy.mock.calls[0][0]).toMatch(/invalid OPENSAFARI_EXEC_TIMEOUT_MS=-1/);
+  });
+
+  test('rejects zero, warns, falls back to default', () => {
+    expect(parseEnvTimeout('0')).toBe(30_000);
+    expect(stderrSpy).toHaveBeenCalledTimes(1);
+  });
+
+  test('rejects NaN string, warns, falls back to default', () => {
+    expect(parseEnvTimeout('not-a-number')).toBe(30_000);
+    expect(stderrSpy).toHaveBeenCalledTimes(1);
+    expect(stderrSpy.mock.calls[0][0]).toMatch(/invalid OPENSAFARI_EXEC_TIMEOUT_MS=not-a-number/);
+  });
+
+  test('rejects decimal value (1.5), warns, falls back to default', () => {
+    expect(parseEnvTimeout('1.5')).toBe(30_000);
+    expect(stderrSpy).toHaveBeenCalledTimes(1);
+  });
+
+  test('rejects value above INT32_MAX, warns, falls back to default', () => {
+    expect(parseEnvTimeout('9999999999')).toBe(30_000);
+    expect(stderrSpy).toHaveBeenCalledTimes(1);
+  });
+
+  test('rejects negative integer well below zero', () => {
+    expect(parseEnvTimeout('-1000000')).toBe(30_000);
+    expect(stderrSpy).toHaveBeenCalledTimes(1);
   });
 });
