@@ -45,7 +45,7 @@ OpenSafari runs fully headless on CI — no display server, no mouse focus, no `
 | Native iOS App (Xcode ≤ 16) | ✅ | ✅ | ✅ | SimulatorKitHID (Tier 1) / `simctl` |
 | Native iOS App (Xcode 26+, element-targeted `app_tap_element` / `app_type_element`) | ✅ | ✅ | ✅ | AX-press (Tier 1.5) when the element advertises `AXPress` — see [docs/headless-architecture.md](docs/headless-architecture.md) |
 | Native iOS App (Xcode 26+, coordinate `app_tap({x,y})` / `app_swipe_native`) | ✅ | ⚠️ Experimental (opt-in) | ⚠️ | PointerService opt-in via `OPENSAFARI_ENABLE_POINTERSERVICE=1` — see [#590](https://github.com/shaun0927/opensafari/issues/590); AppleScript fallback otherwise ([#491](https://github.com/shaun0927/opensafari/issues/491)) |
-| WebView in Native | ✅ | ⚠️ Partial | ⚠️ | WebKit + Native |
+| WebView in Native | ✅ | ⚠️ Partial | ⚠️ | Bundle metadata (`appId`&#124;`bundleId`) requires a newer `ios-webkit-debug-proxy` build — older proxies fall back to URL-scheme heuristics. HTTPS WebViews (e.g. payment-return pages) must pass `bundleId` to `app_webview_connect` for `bundle_match` classification; without it they default to `safari` via `url_scheme` — see [#592](https://github.com/shaun0927/opensafari/issues/592) |
 
 > ✅ Supported and stable. ⚠️ Partially supported — see linked docs for current status and limitations.
 
