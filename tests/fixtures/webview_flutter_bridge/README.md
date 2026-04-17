@@ -33,6 +33,15 @@ mkdir -p assets
 cp assets/index.html <generated>/assets/index.html
 ```
 
+> **Note:** Flutter camelCases the project name when deriving the bundle ID
+> (`webview_flutter_bridge` → `webviewFlutterBridge`), so the generated
+> `ios/Runner.xcodeproj/project.pbxproj` contains
+> `com.opensafari.fixtures.webviewFlutterBridge` instead of the canonical
+> `com.opensafari.fixtures.webviewbridge`. Running `build.sh` automatically
+> rewrites those occurrences before the Xcode build, so the installed `.app`
+> always carries the correct bundle ID. You do **not** need to patch the
+> pbxproj manually.
+
 ## Building and installing
 
 ```sh
@@ -41,8 +50,11 @@ cp assets/index.html <generated>/assets/index.html
 
 `build.sh` will:
 1. Run `flutter pub get`.
-2. Build for the iOS Simulator (`flutter build ios --simulator --debug --no-codesign`).
-3. Install the `.app` bundle onto the simulator identified by `<UDID>` using
+2. Rewrite `PRODUCT_BUNDLE_IDENTIFIER` in `ios/Runner.xcodeproj/project.pbxproj`
+   from the Flutter-generated `com.opensafari.fixtures.webviewFlutterBridge` to
+   the canonical `com.opensafari.fixtures.webviewbridge`.
+3. Build for the iOS Simulator (`flutter build ios --simulator --debug --no-codesign`).
+4. Install the `.app` bundle onto the simulator identified by `<UDID>` using
    `xcrun simctl install`.
 
 ## Screen layout

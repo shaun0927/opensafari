@@ -37,6 +37,20 @@ fi
 echo "==> flutter pub get"
 (cd "$SCRIPT_DIR" && flutter pub get)
 
+# Flutter derives the bundle ID from the project name using camelCase
+# (webview_flutter_bridge → webviewFlutterBridge), producing
+# com.opensafari.fixtures.webviewFlutterBridge in the generated pbxproj.
+# Rewrite it to the canonical ID used by build.sh, the README, and the
+# integration test so that `simctl launch` finds the installed app.
+PBXPROJ="$SCRIPT_DIR/ios/Runner.xcodeproj/project.pbxproj"
+if [ -f "$PBXPROJ" ]; then
+  echo "==> Rewriting PRODUCT_BUNDLE_IDENTIFIER in $PBXPROJ"
+  sed -i '' \
+    -e 's/PRODUCT_BUNDLE_IDENTIFIER = com\.opensafari\.fixtures\.webviewFlutterBridge\.RunnerTests;/PRODUCT_BUNDLE_IDENTIFIER = com.opensafari.fixtures.webviewbridge.RunnerTests;/g' \
+    -e 's/PRODUCT_BUNDLE_IDENTIFIER = com\.opensafari\.fixtures\.webviewFlutterBridge;/PRODUCT_BUNDLE_IDENTIFIER = com.opensafari.fixtures.webviewbridge;/g' \
+    "$PBXPROJ"
+fi
+
 echo "==> flutter build ios --simulator --debug --no-codesign"
 (cd "$SCRIPT_DIR" && flutter build ios --simulator --debug --no-codesign)
 
