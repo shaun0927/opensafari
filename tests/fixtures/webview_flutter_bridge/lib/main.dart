@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
+import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -38,6 +39,11 @@ class _BridgePageState extends State<BridgePage> {
     super.initState();
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted);
+    // Enable Web Inspector so ios-webkit-debug-proxy can see the WKWebView
+    // (required on iOS 16.4+ / WKWebView — isInspectable defaults to false).
+    if (_controller.platform is WebKitWebViewController) {
+      (_controller.platform as WebKitWebViewController).setInspectable(true);
+    }
   }
 
   Future<void> _loadWebView() async {
@@ -64,11 +70,12 @@ class _BridgePageState extends State<BridgePage> {
         children: [
           Padding(
             padding: const EdgeInsets.all(16.0),
-            child: Semantics(
-              identifier: 'load_webview_btn',
-              child: ElevatedButton(
-                key: const Key('load_webview_btn'),
-                onPressed: _loadWebView,
+            child: ElevatedButton(
+              key: const Key('load_webview_btn'),
+              onPressed: _loadWebView,
+              child: Semantics(
+                container: false,
+                identifier: 'load_webview_btn',
                 child: const Text('Load WebView'),
               ),
             ),
@@ -79,11 +86,12 @@ class _BridgePageState extends State<BridgePage> {
             ),
           Padding(
             padding: const EdgeInsets.all(16.0),
-            child: Semantics(
-              identifier: 'native_confirm_btn',
-              child: ElevatedButton(
-                key: const Key('native_confirm_btn'),
-                onPressed: _confirmNative,
+            child: ElevatedButton(
+              key: const Key('native_confirm_btn'),
+              onPressed: _confirmNative,
+              child: Semantics(
+                container: false,
+                identifier: 'native_confirm_btn',
                 child: const Text('Confirm Native'),
               ),
             ),
