@@ -52,10 +52,9 @@
  *     region, and the delegated swipe still scrolls.
  */
 
-import { execFile, execFileSync, execSync } from 'child_process';
+import { execFileSync, execSync } from 'child_process';
 import { existsSync, symlinkSync, unlinkSync } from 'fs';
 import * as path from 'path';
-import { promisify } from 'util';
 import {
   ensureSemanticsActive,
   getAccessibilityBridge,
@@ -70,8 +69,6 @@ import {
   tryCreatePointerServiceBackend,
   isPointerServiceEnabled,
 } from '../../src/tools/pointer-service-input-backend';
-
-const execFileAsync = promisify(execFile);
 
 const DEVICE_ID =
   process.env.OSF_DEVICE_ID ?? '3BEF4E9A-069A-4419-AC62-AB889348EF12';
