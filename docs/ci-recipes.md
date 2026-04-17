@@ -635,8 +635,23 @@ See [docs/ci-integration.md](ci-integration.md#report-format-reference) for the 
 
 ---
 
+---
+
+## Specialized Recipes
+
+End-to-end, scenario-specific recipes that extend the generic flows above. Each
+recipe pins to a specific `opensafari-mcp` version so that teams can copy the
+manifest verbatim and know exactly which APIs it relies on.
+
+| Recipe | Covers | Pinned version |
+|---|---|---|
+| [Flutter + IAP (ko-KR)](recipes/flutter-iap-ko-kr.md) | boot → launch → deep-link → StoreKit purchase → ko-KR alert accept → receipt assert → backend verify | `opensafari-mcp@0.4.9` |
+
+---
+
 ## See also
 
 - [CI Integration](ci-integration.md) — Output formats, exit-code gating, JUnit schema, native artifact collection
 - [Getting Started](getting-started.md) — Local setup guide
 - [Troubleshooting](troubleshooting.md) — General failure modes
+- [StoreKit Automation](storekit-automation.md) — Tool reference for `app_storekit_configure` / `app_storekit_test_session` / `app_storekit_receipt`
