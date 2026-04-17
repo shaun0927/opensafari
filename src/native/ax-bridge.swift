@@ -401,6 +401,21 @@ func main() {
 
     let app = AXUIElementCreateApplication(pid)
 
+    // Wake up the AX server on the target process.
+    //
+    // Empirically, after Simulator.app spends ~1s as a non-frontmost macOS
+    // process, its AX server degrades and subsequent
+    // `AXUIElementCopyAttributeValue` calls return `kAXErrorCannotComplete`
+    // (-25204) for every attribute — `kAXChildren`, `kAXWindows`,
+    // `kAXFocusedWindow`, `kAXMainWindow`. This is the foreground dependency
+    // issue #573 surfaced. Setting `AXManualAccessibility = true` once
+    // forces the target app to keep its AX tree live even while backgrounded;
+    // the SET call itself can return `-25204` in the degraded state, but
+    // the side effect is applied and the following reads succeed. Public AX
+    // API only, no private frameworks involved — same mechanism Electron /
+    // other Chromium hosts use for the inverse direction (opt-in to AX).
+    _ = AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+
     // Find the device content area
     guard let (content, originX, originY) = findDeviceContent(app, deviceUDID: deviceUDID) else {
         outputError("Could not find device window for UDID: \(deviceUDID)", code: "DEVICE_NOT_FOUND")
