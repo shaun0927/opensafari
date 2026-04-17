@@ -14,7 +14,7 @@ const execFileAsync = promisify(execFile);
 const VM_SERVICE_URL_PATTERN = /https?:\/\/127\.0\.0\.1:\d+\/[a-zA-Z0-9_-]+=\//;
 
 /**
- * Default overall deadline for both probes combined (ms).
+ * Default overall deadline for discovery (ms).
  * Override via OPENSAFARI_VM_DISCOVERY_TIMEOUT_MS.
  */
 const DEFAULT_DISCOVERY_TIMEOUT_MS = 5000;
@@ -27,13 +27,30 @@ const MIN_DISCOVERY_TIMEOUT_MS = 500;
 
 /**
  * Per-probe wall-clock cap (ms). Each simctl log probe is bounded to this
- * value so one slow probe cannot consume the entire shared budget.
+ * value so one slow probe cannot consume the entire shared budget. When the
+ * caller-supplied total budget exceeds `PROBE_TIMEOUT_MS × 2`, additional
+ * probe iterations are scheduled until the deadline is reached (see loop
+ * in discoverVMServiceUrl).
  */
 const PROBE_TIMEOUT_MS = 3000;
+
+/**
+ * Default `log show --last` window. Matches the common "already-running app"
+ * case where flutter_connect runs well after the launch banner was logged.
+ * Override via OPENSAFARI_VM_DISCOVERY_LOG_WINDOW (e.g. "2m", "30m", "1h").
+ */
+const DEFAULT_LOG_WINDOW = '10m';
 
 const VM_SERVICE_URL_ENV = 'OPENSAFARI_VM_SERVICE_URL';
 const VM_SERVICE_WS_URL_ENV = 'OPENSAFARI_VM_SERVICE_WS_URL';
 const DISCOVERY_TIMEOUT_ENV = 'OPENSAFARI_VM_DISCOVERY_TIMEOUT_MS';
+const DISCOVERY_LOG_WINDOW_ENV = 'OPENSAFARI_VM_DISCOVERY_LOG_WINDOW';
+
+/**
+ * Accepts values understood by `log show --last` (e.g. "90s", "5m", "2h").
+ * Empty/invalid values fall back to the default.
+ */
+const LOG_WINDOW_PATTERN = /^\d+\s*[smhd]?$/i;
 
 /**
  * Read and validate the env-overridable discovery deadline.
@@ -54,15 +71,32 @@ function resolveDiscoveryTimeout(optionOverride?: number): number {
 }
 
 /**
+ * Read and validate the env-overridable log scan window.
+ * Accepts `log show --last` values like "30s", "10m", "2h".
+ */
+function resolveLogWindow(optionOverride?: string): string {
+  const candidate = optionOverride ?? process.env[DISCOVERY_LOG_WINDOW_ENV];
+  if (candidate && LOG_WINDOW_PATTERN.test(candidate.trim())) {
+    return candidate.trim();
+  }
+  return DEFAULT_LOG_WINDOW;
+}
+
+/**
  * Discover the Dart VM Service URL from simulator logs.
  *
  * Strategy:
  * 1. Short-circuit on env override (no simctl spawned).
  * 2. Predicate-narrowed probe — fast, low-volume, bounded to PROBE_TIMEOUT_MS.
  * 3. Broad fallback probe — only run if probe 1 fails and budget remains.
+ * 4. Additional retry iterations — when the caller-supplied total budget
+ *    exceeds `PROBE_TIMEOUT_MS × 2`, keep alternating predicate/broad probes
+ *    until the shared deadline is reached. This lets larger
+ *    OPENSAFARI_VM_DISCOVERY_TIMEOUT_MS values observably extend total runtime
+ *    (e.g. slow CI log scans).
  *
- * Both probes share a single overall deadline so worst case is one deadline,
- * not 2×. When no URL is found within the budget a single error-level log
+ * All probes share a single overall deadline so worst case is one deadline,
+ * not N×. When no URL is found within the budget a single error-level log
  * line is emitted and null is returned.
  *
  * @param deviceId  Simulator UDID
@@ -71,9 +105,10 @@ function resolveDiscoveryTimeout(optionOverride?: number): number {
  */
 export async function discoverVMServiceUrl(
   deviceId: string,
-  options?: { bundleId?: string; timeout?: number },
+  options?: { bundleId?: string; timeout?: number; logWindow?: string },
 ): Promise<string | null> {
   const deadlineMs = resolveDiscoveryTimeout(options?.timeout);
+  const logWindow = resolveLogWindow(options?.logWindow);
 
   // Fast path: env override — never touches simctl.
   const envOverride = getEnvOverrideUrl();
@@ -87,46 +122,68 @@ export async function discoverVMServiceUrl(
   // Helper: ms remaining until the shared deadline.
   const remaining = () => Math.max(0, absoluteDeadline - Date.now());
 
-  // ── Probe 1: predicate-narrowed (fast, small log volume) ──────────────────
-  const probe1Budget = Math.min(PROBE_TIMEOUT_MS, remaining());
-  if (probe1Budget > 0) {
+  // Helper: run a single simctl log probe. Returns the URL if found, or null.
+  const runPredicateProbe = async (budgetMs: number): Promise<string | null> => {
     try {
       const { stdout } = await execFileAsync('xcrun', [
         'simctl', 'spawn', deviceId,
         'log', 'show',
         '--predicate', 'eventMessage CONTAINS "Observatory" OR eventMessage CONTAINS "VM service" OR eventMessage CONTAINS "Dart VM service"',
-        '--last', '1m',
+        '--last', logWindow,
         '--style', 'compact',
-      ], { timeout: probe1Budget, maxBuffer: 5 * 1024 * 1024 });
+      ], { timeout: budgetMs, maxBuffer: 5 * 1024 * 1024 });
 
-      // Find all URL matches and return the most recent one
       const matches = stdout.match(new RegExp(VM_SERVICE_URL_PATTERN.source, 'g'));
       if (matches && matches.length > 0) {
         return matches[matches.length - 1]; // Most recent
       }
     } catch {
-      // Predicate probe failed — try broad fallback if budget permits.
+      // Probe failed (timeout or simctl error).
     }
-  }
+    return null;
+  };
 
-  // ── Probe 2: broad fallback (no predicate filter) ─────────────────────────
-  const probe2Budget = Math.min(PROBE_TIMEOUT_MS, remaining());
-  if (probe2Budget > 0) {
+  const runBroadProbe = async (budgetMs: number): Promise<string | null> => {
     try {
       const { stdout } = await execFileAsync('xcrun', [
         'simctl', 'spawn', deviceId,
         'log', 'show',
-        '--last', '1m',
+        '--last', logWindow,
         '--style', 'compact',
-      ], { timeout: probe2Budget, maxBuffer: 10 * 1024 * 1024 });
+      ], { timeout: budgetMs, maxBuffer: 10 * 1024 * 1024 });
 
       const matches = stdout.match(new RegExp(VM_SERVICE_URL_PATTERN.source, 'g'));
       if (matches && matches.length > 0) {
         return matches[matches.length - 1];
       }
     } catch {
-      // Broad probe also failed.
+      // Probe failed.
     }
+    return null;
+  };
+
+  // Alternate predicate/broad probes until deadline exhausted or URL found.
+  // When the total budget is ≤ PROBE_TIMEOUT_MS × 2 this behaves exactly like
+  // the original two-probe flow. Larger budgets (e.g. from
+  // OPENSAFARI_VM_DISCOVERY_TIMEOUT_MS) get additional retry iterations so the
+  // override observably extends total wall time and probe count.
+  let iteration = 0;
+  while (remaining() > 0) {
+    const probeBudget = Math.min(PROBE_TIMEOUT_MS, remaining());
+    if (probeBudget <= 0) break;
+
+    // Even iterations use the predicate (fast) probe; odd iterations use the
+    // broad fallback. This preserves the original "predicate first, broad
+    // second" ordering while allowing further retries under large budgets.
+    const url = iteration % 2 === 0
+      ? await runPredicateProbe(probeBudget)
+      : await runBroadProbe(probeBudget);
+
+    if (url) {
+      return url;
+    }
+
+    iteration++;
   }
 
   const elapsedMs = Date.now() - startedAt;

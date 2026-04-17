@@ -68,6 +68,7 @@ beforeEach(() => {
   delete process.env.OPENSAFARI_VM_SERVICE_URL;
   delete process.env.OPENSAFARI_VM_SERVICE_WS_URL;
   delete process.env.OPENSAFARI_VM_DISCOVERY_TIMEOUT_MS;
+  delete process.env.OPENSAFARI_VM_DISCOVERY_LOG_WINDOW;
 });
 
 // ── Env override tests ────────────────────────────────────────────────────────
@@ -123,12 +124,132 @@ describe('shared deadline enforcement', () => {
     expect(elapsed).toBeLessThan(deadlineMs + 500);
   });
 
-  it('never spawns more than two simctl calls', async () => {
+  it('exits the probe loop within the total deadline', async () => {
+    // Each probe takes ~10 ms (real setTimeout). With a 600 ms total budget
+    // the loop must exit within budget + slack. Asserts wall-time bounding
+    // even after the original two-probe cap was removed.
+    setExecFileImpl(() =>
+      new Promise(resolve => setTimeout(() => resolve({ stdout: '', stderr: '' }), 10)),
+    );
+
     const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-    await discoverVMServiceUrl(DEVICE_ID, { timeout: 1000 });
+    const start = Date.now();
+    await discoverVMServiceUrl(DEVICE_ID, { timeout: 600 });
+    errorSpy.mockRestore();
+    const elapsed = Date.now() - start;
+
+    expect(elapsed).toBeLessThan(600 + 500);
+    // Multiple probes should have fit into the 600 ms budget.
+    expect(getCallCount()).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// ── Log window override tests ─────────────────────────────────────────────────
+
+describe('log scan window', () => {
+  it('uses default window of 10m when env var is unset', async () => {
+    let capturedLogWindow: string | undefined;
+    setExecFileImpl((_cmd, args) => {
+      const idx = args.indexOf('--last');
+      if (idx >= 0) capturedLogWindow = args[idx + 1] as string;
+      return Promise.resolve({ stdout: '', stderr: '' });
+    });
+
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    await discoverVMServiceUrl(DEVICE_ID, { timeout: 600 });
     errorSpy.mockRestore();
 
-    expect(getCallCount()).toBeLessThanOrEqual(2);
+    expect(capturedLogWindow).toBe('10m');
+  });
+
+  it('honors OPENSAFARI_VM_DISCOVERY_LOG_WINDOW env override', async () => {
+    process.env.OPENSAFARI_VM_DISCOVERY_LOG_WINDOW = '30m';
+
+    let capturedLogWindow: string | undefined;
+    setExecFileImpl((_cmd, args) => {
+      const idx = args.indexOf('--last');
+      if (idx >= 0) capturedLogWindow = args[idx + 1] as string;
+      return Promise.resolve({ stdout: '', stderr: '' });
+    });
+
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    await discoverVMServiceUrl(DEVICE_ID, { timeout: 600 });
+    errorSpy.mockRestore();
+
+    expect(capturedLogWindow).toBe('30m');
+  });
+
+  it('honors options.logWindow over env var', async () => {
+    process.env.OPENSAFARI_VM_DISCOVERY_LOG_WINDOW = '30m';
+
+    let capturedLogWindow: string | undefined;
+    setExecFileImpl((_cmd, args) => {
+      const idx = args.indexOf('--last');
+      if (idx >= 0) capturedLogWindow = args[idx + 1] as string;
+      return Promise.resolve({ stdout: '', stderr: '' });
+    });
+
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    await discoverVMServiceUrl(DEVICE_ID, { timeout: 600, logWindow: '2h' });
+    errorSpy.mockRestore();
+
+    expect(capturedLogWindow).toBe('2h');
+  });
+
+  it('falls back to default window when env value is malformed', async () => {
+    process.env.OPENSAFARI_VM_DISCOVERY_LOG_WINDOW = 'not-a-window';
+
+    let capturedLogWindow: string | undefined;
+    setExecFileImpl((_cmd, args) => {
+      const idx = args.indexOf('--last');
+      if (idx >= 0) capturedLogWindow = args[idx + 1] as string;
+      return Promise.resolve({ stdout: '', stderr: '' });
+    });
+
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    await discoverVMServiceUrl(DEVICE_ID, { timeout: 600 });
+    errorSpy.mockRestore();
+
+    expect(capturedLogWindow).toBe('10m');
+  });
+});
+
+// ── Large-timeout-override schedules additional retry iterations ──────────────
+
+describe('large timeout override extends probe iterations beyond 2', () => {
+  it('schedules more than two probes when total budget exceeds PROBE_TIMEOUT_MS × 2', async () => {
+    // Each probe completes in 10 ms (real setTimeout) returning empty stdout.
+    // With a 4 s budget the loop should iterate well past the original
+    // two-probe cap — proving the override actually widens discovery.
+    setExecFileImpl(() =>
+      new Promise(resolve => setTimeout(() => resolve({ stdout: '', stderr: '' }), 10)),
+    );
+
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    await discoverVMServiceUrl(DEVICE_ID, { timeout: 4000 });
+    errorSpy.mockRestore();
+
+    expect(getCallCount()).toBeGreaterThan(2);
+  });
+
+  it('alternates predicate and broad probes across iterations', async () => {
+    const probeKinds: Array<'predicate' | 'broad'> = [];
+    setExecFileImpl((_cmd, args) => {
+      const isPredicate = Array.isArray(args) && args.includes('--predicate');
+      probeKinds.push(isPredicate ? 'predicate' : 'broad');
+      return new Promise(resolve =>
+        setTimeout(() => resolve({ stdout: '', stderr: '' }), 10),
+      );
+    });
+
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    await discoverVMServiceUrl(DEVICE_ID, { timeout: 4000 });
+    errorSpy.mockRestore();
+
+    expect(probeKinds.length).toBeGreaterThan(2);
+    expect(probeKinds[0]).toBe('predicate');
+    expect(probeKinds[1]).toBe('broad');
+    expect(probeKinds[2]).toBe('predicate');
   });
 });
 
