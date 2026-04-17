@@ -25,6 +25,10 @@ import type { FlutterVMClient } from '../flutter';
 import { getFlutterVMClient, removeFlutterVMClient } from '../flutter';
 import { FlutterVMInputBackend } from './flutter-vm-input-backend';
 import { tryCreateSimulatorKitHIDBackend } from './sim-hid-input-backend';
+import {
+  isPointerServiceEnabled,
+  tryCreatePointerServiceBackend,
+} from './pointer-service-input-backend';
 import { timedInput } from '../metrics/input-telemetry';
 
 const execFileAsync = promisify(execFile);
@@ -41,7 +45,14 @@ function delay(ms: number): Promise<void> {
  * input — useful when diagnosing focus-theft reports or confirming that a
  * call stayed on a headless tier.
  */
-export type InputBackendKind = 'flutter-vm' | 'simctl' | 'webkit' | 'applescript' | 'simhid' | 'ax-press';
+export type InputBackendKind =
+  | 'flutter-vm'
+  | 'simctl'
+  | 'webkit'
+  | 'applescript'
+  | 'simhid'
+  | 'ax-press'
+  | 'pointer-service';
 
 export interface InputBackend {
   /** Stable identifier used for observability / audit logging. */
@@ -642,6 +653,10 @@ let focusInputOptInWarned = false;
 let simHidProbed = false;
 let cachedSimHidBackend: InputBackend | null = null;
 
+// PointerService backend cache (opt-in, Phase 1 of #590)
+let pointerServiceProbed = false;
+let cachedPointerServiceBackend: InputBackend | null = null;
+
 // Per-device cache of the Flutter VM client connection so subsequent Tier-0
 // lookups reuse an already-established WebSocket instead of re-running
 // discovery on every call. Cleared via `resetInputBackend()`.
@@ -875,6 +890,25 @@ export async function getInputBackend(
     await detectionPromise;
   }
 
+  // Tier 1 (opt-in): PointerService backend — Phase 1 of #590.
+  // When OPENSAFARI_ENABLE_POINTERSERVICE=1, route coordinate tap through
+  // `sim-hid-bridge tap-ps` instead of the default SimHID tap path. Off by
+  // default; when unset the existing Tier-1 SimHID path is used unchanged.
+  // The probe runs once and caches the result for the process lifetime.
+  if (isPointerServiceEnabled()) {
+    if (!pointerServiceProbed) {
+      pointerServiceProbed = true;
+      try {
+        cachedPointerServiceBackend = await tryCreatePointerServiceBackend();
+      } catch {
+        cachedPointerServiceBackend = null;
+      }
+    }
+    if (cachedPointerServiceBackend) {
+      return cachedPointerServiceBackend;
+    }
+  }
+
   // Tier 1: SimulatorKit HID (headless, works with any app — all Xcode versions)
   if (!simHidProbed) {
     simHidProbed = true;
@@ -968,6 +1002,8 @@ export function resetInputBackend(): void {
   flutterVMResolver = defaultFlutterVMResolver;
   simHidProbed = false;
   cachedSimHidBackend = null;
+  pointerServiceProbed = false;
+  cachedPointerServiceBackend = null;
 }
 
 /**

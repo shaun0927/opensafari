@@ -685,6 +685,62 @@ describe('getInputBackend', () => {
     });
   });
 
+  // ── PointerService opt-in routing (Phase 1 of #590) ──────────────────────
+
+  describe('PointerService opt-in routing (#590 Phase 1)', () => {
+    const ALLOW_SWIFT = 'OPENSAFARI_ALLOW_SWIFT_INTERPRETER';
+    const ENABLE_PS = 'OPENSAFARI_ENABLE_POINTERSERVICE';
+    let originalAllowSwift: string | undefined;
+    let originalEnablePS: string | undefined;
+
+    beforeEach(() => {
+      originalAllowSwift = process.env[ALLOW_SWIFT];
+      originalEnablePS = process.env[ENABLE_PS];
+      process.env[ALLOW_SWIFT] = '1';
+      resetInputBackend();
+    });
+
+    afterEach(() => {
+      if (originalAllowSwift === undefined) delete process.env[ALLOW_SWIFT];
+      else process.env[ALLOW_SWIFT] = originalAllowSwift;
+      if (originalEnablePS === undefined) delete process.env[ENABLE_PS];
+      else process.env[ENABLE_PS] = originalEnablePS;
+      resetInputBackend();
+    });
+
+    test('returns pointer-service backend when opt-in flag is set', async () => {
+      process.env[ENABLE_PS] = '1';
+      execMock.mockRejectedValueOnce(new Error('not supported'));
+      const backend = await getInputBackend(DEVICE);
+      expect(backend.kind).toBe('pointer-service');
+    });
+
+    test('falls through to SimHID when opt-in flag is unset', async () => {
+      delete process.env[ENABLE_PS];
+      execMock.mockRejectedValueOnce(new Error('not supported'));
+      const backend = await getInputBackend(DEVICE);
+      expect(backend.kind).toBe('simhid');
+    });
+
+    test('falls through to SimHID when opt-in flag has any non-truthy value', async () => {
+      process.env[ENABLE_PS] = 'maybe';
+      execMock.mockRejectedValueOnce(new Error('not supported'));
+      const backend = await getInputBackend(DEVICE);
+      expect(backend.kind).toBe('simhid');
+    });
+
+    test('returns pointer-service even when a WebKit client is attached (tier order preserved)', async () => {
+      process.env[ENABLE_PS] = '1';
+      execMock.mockRejectedValueOnce(new Error('not supported'));
+      const mockClient = {
+        isConnected: jest.fn().mockReturnValue(true),
+        connect: jest.fn().mockResolvedValue(undefined),
+      } as any;
+      const backend = await getInputBackend(DEVICE, mockClient);
+      expect(backend.kind).toBe('pointer-service');
+    });
+  });
+
   // ── WebKit reconnect retry (issue #405) ─────────────────────────────────
 
   test('attempts a one-shot WebKit reconnect when client is disconnected', async () => {
