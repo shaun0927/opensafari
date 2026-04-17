@@ -299,6 +299,8 @@ describe('FlutterVMInputBackend', () => {
         // User-facing message must surface the remediation — not just echo
         // the raw JSON-RPC error.
         expect(e.message).toMatch(/release build|flutter run/i);
+        // Must link the canonical QA recipe so users can self-serve (#596).
+        expect(e.message).toContain('docs/ci-recipes.md#qa-ready-flutter-build');
       }
     });
 
