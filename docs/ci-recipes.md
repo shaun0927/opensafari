@@ -471,6 +471,9 @@ artifacts:
 | `OPENSAFARI_HEADLESS_ONLY` | `1` | Block AppleScript/CGEvent fallback. Throws `HeadlessInputUnavailableError` instead of moving the physical mouse cursor. **Always set to `1` in CI.** |
 | `OPENSAFARI_PROXY_PORT` | Port number (default `9322`) | Override WebKit proxy port when the default is already in use. |
 | `OPENSAFARI_ALLOW_FOCUS_INPUT` | `1` | Re-enable focus-stealing input (for non-headless local runs only — never set in CI). |
+| `OPENSAFARI_SAVE_FAILURE_SCREENSHOTS` | `1` | Local opt-in for the integration-suite screenshot-on-failure reporter. Auto-detects the booted simulator via `xcrun simctl list devices booted` when `OSF_DEVICE_ID` is unset, so devs can triage a red test locally without also exporting `CI=true`. |
+| `OSF_DEVICE_ID` | Simulator UDID | Explicit simulator target for the screenshot reporter and other integration helpers. Set by CI after booting; dev can use `OPENSAFARI_SAVE_FAILURE_SCREENSHOTS=1` instead to skip the export. |
+| `OSF_SCREENSHOT_DIR` | Directory path | Override base directory for failure screenshots (default `test-output/screenshots/`). |
 
 ```bash
 # Recommended CI environment
