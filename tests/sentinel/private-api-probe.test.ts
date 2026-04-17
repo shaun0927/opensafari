@@ -1,7 +1,7 @@
 /**
  * Private API Regression Sentinel (issue #503).
  *
- * Probes the seven private-API surfaces that opensafari depends on:
+ * Probes the eight private-API surfaces that opensafari depends on:
  *   1. SimulatorKit.framework          — dlopen path exists
  *   2. CoreSimulator.framework         — dlopen path exists
  *   3. sim-hid-bridge                   — loads frameworks + resolves HID symbols
@@ -11,6 +11,8 @@
  *   7. ax-bridge GUI-less invariant     — resolves AX root via
  *                                          AXUIElementCreateApplication(pid) and
  *                                          does not require Simulator.app foreground (#573)
+ *   8. app_alert_handle (#589)          — ko-KR 3-button permission sheet resolves via
+ *                                          AX label match
  *
  * Excluded from `npm test`. Designed to run daily in CI (see
  * .github/workflows/private-api-sentinel.yml) so Apple-side breakage in
@@ -36,6 +38,8 @@ import { existsSync, readFileSync } from 'fs';
 import * as path from 'path';
 
 import { findSocketPath } from '../../src/simulator/socket-finder';
+import { MCPServer } from '../../src/mcp-server';
+import { registerAppAlertHandleTool } from '../../src/tools/app-alert-handle';
 
 const execFileAsync = promisify(execFile);
 
@@ -281,6 +285,126 @@ describe('Private API Sentinel', () => {
           'ios_webkit_debug_proxy not found on PATH. ' +
             'Install with: brew install ios-webkit-debug-proxy',
         );
+      }
+    });
+  });
+
+  // Probe 8 verifies that app_alert_handle's AX label-match path resolves a
+  // live ko-KR 3-button permission dialog end-to-end. Skips when no simulator
+  // is booted, when Simulator.app is not running, or when the active locale is
+  // not ko. Refs #589.
+  describe('8. app_alert_handle ko-KR label-match probe (#589)', () => {
+    test('resolves a ko-KR 3-button permission dialog via AX label match', async () => {
+      // ── Guard 1: booted simulator ──
+      const udid = await getBootedUdid();
+      if (!udid) {
+        console.warn(
+          '[sentinel] No booted simulator found — skipping ko-KR app_alert_handle probe.',
+        );
+        return;
+      }
+
+      // ── Guard 2: Simulator.app must be running ──
+      try {
+        const { stdout: pgrep } = await execFileAsync('pgrep', ['-x', 'Simulator']);
+        if (!pgrep.trim()) {
+          console.warn(
+            '[sentinel] Simulator.app process not found — skipping ko-KR app_alert_handle probe.',
+          );
+          return;
+        }
+      } catch {
+        console.warn(
+          '[sentinel] Simulator.app is not running — skipping ko-KR app_alert_handle probe.',
+        );
+        return;
+      }
+
+      // ── Guard 3: active locale must be ko ──
+      let locale = '';
+      try {
+        const { stdout } = await execFileAsync('xcrun', [
+          'simctl', 'spawn', udid, 'defaults', 'read', '-g', 'AppleLocale',
+        ]);
+        locale = stdout.trim();
+      } catch {
+        console.warn(
+          '[sentinel] Could not read AppleLocale from simulator — skipping ko-KR app_alert_handle probe.',
+        );
+        return;
+      }
+
+      if (!locale.startsWith('ko')) {
+        console.warn(
+          `[sentinel] Simulator locale is "${locale}" (not ko) — skipping ko-KR app_alert_handle probe.`,
+        );
+        return;
+      }
+
+      // ── Trigger a deterministic ko-KR 3-button Maps location permission dialog ──
+      try {
+        await execFileAsync('xcrun', ['simctl', 'terminate', udid, 'com.apple.Maps']);
+      } catch {
+        // ignore — Maps may not be running
+      }
+
+      await execFileAsync('xcrun', ['simctl', 'privacy', udid, 'reset', 'location', 'com.apple.Maps']);
+      await execFileAsync('xcrun', ['simctl', 'openurl', udid, 'maps://?q=Seoul']);
+
+      await new Promise<void>((resolve) => setTimeout(resolve, 4500));
+
+      // ── Invoke app_alert_handle via the MCP server registry ──
+      const server = new MCPServer();
+      registerAppAlertHandleTool(server);
+
+      const handler = server.getToolHandler('app_alert_handle');
+      if (!handler) {
+        throw new Error('app_alert_handle handler not registered — internal sentinel error');
+      }
+
+      const result = await handler('sentinel', {
+        buttonLabels: ['앱을 사용하는 동안 허용', 'Allow While Using App'],
+        deviceId: udid,
+      });
+
+      const body = (result as { content: Array<{ type: string; text: string }> }).content[0].text;
+      let parsed: Record<string, unknown>;
+      try {
+        parsed = JSON.parse(body) as Record<string, unknown>;
+      } catch (err) {
+        throw new Error(
+          `app_alert_handle returned non-JSON: ${body}. parseError=${(err as Error).message}`,
+        );
+      }
+
+      if (parsed['error']) {
+        const maybeError = parsed as { error?: unknown; code?: string };
+        if (
+          maybeError.code === 'SIMULATOR_NOT_RUNNING' ||
+          (typeof parsed['error'] === 'string' && (parsed['error'] as string).includes('SIMULATOR_NOT_RUNNING'))
+        ) {
+          console.warn(
+            '[sentinel] app_alert_handle reports SIMULATOR_NOT_RUNNING — skipping ko-KR probe.',
+          );
+          return;
+        }
+        throw new Error(
+          `app_alert_handle returned error: ${JSON.stringify(parsed)}`,
+        );
+      }
+
+      // ── Assertions ──
+      expect(parsed['handled']).toBe(true);
+      expect(parsed['method']).toBe('ax-press');
+
+      const meta = parsed['_meta'] as { _telemetry?: Array<{ backend?: string }> } | undefined;
+      expect(meta?._telemetry?.[0]?.backend).toBe('ax-press');
+
+      // ── Cleanup ──
+      try {
+        await execFileAsync('xcrun', ['simctl', 'terminate', udid, 'com.apple.Maps']);
+      } catch {
+        // ignore
       }
     });
   });
