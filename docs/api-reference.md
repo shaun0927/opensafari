@@ -83,6 +83,15 @@ Reset app state: terminate, reset privacy permissions, uninstall. The app must b
 - **Output:** `{ reset: boolean, bundleId, deviceId, steps: string[] }`
 - **Steps:** `terminated` → `privacy_reset` → `uninstalled` (each step proceeds independently)
 
+#### app_webview_connect
+Detect WebView targets inside a running native app and list available ones.
+- **Input:** `{ bundleId?: string, deviceId?: string }`
+- **Output:** `{ deviceId, targets: [{ id, title, url, type, classificationReason }], count }`
+- **`classificationReason`** values: `bundle_match` | `proxy_type` | `url_scheme`
+  - `bundle_match` — target matched via `bundleId` parameter (metadata fields or title/url substring). When `bundleId` is provided, HTTPS WebViews such as payment-return pages or OAuth callbacks are promoted from `safari` to `webview` classification via this reason.
+  - `proxy_type` — proxy-supplied `type` field on the target determined classification (e.g. `type: 'WebView'` overrides URL-scheme heuristics).
+  - `url_scheme` — fallback heuristic: non-http(s) schemes → `webview`; http(s) or empty/about:blank → `safari`.
+
 ### Advanced Tools (Tier 2)
 
 inspect, wait_for, long_press, swipe, press, dismiss_keyboard, select_option, device_list, device_rotate, appearance_toggle

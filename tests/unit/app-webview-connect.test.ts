@@ -1,7 +1,7 @@
 import { MCPServer, setWebKitClient } from '../../src/mcp-server';
 import { registerAppWebviewConnectTool } from '../../src/tools/app-webview-connect';
 
-function createMockClient(targets: Array<{ id: string; title: string; url: string; webSocketDebuggerUrl: string; type?: string }>) {
+function createMockClient(targets: Array<{ id: string; title: string; url: string; webSocketDebuggerUrl: string; type?: string; appId?: string; bundleId?: string; app_id?: string }>) {
   return {
     async listTargets() { return targets; },
     async connect() {},
@@ -132,5 +132,78 @@ describe('app_webview_connect tool', () => {
     const data = JSON.parse((result.content as any)[0].text);
     expect(data.count).toBe(0);
     expect(data.targets).toHaveLength(0);
+  });
+
+  // New tests for bundle-aware classification
+
+  test('HTTPS payment-return target classified as webview when bundleId matches', async () => {
+    const targets = [
+      { id: 'page-pg', title: 'Payment', url: 'https://pay.example.com/return', webSocketDebuggerUrl: 'ws://localhost:9222/devtools/page/page-pg', appId: 'com.example.shopping' },
+    ];
+    const mock = createMockClient(targets);
+    setWebKitClient(mock as any);
+    const handler = server.getToolHandler('app_webview_connect')!;
+    const result = await handler('test', { bundleId: 'com.example.shopping' });
+    const data = JSON.parse((result.content as any)[0].text);
+    const target = data.targets.find((t: any) => t.id === 'page-pg');
+    expect(target).toBeDefined();
+    expect(target.type).toBe('webview');
+    expect(target.classificationReason).toBe('bundle_match');
+  });
+
+  test('HTTPS target with non-matching bundleId stays safari and is filtered out', async () => {
+    const targets = [
+      { id: 'page-pure', title: 'Google', url: 'https://google.com', webSocketDebuggerUrl: 'ws://localhost:9222/devtools/page/page-pure' },
+    ];
+    const mock = createMockClient(targets);
+    setWebKitClient(mock as any);
+    const handler = server.getToolHandler('app_webview_connect')!;
+    const result = await handler('test', { bundleId: 'com.example.shopping' });
+    const data = JSON.parse((result.content as any)[0].text);
+    expect(data.targets.map((t: any) => t.id)).not.toContain('page-pure');
+  });
+
+  test('file:// target classified webview with reason url_scheme', async () => {
+    const targets = [
+      { id: 'page-file', title: 'x', url: 'file:///app/index.html', webSocketDebuggerUrl: 'ws://localhost:9222/devtools/page/page-file' },
+    ];
+    const mock = createMockClient(targets);
+    setWebKitClient(mock as any);
+    const handler = server.getToolHandler('app_webview_connect')!;
+    const result = await handler('test', {});
+    const data = JSON.parse((result.content as any)[0].text);
+    const target = data.targets.find((t: any) => t.id === 'page-file');
+    expect(target).toBeDefined();
+    expect(target.classificationReason).toBe('url_scheme');
+  });
+
+  test('proxy-supplied type=WebView overrides url_scheme', async () => {
+    const targets = [
+      { id: 'page-pt', title: 'x', url: 'https://cdn.example.com/frame.html', webSocketDebuggerUrl: 'ws://localhost:9222/devtools/page/page-pt', type: 'WebView' },
+    ];
+    const mock = createMockClient(targets);
+    setWebKitClient(mock as any);
+    const handler = server.getToolHandler('app_webview_connect')!;
+    const result = await handler('test', {});
+    const data = JSON.parse((result.content as any)[0].text);
+    const target = data.targets.find((t: any) => t.id === 'page-pt');
+    expect(target).toBeDefined();
+    expect(target.type).toBe('webview');
+    expect(target.classificationReason).toBe('proxy_type');
+  });
+
+  test('bundle_match by title substring still works for backward compatibility', async () => {
+    const targets = [
+      { id: 'page-legacy', title: 'com.example.app \u2013 Home', url: 'about:blank', webSocketDebuggerUrl: 'ws://localhost:9222/devtools/page/page-legacy' },
+    ];
+    const mock = createMockClient(targets);
+    setWebKitClient(mock as any);
+    const handler = server.getToolHandler('app_webview_connect')!;
+    const result = await handler('test', { bundleId: 'com.example.app' });
+    const data = JSON.parse((result.content as any)[0].text);
+    const target = data.targets.find((t: any) => t.id === 'page-legacy');
+    expect(target).toBeDefined();
+    expect(target.classificationReason).toBe('bundle_match');
+    expect(target.type).toBe('webview');
   });
 });

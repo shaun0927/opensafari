@@ -6,23 +6,73 @@ import { getSharedProxy } from '../simulator/proxy';
 
 const DEFAULT_PROXY_HOST = 'localhost';
 
+type ClassificationReason = 'bundle_match' | 'proxy_type' | 'url_scheme';
+type TargetType = 'safari' | 'webview';
+
+interface ClassificationResult {
+  type: TargetType;
+  reason: ClassificationReason;
+}
+
+interface ListTarget {
+  id: string;
+  title: string;
+  url: string;
+  webSocketDebuggerUrl: string;
+  type?: string;
+  appId?: string;
+  bundleId?: string;
+  app_id?: string;
+}
+
 /**
  * Determine whether a target looks like a Safari browser tab vs a native app WebView.
- * Safari targets typically load http/https URLs and have titles like "Safari" or blank/about.
- * WebView targets often have app-specific schemes or titles tied to app bundle identifiers.
+ *
+ * Priority order (first match wins):
+ * 1. bundle_match — ownerBundleId matches target metadata (appId/bundleId/app_id fields,
+ *    or title/url substring). Classifies as webview.
+ * 2. proxy_type — target has a `type` field from the proxy. Maps safari/mobilesafari →
+ *    safari; any string containing "webview" → webview.
+ * 3. url_scheme — fallback heuristic: empty/about:blank → safari; non-http(s) → webview;
+ *    http(s) → safari.
  */
-function classifyTarget(target: { url: string; title: string; type?: string }): 'safari' | 'webview' {
-  const url = target.url ?? '';
-  // Explicit type hint from proxy
-  if (target.type) {
-    if (target.type.toLowerCase().includes('safari')) return 'safari';
-    if (target.type.toLowerCase().includes('webview')) return 'webview';
+function classifyTarget(
+  target: ListTarget,
+  ownerBundleId?: string,
+): ClassificationResult {
+  // 1. bundle_match
+  if (ownerBundleId) {
+    const lower = ownerBundleId.toLowerCase();
+    const metadataFields = [target.appId, target.bundleId, target.app_id];
+    const metadataMatch = metadataFields.some(
+      (field) => field !== undefined && field.toLowerCase() === lower,
+    );
+    const substringMatch =
+      target.title.toLowerCase().includes(lower) ||
+      target.url.toLowerCase().includes(lower);
+    if (metadataMatch || substringMatch) {
+      return { type: 'webview', reason: 'bundle_match' };
+    }
   }
-  // about:blank or empty URL — likely Safari new tab
-  if (!url || url === 'about:blank') return 'safari';
-  // file:// or custom scheme — WebView
-  if (!url.startsWith('http://') && !url.startsWith('https://')) return 'webview';
-  return 'safari';
+
+  // 2. proxy_type
+  if (target.type) {
+    const t = target.type.toLowerCase();
+    if (t === 'safari' || t === 'mobilesafari') {
+      return { type: 'safari', reason: 'proxy_type' };
+    }
+    if (t.includes('webview')) {
+      return { type: 'webview', reason: 'proxy_type' };
+    }
+  }
+
+  // 3. url_scheme fallback
+  const url = target.url ?? '';
+  if (!url || url === 'about:blank') return { type: 'safari', reason: 'url_scheme' };
+  if (!url.startsWith('http://') && !url.startsWith('https://')) {
+    return { type: 'webview', reason: 'url_scheme' };
+  }
+  return { type: 'safari', reason: 'url_scheme' };
 }
 
 export function registerAppWebviewConnectTool(server: MCPServer): void {
@@ -66,7 +116,7 @@ export function registerAppWebviewConnectTool(server: MCPServer): void {
       }
 
       // List all targets from ios-webkit-debug-proxy
-      let targets: Array<{ id: string; title: string; url: string; webSocketDebuggerUrl: string; type?: string }>;
+      let targets: ListTarget[];
       try {
         targets = await (client as any).listTargets?.() ?? [];
       } catch (err) {
@@ -77,24 +127,31 @@ export function registerAppWebviewConnectTool(server: MCPServer): void {
         };
       }
 
-      // Classify and filter targets
-      const classified = targets.map((t) => ({
-        id: t.id,
-        title: t.title,
-        url: t.url,
-        webSocketDebuggerUrl: t.webSocketDebuggerUrl,
-        type: classifyTarget(t),
-      }));
+      // Classify all targets
+      const classified = targets.map((t) => {
+        const { type, reason } = classifyTarget(t, bundleId);
+        return {
+          id: t.id,
+          title: t.title,
+          url: t.url,
+          webSocketDebuggerUrl: t.webSocketDebuggerUrl,
+          type,
+          classificationReason: reason,
+        };
+      });
 
-      // Filter to WebView targets only; optionally filter by bundleId in title/url
-      let webviewTargets = classified.filter((t) => t.type === 'webview');
-      if (bundleId) {
-        webviewTargets = webviewTargets.filter(
-          (t) =>
-            t.title.toLowerCase().includes(bundleId.toLowerCase()) ||
-            t.url.toLowerCase().includes(bundleId.toLowerCase()),
+      // Keep WebView targets only. When bundleId is provided, further restrict to targets
+      // that either matched via bundle_match (already promoted) OR contain the bundleId
+      // substring in title/url (backward-compatible filter for non-HTTPS webviews).
+      const webviewTargets = classified.filter((t) => {
+        if (t.type !== 'webview') return false;
+        if (!bundleId) return true;
+        return (
+          t.classificationReason === 'bundle_match' ||
+          t.title.toLowerCase().includes(bundleId.toLowerCase()) ||
+          t.url.toLowerCase().includes(bundleId.toLowerCase())
         );
-      }
+      });
 
       const result = {
         deviceId: resolvedDeviceId,
