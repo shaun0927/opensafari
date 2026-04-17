@@ -110,6 +110,31 @@ Run all 13 iOS QA detectors and generate a scored report.
 - **Output:** Report content as text (or file path for `html` format)
 - **CI usage:** See [CI/CD Integration](ci-integration.md) for example GitHub Actions workflows, exit code gating, and Jenkins/CircleCI examples.
 
+### StoreKit / In-App Purchase Tools (Tier 2)
+
+#### app_storekit_configure
+Load a `.storekit` configuration file into an iOS Simulator to enable sandbox IAP testing. Requires Xcode 14+. Disabled when `OPENSAFARI_DISABLE_STOREKIT=1`.
+- **Input:** `{ configPath: string, udid?: string }`
+- **Output:** `{ ok: true, productIds: string[], udid, configPath }`
+- **Errors:** `MISSING_FILE` (file not found or invalid JSON), `DEVICE_NOT_BOOTED`, `STOREKIT_DISABLED`, `XCODE_TOO_OLD`, `STOREKIT_ERROR`
+
+#### app_storekit_test_session
+Control the StoreKit sandbox test session: list, approve, decline, refund, or clear transactions, and toggle Ask to Buy. Requires Xcode 14+. Disabled when `OPENSAFARI_DISABLE_STOREKIT=1`.
+- **Input:** `{ action: 'list'|'approve'|'decline'|'refund'|'clear'|'askToBuy', udid?: string, transactionId?: string, enabled?: boolean }`
+  - `transactionId` required for `approve`, `decline`, `refund`
+  - `enabled` required for `askToBuy`
+- **Output (list):** `{ ok: true, transactions: [{ id, state, productId }] }`
+- **Output (others):** `{ ok: true, action, udid, ... }`
+- **Errors:** `MISSING_TRANSACTION_ID`, `MISSING_ENABLED`, `DEVICE_NOT_BOOTED`, `STOREKIT_DISABLED`, `XCODE_TOO_OLD`, `STOREKIT_ERROR`
+
+#### app_storekit_receipt
+Pull the StoreKit sandbox receipt (base64-encoded) from an installed app's data container. Checks `StoreKit/sandboxReceipt` then `Documents/receipt`. Disabled when `OPENSAFARI_DISABLE_STOREKIT=1`.
+- **Input:** `{ bundleId: string, udid?: string }`
+- **Output:** `{ receipt: string, path: string, bytes: number, bundleId, udid }`
+- **Errors:** `APP_NOT_INSTALLED`, `NO_RECEIPT`, `READ_ERROR`, `DEVICE_NOT_BOOTED`, `STOREKIT_DISABLED`
+
+See [StoreKit Automation Guide](storekit-automation.md) for a full walk-through with sample `.storekit` file.
+
 ## Claude Code Configuration
 
 ```json
