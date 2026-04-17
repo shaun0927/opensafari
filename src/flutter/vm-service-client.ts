@@ -694,3 +694,12 @@ export function removeFlutterVMClient(deviceId: string): void {
     clients.delete(deviceId);
   }
 }
+
+/**
+ * Current number of retained per-device `FlutterVMClient` entries. Exposed
+ * for the cache-budget survey (#554) so `diagnose` can flag this cache when
+ * it outgrows the budget documented in `docs/memory-budget.md`.
+ */
+export function getFlutterVMClientCount(): number {
+  return clients.size;
+}

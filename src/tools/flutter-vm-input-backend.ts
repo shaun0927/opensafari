@@ -72,7 +72,10 @@ export class FlutterVMInputBackendError extends Error {
           `(code 113). This app is likely a release build or was launched ` +
           `with \`simctl launch\` instead of \`flutter run\`. ` +
           `Use Tier 1.5 AX press (app_tap_element / app_type_element) or ` +
-          `relaunch under \`flutter run --debug\` for full gesture coverage.`
+          `relaunch under \`flutter run --debug\` for full gesture coverage. ` +
+          `See docs/ci-recipes.md#qa-ready-flutter-build for the ` +
+          `simulator (--debug) and physical-device (--profile) recipes ` +
+          `that keep Tier 0 available.`
         : `FlutterVMInputBackend.${op} failed: ${msg}`;
     super(userMessage);
     this.op = op;

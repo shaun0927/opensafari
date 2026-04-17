@@ -9,6 +9,40 @@ The Flutter Inspector tools provide real-time widget tree inspection for running
 
 Both tools require an active Flutter VM Service connection via `flutter_connect` (debug or profile builds only).
 
+## Build-mode × Xcode tier matrix (#596)
+
+Flutter build mode determines which input tier the router lands on. **Release builds on Xcode 26+ land on the slowest and most fragile path** — AX-press for element-targeted tools only, AppleScript for coordinate tools — because Tier 0 (`FlutterVMInputBackend`) requires `evaluate` support (Dart AOT cannot compile expressions at runtime) and Tier 1 SimHID tap/swipe is disabled on Xcode 26+ pending the `IndigoHIDMessageForMouseNSEvent` regression fix (#491, #537).
+
+Consumers often pick release mode for "QA" simulator builds to match production performance — and silently forfeit headless coverage. The Flutter toolchain blocks `--profile` for simulator targets (`flutter build ios --simulator --profile` exits with *"Profile mode is not supported for simulators."*), so the only Tier-0-keeping mode on the simulator is `--debug`. Profile mode still applies to physical-device QA. See the [QA-ready Flutter build recipe](./ci-recipes.md#qa-ready-flutter-build) for both flows.
+
+**iOS Simulator (Xcode Simulator runtimes):**
+
+| Build mode | Xcode ≤ 25 | Xcode 26+ | VM Service | Tier 0 (`FlutterVMInputBackend`) |
+| --- | --- | --- | --- | --- |
+| `debug` | **Tier 0** (all gestures via VM Service) | **Tier 0** (all gestures via VM Service) | ✅ | ✅ `evaluate` available |
+| `profile` | n/a — *"Profile mode is not supported for simulators."* | n/a — same toolchain block | n/a | n/a — use `--debug` instead |
+| `release` | Tier 1/2/3 (SimHID → simctl → WebKit) | ⚠️ **AX-press for element, AppleScript for coords** | ❌ (AOT) | ❌ falls through (`VM_NO_EVALUATE`) |
+
+**Physical iOS devices:**
+
+| Build mode | VM Service | Tier 0 (`FlutterVMInputBackend`) | Notes |
+| --- | --- | --- | --- |
+| `debug` | ✅ | ✅ `evaluate` available | Slowest runtime; use only when you need full inspector tooling. |
+| `profile` | ✅ | ✅ `evaluate` available | **Recommended for perf-parity device QA** — keeps Tier 0 while running close to release perf. |
+| `release` | ❌ (AOT) | ❌ falls through (`VM_NO_EVALUATE`) | Same fall-through behaviour as a release-mode simulator build. |
+
+Legend:
+
+- **Tier 0** `FlutterVMInputBackend` — synthetic `PointerDataPacket` via VM Service, zero OS input, fully headless.
+- **Tier 1** `SimulatorKitHIDInputBackend` — IOKit HID events; tap/swipe disabled on Xcode 26+.
+- **Tier 1.5** `AccessibilityPressInputBackend` — `AXUIElementPerformAction` for `app_tap_element` / `app_type_element` only.
+- **Tier 2/3** `SimctlIOInputBackend` / `NativeInputBackend` (WebKit) — coordinate-only on native UIKit.
+- **Tier 4** `AppleScriptInputBackend` — requires `Simulator.app` focus; blocked when `OPENSAFARI_HEADLESS_ONLY=1`.
+
+### Detecting release-mode fall-through
+
+When Tier 0 probes a release build it rejects with `FlutterVMInputBackendError { code: 'VM_NO_EVALUATE' }` whose `.message` surfaces the canonical recipe link. Tool consumers can key on the structured code to prompt users to rebuild with `--profile`, or parse `flutter_connect`'s response metadata (Dart VM flags expose the build mode).
+
 ## Flutter Compatibility Matrix
 
 | Flutter version | `flutter_root_widget` | `flutter_inspect_selection` | Inspector method chosen | Notes |

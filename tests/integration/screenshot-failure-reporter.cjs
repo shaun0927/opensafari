@@ -6,8 +6,11 @@
  * Activation:
  *   - Pass `--reporters=default --reporters=<path>/screenshot-failure-reporter.cjs`
  *     to jest. The `npm run test:integration` script wires this up by default.
- *   - The reporter no-ops when `OSF_DEVICE_ID` is unset (CI without a booted
- *     simulator) or when the booted device cannot be probed.
+ *   - The reporter no-ops when no iOS Simulator device id is resolvable — either
+ *     via `OSF_DEVICE_ID` (set explicitly by CI or the dev) or via the local
+ *     opt-in `OPENSAFARI_SAVE_FAILURE_SCREENSHOTS=1`, which auto-detects a
+ *     booted simulator through `xcrun simctl list devices booted` so the dev
+ *     does not have to mirror CI env just to triage a red test locally.
  *
  * Output:
  *   - Default: `<repo>/test-output/screenshots/<ISO-timestamp>_<sanitised-test-name>.png`
@@ -35,7 +38,34 @@ class ScreenshotOnFailureReporter {
       process.env.OSF_SCREENSHOT_DIR ||
       path.resolve(cwd, 'test-output', 'screenshots');
     this.deviceId = process.env.OSF_DEVICE_ID || null;
+    this.forced = process.env.OPENSAFARI_SAVE_FAILURE_SCREENSHOTS === '1';
+    // Local opt-in convenience: if the dev asked for failure screenshots but
+    // hasn't exported a device id, find the booted simulator ourselves. Keeps
+    // `CI=true` / `OSF_DEVICE_ID=…` as the CI path and this flag as the strictly
+    // additive local path — neither side effects the other.
+    if (!this.deviceId && this.forced) {
+      this.deviceId = ScreenshotOnFailureReporter.detectBootedDevice();
+    }
     this.captures = 0;
+  }
+
+  static detectBootedDevice() {
+    try {
+      const raw = execFileSync(
+        'xcrun',
+        ['simctl', 'list', 'devices', 'booted', '-j'],
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 5_000 },
+      );
+      const parsed = JSON.parse(raw);
+      for (const devices of Object.values(parsed.devices || {})) {
+        for (const dev of devices || []) {
+          if (dev && dev.udid) return dev.udid;
+        }
+      }
+    } catch {
+      // Swallow: absence of xcrun / booted devices means "nothing to do".
+    }
+    return null;
   }
 
   /**

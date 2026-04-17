@@ -10,6 +10,7 @@ name: SimulatorKit HID Sentinel
 #   exit 78 CORESIMULATOR_MISSING     — CoreSimulator.framework moved or gone
 #   exit 78 HID_CLIENT_FAILED         — SimDeviceLegacyHIDClient class gone
 #   exit 78 HID_FUNCTIONS_MISSING     — IndigoHIDMessage* symbols gone
+#   diag indigoSymbols false/missing  — IndigoHIDMessageToCreate/RemovePointerService gone (#590 Phase 1)
 #
 # When the job fails we open (or update) a tracking issue so the on-call
 # engineer sees it on github.com without needing Slack access.
@@ -38,7 +39,13 @@ jobs:
       fail-fast: false
       matrix:
         runner:
+          # Each runner ships a different Xcode/macOS combination so we detect
+          # version-specific private-framework regressions:
+          #   macos-14  → macOS 14 (Sonoma)  / Xcode 15–16
+          #   macos-15  → macOS 15 (Sequoia) / Xcode 16–17
+          #   macos-latest → latest GA (currently macOS 15)
           - macos-latest
+          - macos-15
           - macos-14
     runs-on: ${{ matrix.runner }}
     name: sentinel (${{ matrix.runner }})

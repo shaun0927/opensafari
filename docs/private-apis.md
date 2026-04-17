@@ -18,6 +18,71 @@ auditable. Every private symbol we touch is listed here together with:
 If you add a new private-framework call, you **must** update this file in
 the same PR. Reviewers will block merges that skip this step.
 
+## Deployment scope
+
+> **TL;DR — host-side simulator automation only. Do not bundle into a shipping iOS app.**
+
+OpenSafari loads `SimulatorKit.framework` and `CoreSimulator.framework` via
+`dlopen` and uses Apple-private IOKit / Accessibility entry points. These
+frameworks are part of the **macOS developer toolchain** (they ship inside
+`/Library/Developer/PrivateFrameworks/` and `Xcode.app`), not the iOS SDK,
+and they are intended for tooling that drives the iOS Simulator from a
+developer Mac.
+
+### ✅ Allowed
+
+- Running OpenSafari on a developer Mac as an MCP server / CLI.
+- Running OpenSafari on macOS CI runners (GitHub Actions `macos-*`,
+  Buildkite Mac agents, internal Mac mini farms) for headless QA against
+  the iOS Simulator.
+- Bundling OpenSafari with internal developer tooling distributed to
+  engineers (it never leaves macOS).
+
+### ❌ Not allowed
+
+- **Bundling `sim-hid-bridge`, `ax-bridge`, the SimulatorKit `dlopen`
+  helper, or any other private-API helper inside an iOS `.ipa` submitted
+  to the App Store, TestFlight, Ad Hoc, or Enterprise (in-house)
+  distribution.** Private frameworks and undocumented APIs trigger App
+  Store Review Guideline 2.5.1 / 2.5.2 rejections, and Enterprise
+  Distribution programs prohibit shipping software that uses
+  non-public APIs.
+- Shipping derivative works that load `SimulatorKit.framework`,
+  `CoreSimulator.framework`, or any `Indigo*` / `IOHIDEvent*` symbol
+  inside an iOS device build (the symbols don't exist on-device anyway,
+  but stripping them out of a fork before redistribution is the
+  consumer's responsibility).
+- Re-targeting the helpers to drive a physical iOS device. The
+  SimulatorKit HID path operates on `SimDevice` instances managed by
+  CoreSimulator; it has no on-device counterpart and any attempt to
+  port it would require additional, separately-prohibited private APIs.
+
+### Rationale
+
+- **Apple App Review** — Guideline 2.5.1 requires apps to use only
+  public APIs; 2.5.2 requires self-contained executable code. Bundling
+  `dlopen("…/SimulatorKit.framework/SimulatorKit")` inside an iOS app
+  fails both even before the framework's absence on iOS becomes the
+  immediate runtime crash.
+- **Framework provenance** — `SimulatorKit.framework` and
+  `CoreSimulator.framework` live under
+  `/Library/Developer/PrivateFrameworks/` (Mac developer tools), not in
+  any iOS SDK. They have no code-signing entitlement that would let
+  them ship inside an `.ipa`.
+- **Same posture as `idb`** — Facebook's `idb` (which uses the same
+  SimulatorKit HID surface) is a host-side daemon for the same reason;
+  it is not shipped inside iOS apps either.
+
+### License interaction
+
+The MIT license on this repository covers OpenSafari's own source. It
+does **not** sublicense Apple's frameworks. Any use of
+`SimulatorKit.framework`, `CoreSimulator.framework`, or other Apple
+private APIs remains subject to the Xcode and macOS license agreements
+you accepted when installing them. See [`../LICENSE`](../LICENSE) for
+the OpenSafari grant; consult Apple's developer agreements for the
+permissible scope of the loaded frameworks themselves.
+
 ## Loaded frameworks
 
 | Framework | Path | Why |
@@ -221,7 +286,11 @@ Relevant shipped PRs:
 
 The Xcode 26 tap regression + the candidates we have already falsified
 (mouse NSEvent coord units, `CreatePointerService` bracket, digitizer
-IOHIDEvent → pointer wrapper) are tracked in
+IOHIDEvent → pointer wrapper) are catalogued in
 [docs/simhid-ios26-investigation.md](./simhid-ios26-investigation.md).
-Read that file before adding a new candidate path so we don't reproduce
-work already ruled out.
+That document is the canonical synthesis: it carries the
+falsification log, remaining candidates ranked by effort × yield, and
+the [stability commitments](./simhid-ios26-investigation.md#stability-commitments)
+for coordinate tap vs element-targeted input on Xcode 26+. Read it
+before adding a new candidate path so we don't reproduce work already
+ruled out.

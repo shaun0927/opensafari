@@ -103,6 +103,7 @@ export type InputBackendErrorCode =
   | 'NOT_IMPLEMENTED'
   | 'SPAWN_TIMEOUT'
   | 'BRIDGE_NOT_FOUND'
+  | 'HID_BRIDGE_MISSING'
   | 'JSON_PARSE_FAILURE'
   | 'UNKNOWN';
 
@@ -222,7 +223,10 @@ export class SimulatorKitHIDInputBackend implements InputBackend {
         '[opensafari] SimulatorKitHIDInputBackend uses private Apple frameworks ' +
           '(SimulatorKit.framework, CoreSimulator.framework) via dlopen. ' +
           'These APIs are undocumented and Xcode updates may break them. ' +
-          PRIVATE_API_DOC_REF,
+          'Where can I use this? macOS host / CI only — never bundle inside an ' +
+          'iOS .ipa shipped to the App Store or TestFlight. ' +
+          PRIVATE_API_DOC_REF +
+          ' (see "Deployment scope").',
       );
     }
     const { cmd, cmdArgs } = this.resolveSpawn(args);
@@ -356,5 +360,10 @@ export async function tryCreateSimulatorKitHIDBackend(): Promise<
       return new SimulatorKitHIDInputBackend(candidate);
     }
   }
-  return null;
+  const searched = candidates.map((c) => `  - ${c}`).join('\n');
+  throw new InputBackendError(
+    `sim-hid-bridge not found. Searched:\n${searched}\n` +
+      'Run npm run build or set OPENSAFARI_ALLOW_SWIFT_INTERPRETER=1 for dev mode.',
+    'HID_BRIDGE_MISSING',
+  );
 }

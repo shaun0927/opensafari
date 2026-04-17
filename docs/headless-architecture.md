@@ -34,6 +34,7 @@ Native input tools (`app_tap`, `app_swipe_native`, `app_scroll_native`,
 | Tier | Backend | `kind` | Target apps | Headless | Xcode 26+ | Selection Condition | Status |
 |------|---------|--------|-------------|----------|-----------|---------------------|--------|
 | 0 | `FlutterVMInputBackend` | `flutter-vm` | Flutter only | Yes | Yes | Flutter VM Service reachable within 1.5 s discovery timeout | Production |
+| 1 (opt-in) | `PointerServiceInputBackend` | `pointer-service` | Any app (tap on Xcode 26+) | Yes | Yes | Activated only when `OPENSAFARI_ENABLE_POINTERSERVICE=1`. Shells out to `sim-hid-bridge tap-ps` so the mouse-down/up is bracketed with `IndigoHIDMessageToCreatePointerService` / `RemovePointerService`. Swipe and keys delegate to the Tier-1 SimHID path. Phase 1 of [#590](https://github.com/shaun0927/opensafari/issues/590). | **Opt-in experimental** |
 | 1 | `SimulatorKitHIDInputBackend` | `simhid` | Any app | Yes | Partial | `sim-hid-bridge` binary resolves and `SimulatorKit.framework` loads via `dlopen`. **Tap/swipe routing is currently disabled** on Xcode 26+ — see note below. Keyboard and hardware-button synthesis still route through this tier. | Partial (tap/swipe disabled on Xcode 26+) |
 | 1.5 | `AccessibilityPressInputBackend` (AX press) | `ax-press` | Any app (element-targeted only) | Yes | Yes | Used by `app_tap_element` / `app_type_element` when the resolved element advertises `AXPress`. Coordinate-only `app_tap({x, y})` cannot use this tier. Disabled via `OPENSAFARI_DISABLE_AX_PRESS=1`. | Production |
 | 2 | `SimctlInputBackend` | `simctl` | Any app | Yes | **Removed** | `xcrun simctl io input` probe succeeds (Xcode ≤ 16) | Legacy |
@@ -430,7 +431,13 @@ When Apple breaks a private API in a new Xcode release, the recommended response
 
 ---
 
-## 8. References
+## 8. Memory management
+
+See [Memory Budget](memory-budget.md) for the per-cache retention budget and eviction policies.
+
+---
+
+## 9. References
 
 ### Related source files
 

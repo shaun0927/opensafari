@@ -1,6 +1,6 @@
 {
   "name": "opensafari-mcp",
-  "version": "0.4.9",
+  "version": "0.5.0",
   "description": "iOS Safari automation MCP server via Xcode Simulator + WebKit Remote Debugging Protocol",
   "main": "dist/index.js",
   "bin": {
@@ -13,18 +13,21 @@
     "darwin"
   ],
   "scripts": {
-    "build": "npm run clean && npm run build:src && npm run build:cli && npm run build:ax-bridge && npm run build:sim-hid-bridge",
-    "postbuild": "cp src/native/ax-bridge.swift dist/ 2>/dev/null || true; cp src/native/sim-hid-bridge.swift dist/ 2>/dev/null || true",
+    "build": "npm run clean && npm run build:src && npm run build:cli && npm run build:ax-bridge && npm run build:sim-hid-bridge && npm run build:cursor-monitor",
+    "postbuild": "cp src/native/ax-bridge.swift dist/ 2>/dev/null || true; cp src/native/sim-hid-bridge.swift dist/ 2>/dev/null || true; cp src/native/cursor-monitor.swift dist/ 2>/dev/null || true",
     "build:src": "webpack --config webpack.config.js --config-name server",
     "build:cli": "webpack --config webpack.config.js --config-name cli",
-    "build:ax-bridge": "swiftc -O src/native/ax-bridge.swift -o dist/ax-bridge 2>/dev/null && (codesign --sign - dist/ax-bridge 2>/dev/null || (echo 'ax-bridge: codesign failed, removing unsigned binary' && rm -f dist/ax-bridge)) || echo 'ax-bridge: compiled binary skipped, using swift interpreter fallback'",
-    "build:sim-hid-bridge": "swiftc -O src/native/sim-hid-bridge.swift -o dist/sim-hid-bridge 2>/dev/null && (codesign --sign - dist/sim-hid-bridge 2>/dev/null || (echo 'sim-hid-bridge: codesign failed, removing unsigned binary' && rm -f dist/sim-hid-bridge)) || echo 'sim-hid-bridge: compiled binary skipped, using swift interpreter fallback'",
+    "build:ax-bridge": "swiftc -O src/native/ax-bridge.swift -o dist/ax-bridge && (codesign --sign - dist/ax-bridge || echo 'ax-bridge: ad-hoc codesign failed, keeping unsigned binary (still runnable for AX queries against booted simulators)') || echo 'ax-bridge: swiftc compilation failed, falling back to swift interpreter at runtime'",
+    "build:sim-hid-bridge": "swiftc -O src/native/sim-hid-bridge.swift -o dist/sim-hid-bridge && (codesign --sign - dist/sim-hid-bridge || echo 'sim-hid-bridge: ad-hoc codesign failed, keeping unsigned binary (still runnable for HID dispatch)') || echo 'sim-hid-bridge: swiftc compilation failed, falling back to swift interpreter at runtime'",
+    "build:cursor-monitor": "swiftc -O src/native/cursor-monitor.swift -o dist/cursor-monitor && (codesign --sign - dist/cursor-monitor || echo 'cursor-monitor: ad-hoc codesign failed, keeping unsigned binary') || echo 'cursor-monitor: swiftc compilation failed, falling back to swift interpreter at runtime'",
     "clean": "rimraf dist",
     "dev": "ts-node --esm src/index.ts",
     "start": "node dist/index.js",
     "test": "jest --config jest.config.js",
     "test:unit": "jest --config jest.config.js",
     "test:integration": "jest --preset ts-jest --testEnvironment node --roots tests/integration --testPathIgnorePatterns '/node_modules/' --testPathIgnorePatterns 'webkit-connection' --testTimeout=120000 --runInBand --reporters=default --reporters=<rootDir>/tests/integration/screenshot-failure-reporter.cjs",
+    "test:integration:monitored": "node scripts/run-with-cursor-monitor.js -- npm run test:integration",
+    "test:live": "OSF_LIVE=1 node scripts/run-with-cursor-monitor.js -- npm run test:integration",
     "test:ci": "jest --config jest.ci.config.js",
     "test:sentinel": "jest --config jest.sentinel.config.js",
     "test:coverage": "jest --coverage",

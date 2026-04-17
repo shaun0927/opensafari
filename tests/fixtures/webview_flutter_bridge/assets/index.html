@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OpenSafari Bridge Fixture</title>
+  <style>
+    body { font-family: sans-serif; padding: 24px; }
+    button { padding: 12px 24px; font-size: 16px; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <h1 id="heading">WebView Bridge</h1>
+  <button id="web-action" onclick="document.getElementById('web-info').textContent = 'clicked'">
+    Click me
+  </button>
+  <div id="web-info">idle</div>
+</body>
+</html>

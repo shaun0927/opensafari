@@ -43,17 +43,20 @@ OpenSafari runs fully headless on CI — no display server, no mouse focus, no `
 | Safari (Web) | ✅ | ✅ | ✅ | WebKit Remote Debug |
 | Flutter App | ✅ | ✅ | ✅ | FlutterVMInputBackend |
 | Native iOS App (Xcode ≤ 16) | ✅ | ✅ | ✅ | SimulatorKitHID (Tier 1) / `simctl` |
-| Native iOS App (Xcode 26+) | ✅ | ⚠️ Partial | ⚠️ | Keys/buttons headless via SimHID; tap/swipe pending — see [#491](https://github.com/shaun0927/opensafari/issues/491) |
-| WebView in Native | ✅ | ⚠️ Partial | ⚠️ | WebKit + Native |
+| Native iOS App (Xcode 26+, element-targeted `app_tap_element` / `app_type_element`) | ✅ | ✅ | ✅ | AX-press (Tier 1.5) when the element advertises `AXPress` — see [docs/headless-architecture.md](docs/headless-architecture.md) |
+| Native iOS App (Xcode 26+, coordinate `app_tap({x,y})` / `app_swipe_native`) | ✅ | ⚠️ Experimental (opt-in) | ⚠️ | PointerService opt-in via `OPENSAFARI_ENABLE_POINTERSERVICE=1` — see [#590](https://github.com/shaun0927/opensafari/issues/590); AppleScript fallback otherwise ([#491](https://github.com/shaun0927/opensafari/issues/491)) |
+| WebView in Native | ✅ | ⚠️ Partial | ⚠️ | Bundle metadata (`appId`&#124;`bundleId`) requires a newer `ios-webkit-debug-proxy` build — older proxies fall back to URL-scheme heuristics. HTTPS WebViews (e.g. payment-return pages) must pass `bundleId` to `app_webview_connect` for `bundle_match` classification; without it they default to `safari` via `url_scheme` — see [#592](https://github.com/shaun0927/opensafari/issues/592) |
 
 > ✅ Supported and stable. ⚠️ Partially supported — see linked docs for current status and limitations.
+
+Stability commitments (stable vs opt-in vs experimental) are catalogued in [docs/simhid-ios26-investigation.md#stability-commitments](docs/simhid-ios26-investigation.md#stability-commitments).
 
 ### Headless input vs other iOS automation tools
 
 |  | OpenSafari | Appium | idb | XCUITest |
 |---|:---:|:---:|:---:|:---:|
-| **Headless native input** (no mouse focus, no `Simulator.app` activation) | **⚠️ SimulatorKit HID** (keys/buttons on Xcode 26+; tap/swipe pending [#491](https://github.com/shaun0927/opensafari/issues/491)) | ❌ ([XCUI focus](https://appium.io/docs/en/2.0/ecosystem/drivers/)) | ✅ `FBSimulatorHID` | ❌ |
-| **Works on Xcode 26+** (after `simctl io input` removal) | ⚠️ Safari & Flutter fully; native tap/swipe pending | ⚠️ driver-dependent | ✅ | ✅ |
+| **Headless native input** (no mouse focus, no `Simulator.app` activation) | **✅ AX-press + SimulatorKit HID** (element-targeted tap & keys/buttons headless on Xcode 26+; coordinate-only tap/swipe pending [#491](https://github.com/shaun0927/opensafari/issues/491)) | ❌ ([XCUI focus](https://appium.io/docs/en/2.0/ecosystem/drivers/)) | ✅ `FBSimulatorHID` | ❌ |
+| **Works on Xcode 26+** (after `simctl io input` removal) | ✅ Safari, Flutter, and element-targeted native taps; ⚠️ coordinate-only native tap/swipe pending | ⚠️ driver-dependent | ✅ | ✅ |
 | **Flutter native taps** (no OS-level input) | ✅ Dart VM `PointerDataPacket` | ⚠️ 3rd-party plugin | ❌ | ❌ |
 | **MCP / LLM integration** | ✅ native | ❌ | ❌ | ❌ |
 | **Private API dependency** | SimulatorKit (documented, sentinel-guarded) | UIAutomation / XCUI | SimulatorKit | none |
@@ -61,6 +64,8 @@ OpenSafari runs fully headless on CI — no display server, no mouse focus, no `
 > See [docs/private-apis.md](docs/private-apis.md) for the SimulatorKit contract, the daily sentinel CI that detects BC breaks, and the rollback plan if Apple changes symbols.
 
 For CI setup recipes (GitHub Actions, Buildkite, GitLab CI), see [docs/ci-recipes.md](docs/ci-recipes.md).
+
+Long-running MCP sessions are soak-tested nightly — see [memory-soak workflow](.github/workflows/memory-soak.yml).
 
 ---
 
@@ -612,6 +617,8 @@ Together, they provide **complete browser coverage** — Chrome for desktop, Saf
 | [Troubleshooting](docs/troubleshooting.md) | Common issues and solutions |
 | [CI Integration](docs/ci-integration.md) | Using OpenSafari in CI pipelines |
 | [CI Recipes](docs/ci-recipes.md) | Copy-paste GitHub Actions, Buildkite, and GitLab CI recipes |
+| [Memory Budget](docs/memory-budget.md) | Per-cache retention budgets and eviction policies |
+| [Diagnose Tool Reference](docs/diagnose.md) | `diagnose` output schema and memory block reference |
 | [RFC: Native App Backend](docs/rfc-native-app-backend.md) | Architecture RFC for native-app automation in Xcode Simulator |
 | [Native App Tool Surface](docs/native-app-tool-surface.md) | Proposed MCP tool surface for native-app automation |
 | [WebKit Protocol Research](docs/webkit-protocol-research.md) | WebKit Remote Debugging Protocol research notes |

@@ -125,13 +125,21 @@ export class AccessibilityBridge {
           if (errJson.error) {
             throw new AccessibilityBridgeError(errJson.error, errJson.code ?? 'AX_ERROR');
           }
-        } catch {
-          // Not JSON, fall through
+        } catch (parseErr) {
+          if (parseErr instanceof AccessibilityBridgeError) throw parseErr;
+          // Not JSON, fall through to surface raw stderr below.
         }
       }
 
+      // Include the bridge's stderr tail in the thrown message. Without this
+      // the caller only sees `Command failed: <cmd>` and every CI failure
+      // looks identical regardless of root cause (unsigned binary, missing
+      // TCC, simulator not booted, swift interpreter compile error, etc.).
+      const stderrTail = error.stderr
+        ? ` | stderr: ${error.stderr.trim().split('\n').slice(-5).join(' / ')}`
+        : '';
       throw new AccessibilityBridgeError(
-        `ax-bridge failed: ${error.message}`,
+        `ax-bridge failed (${cmd}): ${error.message}${stderrTail}`,
         'BRIDGE_EXEC_FAILED',
       );
     }

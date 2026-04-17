@@ -25,6 +25,10 @@ import type { FlutterVMClient } from '../flutter';
 import { getFlutterVMClient, removeFlutterVMClient } from '../flutter';
 import { FlutterVMInputBackend } from './flutter-vm-input-backend';
 import { tryCreateSimulatorKitHIDBackend } from './sim-hid-input-backend';
+import {
+  isPointerServiceEnabled,
+  tryCreatePointerServiceBackend,
+} from './pointer-service-input-backend';
 import { timedInput } from '../metrics/input-telemetry';
 
 const execFileAsync = promisify(execFile);
@@ -41,7 +45,14 @@ function delay(ms: number): Promise<void> {
  * input — useful when diagnosing focus-theft reports or confirming that a
  * call stayed on a headless tier.
  */
-export type InputBackendKind = 'flutter-vm' | 'simctl' | 'webkit' | 'applescript' | 'simhid' | 'ax-press';
+export type InputBackendKind =
+  | 'flutter-vm'
+  | 'simctl'
+  | 'webkit'
+  | 'applescript'
+  | 'simhid'
+  | 'ax-press'
+  | 'pointer-service';
 
 export interface InputBackend {
   /** Stable identifier used for observability / audit logging. */
@@ -599,8 +610,7 @@ export class HeadlessInputUnavailableError extends Error {
     | 'no-simctl'
     | 'no-webkit'
     | 'webkit-disconnected'
-    | 'headless-only'
-    | 'simhid-gated';
+    | 'headless-only';
   readonly remediation: readonly string[];
 
   constructor(
@@ -614,19 +624,7 @@ export class HeadlessInputUnavailableError extends Error {
             'Ensure a headless backend (simctl, webkit, flutter-vm, simhid) is available.',
             `To allow focus-stealing input, unset ${OPENSAFARI_HEADLESS_ONLY_ENV}.`,
           ] as const)
-        : reason === 'simhid-gated'
-          ? ([
-              'SimulatorKitHID (Tier 1) is probed and cached on this host, but the ' +
-                'tap/swipe return path in `getInputBackend()` is commented out while ' +
-                'issue #491 fixes `IndigoHIDMessageForMouseNSEvent` locking the Simulator ' +
-                'screen on Xcode 26+.',
-              'Track progress: https://github.com/shaun0927/opensafari/issues/491',
-              'Hardware buttons and keyboard input via simhid are unaffected — only ' +
-                'tap/swipe are gated.',
-              `Temporary workaround: set ${OPENSAFARI_ALLOW_FOCUS_INPUT_ENV}=1 to route ` +
-                'tap/swipe through the focus-stealing AppleScript/CGEvent backend until #491 ships.',
-            ] as const)
-          : ([
+        : ([
               "Safari QA: call `set_active_context({ context: 'safari' })` to enable WebKitInputBackend",
               `Native apps: opt in to the CGEvent fallback by setting ${OPENSAFARI_ALLOW_FOCUS_INPUT_ENV}=1 ` +
                 '(WARNING: will move the mouse cursor and bring Simulator.app to the foreground)',
@@ -654,6 +652,10 @@ let focusInputOptInWarned = false;
 // SimulatorKit HID backend cache (Tier 1)
 let simHidProbed = false;
 let cachedSimHidBackend: InputBackend | null = null;
+
+// PointerService backend cache (opt-in, Phase 1 of #590)
+let pointerServiceProbed = false;
+let cachedPointerServiceBackend: InputBackend | null = null;
 
 // Per-device cache of the Flutter VM client connection so subsequent Tier-0
 // lookups reuse an already-established WebSocket instead of re-running
@@ -712,14 +714,16 @@ async function defaultFlutterVMResolver(
     const client = getFlutterVMClient(deviceId);
     if (!client.isConnected()) {
       let timeoutId: ReturnType<typeof setTimeout> | undefined;
+      const explicitUrl = process.env.OPENSAFARI_VM_SERVICE_URL;
+      const effectiveTimeout = explicitUrl ? 10_000 : DISCOVERY_TIMEOUT_MS;
       const timeout = new Promise<void>((_, reject) => {
         timeoutId = setTimeout(
           () => reject(new Error('flutter-vm-discovery-timeout')),
-          DISCOVERY_TIMEOUT_MS,
+          effectiveTimeout,
         );
       });
       try {
-        await Promise.race([client.connect({ deviceId }), timeout]);
+        await Promise.race([client.connect({ deviceId, vmServiceUrl: process.env.OPENSAFARI_VM_SERVICE_URL || undefined }), timeout]);
       } finally {
         if (timeoutId) clearTimeout(timeoutId);
       }
@@ -886,6 +890,25 @@ export async function getInputBackend(
     await detectionPromise;
   }
 
+  // Tier 1 (opt-in): PointerService backend — Phase 1 of #590.
+  // When OPENSAFARI_ENABLE_POINTERSERVICE=1, route coordinate tap through
+  // `sim-hid-bridge tap-ps` instead of the default SimHID tap path. Off by
+  // default; when unset the existing Tier-1 SimHID path is used unchanged.
+  // The probe runs once and caches the result for the process lifetime.
+  if (isPointerServiceEnabled()) {
+    if (!pointerServiceProbed) {
+      pointerServiceProbed = true;
+      try {
+        cachedPointerServiceBackend = await tryCreatePointerServiceBackend();
+      } catch {
+        cachedPointerServiceBackend = null;
+      }
+    }
+    if (cachedPointerServiceBackend) {
+      return cachedPointerServiceBackend;
+    }
+  }
+
   // Tier 1: SimulatorKit HID (headless, works with any app — all Xcode versions)
   if (!simHidProbed) {
     simHidProbed = true;
@@ -895,12 +918,12 @@ export async function getInputBackend(
       cachedSimHidBackend = null;
     }
   }
-  // SimHID tap/swipe broken on Xcode 26+ (locks screen). TODO(#491): re-enable.
-  // `cachedSimHidBackend` is read below when picking the error reason, so the
-  // probe is not dead code even while the return path is commented out.
-  // if (cachedSimHidBackend) {
-  //   return cachedSimHidBackend;
-  // }
+  // Tier 1: SimulatorKit HID — re-enabled after #491 resolved the Xcode 26
+  // gesture-recognizer regression. Provides headless coordinate-based
+  // tap/swipe/scroll for any app (native, Flutter, Safari).
+  if (cachedSimHidBackend) {
+    return cachedSimHidBackend;
+  }
 
   // Tier 2: simctl io input (headless, works with any app — Xcode ≤16)
   if (simctlAvailable) {
@@ -942,13 +965,8 @@ export async function getInputBackend(
   // Without explicit opt-in, refuse to return a backend that would move the
   // mouse cursor or steal Simulator focus. See issue #405.
   if (!isFocusInputAllowed()) {
-    // Prefer the 'simhid-gated' reason when the Tier-1 probe succeeded on
-    // this host — pointing users at #491 is more actionable than the
-    // WebKit-oriented 'no-webkit' reason for a native-app call site.
     let reason: HeadlessInputUnavailableError['reason'];
-    if (cachedSimHidBackend) {
-      reason = 'simhid-gated';
-    } else if (!webkitClient) {
+    if (!webkitClient) {
       reason = 'no-webkit';
     } else {
       reason = 'webkit-disconnected';
@@ -984,6 +1002,18 @@ export function resetInputBackend(): void {
   flutterVMResolver = defaultFlutterVMResolver;
   simHidProbed = false;
   cachedSimHidBackend = null;
+  pointerServiceProbed = false;
+  cachedPointerServiceBackend = null;
+}
+
+/**
+ * Current number of entries in the Flutter VM discovery cache (includes both
+ * positive hits and negative entries that have not yet expired). Exposed for
+ * the cache-budget survey (#554) so `diagnose` can flag this cache when it
+ * outgrows the budget documented in `docs/memory-budget.md`.
+ */
+export function getFlutterClientCacheSize(): number {
+  return flutterClientCache.size;
 }
 
 // Re-export for convenience

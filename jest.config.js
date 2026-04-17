@@ -9,12 +9,15 @@ module.exports = {
   // - tests/ci/**            — daily cron jobs (SimulatorKit HID sentinel, etc.)
   //                            run via .github/workflows/*.yml, not `npm test`
   // - tests/sentinel/**      — private API regression probes
+  // - tests/soak/**          — 60-minute memory soak; requires OPENSAFARI_RUN_SOAK=1
+  //                            run via .github/workflows/memory-soak.yml, not `npm test`
   // - tests/e2e-* / fixtures — live browser / app fixtures
   testPathIgnorePatterns: [
     '/node_modules/',
     '/tests/integration/',
     '/tests/ci/',
     '/tests/sentinel/',
+    '/tests/soak/',
     '/tests/e2e-',
     '/tests/fixtures/',
   ],

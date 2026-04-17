@@ -13,12 +13,36 @@ interface ReporterStatic {
     deviceId: string | null;
     outputDir: string;
     captures: number;
+    forced: boolean;
     onTestCaseResult: (
       test: unknown,
       result: { status: string; title?: string; ancestorTitles?: string[] },
     ) => void;
   };
   slugify: (s: string) => string;
+  detectBootedDevice: () => string | null;
+}
+
+function withEnv<K extends string>(
+  key: K,
+  value: string | undefined,
+  fn: () => void,
+): void {
+  const original = process.env[key];
+  if (value === undefined) {
+    delete process.env[key];
+  } else {
+    process.env[key] = value;
+  }
+  try {
+    fn();
+  } finally {
+    if (original === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = original;
+    }
+  }
 }
 
 const Reporter = ScreenshotOnFailureReporter as ReporterStatic;
@@ -61,9 +85,7 @@ describe('screenshot-failure-reporter', () => {
     });
 
     test('skips passed and skipped cases even when device id is set', () => {
-      const original = process.env.OSF_DEVICE_ID;
-      process.env.OSF_DEVICE_ID = 'fake-uuid';
-      try {
+      withEnv('OSF_DEVICE_ID', 'fake-uuid', () => {
         const r = new Reporter({ rootDir: process.cwd() });
         r.onTestCaseResult(null, {
           status: 'passed',
@@ -76,13 +98,69 @@ describe('screenshot-failure-reporter', () => {
           ancestorTitles: [],
         });
         expect(r.captures).toBe(0);
-      } finally {
-        if (original === undefined) {
-          delete process.env.OSF_DEVICE_ID;
-        } else {
-          process.env.OSF_DEVICE_ID = original;
-        }
-      }
+      });
+    });
+  });
+
+  describe('OPENSAFARI_SAVE_FAILURE_SCREENSHOTS opt-in', () => {
+    test('force flag triggers booted-device detection when OSF_DEVICE_ID is unset', () => {
+      const detect = jest
+        .spyOn(Reporter, 'detectBootedDevice')
+        .mockReturnValue('auto-detected-uuid');
+      withEnv('OSF_DEVICE_ID', undefined, () => {
+        withEnv('OPENSAFARI_SAVE_FAILURE_SCREENSHOTS', '1', () => {
+          const r = new Reporter({ rootDir: process.cwd() });
+          expect(r.forced).toBe(true);
+          expect(r.deviceId).toBe('auto-detected-uuid');
+          expect(detect).toHaveBeenCalledTimes(1);
+        });
+      });
+      detect.mockRestore();
+    });
+
+    test('force flag defers to an explicit OSF_DEVICE_ID when both are set', () => {
+      const detect = jest.spyOn(Reporter, 'detectBootedDevice');
+      withEnv('OSF_DEVICE_ID', 'explicit-uuid', () => {
+        withEnv('OPENSAFARI_SAVE_FAILURE_SCREENSHOTS', '1', () => {
+          const r = new Reporter({ rootDir: process.cwd() });
+          expect(r.forced).toBe(true);
+          expect(r.deviceId).toBe('explicit-uuid');
+          expect(detect).not.toHaveBeenCalled();
+        });
+      });
+      detect.mockRestore();
+    });
+
+    test('absence of the flag leaves detection dormant', () => {
+      const detect = jest.spyOn(Reporter, 'detectBootedDevice');
+      withEnv('OSF_DEVICE_ID', undefined, () => {
+        withEnv('OPENSAFARI_SAVE_FAILURE_SCREENSHOTS', undefined, () => {
+          const r = new Reporter({ rootDir: process.cwd() });
+          expect(r.forced).toBe(false);
+          expect(r.deviceId).toBeNull();
+          expect(detect).not.toHaveBeenCalled();
+        });
+      });
+      detect.mockRestore();
+    });
+
+    test('flag without a booted simulator still no-ops on failure', () => {
+      const detect = jest
+        .spyOn(Reporter, 'detectBootedDevice')
+        .mockReturnValue(null);
+      withEnv('OSF_DEVICE_ID', undefined, () => {
+        withEnv('OPENSAFARI_SAVE_FAILURE_SCREENSHOTS', '1', () => {
+          const r = new Reporter({ rootDir: process.cwd() });
+          expect(r.deviceId).toBeNull();
+          r.onTestCaseResult(null, {
+            status: 'failed',
+            title: 'red',
+            ancestorTitles: [],
+          });
+          expect(r.captures).toBe(0);
+        });
+      });
+      detect.mockRestore();
     });
   });
 });

@@ -471,11 +471,96 @@ artifacts:
 | `OPENSAFARI_HEADLESS_ONLY` | `1` | Block AppleScript/CGEvent fallback. Throws `HeadlessInputUnavailableError` instead of moving the physical mouse cursor. **Always set to `1` in CI.** |
 | `OPENSAFARI_PROXY_PORT` | Port number (default `9322`) | Override WebKit proxy port when the default is already in use. |
 | `OPENSAFARI_ALLOW_FOCUS_INPUT` | `1` | Re-enable focus-stealing input (for non-headless local runs only — never set in CI). |
+| `OPENSAFARI_SAVE_FAILURE_SCREENSHOTS` | `1` | Local opt-in for the integration-suite screenshot-on-failure reporter. Auto-detects the booted simulator via `xcrun simctl list devices booted` when `OSF_DEVICE_ID` is unset, so devs can triage a red test locally without also exporting `CI=true`. |
+| `OSF_DEVICE_ID` | Simulator UDID | Explicit simulator target for the screenshot reporter and other integration helpers. Set by CI after booting; dev can use `OPENSAFARI_SAVE_FAILURE_SCREENSHOTS=1` instead to skip the export. |
+| `OSF_SCREENSHOT_DIR` | Directory path | Override base directory for failure screenshots (default `test-output/screenshots/`). |
+| `OPENSAFARI_INPUT_TELEMETRY_META` | `0` / `false` to disable | Controls whether input-tool responses carry `_meta._telemetry` (per-call `elapsed_ms`, `ok`, `operation`). **On by default since 0.5.0** (#595). Set to `0` only when payload size matters and you are not inspecting per-call timing. |
 
 ```bash
 # Recommended CI environment
 export OPENSAFARI_HEADLESS_ONLY=1
+# _meta._telemetry is on by default; uncomment to opt out:
+# export OPENSAFARI_INPUT_TELEMETRY_META=0
 ```
+
+### QA-ready Flutter build
+
+Release builds compile Dart to AOT and reject runtime `evaluate` calls with `code 113`, which surfaces as `FlutterVMInputBackendError { code: 'VM_NO_EVALUATE' }`. The router then falls through to Tier 1.5 AX-press (element-targeted tools only) and ultimately AppleScript for coordinate gestures — the slowest and most fragile path, and — on Xcode 26+ where Tier-1 SimHID tap/swipe is disabled pending #491 — the only remaining coordinate fallback. See [Build-mode × Xcode tier matrix](./flutter-inspector.md#build-mode--xcode-tier-matrix-596) for the full routing table.
+
+The right "QA-ready" build differs by target. The Flutter toolchain blocks `--profile` for simulator targets, so simulator QA must use `--debug`; profile mode is reserved for physical-device QA.
+
+#### iOS Simulator — use `--debug`
+
+**Recommendation:** build simulator QA artifacts with `flutter build ios --simulator --debug`. This is the only mode the Flutter toolchain accepts for `--simulator` targets and keeps `FlutterVMInputBackend` (Tier 0) active.
+
+Trying `--profile` against the simulator fails fast — Flutter exits with *"Profile mode is not supported for simulators."* (verified against Flutter 3.41.5 / Dart 3.11.3 on iPhone 17 Pro Sim, iOS 26.4). Use `--debug` for the simulator and reserve `--profile` for physical-device runs.
+
+```bash
+# Build a debug-mode simulator bundle (only mode the Flutter toolchain accepts; keeps Tier 0).
+flutter build ios --simulator --debug --target lib/main_qa.dart
+
+# Install and launch so flutter_connect lands on Tier 0.
+APP=build/ios/iphonesimulator/Runner.app
+xcrun simctl install booted "$APP"
+xcrun simctl launch --console booted "$(plutil -extract CFBundleIdentifier raw "$APP/Info.plist")"
+```
+
+```yaml
+# GitHub Actions — QA-ready Flutter simulator build
+- name: Build Flutter (debug mode for simulator)
+  run: flutter build ios --simulator --debug --target lib/main_qa.dart
+
+- name: Install + launch on booted simulator
+  run: |
+    APP=build/ios/iphonesimulator/Runner.app
+    BUNDLE=$(plutil -extract CFBundleIdentifier raw "$APP/Info.plist")
+    xcrun simctl install booted "$APP"
+    xcrun simctl launch booted "$BUNDLE"
+```
+
+#### Physical iOS device — use `--profile`
+
+**Recommendation:** for physical-device QA where you want perf parity with release, use `flutter build ios --profile`. Profile mode keeps the Dart VM Service online (so Tier 0 remains active) while running close to release performance — the same trade-off `flutter run --profile` makes for Flutter's own tooling.
+
+```bash
+# Build a profile-mode IPA for a physical device (keeps VM Service; runs near release perf).
+flutter build ios --profile --target lib/main_qa.dart
+
+# Install and launch via your usual device tooling (Xcode, ios-deploy, devicectl, etc.).
+```
+
+> **Why not `--release` on either target?** The Dart AOT runtime in release mode has no expression compiler, so Tier 0 probes fail and every subsequent tap/swipe degrades to AppleScript (or silently fails under `OPENSAFARI_HEADLESS_ONLY=1`). Choose `--debug` for simulator QA and `--profile` for device QA to keep Tier 0 alive.
+
+### Reading `_meta._telemetry` in CI
+
+Every input-tool response (`app_tap`, `app_swipe`, `app_type_text`, `app_tap_element`, etc.) embeds a compact telemetry projection under `result._meta._telemetry`. Use it to assert on per-call latency without scraping stderr.
+
+```js
+// Node — direct invocation
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+
+const res = await client.callTool({ name: 'app_tap', arguments: { x: 100, y: 200 } });
+const events = res._meta?._telemetry ?? [];
+for (const e of events) {
+  if (!e.ok) throw new Error(`app_tap failed: ${e.error}`);
+  if (e.elapsed_ms > 500) console.error(`slow tap: ${e.elapsed_ms}ms`);
+}
+```
+
+```yaml
+# GitHub Actions — failing the job when any op exceeds a budget
+- name: Smoke run with latency budget
+  run: |
+    node scripts/run-smoke.mjs > out.json
+    node -e '
+      const r = JSON.parse(require("fs").readFileSync("out.json", "utf8"));
+      const events = (r._meta && r._meta._telemetry) || [];
+      const slow = events.filter(e => e.elapsed_ms > 500);
+      if (slow.length) { console.error("latency budget exceeded", slow); process.exit(1); }
+    '
+```
+
+To suppress the field (e.g., matching legacy golden files), set `OPENSAFARI_INPUT_TELEMETRY_META=0` at the job or step level.
 
 ### JUnit output generation
 
@@ -550,8 +635,23 @@ See [docs/ci-integration.md](ci-integration.md#report-format-reference) for the 
 
 ---
 
+---
+
+## Specialized Recipes
+
+End-to-end, scenario-specific recipes that extend the generic flows above. Each
+recipe pins to a specific `opensafari-mcp` version so that teams can copy the
+manifest verbatim and know exactly which APIs it relies on.
+
+| Recipe | Covers | Pinned version |
+|---|---|---|
+| [Flutter + IAP (ko-KR)](recipes/flutter-iap-ko-kr.md) | boot → launch → deep-link → StoreKit purchase → ko-KR alert accept → receipt assert → backend verify | `opensafari-mcp@0.4.9` |
+
+---
+
 ## See also
 
 - [CI Integration](ci-integration.md) — Output formats, exit-code gating, JUnit schema, native artifact collection
 - [Getting Started](getting-started.md) — Local setup guide
 - [Troubleshooting](troubleshooting.md) — General failure modes
+- [StoreKit Automation](storekit-automation.md) — Tool reference for `app_storekit_configure` / `app_storekit_test_session` / `app_storekit_receipt`

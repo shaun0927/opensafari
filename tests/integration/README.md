@@ -18,6 +18,23 @@ OPENSAFARI_ALLOW_FOCUS_INPUT=1 npx jest tests/integration/<name>.live.test.ts \
 `testPathIgnorePatterns` from `jest.config.js`; without it Jest re-applies the
 exclusion and reports zero tests.
 
+## DX-facing live run (epic #540)
+
+For the headless posture guarantee in epic #540 ("no job moves the mouse") the
+canonical developer command is:
+
+```bash
+npm run test:live
+```
+
+This sets `OSF_LIVE=1` and wraps the full integration suite with
+`scripts/run-with-cursor-monitor.js`, which pipes the child through the
+`cursor-monitor` Swift helper. The helper polls `CGEventGetLocation` and fails
+the run the moment the macOS cursor moves — so any regression that silently
+reintroduces a focus-stealing backend is caught locally before it lands in CI.
+`npm run test:integration:monitored` remains as the non-gated alias for ad-hoc
+use without the `OSF_LIVE` signal.
+
 ## Prerequisites
 
 | Requirement | Why |

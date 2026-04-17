@@ -83,6 +83,68 @@ Reset app state: terminate, reset privacy permissions, uninstall. The app must b
 - **Output:** `{ reset: boolean, bundleId, deviceId, steps: string[] }`
 - **Steps:** `terminated` → `privacy_reset` → `uninstalled` (each step proceeds independently)
 
+#### app_webview_connect
+Detect WebView targets inside a running native iOS app and list available ones. Classifies each target as `safari` vs `webview` and surfaces a `classificationReason` for debuggability. Uses ios-webkit-debug-proxy to enumerate all open debugging targets on the device.
+
+- **Input:**
+  - `bundleId?: string` — Optional. When provided, targets whose proxy-supplied metadata (`appId`, `bundleId`, or `app_id` fields) matches the value, or whose `title`/`url` contains it as a substring, are promoted to `webview` via the `bundle_match` rule. The result list is then restricted to those bundle-matched WebViews.
+  - `deviceId?: string` — Optional simulator UDID. Defaults to the active device when omitted.
+- **Output:**
+  ```json
+  {
+    "deviceId": "string",
+    "targets": [
+      {
+        "id": "string",
+        "title": "string",
+        "url": "string",
+        "type": "safari | webview",
+        "classificationReason": "bundle_match | proxy_type | url_scheme"
+      }
+    ],
+    "count": "number"
+  }
+  ```
+- **Classification priority** (first match wins):
+  1. `bundle_match` — `bundleId` argument matches the target's proxy metadata or appears as a substring in the `title`/`url`. Classifies the target as `webview`. HTTPS WebViews such as payment-return pages or OAuth callbacks are promoted via this rule when `bundleId` is supplied.
+  2. `proxy_type` — proxy emits a `type` field: `safari`/`mobilesafari` → `safari`; any value containing `webview` → `webview`.
+  3. `url_scheme` (fallback) — empty URL or `about:blank` → `safari`; non-`http(s)` scheme → `webview`; `http(s)` → `safari`.
+- **Notes:**
+  - `webSocketDebuggerUrl` is intentionally stripped from the response. Use `set_active_context` with the returned `id` to switch into a WebView target.
+  - See also: `set_active_context`.
+
+#### app_alert_handle
+Accept, dismiss, or press a named button on a system alert/dialog on a booted iOS Simulator.
+
+- **Input:**
+  - `action?: 'accept' | 'dismiss'` — Accept (Return key) or dismiss (Escape key) the alert. Used only when no `buttonLabel`/`buttonLabels` is provided.
+  - `buttonLabel?: string` — Exact button label to press (case-insensitive, trimmed). Walks the front-most alert's accessibility tree and invokes `AXPress` on the first match. Takes precedence over `action`.
+  - `buttonLabels?: string[]` — Ordered list of candidate labels tried in priority order; the first match is pressed. Takes precedence over `buttonLabel` and `action`. Useful for multi-locale support.
+  - `deviceId?: string` — Simulator UDID. Falls back to the active device if omitted.
+- **Output:** `{ handled: true, buttonLabel?, action?, deviceId, method, _meta }`
+- **Errors:**
+  - `DEVICE_NOT_BOOTED` — No booted simulator found.
+  - `MISSING_PARAMS` — Neither `action` nor `buttonLabel`/`buttonLabels` provided.
+  - `INVALID_ACTION` — `action` is not `"accept"` or `"dismiss"`.
+  - `NO_MATCHING_BUTTON` — None of the supplied labels matched a visible button; the error payload includes `visibleLabels` listing what was found.
+  - `ALERT_HANDLE_FAILED` — Key send or AX press failed.
+- **Examples:**
+  ```json
+  // Keyboard fallback — accept the default button
+  { "action": "accept" }
+
+  // Press a specific button by label (StoreKit, permission sheet, etc.)
+  { "buttonLabel": "Allow While Using App" }
+
+  // Multi-locale: try the localized label first, then English fallback
+  { "buttonLabels": ["앱을 사용하는 동안 허용", "Allow While Using App"] }
+  ```
+- **Notes:**
+  - The `buttonLabel`/`buttonLabels` path uses macOS `AXUIElement` accessibility API (`ax-bridge`) — it works on StoreKit password sheets, 3-button permission dialogs, and any alert where the default button is not the accept action.
+  - `_meta._telemetry[0].backend` is `"ax-press"` on the label path and the backend kind (e.g. `"simctl"`) on the keyboard path.
+  - For non-English simulators, build the candidate list with `resolveLocalizedButtonLabels` from `src/native/localized-button-matcher.ts` or seed it from `src/native/system-button-catalog.ts`.
+  - For StoreKit / In-App Purchase QA see [StoreKit Automation Guide](storekit-automation.md).
+
 ### Advanced Tools (Tier 2)
 
 inspect, wait_for, long_press, swipe, press, dismiss_keyboard, select_option, device_list, device_rotate, appearance_toggle

@@ -1,0 +1,10 @@
+/build/
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+ios/Pods/
+ios/Runner.xcworkspace/xcuserdata/
+ios/Flutter/Flutter.framework
+ios/Flutter/Flutter.podspec
+ios/Flutter/Generated.xcconfig
+ios/Flutter/flutter_export_environment.sh

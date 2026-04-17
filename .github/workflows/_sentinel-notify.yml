@@ -1,0 +1,93 @@
+name: Sentinel Notify (reusable)
+
+# Forks-friendly notifier for the Private API Sentinel (#541, #599).
+#
+# Called from `private-api-sentinel.yml` on scheduled failures so forks and
+# downstream orgs can redirect alerts to their own Slack / Discord endpoint
+# without editing the sentinel workflow itself.
+#
+# Contract:
+#   - `webhook-url` (secret) selects the destination. If missing or empty the
+#     job short-circuits — the sentinel run still succeeds and the GitHub
+#     tracking issue still gets opened, so a missing secret never masks a
+#     regression.
+#   - `channel` (var, default `#opensafari-sentinels`) is forwarded to
+#     Slack-compatible endpoints. Ignored by Discord, which drives channel
+#     routing from the webhook URL itself.
+#   - The webhook host switches the payload shape: `hooks.slack.com` uses the
+#     Slack Incoming Webhooks schema (`text`); everything else falls back to
+#     Discord's `{ "content": "…" }` schema, which also works for Mattermost
+#     and Rocket.Chat.
+#
+# This keeps the sentinel workflow declarative (no per-provider curl blocks)
+# and gives future notifiers (PagerDuty, Telegram) a single surface to grow.
+
+on:
+  workflow_call:
+    inputs:
+      title:
+        required: true
+        type: string
+        description: Short headline for the alert (e.g. "Private API regression").
+      body:
+        required: true
+        type: string
+        description: Multi-line body. Kept small; use the workflow run URL for the full log.
+      runner:
+        required: true
+        type: string
+        description: Matrix runner label so recipients can spot which row failed.
+      run-url:
+        required: true
+        type: string
+        description: Direct URL to the failing workflow run.
+      channel:
+        required: false
+        type: string
+        default: '#opensafari-sentinels'
+        description: Slack channel override. Ignored by Discord-shaped webhooks.
+    secrets:
+      webhook-url:
+        required: false
+        description: Slack / Discord / Mattermost Incoming Webhook URL. Missing ⇒ no-op.
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post to webhook
+        env:
+          WEBHOOK_URL: ${{ secrets.webhook-url }}
+          CHANNEL: ${{ inputs.channel }}
+          TITLE: ${{ inputs.title }}
+          BODY: ${{ inputs.body }}
+          RUNNER: ${{ inputs.runner }}
+          RUN_URL: ${{ inputs.run-url }}
+        run: |
+          if [ -z "${WEBHOOK_URL}" ]; then
+            echo "SENTINEL_WEBHOOK_URL is not configured — skipping webhook notification."
+            echo "(The GitHub tracking issue will still be opened by the caller.)"
+            exit 0
+          fi
+
+          # Slack vs. generic: switch purely on host so a single secret rotation
+          # can move the org between providers without touching the workflow.
+          host="$(printf '%s' "${WEBHOOK_URL}" | awk -F/ '{print $3}')"
+          text="*${TITLE}*"$'\n'"Runner: \`${RUNNER}\`"$'\n'"Run: ${RUN_URL}"$'\n\n'"${BODY}"
+
+          if [ "${host}" = "hooks.slack.com" ]; then
+            payload=$(jq -n \
+              --arg channel "${CHANNEL}" \
+              --arg text "${text}" \
+              '{channel: $channel, text: $text}')
+          else
+            # Discord / Mattermost / Rocket.Chat all accept { "content": "…" }.
+            payload=$(jq -n --arg content "${text}" '{content: $content}')
+          fi
+
+          # `--fail-with-body` surfaces 4xx payloads (e.g. a revoked webhook)
+          # so the workflow logs tell the on-call why the ping was dropped.
+          curl --silent --show-error --fail-with-body \
+            -H 'Content-Type: application/json' \
+            -X POST -d "${payload}" \
+            "${WEBHOOK_URL}"

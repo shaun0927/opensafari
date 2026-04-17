@@ -414,6 +414,50 @@ For apps that embed WebViews, discover and switch between native and web context
             error-logs.json
 ```
 
+## Private API Sentinel alerting
+
+The [`private-api-sentinel`](../.github/workflows/private-api-sentinel.yml)
+workflow runs the six private-API probes daily and is the canary for Apple-side
+breakage across Xcode / macOS releases. It always opens a `sentinel`-labeled
+GitHub tracking issue on failure; it can additionally post to a Slack, Discord,
+or Mattermost webhook when the repo is configured for it.
+
+### Configuration
+
+| Name | Kind | Default | Purpose |
+|---|---|---|---|
+| `SENTINEL_WEBHOOK_URL` | Secret | _unset_ | Incoming Webhook URL. When unset the notifier short-circuits and only the GitHub tracking issue is opened. Rotate via repo → Settings → Secrets and variables → Actions. |
+| `SENTINEL_CHANNEL` | Variable | `#opensafari-sentinels` | Slack channel override. Ignored by Discord / Mattermost webhooks, whose channel routing is encoded in the URL. |
+
+The workflow switches payload shape on the webhook host: `hooks.slack.com`
+receives a Slack-format `{ channel, text }` body; any other host receives a
+Discord-compatible `{ content }` body that Mattermost and Rocket.Chat also
+accept. No custom action is required.
+
+### Fork checklist
+
+1. **Add the secret**: `SENTINEL_WEBHOOK_URL` at repo scope. Minimum permissions
+   on the receiving provider:
+   - Slack: `chat:write` via Incoming Webhooks app, scoped to the destination
+     channel only.
+   - Discord: channel-specific webhook from _Channel Settings → Integrations_.
+   - Mattermost / Rocket.Chat: channel Incoming Webhook.
+2. **Optional**: set `vars.SENTINEL_CHANNEL` if your Slack destination is not
+   `#opensafari-sentinels`.
+3. **Rotate**: updating the secret takes effect on the next scheduled run; no
+   workflow edit needed.
+
+### Behaviour
+
+- Missing secret → `notify` job logs the reason and exits 0. The `sentinel`
+  matrix status is unaffected, and the GitHub tracking issue still gets
+  opened, so a missing secret never silently masks a regression.
+- Invalid / revoked webhook → `curl --fail-with-body` fails the notify job and
+  echoes the provider response so the on-call can see why the ping dropped.
+- Custom notifiers (PagerDuty, Telegram, …) can be added by extending the
+  reusable workflow at `.github/workflows/_sentinel-notify.yml`; callers do not
+  need to change.
+
 ## See also
 
 - [Getting Started](getting-started.md)

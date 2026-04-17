@@ -14,7 +14,12 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { InputBackendKind } from '../tools/native-input-backend';
 import { accumulateInputTelemetry } from './input-telemetry-rollup';
-import { recordMemorySample } from './memory-tracker';
+import {
+  recordMemorySample,
+  recordMemorySampleFromRss,
+  bytesToMB,
+  isMemoryTrackingEnabled,
+} from './memory-tracker';
 
 /**
  * Stable set of operations we time. Matches the `InputBackend` interface
@@ -34,6 +39,16 @@ export interface InputTelemetryEvent {
   ok: boolean;
   /** Present only when `ok === false`. */
   error?: string;
+  /**
+   * Resident set size in MB at the time the event was emitted.
+   * Only present when `OPENSAFARI_INPUT_TELEMETRY_MEMORY` is not disabled.
+   */
+  rss_mb?: number;
+  /**
+   * V8 heap used in MB at the time the event was emitted.
+   * Only present when `OPENSAFARI_INPUT_TELEMETRY_MEMORY` is not disabled.
+   */
+  heap_used_mb?: number;
 }
 
 /** Alias retained for the shape referenced in the proposal in #502. */
@@ -47,15 +62,23 @@ export type InputOperationResult = InputTelemetryEvent;
 export const OPENSAFARI_INPUT_TELEMETRY_ENV = 'OPENSAFARI_INPUT_TELEMETRY';
 
 /**
- * Env var that opts MCP tool responses into the Phase-2 `_telemetry` metadata
- * field. When set to `1` / `true`, each input tool (`app_tap`, `app_swipe`,
- * ...) attaches the captured `InputTelemetryEvent` list under `_meta._telemetry`
- * so clients and CI can assert on `elapsed_ms` without scraping stderr.
+ * Env var that controls the Phase-2 `_telemetry` metadata field on MCP tool
+ * responses. Each input tool (`app_tap`, `app_swipe`, ...) attaches the
+ * captured `InputTelemetryEvent` list under `_meta._telemetry` so clients and
+ * CI can assert on `elapsed_ms` without scraping stderr.
  *
- * Default-off so the field is strictly opt-in and does not inflate payloads
- * for consumers that only care about success/failure.
+ * Default-on since 0.5.0 (issue #595). Set to `0` / `false` to opt out and
+ * suppress the `_telemetry` projection when payload size matters.
  */
 export const OPENSAFARI_INPUT_TELEMETRY_META_ENV = 'OPENSAFARI_INPUT_TELEMETRY_META';
+
+/**
+ * Env var that opts `_meta` responses into including a `memory` snapshot
+ * (rss_mb + heap_used_mb). Set to `1` / `true` to enable.
+ * Default-off so memory fields don't inflate payloads for consumers that
+ * don't need them.
+ */
+export const OPENSAFARI_TELEMETRY_INCLUDE_MEMORY = 'OPENSAFARI_TELEMETRY_INCLUDE_MEMORY';
 
 function isTelemetryEnabled(): boolean {
   const value = process.env[OPENSAFARI_INPUT_TELEMETRY_ENV];
@@ -65,6 +88,15 @@ function isTelemetryEnabled(): boolean {
 /** Whether input tool responses should include `_meta._telemetry`. */
 export function isInputTelemetryMetaEnabled(): boolean {
   const value = process.env[OPENSAFARI_INPUT_TELEMETRY_META_ENV];
+  return value !== '0' && value !== 'false';
+}
+
+/**
+ * Whether `_meta` responses should include a `memory` snapshot.
+ * Controlled by `OPENSAFARI_TELEMETRY_INCLUDE_MEMORY=1` / `true`.
+ */
+export function isMemoryMetaEnabled(): boolean {
+  const value = process.env[OPENSAFARI_TELEMETRY_INCLUDE_MEMORY];
   return value === '1' || value === 'true';
 }
 
@@ -97,11 +129,16 @@ export function emitInputTelemetry(event: InputTelemetryEvent): void {
   } catch {
     // Ditto — rollup failures stay invisible to the caller.
   }
-  // Piggyback a cheap RSS sample on every telemetry tick so peak memory
-  // is observable from `diagnose` without any separate scheduling. The
-  // tracker guards itself with its own env var and try/catch, so this
-  // call cannot destabilise the telemetry path.
-  recordMemorySample();
+  // Piggyback peak-RSS tracking on every telemetry tick so `diagnose`
+  // observes memory without any separate scheduling. When the caller
+  // already sampled a full `process.memoryUsage()` (e.g. `timedInput`
+  // via `sampleMemoryFields`) we reuse its RSS reading to avoid a
+  // redundant syscall on the per-op hot path (#554 microbench budget).
+  if (event.rss_mb !== undefined) {
+    recordMemorySampleFromRss(event.rss_mb * 1_048_576);
+  } else {
+    recordMemorySample();
+  }
   const buf = captureStore.getStore();
   if (buf) buf.push(event);
 }
@@ -158,6 +195,24 @@ function elapsedMs(startNs: bigint): number {
  * the error message attached and re-throws so routing/error handling stay
  * authoritative.
  */
+/**
+ * Sample rss_mb and heap_used_mb from `process.memoryUsage()` when memory
+ * tracking is enabled. Returns an object with both fields, or an empty object
+ * when sampling is disabled or fails.
+ */
+function sampleMemoryFields(): { rss_mb?: number; heap_used_mb?: number } {
+  if (!isMemoryTrackingEnabled()) return {};
+  try {
+    const usage = process.memoryUsage();
+    return {
+      rss_mb: bytesToMB(usage.rss),
+      heap_used_mb: bytesToMB(usage.heapUsed),
+    };
+  } catch {
+    return {};
+  }
+}
+
 export async function timedInput<T>(
   backendKind: InputBackendKind,
   operation: InputOperation,
@@ -173,6 +228,7 @@ export async function timedInput<T>(
       deviceId,
       elapsed_ms: elapsedMs(start),
       ok: true,
+      ...sampleMemoryFields(),
     });
     return result;
   } catch (err) {
@@ -183,6 +239,7 @@ export async function timedInput<T>(
       elapsed_ms: elapsedMs(start),
       ok: false,
       error: err instanceof Error ? err.message : String(err),
+      ...sampleMemoryFields(),
     });
     throw err;
   }
