@@ -425,6 +425,11 @@ describe('SimulatorKitHIDInputBackend private-API warning', () => {
     );
     expect(warningCalls).toHaveLength(1);
     expect(warningCalls[0][0]).toMatch(/docs\/private-apis\.md/);
+    // Issue #601: warning must signal deployment scope (host/CI only, not iOS .ipa)
+    expect(warningCalls[0][0]).toMatch(/Where can I use this\?/);
+    expect(warningCalls[0][0]).toMatch(/macOS host \/ CI only/);
+    expect(warningCalls[0][0]).toMatch(/never bundle inside an iOS \.ipa/);
+    expect(warningCalls[0][0]).toMatch(/Deployment scope/);
   });
 
   test('does not re-emit the notice on subsequent spawns', async () => {
