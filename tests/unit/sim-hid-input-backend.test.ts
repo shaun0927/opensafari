@@ -183,6 +183,120 @@ describe('SimulatorKitHIDInputBackend', () => {
     );
   });
 
+  // ── Printable-ASCII symbol coverage (issue #483 follow-up) ────────────────
+  // The original PoC only mapped A-Z, a-z, 0-9, and space, so the tool could
+  // not type an email address (no '@', '.', or '-'). typeText now covers every
+  // printable US-ASCII code point (U+0020..U+007E) and dispatches shifted
+  // characters through the bridge's `key-mod` subcommand with LeftShift (0xE1).
+
+  test('typeText unshifted symbols send plain `key` events', async () => {
+    execFileMock.mockResolvedValue({
+      stdout: '{"ok":true,"kind":"key","udid":"x","elapsed_ms":1}',
+      stderr: '',
+    });
+    // Each char maps to a known HID usage on the US layout, no Shift needed.
+    const cases: Array<[string, number]> = [
+      ['-', 0x2d],
+      ['=', 0x2e],
+      ['[', 0x2f],
+      [']', 0x30],
+      ['\\', 0x31],
+      [';', 0x33],
+      ["'", 0x34],
+      ['`', 0x35],
+      [',', 0x36],
+      ['.', 0x37],
+      ['/', 0x38],
+    ];
+    for (const [ch, usage] of cases) {
+      execFileMock.mockClear();
+      await backend.typeText(DEVICE, ch);
+      expect(execFileMock).toHaveBeenCalledTimes(1);
+      expect(execFileMock.mock.calls[0][1]).toEqual([DEVICE, 'key', String(usage)]);
+    }
+  });
+
+  test('typeText shifted symbols send `key-mod` with LeftShift (225)', async () => {
+    execFileMock.mockResolvedValue({
+      stdout: '{"ok":true,"kind":"key-mod","udid":"x","elapsed_ms":1}',
+      stderr: '',
+    });
+    // Each char's key usage + the Shift modifier (0xE1 = 225).
+    const cases: Array<[string, number]> = [
+      ['!', 0x1e],
+      ['@', 0x1f],
+      ['#', 0x20],
+      ['$', 0x21],
+      ['%', 0x22],
+      ['^', 0x23],
+      ['&', 0x24],
+      ['*', 0x25],
+      ['(', 0x26],
+      [')', 0x27],
+      ['_', 0x2d],
+      ['+', 0x2e],
+      ['{', 0x2f],
+      ['}', 0x30],
+      ['|', 0x31],
+      [':', 0x33],
+      ['"', 0x34],
+      ['~', 0x35],
+      ['<', 0x36],
+      ['>', 0x37],
+      ['?', 0x38],
+    ];
+    for (const [ch, usage] of cases) {
+      execFileMock.mockClear();
+      await backend.typeText(DEVICE, ch);
+      expect(execFileMock).toHaveBeenCalledTimes(1);
+      expect(execFileMock.mock.calls[0][1]).toEqual([
+        DEVICE,
+        'key-mod',
+        String(usage),
+        String(0xe1),
+      ]);
+    }
+  });
+
+  test('typeText uppercase letters send `key-mod` with Shift (was silently lowercased before)', async () => {
+    execFileMock.mockResolvedValue({
+      stdout: '{"ok":true,"kind":"key-mod","udid":"x","elapsed_ms":1}',
+      stderr: '',
+    });
+    await backend.typeText(DEVICE, 'A');
+    expect(execFileMock).toHaveBeenCalledTimes(1);
+    // 'A' → same HID usage as 'a' (0x04) with Shift (0xE1 = 225).
+    expect(execFileMock.mock.calls[0][1]).toEqual([
+      DEVICE,
+      'key-mod',
+      String(0x04),
+      String(0xe1),
+    ]);
+  });
+
+  test('typeText composes a realistic email address correctly', async () => {
+    execFileMock.mockResolvedValue({
+      stdout: '{"ok":true,"kind":"key","udid":"x","elapsed_ms":1}',
+      stderr: '',
+    });
+    await backend.typeText(DEVICE, 'a@b.c');
+    expect(execFileMock).toHaveBeenCalledTimes(5);
+    expect(execFileMock.mock.calls[0][1]).toEqual([DEVICE, 'key', String(0x04)]); // 'a'
+    expect(execFileMock.mock.calls[1][1]).toEqual([DEVICE, 'key-mod', String(0x1f), String(0xe1)]); // '@'
+    expect(execFileMock.mock.calls[2][1]).toEqual([DEVICE, 'key', String(0x05)]); // 'b'
+    expect(execFileMock.mock.calls[3][1]).toEqual([DEVICE, 'key', String(0x37)]); // '.'
+    expect(execFileMock.mock.calls[4][1]).toEqual([DEVICE, 'key', String(0x06)]); // 'c'
+  });
+
+  test('typeText rejects control characters (tab, newline, DEL) with unsupported-character error', async () => {
+    for (const ch of ['\t', '\n', '\r', '\x00', '\x7f']) {
+      const p = backend.typeText(DEVICE, ch);
+      await expect(p).rejects.toBeInstanceOf(InputBackendError);
+      await expect(p).rejects.toMatchObject({ code: 'BAD_ARGS' });
+      await expect(p).rejects.toThrow(/unsupported character/);
+    }
+  });
+
   // ── Exit-code classification ─────────────────────────────────────────────
 
   test('exit 99 → InputBackendError code "NOT_IMPLEMENTED"', async () => {
