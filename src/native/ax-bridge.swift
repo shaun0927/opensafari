@@ -6,10 +6,10 @@
 // via the macOS AXUIElement API. Outputs structured JSON to stdout.
 //
 // Usage:
-//   ax-bridge dump   --device <UDID> [--max-depth N]
-//   ax-bridge query  --device <UDID> [--id X] [--label X] [--text X] [--role X]
-//   ax-bridge inspect --device <UDID> --path <index-path>
-//   ax-bridge press   --device <UDID> --path <index-path>
+//   ax-bridge dump   --device <UDID|device-name|booted|any> [--max-depth N]
+//   ax-bridge query  --device <UDID|device-name|booted|any> [--id X] [--label X] [--text X] [--role X]
+//   ax-bridge inspect --device <UDID|device-name|booted|any> --path <index-path>
+//   ax-bridge press   --device <UDID|device-name|booted|any> --path <index-path>
 //
 
 import ApplicationServices
@@ -182,67 +182,203 @@ func buildNode(_ element: AXUIElement, path: String, maxDepth: Int, currentDepth
 
 // MARK: - Simulator Discovery
 
-func findSimulatorPID() -> pid_t? {
+struct SimulatorDeviceRecord {
+    let udid: String
+    let name: String
+    let runtimeIdentifier: String
+    let state: String
+}
+
+struct WindowCandidate {
+    let window: AXUIElement
+    let score: Int
+    let title: String
+    let identifier: String
+}
+
+func runCommand(_ launchPath: String, arguments: [String]) -> String? {
     let task = Process()
-    task.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
-    task.arguments = ["-x", "Simulator"]
+    task.executableURL = URL(fileURLWithPath: launchPath)
+    task.arguments = arguments
     let pipe = Pipe()
     task.standardOutput = pipe
     task.standardError = FileHandle.nullDevice
     try? task.run()
     task.waitUntilExit()
-
+    guard task.terminationStatus == 0 else { return nil }
     let data = pipe.fileHandleForReading.readDataToEndOfFile()
-    guard let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+    return String(data: data, encoding: .utf8)
+}
+
+func findSimulatorPID() -> pid_t? {
+    guard let output = runCommand("/usr/bin/pgrep", arguments: ["-x", "Simulator"])?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
           let pid = Int32(output.components(separatedBy: "\n").first ?? "") else {
         return nil
     }
     return pid
 }
 
-/// Navigate AX tree to find the device content area for a given UDID.
-/// Traverses: Simulator app → window → device frame → content.
-func findDeviceContent(_ app: AXUIElement, deviceUDID: String) -> (element: AXUIElement, originX: Double, originY: Double)? {
-    let windows = getChildren(app)
+func listSimulatorDevices() -> [SimulatorDeviceRecord] {
+    guard let output = runCommand("/usr/bin/xcrun", arguments: ["simctl", "list", "devices", "-j"]),
+          let data = output.data(using: .utf8),
+          let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let devices = root["devices"] as? [String: Any] else {
+        return []
+    }
 
-    for window in windows {
-        let windowTitle = getStringAttr(window, kAXTitleAttribute as String) ?? ""
-        let windowId = getStringAttr(window, kAXIdentifierAttribute as String) ?? ""
-
-        // Match by UDID in window title/identifier, or use first window
-        let isMatch = windowTitle.contains(deviceUDID) || windowId.contains(deviceUDID)
-            || deviceUDID == "any"
-
-        if isMatch || windows.count == 1 {
-            // Try to find the deepest content group (the actual device screen area)
-            let pos = getPosition(window) ?? (0, 0)
-            let children = getChildren(window)
-
-            // Look for the device content area (typically a group containing the app UI)
-            for child in children {
-                let childRole = getStringAttr(child, kAXRoleAttribute as String) ?? ""
-                if childRole == "AXGroup" || childRole == "AXScrollArea" {
-                    let childPos = getPosition(child) ?? pos
-                    let grandchildren = getChildren(child)
-                    // If this group has children, it's likely the content area
-                    if !grandchildren.isEmpty {
-                        return (child, childPos.0, childPos.1)
-                    }
-                }
+    var records: [SimulatorDeviceRecord] = []
+    for (runtimeIdentifier, value) in devices {
+        guard let entries = value as? [[String: Any]] else { continue }
+        for entry in entries {
+            guard let udid = entry["udid"] as? String,
+                  let name = entry["name"] as? String,
+                  let state = entry["state"] as? String else {
+                continue
             }
+            let isAvailable = (entry["isAvailable"] as? Bool) ?? true
+            guard isAvailable else { continue }
+            records.append(SimulatorDeviceRecord(
+                udid: udid,
+                name: name,
+                runtimeIdentifier: runtimeIdentifier,
+                state: state
+            ))
+        }
+    }
+    return records
+}
 
-            // Fallback: use the window itself
-            return (window, pos.0, pos.1)
+func windowDiagnostics(_ windows: [AXUIElement]) -> [String] {
+    windows.map { window in
+        let title = getStringAttr(window, kAXTitleAttribute as String) ?? "<untitled>"
+        let identifier = getStringAttr(window, kAXIdentifierAttribute as String) ?? ""
+        return identifier.isEmpty ? title : "\(title) [id=\(identifier)]"
+    }
+}
+
+func resolveRequestedDevice(_ requested: String) -> (target: SimulatorDeviceRecord?, error: ErrorJSON?) {
+    if requested == "any" { return (nil, nil) }
+
+    let devices = listSimulatorDevices()
+    let booted = devices.filter { $0.state == "Booted" }
+
+    if requested == "booted" {
+        if booted.count == 1 { return (booted[0], nil) }
+        if booted.isEmpty {
+            return (nil, ErrorJSON(
+                error: "Requested booted device, but no booted simulators were found.",
+                code: "DEVICE_RESOLUTION_FAILED"
+            ))
+        }
+        return (nil, ErrorJSON(
+            error: "Requested booted device, but found multiple booted simulators: \(booted.map { $0.name })",
+            code: "DEVICE_RESOLUTION_AMBIGUOUS"
+        ))
+    }
+
+    let udidMatches = devices.filter { $0.udid.caseInsensitiveCompare(requested) == .orderedSame }
+    if let device = udidMatches.first {
+        guard device.state == "Booted" else {
+            return (nil, ErrorJSON(
+                error: "Requested device \(requested) resolved to \(device.name), but that simulator is not booted.",
+                code: "DEVICE_RESOLUTION_FAILED"
+            ))
+        }
+        return (device, nil)
+    }
+
+    let nameMatches = booted.filter { $0.name == requested }
+    if nameMatches.count == 1 { return (nameMatches[0], nil) }
+    if nameMatches.count > 1 {
+        return (nil, ErrorJSON(
+            error: "Requested device name '\(requested)' matched multiple booted simulators: \(nameMatches.map { $0.udid })",
+            code: "DEVICE_RESOLUTION_AMBIGUOUS"
+        ))
+    }
+
+    return (nil, ErrorJSON(
+        error: "Could not resolve requested device '\(requested)' to a booted simulator via simctl list devices -j.",
+        code: "DEVICE_RESOLUTION_FAILED"
+    ))
+}
+
+func scoreWindow(_ window: AXUIElement, requested: String, target: SimulatorDeviceRecord?) -> WindowCandidate? {
+    let title = getStringAttr(window, kAXTitleAttribute as String) ?? ""
+    let identifier = getStringAttr(window, kAXIdentifierAttribute as String) ?? ""
+
+    if requested == "any" {
+        return WindowCandidate(window: window, score: 1, title: title, identifier: identifier)
+    }
+
+    guard let target = target else { return nil }
+
+    var score = 0
+    if title.contains(target.udid) || identifier.contains(target.udid) { score = max(score, 1000) }
+    if title == target.name || identifier == target.name { score = max(score, 900) }
+    if title.contains(target.name) || identifier.contains(target.name) { score = max(score, 800) }
+    if title.hasPrefix("\(target.name) –") || title.hasPrefix("\(target.name) -") { score = max(score, 850) }
+
+    guard score > 0 else { return nil }
+    return WindowCandidate(window: window, score: score, title: title, identifier: identifier)
+}
+
+func findMatchingWindow(_ app: AXUIElement, requested: String, target: SimulatorDeviceRecord?) -> (window: AXUIElement?, error: ErrorJSON?) {
+    let windows = getChildren(app)
+    guard !windows.isEmpty else {
+        return (nil, ErrorJSON(
+            error: "Simulator.app is running but no accessibility windows were found.",
+            code: "DEVICE_WINDOW_NOT_FOUND"
+        ))
+    }
+
+    if requested == "any" {
+        if let first = windows.first { return (first, nil) }
+    }
+
+    let candidates = windows.compactMap { scoreWindow($0, requested: requested, target: target) }
+    let sorted = candidates.sorted { lhs, rhs in
+        if lhs.score != rhs.score { return lhs.score > rhs.score }
+        return lhs.title < rhs.title
+    }
+
+    guard let best = sorted.first else {
+        return (nil, ErrorJSON(
+            error: "Could not map requested device \(requested) to a Simulator window. Visible windows: \(windowDiagnostics(windows))",
+            code: "DEVICE_WINDOW_NOT_FOUND"
+        ))
+    }
+
+    let ambiguousPeers = sorted.filter { $0.score == best.score && $0.title != best.title }
+    if !ambiguousPeers.isEmpty && best.score < 1000 {
+        let peerTitles = ([best] + ambiguousPeers).map { $0.title }
+        return (nil, ErrorJSON(
+            error: "Requested device \(requested) matched multiple Simulator windows with the same confidence: \(peerTitles)",
+            code: "DEVICE_WINDOW_AMBIGUOUS"
+        ))
+    }
+
+    return (best.window, nil)
+}
+
+/// Navigate AX tree to find the device content area inside a matched window.
+/// Traverses: matched Simulator window → likely device frame → content.
+func findDeviceContentInWindow(_ window: AXUIElement) -> (element: AXUIElement, originX: Double, originY: Double)? {
+    let pos = getPosition(window) ?? (0, 0)
+    let children = getChildren(window)
+
+    for child in children {
+        let childRole = getStringAttr(child, kAXRoleAttribute as String) ?? ""
+        if childRole == "AXGroup" || childRole == "AXScrollArea" {
+            let childPos = getPosition(child) ?? pos
+            let grandchildren = getChildren(child)
+            if !grandchildren.isEmpty {
+                return (child, childPos.0, childPos.1)
+            }
         }
     }
 
-    // Last resort: use first window
-    if let first = windows.first {
-        let pos = getPosition(first) ?? (0, 0)
-        return (first, pos.0, pos.1)
-    }
-
-    return nil
+    return (window, pos.0, pos.1)
 }
 
 // MARK: - Query Matching
@@ -381,7 +517,7 @@ func parseArgs() -> [String: String] {
 func main() {
     let args = parseArgs()
     let command = args["command"] ?? "dump"
-    let deviceUDID = args["device"] ?? "any"
+    let requestedDevice = args["device"] ?? "any"
     let maxDepth = Int(args["max-depth"] ?? "10") ?? 10
 
     // Check accessibility permissions
@@ -416,9 +552,26 @@ func main() {
     // other Chromium hosts use for the inverse direction (opt-in to AX).
     _ = AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
 
-    // Find the device content area
-    guard let (content, originX, originY) = findDeviceContent(app, deviceUDID: deviceUDID) else {
-        outputError("Could not find device window for UDID: \(deviceUDID)", code: "DEVICE_NOT_FOUND")
+    let resolution = resolveRequestedDevice(requestedDevice)
+    if let error = resolution.error {
+        outputJSON(error)
+        exit(1)
+    }
+    let resolvedTarget = resolution.target
+
+    let windowMatch = findMatchingWindow(app, requested: requestedDevice, target: resolvedTarget)
+    if let error = windowMatch.error {
+        outputJSON(error)
+        exit(1)
+    }
+    guard let matchedWindow = windowMatch.window else {
+        outputError("Could not resolve a Simulator window for requested device: \(requestedDevice)", code: "DEVICE_WINDOW_NOT_FOUND")
+        exit(1)
+    }
+
+    // Find the device content area inside the matched window.
+    guard let (content, originX, originY) = findDeviceContentInWindow(matchedWindow) else {
+        outputError("Could not find device content area for requested device: \(requestedDevice)", code: "DEVICE_CONTENT_NOT_FOUND")
         exit(1)
     }
 
