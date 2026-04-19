@@ -41,14 +41,23 @@ interface VisibleSummary {
   nodeCount: number;
 }
 
-const CHROME_LABELS = new Set([
-  'home',
+// Labels that only appear in Simulator chrome controls and never in real app UIs.
+// A single match here is sufficient to classify the surface as simulator_chrome.
+const CHROME_UNIQUE_LABELS = new Set([
   'save screen',
   'rotate',
-  'action',
   'volume up',
   'volume down',
   'sleep/wake',
+  'shake gesture',
+  'device rotation',
+]);
+
+// Labels that can appear both in Simulator chrome and in real app UIs.
+// At least two distinct matches are required to avoid false positives.
+const CHROME_AMBIGUOUS_LABELS = new Set([
+  'home',
+  'action',
 ]);
 
 const SPRINGBOARD_HINTS = [
@@ -119,8 +128,9 @@ export function classifyMobileContext(params: {
     surface = 'empty';
     reason = 'Accessibility tree exposed no visible nodes.';
   } else if (
-    buttonLabelsLower.some((label) => CHROME_LABELS.has(label)) &&
-    summary.nodeCount <= 20
+    summary.nodeCount <= 20 &&
+    (buttonLabelsLower.some((label) => CHROME_UNIQUE_LABELS.has(label)) ||
+      buttonLabelsLower.filter((label) => CHROME_AMBIGUOUS_LABELS.has(label)).length >= 2)
   ) {
     surface = 'simulator_chrome';
     contextVerified = true;

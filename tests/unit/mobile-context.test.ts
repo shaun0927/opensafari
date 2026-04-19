@@ -35,6 +35,45 @@ describe('classifyMobileContext', () => {
     expect(result.contextVerified).toBe(true);
   });
 
+  test('does NOT classify as chrome when only a single ambiguous label matches (e.g. a small app screen with one Home button)', () => {
+    // A small real-app screen with a single "Home" button should remain app_content.
+    const tree = makeNode({
+      children: [
+        makeNode({ role: 'AXStaticText', label: 'Dashboard', path: '0' }),
+        makeNode({ role: 'AXButton', label: 'Home', path: '1' }),
+        makeNode({ role: 'AXButton', label: 'Profile', path: '2' }),
+      ],
+    });
+
+    const result = classifyMobileContext({
+      deviceId: 'device-1',
+      tree,
+      runningApps: [],
+    });
+
+    expect(result.surface).toBe('app_content');
+    expect(result.surface).not.toBe('simulator_chrome');
+  });
+
+  test('classifies as chrome when two or more ambiguous chrome labels are present', () => {
+    // Both "home" and "action" together form a strong enough chrome signature.
+    const tree = makeNode({
+      children: [
+        makeNode({ role: 'AXButton', label: 'Home', path: '0' }),
+        makeNode({ role: 'AXButton', label: 'Action', path: '1' }),
+      ],
+    });
+
+    const result = classifyMobileContext({
+      deviceId: 'device-1',
+      tree,
+      runningApps: [],
+    });
+
+    expect(result.surface).toBe('simulator_chrome');
+    expect(result.contextVerified).toBe(true);
+  });
+
   test('classifies springboard-like icon grids', () => {
     const tree = makeNode({
       children: [
