@@ -16,6 +16,7 @@ type AXPressVerification = {
   verified: boolean;
   effect:
     | 'target_disappeared'
+    | 'target_appeared'
     | 'focus_changed'
     | 'subtree_changed'
     | 'no_observable_change';
@@ -216,17 +217,19 @@ export function registerAppTapElementTool(server: MCPServer): void {
           process.env.OPENSAFARI_DISABLE_AX_PRESS === '1' ||
           process.env.OPENSAFARI_DISABLE_AX_PRESS === 'true';
         if (duration === 0 && match.path && !axPressDisabled) {
-          let beforeTree: AXNode | null = null;
-          try {
-            beforeTree = await bridge.dumpTree({ deviceId, maxDepth: 8 });
-          } catch (dumpErr) {
-            const dumpMsg = dumpErr instanceof Error ? dumpErr.message : String(dumpErr);
-            console.error(
-              `[app_tap_element] pre-press AX tree dump failed; verification will be skipped. Reason: ${dumpMsg}`,
-            );
-          }
           const pressResponse = await tryPress(bridge, match.path, deviceId);
           if (pressResponse?.ok) {
+            // Dump the pre-press snapshot only after we know the press succeeded —
+            // this avoids a wasted round-trip on PRESS_NOT_ACTIONABLE / PRESS_FAILED.
+            let beforeTree: AXNode | null = null;
+            try {
+              beforeTree = await bridge.dumpTree({ deviceId, maxDepth: 8 });
+            } catch (dumpErr) {
+              const dumpMsg = dumpErr instanceof Error ? dumpErr.message : String(dumpErr);
+              console.error(
+                `[app_tap_element] pre-press AX tree dump failed; verification will be skipped. Reason: ${dumpMsg}`,
+              );
+            }
             await sleep(250);
             let afterTree: AXNode | null = null;
             try {
@@ -480,6 +483,13 @@ export function verifyAXPressEffect(
       return { verified: false, effect: 'no_observable_change' };
     }
     return { verified: true, effect: 'target_disappeared' };
+  }
+
+  // The target was absent before the press but is now present — treat this
+  // as a verified appearance effect (e.g. a lazy-loaded or conditionally
+  // rendered element that the tap caused to be inserted into the AX tree).
+  if (!beforeTarget && afterTarget) {
+    return { verified: true, effect: 'target_appeared' };
   }
 
   if (!!beforeTarget?.focused !== !!afterTarget.focused) {
