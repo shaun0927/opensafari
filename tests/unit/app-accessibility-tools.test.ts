@@ -203,6 +203,49 @@ describe('Native Accessibility Tools', () => {
       expect(matches).toHaveLength(2);
     });
 
+    test('query by label matches diacritic and fullwidth variants', () => {
+      const accentTree: AccessibilityNode = {
+        ...sampleTree,
+        children: [
+          {
+            ...sampleTree.children[0],
+            children: [
+              {
+                role: 'Button',
+                label: 'Café',
+                identifier: 'cafe-btn',
+                traits: ['ButtonTrait'],
+                frame: { x: 10, y: 10, width: 100, height: 44 },
+                isVisible: true,
+                isEnabled: true,
+                children: [],
+              },
+              {
+                role: 'StaticText',
+                // fullwidth latin characters (ａｂｃ → abc after NFKC folding)
+                label: 'ｈｅｌｌｏ ｗｏｒｌｄ',
+                traits: ['StaticTextTrait'],
+                frame: { x: 10, y: 60, width: 200, height: 30 },
+                isVisible: true,
+                isEnabled: true,
+                children: [],
+              },
+            ],
+          },
+        ],
+      };
+
+      // Diacritic-insensitive: query "cafe" should match label "Café"
+      const cafeMatches = filterTree(accentTree, { strategy: 'label', value: 'cafe' });
+      expect(cafeMatches).toHaveLength(1);
+      expect(cafeMatches[0].node.identifier).toBe('cafe-btn');
+
+      // Width-insensitive: query "hello world" should match fullwidth label
+      const fullwidthMatches = filterTree(accentTree, { strategy: 'label', value: 'hello world' });
+      expect(fullwidthMatches).toHaveLength(1);
+      expect(fullwidthMatches[0].node.role).toBe('StaticText');
+    });
+
     test('query returns empty array when no matches', () => {
       const matches = filterTree(sampleTree, {
         strategy: 'label',
@@ -272,6 +315,27 @@ describe('Native Accessibility Tools', () => {
 
     test('returns false for invalid condition format', () => {
       expect(evaluatePredicate(node, 'not a valid predicate')).toBe(false);
+    });
+
+    test('predicate ~= applies diacritic folding on label and value fields', () => {
+      const accentNode: AccessibilityNode = {
+        role: 'Button',
+        label: 'Réservér',
+        value: 'naïve',
+        identifier: 'reserve-btn',
+        traits: ['ButtonTrait'],
+        frame: { x: 0, y: 0, width: 100, height: 44 },
+        isVisible: true,
+        isEnabled: true,
+        children: [],
+      };
+
+      // Diacritic-stripped query should match label "Réservér"
+      expect(evaluatePredicate(accentNode, 'label~=reserver')).toBe(true);
+      // Diacritic-stripped query should match value "naïve"
+      expect(evaluatePredicate(accentNode, 'value~=naive')).toBe(true);
+      // Non-matching query should still return false
+      expect(evaluatePredicate(accentNode, 'label~=cancel')).toBe(false);
     });
   });
 

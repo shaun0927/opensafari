@@ -113,7 +113,13 @@ function matchesQuery(node: AccessibilityNode, options: QueryOptions): boolean {
 }
 
 function normalizeQueryText(value: string): string {
+  // Two-step normalize is intentional: NFKD decomposes characters so diacritic
+  // marks (U+0300–U+036F) can be stripped (café → cafe), then NFKC re-composes
+  // and folds fullwidth/halfwidth variants (ａｂｃ → abc) while collapsing
+  // whitespace for multiline labels.
   return value
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
     .normalize('NFKC')
     .replace(/\s+/g, ' ')
     .trim()
@@ -162,8 +168,15 @@ function evaluateSingleCondition(node: AccessibilityNode, condition: string): bo
       return actualLower === expectedLower;
     case '!=':
       return actualLower !== expectedLower;
-    case '~=':
+    case '~=': {
+      // Apply the same diacritic/width folding as the label strategy so that
+      // predicate matching is consistent with normalizeQueryText used elsewhere.
+      const fieldName = field.toLowerCase();
+      if (fieldName === 'label' || fieldName === 'value') {
+        return normalizeQueryText(String(fieldValue)).includes(normalizeQueryText(expected.trim()));
+      }
       return actualLower.includes(expectedLower);
+    }
     default:
       return false;
   }
