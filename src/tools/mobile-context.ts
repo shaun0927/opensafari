@@ -15,6 +15,13 @@ export interface RunningAppInfo {
   pid: number;
 }
 
+export interface VisibleSummary {
+  buttonLabels: string[];
+  staticTexts: string[];
+  textFieldLabels: string[];
+  nodeCount: number;
+}
+
 export interface MobileContextProbe {
   deviceId: string;
   surface: MobileSurface;
@@ -26,20 +33,12 @@ export interface MobileContextProbe {
   reason: string;
   warnings: string[];
   runningApps: RunningAppInfo[];
-  visibleSummary: {
-    buttonLabels: string[];
-    staticTexts: string[];
-    textFieldLabels: string[];
-    nodeCount: number;
-  };
+  visibleSummary: VisibleSummary;
 }
 
-interface VisibleSummary {
-  buttonLabels: string[];
-  staticTexts: string[];
-  textFieldLabels: string[];
-  nodeCount: number;
-}
+// Simulator chrome AX trees are minimal; real apps on the simulator chrome will always
+// exceed this node count, so treat <= MAX_CHROME_NODE_COUNT as chrome-only.
+const MAX_CHROME_NODE_COUNT = 20;
 
 // Labels that only appear in Simulator chrome controls and never in real app UIs.
 // A single match here is sufficient to classify the surface as simulator_chrome.
@@ -115,7 +114,6 @@ export function classifyMobileContext(params: {
   const { deviceId, tree, runningApps, expectedBundle } = params;
   const summary = collectVisibleSummary(tree);
   const buttonLabelsLower = summary.buttonLabels.map((v) => v.trim().toLowerCase());
-  const staticTextsLower = summary.staticTexts.map((v) => v.trim().toLowerCase());
   const textFieldCount = summary.textFieldLabels.length;
 
   let surface: MobileSurface = 'unknown';
@@ -128,7 +126,7 @@ export function classifyMobileContext(params: {
     surface = 'empty';
     reason = 'Accessibility tree exposed no visible nodes.';
   } else if (
-    summary.nodeCount <= 20 &&
+    summary.nodeCount <= MAX_CHROME_NODE_COUNT &&
     (buttonLabelsLower.some((label) => CHROME_UNIQUE_LABELS.has(label)) ||
       buttonLabelsLower.filter((label) => CHROME_AMBIGUOUS_LABELS.has(label)).length >= 2)
   ) {
