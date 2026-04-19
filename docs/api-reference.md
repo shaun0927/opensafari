@@ -77,6 +77,12 @@ List running foreground apps (UIKit) with bundle IDs and PIDs.
 - **Input:** `{ deviceId?: string }`
 - **Output:** `{ deviceId, apps: [{ label, pid }], count }`
 
+#### app_context
+Report the current mobile context for a booted simulator using accessibility-tree heuristics plus the running-app list.
+- **Input:** `{ deviceId?: string, expectedBundle?: string, requireMatch?: boolean, maxDepth?: number }`
+- **Output:** `{ deviceId, surface, contextVerified, inferredBundleId?, expectedBundle?, expectedBundleMatch?, expectedBundleMatchConfidence?, reason, warnings, runningApps, visibleSummary }`
+- **Errors:** `EXPECTED_BUNDLE_MISMATCH` when `requireMatch=true` and the expected bundle cannot be matched
+
 #### app_reset
 Reset app state: terminate, reset privacy permissions, uninstall. The app must be reinstalled after reset.
 - **Input:** `{ bundleId: string, deviceId?: string }`

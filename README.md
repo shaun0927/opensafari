@@ -272,6 +272,7 @@ OpenSafari shares battle-tested infrastructure with [OpenChrome](https://github.
 | `app_terminate` | Terminate a running app by bundle ID |
 | `app_activate` | Bring app to foreground (launches if not running) |
 | `app_list_running` | List running foreground apps with PIDs |
+| `app_context` | Report the current mobile context and optionally guard on an expected bundle |
 | `app_reset` | Reset app state: terminate, clear permissions, uninstall |
 
 ### Auth Tools (Tier 3)
