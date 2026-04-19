@@ -12,6 +12,16 @@ import type { AXNode, AXPressResponse } from '../native';
 import type { AccessibilityBridge } from '../native/accessibility-bridge';
 import { resolveDeviceId, getInputBackend, runInputOp } from './native-input-utils';
 
+type AXPressVerification = {
+  verified: boolean;
+  effect:
+    | 'target_disappeared'
+    | 'target_appeared'
+    | 'focus_changed'
+    | 'subtree_changed'
+    | 'no_observable_change';
+};
+
 export function registerAppTapElementTool(server: MCPServer): void {
   server.registerTool(
     {
@@ -209,21 +219,55 @@ export function registerAppTapElementTool(server: MCPServer): void {
         if (duration === 0 && match.path && !axPressDisabled) {
           const pressResponse = await tryPress(bridge, match.path, deviceId);
           if (pressResponse?.ok) {
-            const response = buildAXPressResponse({
-              match,
-              centerX,
-              centerY,
-              deviceId,
-              totalMatches,
-              indexProvided,
-              index,
-              ambiguous,
-              clampedFrom,
-              pressActions: pressResponse.actions,
-            });
-            return {
-              content: [{ type: 'text' as const, text: JSON.stringify(response) }],
-            };
+            // Dump the pre-press snapshot only after we know the press succeeded —
+            // this avoids a wasted round-trip on PRESS_NOT_ACTIONABLE / PRESS_FAILED.
+            let beforeTree: AXNode | null = null;
+            try {
+              beforeTree = await bridge.dumpTree({ deviceId, maxDepth: 8 });
+            } catch (dumpErr) {
+              const dumpMsg = dumpErr instanceof Error ? dumpErr.message : String(dumpErr);
+              console.error(
+                `[app_tap_element] pre-press AX tree dump failed; verification will be skipped. Reason: ${dumpMsg}`,
+              );
+            }
+            await sleep(250);
+            let afterTree: AXNode | null = null;
+            try {
+              afterTree = await bridge.dumpTree({ deviceId, maxDepth: 8 });
+            } catch (dumpErr) {
+              const dumpMsg = dumpErr instanceof Error ? dumpErr.message : String(dumpErr);
+              console.error(
+                `[app_tap_element] post-press AX tree dump failed; verification will be skipped. Reason: ${dumpMsg}`,
+              );
+            }
+            const verification =
+              beforeTree !== null && afterTree !== null
+                ? verifyAXPressEffect(beforeTree, afterTree, match)
+                : { verified: false, effect: 'no_observable_change' as const };
+            if (verification.verified) {
+              const response = buildAXPressResponse({
+                match,
+                centerX,
+                centerY,
+                deviceId,
+                totalMatches,
+                indexProvided,
+                index,
+                ambiguous,
+                clampedFrom,
+                pressActions: pressResponse.actions,
+                effect: verification.effect,
+              });
+              return {
+                content: [{ type: 'text' as const, text: JSON.stringify(response) }],
+              };
+            }
+
+            console.error(
+              `[app_tap_element] AXPress returned OK for path ${match.path} ` +
+                `but no observable UI effect was detected (${verification.effect}); ` +
+                `falling back to coordinate tap.`,
+            );
           }
           if (pressResponse && pressResponse.code === 'PRESS_NOT_ACTIONABLE') {
             console.error(
@@ -382,6 +426,83 @@ export async function tryPress(
   }
 }
 
+function walkTree(node: AXNode, visit: (node: AXNode) => void): void {
+  visit(node);
+  for (const child of node.children ?? []) {
+    walkTree(child, visit);
+  }
+}
+
+function fingerprintTree(node: AXNode): string {
+  const parts: string[] = [];
+  walkTree(node, (current) => {
+    if (!current.visible) return;
+    parts.push(
+      [
+        current.path,
+        current.role,
+        current.label ?? '',
+        current.value ?? '',
+        current.enabled ? '1' : '0',
+        current.focused ? '1' : '0',
+        Math.round(current.frame.x),
+        Math.round(current.frame.y),
+        Math.round(current.frame.width),
+        Math.round(current.frame.height),
+      ].join('|'),
+    );
+  });
+  return parts.join('\n');
+}
+
+function findNodeByPath(node: AXNode, path: string): AXNode | null {
+  let match: AXNode | null = null;
+  walkTree(node, (current) => {
+    if (!match && current.path === path) {
+      match = current;
+    }
+  });
+  return match;
+}
+
+export function verifyAXPressEffect(
+  beforeTree: AXNode,
+  afterTree: AXNode,
+  target: AXNode,
+): AXPressVerification {
+  const beforeTarget = findNodeByPath(beforeTree, target.path);
+  const afterTarget = findNodeByPath(afterTree, target.path);
+
+  if (!afterTarget) {
+    // Only treat disappearance as a verified effect when the target was
+    // actually present before the press. If it was absent from both trees
+    // (e.g. deep node truncated by maxDepth: 8), we have no evidence the
+    // press did anything — return unverified so the caller falls back to
+    // the coordinate path.
+    if (!beforeTarget) {
+      return { verified: false, effect: 'no_observable_change' };
+    }
+    return { verified: true, effect: 'target_disappeared' };
+  }
+
+  // The target was absent before the press but is now present — treat this
+  // as a verified appearance effect (e.g. a lazy-loaded or conditionally
+  // rendered element that the tap caused to be inserted into the AX tree).
+  if (!beforeTarget && afterTarget) {
+    return { verified: true, effect: 'target_appeared' };
+  }
+
+  if (!!beforeTarget?.focused !== !!afterTarget.focused) {
+    return { verified: true, effect: 'focus_changed' };
+  }
+
+  if (fingerprintTree(beforeTree) !== fingerprintTree(afterTree)) {
+    return { verified: true, effect: 'subtree_changed' };
+  }
+
+  return { verified: false, effect: 'no_observable_change' };
+}
+
 /**
  * Build the MCP response envelope for a successful AX press — shape matches
  * the coordinate-tap response so callers do not need to branch on `backend`
@@ -398,6 +519,7 @@ export function buildAXPressResponse(args: {
   ambiguous: boolean;
   clampedFrom?: { x: number; y: number };
   pressActions: string[];
+  effect: AXPressVerification['effect'];
 }): Record<string, unknown> {
   const {
     match,
@@ -410,6 +532,7 @@ export function buildAXPressResponse(args: {
     ambiguous,
     clampedFrom,
     pressActions,
+    effect,
   } = args;
   const response: Record<string, unknown> = {
     status: 'tapped',
@@ -423,6 +546,8 @@ export function buildAXPressResponse(args: {
     backend: 'ax-press',
     deviceId,
     totalMatches,
+    verified: true,
+    effect,
     _meta: {
       backendKind: 'ax-press',
       headless: true,

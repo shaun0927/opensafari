@@ -88,6 +88,20 @@ function makeQueryResult(matches: AXNode[], ambiguous = false): AXQueryResult {
   };
 }
 
+function makeNodeTree(node: AXNode): AXNode {
+  return {
+    role: 'AXWindow',
+    label: 'Test App',
+    traits: [],
+    frame: { x: 0, y: 0, width: 375, height: 812 },
+    visible: true,
+    enabled: true,
+    focused: false,
+    path: '',
+    children: [node],
+  };
+}
+
 // ── Test Setup ───────────────────────────────────────────────────────────────
 
 let server: MCPServer;
@@ -125,6 +139,7 @@ beforeEach(() => {
     message: 'Element does not support AXPress',
     axErrorCode: null,
   });
+  mockDumpTree.mockResolvedValue(makeNodeTree(makeNode()));
 });
 
 // ── Tests ──────────────────────────────────────────────────────────────────
@@ -505,6 +520,9 @@ describe('app_tap_element — Tier 1.5 AX press', () => {
   it('routes to AX press when the element advertises the AXPress action', async () => {
     const node = makeNode();
     mockQuery.mockResolvedValue(makeQueryResult([node]));
+    mockDumpTree
+      .mockResolvedValueOnce(makeNodeTree(node))
+      .mockResolvedValueOnce(makeNodeTree({ ...node, focused: true }));
     mockPress.mockResolvedValueOnce({
       ok: true,
       code: 'OK',
@@ -523,6 +541,8 @@ describe('app_tap_element — Tier 1.5 AX press', () => {
     expect(result.isError).toBeUndefined();
     expect(body.status).toBe('tapped');
     expect(body.backend).toBe('ax-press');
+    expect(body.verified).toBe(true);
+    expect(body.effect).toBe('focus_changed');
     expect(body._meta).toMatchObject({
       backendKind: 'ax-press',
       headless: true,
@@ -545,6 +565,32 @@ describe('app_tap_element — Tier 1.5 AX press', () => {
     expect(body.backend).toBe('simctl');
     expect(mockTap).toHaveBeenCalledTimes(1);
     expect(mockPress).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls back to coordinate tap when AX press reports OK but no observable effect is detected', async () => {
+    const node = makeNode();
+    mockQuery.mockResolvedValue(makeQueryResult([node]));
+    mockDumpTree
+      .mockResolvedValueOnce(makeNodeTree(node))
+      .mockResolvedValueOnce(makeNodeTree(node));
+    mockPress.mockResolvedValueOnce({
+      ok: true,
+      code: 'OK',
+      path: '0/1',
+      actions: ['AXPress'],
+      role: 'AXButton',
+      identifier: 'login_btn',
+      label: 'Login',
+      message: null,
+      axErrorCode: null,
+    });
+
+    const result = await handler('session', { label: 'Login', timeout: 0 });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(result.isError).toBeUndefined();
+    expect(body.backend).toBe('simctl');
+    expect(mockTap).toHaveBeenCalledTimes(1);
   });
 
   it('falls back to coordinate tap when AX press reports PRESS_FAILED', async () => {
@@ -678,6 +724,11 @@ describe('app_tap_element — Tier 1.5 AX press', () => {
   it('surfaces axActions + warning flags in the response envelope', async () => {
     const node = makeNode({ path: '2/3/4' });
     mockQuery.mockResolvedValue(makeQueryResult([node, makeNode(), makeNode()]));
+    // Before tree: node present (so beforeTarget is found). After tree: node
+    // focused=true (different fingerprint) → subtree_changed → verified=true.
+    mockDumpTree
+      .mockResolvedValueOnce(makeNodeTree(node))
+      .mockResolvedValueOnce(makeNodeTree({ ...node, focused: true }));
     mockPress.mockResolvedValueOnce({
       ok: true,
       code: 'OK',
@@ -696,6 +747,156 @@ describe('app_tap_element — Tier 1.5 AX press', () => {
     expect(body._meta.axActions).toEqual(['AXPress', 'AXShowMenu']);
     // Without explicit `index`, 3 matches should trigger implicit-ambiguity warning.
     expect(body.warning).toMatch(/ambiguous: 3 elements matched; pressed index 0/);
+  });
+
+  // ── P1: both-missing case is unverified, coordinate fallback runs ──────────
+
+  it('returns unverified and falls back to coordinate tap when target is absent from both before and after trees (codex P1)', async () => {
+    // The node path '9/9/9' is not present in either tree returned by
+    // dumpTree (both trees contain only the default '0/1' node). With the
+    // old code this would incorrectly return verified=true via
+    // 'target_disappeared'; with the fix it must fall through to the
+    // coordinate tap backend.
+    const node = makeNode({ path: '9/9/9' });
+    mockQuery.mockResolvedValue(makeQueryResult([node]));
+    // Both trees contain only '0/1', not '9/9/9'.
+    mockDumpTree
+      .mockResolvedValueOnce(makeNodeTree(makeNode()))
+      .mockResolvedValueOnce(makeNodeTree(makeNode()));
+    mockPress.mockResolvedValueOnce({
+      ok: true,
+      code: 'OK',
+      path: '9/9/9',
+      actions: ['AXPress'],
+      role: 'AXButton',
+      identifier: 'login_btn',
+      label: 'Login',
+      message: null,
+      axErrorCode: null,
+    });
+
+    const result = await handler('session', { label: 'Login', timeout: 0 });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(result.isError).toBeUndefined();
+    // Must have fallen back to the coordinate tap, not returned ax-press.
+    expect(body.backend).toBe('simctl');
+    expect(mockTap).toHaveBeenCalledTimes(1);
+  });
+
+  // ── target_appeared: node absent before press, present after ──────────────
+
+  it('returns verified=true with effect="target_appeared" when target is absent before press but present after', async () => {
+    // The target node is not in the "before" tree but appears in the "after"
+    // tree — indicating the tap caused it to be inserted into the AX tree
+    // (e.g. a lazy-loaded or conditionally rendered element).
+    const node = makeNode({ path: '0/1' });
+    mockQuery.mockResolvedValue(makeQueryResult([node]));
+    // Before tree: does NOT contain the target path '0/1'.
+    // After tree: DOES contain the target path '0/1'.
+    const emptyTree: AXNode = {
+      role: 'AXWindow',
+      label: 'Test App',
+      traits: [],
+      frame: { x: 0, y: 0, width: 375, height: 812 },
+      visible: true,
+      enabled: true,
+      focused: false,
+      path: '',
+      children: [],
+    };
+    mockDumpTree
+      .mockResolvedValueOnce(emptyTree)
+      .mockResolvedValueOnce(makeNodeTree(node));
+    mockPress.mockResolvedValueOnce({
+      ok: true,
+      code: 'OK',
+      path: '0/1',
+      actions: ['AXPress'],
+      role: 'AXButton',
+      identifier: 'login_btn',
+      label: 'Login',
+      message: null,
+      axErrorCode: null,
+    });
+
+    const result = await handler('session', { label: 'Login', timeout: 0 });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(result.isError).toBeUndefined();
+    expect(body.status).toBe('tapped');
+    expect(body.backend).toBe('ax-press');
+    expect(body.verified).toBe(true);
+    expect(body.effect).toBe('target_appeared');
+    expect(mockTap).not.toHaveBeenCalled();
+  });
+
+  // ── P2: dumpTree failures are treated as best-effort, fallback still runs ──
+
+  it('falls back to coordinate tap without error when pre-press dumpTree throws (codex P2)', async () => {
+    const node = makeNode();
+    mockQuery.mockResolvedValue(makeQueryResult([node]));
+    mockPress.mockResolvedValueOnce({
+      ok: true,
+      code: 'OK',
+      path: '0/1',
+      actions: ['AXPress'],
+      role: 'AXButton',
+      identifier: 'login_btn',
+      label: 'Login',
+      message: null,
+      axErrorCode: null,
+    });
+    // Pre-press dump throws; post-press dump succeeds but should not matter.
+    mockDumpTree
+      .mockRejectedValueOnce(new Error('AX timeout'))
+      .mockResolvedValueOnce(makeNodeTree(node));
+    const warnSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = await handler('session', { label: 'Login', timeout: 0 });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(result.isError).toBeUndefined();
+    expect(body.backend).toBe('simctl');
+    expect(mockTap).toHaveBeenCalledTimes(1);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringMatching(/pre-press AX tree dump failed/),
+    );
+
+    warnSpy.mockRestore();
+  });
+
+  it('falls back to coordinate tap without error when post-press dumpTree throws (codex P2)', async () => {
+    const node = makeNode();
+    mockQuery.mockResolvedValue(makeQueryResult([node]));
+    mockPress.mockResolvedValueOnce({
+      ok: true,
+      code: 'OK',
+      path: '0/1',
+      actions: ['AXPress'],
+      role: 'AXButton',
+      identifier: 'login_btn',
+      label: 'Login',
+      message: null,
+      axErrorCode: null,
+    });
+    // Pre-press dump succeeds; post-press dump throws.
+    mockDumpTree
+      .mockResolvedValueOnce(makeNodeTree(node))
+      .mockRejectedValueOnce(new Error('AX timeout on large tree'));
+    const warnSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = await handler('session', { label: 'Login', timeout: 0 });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(result.isError).toBeUndefined();
+    expect(body.backend).toBe('simctl');
+    expect(mockTap).toHaveBeenCalledTimes(1);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringMatching(/post-press AX tree dump failed/),
+    );
+
+    warnSpy.mockRestore();
   });
 });
 
