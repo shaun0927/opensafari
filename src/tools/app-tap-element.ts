@@ -452,6 +452,14 @@ export function verifyAXPressEffect(
   const afterTarget = findNodeByPath(afterTree, target.path);
 
   if (!afterTarget) {
+    // Only treat disappearance as a verified effect when the target was
+    // actually present before the press. If it was absent from both trees
+    // (e.g. deep node truncated by maxDepth: 8), we have no evidence the
+    // press did anything — return unverified so the caller falls back to
+    // the coordinate path.
+    if (!beforeTarget) {
+      return { verified: false, effect: 'no_observable_change' };
+    }
     return { verified: true, effect: 'target_disappeared' };
   }
 
