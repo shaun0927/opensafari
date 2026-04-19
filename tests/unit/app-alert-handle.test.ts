@@ -83,6 +83,96 @@ function makeTree(buttonLabels: string[]) {
   };
 }
 
+function makeModalTree(buttonLabels: string[]) {
+  return {
+    role: 'AXWindow',
+    label: undefined,
+    traits: [],
+    frame: { x: 0, y: 0, width: 375, height: 812 },
+    visible: true,
+    enabled: true,
+    focused: false,
+    path: '',
+    children: [
+      {
+        role: 'AXGroup',
+        label: undefined,
+        traits: [],
+        frame: { x: 0, y: 0, width: 375, height: 812 },
+        visible: true,
+        enabled: true,
+        focused: false,
+        path: '0',
+        children: [
+          {
+            role: 'AXButton',
+            label: 'Home',
+            traits: [],
+            frame: { x: 0, y: 700, width: 60, height: 44 },
+            visible: true,
+            enabled: true,
+            focused: false,
+            path: '0/0',
+          },
+          {
+            role: 'AXButton',
+            label: 'Save Screen',
+            traits: [],
+            frame: { x: 80, y: 700, width: 80, height: 44 },
+            visible: true,
+            enabled: true,
+            focused: false,
+            path: '0/1',
+          },
+        ],
+      },
+      {
+        role: 'AXGroup',
+        label: undefined,
+        traits: [],
+        frame: { x: 40, y: 280, width: 295, height: 180 },
+        visible: true,
+        enabled: true,
+        focused: false,
+        path: '1',
+        children: [
+          {
+            role: 'AXStaticText',
+            label: 'Allow notifications?',
+            traits: ['text'],
+            frame: { x: 60, y: 300, width: 200, height: 24 },
+            visible: true,
+            enabled: true,
+            focused: false,
+            path: '1/0',
+          },
+          {
+            role: 'AXStaticText',
+            label: 'This app wants to notify you.',
+            traits: ['text'],
+            frame: { x: 60, y: 330, width: 220, height: 24 },
+            visible: true,
+            enabled: true,
+            focused: false,
+            path: '1/1',
+          },
+          ...buttonLabels.map((label, i) => ({
+            role: 'AXButton',
+            label,
+            traits: [],
+            frame: { x: 60 + i * 110, y: 390, width: 100, height: 44 },
+            visible: true,
+            enabled: true,
+            focused: false,
+            path: `1/${i + 2}`,
+            children: undefined,
+          })),
+        ],
+      },
+    ],
+  };
+}
+
 // ── Tests ──
 
 describe('app_alert_handle tool', () => {
@@ -108,6 +198,7 @@ describe('app_alert_handle tool', () => {
     getSessionManager.mockReturnValue({
       getSoleDeviceId: jest.fn().mockReturnValue('TEST-UDID-1234'),
     });
+    mockDumpTree.mockResolvedValue(makeTree(['Cancel', 'OK']));
   });
 
   test('is registered with correct name', () => {
@@ -204,7 +295,9 @@ describe('app_alert_handle tool', () => {
   // ── AX-press path (label-based) ───────────────────────────────────────────
 
   test('presses button by buttonLabel (exact match)', async () => {
-    mockDumpTree.mockResolvedValue(makeTree(['Cancel', 'OK']));
+    mockDumpTree
+      .mockResolvedValueOnce(makeTree(['Cancel', 'OK']))
+      .mockResolvedValueOnce(makeTree(['Cancel']));
     mockPress.mockResolvedValue({
       ok: true, code: 'OK', path: '1', actions: ['AXPress'],
       role: 'AXButton', identifier: null, label: 'OK', message: null, axErrorCode: null,
@@ -218,13 +311,16 @@ describe('app_alert_handle tool', () => {
     expect(text.handled).toBe(true);
     expect(text.method).toBe('ax-press');
     expect(text.buttonLabel).toBe('OK');
+    expect(text.verified).toBe(true);
     expect(text._meta._telemetry[0].backend).toBe('ax-press');
     // should NOT have called sendKey
     expect(mockSendKey).not.toHaveBeenCalled();
   });
 
   test('presses button case-insensitively', async () => {
-    mockDumpTree.mockResolvedValue(makeTree(['Allow', "Don't Allow"]));
+    mockDumpTree
+      .mockResolvedValueOnce(makeTree(['Allow', "Don't Allow"]))
+      .mockResolvedValueOnce(makeTree(["Don't Allow"]));
     mockPress.mockResolvedValue({
       ok: true, code: 'OK', path: '0', actions: ['AXPress'],
       role: 'AXButton', identifier: null, label: 'Allow', message: null, axErrorCode: null,
@@ -242,7 +338,9 @@ describe('app_alert_handle tool', () => {
   test('respects multi-label priority order', async () => {
     // tree has both "Cancel" (idx 0) and "Allow" (idx 1)
     // buttonLabels: ['Allow', 'Cancel'] → priority 0 = Allow → should match Allow first
-    mockDumpTree.mockResolvedValue(makeTree(['Cancel', 'Allow']));
+    mockDumpTree
+      .mockResolvedValueOnce(makeTree(['Cancel', 'Allow']))
+      .mockResolvedValueOnce(makeTree(['Cancel']));
     mockPress.mockResolvedValue({
       ok: true, code: 'OK', path: '1', actions: ['AXPress'],
       role: 'AXButton', identifier: null, label: 'Allow', message: null, axErrorCode: null,
@@ -272,9 +370,28 @@ describe('app_alert_handle tool', () => {
     expect(text.visibleLabels).toContain('Go Back');
   });
 
+  test('returns NO_MATCHING_BUTTON labels from the modal subtree instead of underlying app buttons', async () => {
+    mockDumpTree.mockResolvedValue(
+      makeModalTree(['취소', '계속']),
+    );
+
+    const handler = server.getToolHandler('app_alert_handle')!;
+    const result = await handler('test', { buttonLabel: '허용 안 함' });
+
+    expect(result.isError).toBe(true);
+    const text = parseResult(result as { content: Array<{ type: string; text: string }> });
+    expect(text.error).toBe('NO_MATCHING_BUTTON');
+    expect(text.visibleLabels).toContain('취소');
+    expect(text.visibleLabels).toContain('계속');
+    expect(text.visibleLabels).not.toContain('Home');
+    expect(text.visibleLabels).not.toContain('Save Screen');
+  });
+
   test('buttonLabels takes precedence over buttonLabel', async () => {
     // When both are supplied, buttonLabels wins
-    mockDumpTree.mockResolvedValue(makeTree(['Allow', 'Deny']));
+    mockDumpTree
+      .mockResolvedValueOnce(makeTree(['Allow', 'Deny']))
+      .mockResolvedValueOnce(makeTree(['Deny']));
     mockPress.mockResolvedValue({
       ok: true, code: 'OK', path: '0', actions: ['AXPress'],
       role: 'AXButton', identifier: null, label: 'Allow', message: null, axErrorCode: null,
@@ -302,6 +419,25 @@ describe('app_alert_handle tool', () => {
     expect(result.isError).toBe(true);
     const text = parseResult(result as { content: Array<{ type: string; text: string }> });
     expect(text.error).toBe('ALERT_HANDLE_FAILED');
+  });
+
+  test('returns ALERT_HANDLE_NO_EFFECT when the same alert button is still present after AX press', async () => {
+    mockDumpTree
+      .mockResolvedValueOnce(makeTree(['취소', '계속']))
+      .mockResolvedValueOnce(makeTree(['취소', '계속']));
+    mockPress.mockResolvedValue({
+      ok: true, code: 'OK', path: '1', actions: ['AXPress'],
+      role: 'AXButton', identifier: null, label: '계속', message: null, axErrorCode: null,
+    });
+
+    const handler = server.getToolHandler('app_alert_handle')!;
+    const result = await handler('test', { buttonLabel: '계속' });
+
+    expect(result.isError).toBe(true);
+    const text = parseResult(result as { content: Array<{ type: string; text: string }> });
+    expect(text.error).toBe('ALERT_HANDLE_NO_EFFECT');
+    expect(text.verified).toBe(false);
+    expect(text.effect).toBe('no_observable_change');
   });
 
   test('backward-compat: action=accept with no labels uses keyboard path', async () => {
