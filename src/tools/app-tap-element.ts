@@ -216,12 +216,31 @@ export function registerAppTapElementTool(server: MCPServer): void {
           process.env.OPENSAFARI_DISABLE_AX_PRESS === '1' ||
           process.env.OPENSAFARI_DISABLE_AX_PRESS === 'true';
         if (duration === 0 && match.path && !axPressDisabled) {
-          const beforeTree = await bridge.dumpTree({ deviceId, maxDepth: 8 });
+          let beforeTree: AXNode | null = null;
+          try {
+            beforeTree = await bridge.dumpTree({ deviceId, maxDepth: 8 });
+          } catch (dumpErr) {
+            const dumpMsg = dumpErr instanceof Error ? dumpErr.message : String(dumpErr);
+            console.error(
+              `[app_tap_element] pre-press AX tree dump failed; verification will be skipped. Reason: ${dumpMsg}`,
+            );
+          }
           const pressResponse = await tryPress(bridge, match.path, deviceId);
           if (pressResponse?.ok) {
             await sleep(250);
-            const afterTree = await bridge.dumpTree({ deviceId, maxDepth: 8 });
-            const verification = verifyAXPressEffect(beforeTree, afterTree, match);
+            let afterTree: AXNode | null = null;
+            try {
+              afterTree = await bridge.dumpTree({ deviceId, maxDepth: 8 });
+            } catch (dumpErr) {
+              const dumpMsg = dumpErr instanceof Error ? dumpErr.message : String(dumpErr);
+              console.error(
+                `[app_tap_element] post-press AX tree dump failed; verification will be skipped. Reason: ${dumpMsg}`,
+              );
+            }
+            const verification =
+              beforeTree !== null && afterTree !== null
+                ? verifyAXPressEffect(beforeTree, afterTree, match)
+                : { verified: false, effect: 'no_observable_change' as const };
             if (verification.verified) {
               const response = buildAXPressResponse({
                 match,

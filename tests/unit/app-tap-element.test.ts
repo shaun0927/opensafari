@@ -783,6 +783,74 @@ describe('app_tap_element — Tier 1.5 AX press', () => {
     expect(body.backend).toBe('simctl');
     expect(mockTap).toHaveBeenCalledTimes(1);
   });
+
+  // ── P2: dumpTree failures are treated as best-effort, fallback still runs ──
+
+  it('falls back to coordinate tap without error when pre-press dumpTree throws (codex P2)', async () => {
+    const node = makeNode();
+    mockQuery.mockResolvedValue(makeQueryResult([node]));
+    mockPress.mockResolvedValueOnce({
+      ok: true,
+      code: 'OK',
+      path: '0/1',
+      actions: ['AXPress'],
+      role: 'AXButton',
+      identifier: 'login_btn',
+      label: 'Login',
+      message: null,
+      axErrorCode: null,
+    });
+    // Pre-press dump throws; post-press dump succeeds but should not matter.
+    mockDumpTree
+      .mockRejectedValueOnce(new Error('AX timeout'))
+      .mockResolvedValueOnce(makeNodeTree(node));
+    const warnSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = await handler('session', { label: 'Login', timeout: 0 });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(result.isError).toBeUndefined();
+    expect(body.backend).toBe('simctl');
+    expect(mockTap).toHaveBeenCalledTimes(1);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringMatching(/pre-press AX tree dump failed/),
+    );
+
+    warnSpy.mockRestore();
+  });
+
+  it('falls back to coordinate tap without error when post-press dumpTree throws (codex P2)', async () => {
+    const node = makeNode();
+    mockQuery.mockResolvedValue(makeQueryResult([node]));
+    mockPress.mockResolvedValueOnce({
+      ok: true,
+      code: 'OK',
+      path: '0/1',
+      actions: ['AXPress'],
+      role: 'AXButton',
+      identifier: 'login_btn',
+      label: 'Login',
+      message: null,
+      axErrorCode: null,
+    });
+    // Pre-press dump succeeds; post-press dump throws.
+    mockDumpTree
+      .mockResolvedValueOnce(makeNodeTree(node))
+      .mockRejectedValueOnce(new Error('AX timeout on large tree'));
+    const warnSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = await handler('session', { label: 'Login', timeout: 0 });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(result.isError).toBeUndefined();
+    expect(body.backend).toBe('simctl');
+    expect(mockTap).toHaveBeenCalledTimes(1);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringMatching(/post-press AX tree dump failed/),
+    );
+
+    warnSpy.mockRestore();
+  });
 });
 
 describe('sanitizeTapTarget', () => {
