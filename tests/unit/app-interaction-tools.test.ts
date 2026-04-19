@@ -89,6 +89,11 @@ jest.mock('../../src/native/accessibility-bridge', () => ({
   }),
 }));
 
+jest.mock('../../src/native/semantics-activator', () => ({
+  ensureSemanticsActive: jest.fn().mockResolvedValue(true),
+  countNodes: jest.fn().mockReturnValue(10),
+}));
+
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 function parseResult(result: { content: { type: string; text: string }[] }) {
@@ -143,8 +148,13 @@ describe('app_tap tool', () => {
   });
 
   test('taps at given coordinates', async () => {
+    jest.useFakeTimers();
     const handler = server.getToolHandler('app_tap')!;
-    const result = await handler('s', { x: 100, y: 200 });
+    const promise = handler('s', { x: 100, y: 200 });
+    await jest.runAllTimersAsync();
+    const result = await promise;
+    jest.useRealTimers();
+
     const body = parseResult(result as any);
     expect(body.status).toBe('tapped');
     expect(body.x).toBe(100);
@@ -159,8 +169,13 @@ describe('app_tap tool', () => {
   });
 
   test('long press with duration', async () => {
+    jest.useFakeTimers();
     const handler = server.getToolHandler('app_tap')!;
-    const result = await handler('s', { x: 50, y: 60, duration: 1.5 });
+    const promise = handler('s', { x: 50, y: 60, duration: 1.5 });
+    await jest.runAllTimersAsync();
+    const result = await promise;
+    jest.useRealTimers();
+
     const body = parseResult(result as any);
     expect(body.duration).toBe(1.5);
     expect(execMock).toHaveBeenCalledWith(
@@ -169,6 +184,7 @@ describe('app_tap tool', () => {
   });
 
   test('rejects non-finite coordinates', async () => {
+    // Coordinate validation happens before the poll loop — no timers needed.
     const handler = server.getToolHandler('app_tap')!;
     const result = await handler('s', { x: NaN, y: 100 });
     expect((result as any).isError).toBe(true);
@@ -177,14 +193,20 @@ describe('app_tap tool', () => {
   });
 
   test('uses explicit deviceId when provided', async () => {
+    jest.useFakeTimers();
     const handler = server.getToolHandler('app_tap')!;
-    await handler('s', { x: 10, y: 20, deviceId: 'CUSTOM-UDID' });
+    const promise = handler('s', { x: 10, y: 20, deviceId: 'CUSTOM-UDID' });
+    await jest.runAllTimersAsync();
+    await promise;
+    jest.useRealTimers();
+
     expect(execMock).toHaveBeenCalledWith(
       ['io', 'CUSTOM-UDID', 'input', 'tap', '10', '20'],
     );
   });
 
   test('returns error on simctl failure', async () => {
+    // Simctl throws before reaching the poll loop — no timers needed.
     execMock.mockRejectedValueOnce(new Error('simctl io failed'));
     const handler = server.getToolHandler('app_tap')!;
     const result = await handler('s', { x: 10, y: 20 });
@@ -194,13 +216,17 @@ describe('app_tap tool', () => {
   });
 
   test('returns TAP_NO_EFFECT when the AX tree does not change after the tap', async () => {
+    jest.useFakeTimers();
     mockDumpTree.mockReset();
-    mockDumpTree
-      .mockResolvedValueOnce(makeTree('same'))
-      .mockResolvedValueOnce(makeTree('same'));
+    // Pre-tap snapshot + all poll samples return the same tree — poll window times out.
+    mockDumpTree.mockResolvedValue(makeTree('same'));
 
     const handler = server.getToolHandler('app_tap')!;
-    const result = await handler('s', { x: 10, y: 20 });
+    const promise = handler('s', { x: 10, y: 20 });
+    await jest.runAllTimersAsync();
+    const result = await promise;
+    jest.useRealTimers();
+
     expect((result as any).isError).toBe(true);
     const body = parseResult(result as any);
     expect(body.error).toBe('TAP_NO_EFFECT');

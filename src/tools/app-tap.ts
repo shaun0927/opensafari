@@ -8,6 +8,7 @@
 
 import { MCPServer, getWebKitClient } from '../mcp-server';
 import { getAccessibilityBridge } from '../native/accessibility-bridge';
+import { ensureSemanticsActive, countNodes } from '../native/semantics-activator';
 import type { AXNode } from '../native/ax-types';
 import { resolveDeviceId, getInputBackend, runInputOp } from './native-input-utils';
 import { probeMobileContext } from './app-context';
@@ -82,8 +83,18 @@ export function registerAppTapTool(server: MCPServer): void {
 
         const bridge = getAccessibilityBridge();
         let beforeTree: AXNode | null = null;
+        let semanticsActive = false;
         try {
-          beforeTree = await bridge.dumpTree({ deviceId, maxDepth: 8 });
+          semanticsActive = await ensureSemanticsActive(deviceId);
+          if (semanticsActive) {
+            beforeTree = await bridge.dumpTree({ deviceId, maxDepth: 8 });
+            // If the tree is suspiciously sparse after activation, treat
+            // verification as unavailable to avoid false TAP_NO_EFFECT on
+            // Flutter screens where semantics are still materialising.
+            if (beforeTree !== null && countNodes(beforeTree) < 5) {
+              beforeTree = null;
+            }
+          }
         } catch {
           beforeTree = null;
         }
