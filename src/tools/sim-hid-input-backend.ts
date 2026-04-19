@@ -66,16 +66,69 @@ const KEY_NAME_TO_HID_USAGE: Record<string, number> = {
   Home: 0x4a,
 };
 
-/** ASCII → HID usage code (subset — PoC only covers A–Z, 0–9, space). */
-function asciiToHidUsage(ch: string): number | null {
+/**
+ * HID usage of the LeftShift modifier (Keyboard/Keypad page 0x07).
+ * Sent alongside a character key via the bridge's `key-mod` subcommand for
+ * every ASCII symbol that requires Shift on a US keyboard (uppercase letters,
+ * `!@#$%^&*()_+{}|:"<>?~`).
+ */
+const HID_USAGE_LEFT_SHIFT = 0xe1;
+
+/**
+ * US-keyboard printable ASCII → HID usage + whether Shift must be held.
+ *
+ * Covers U+0020 (space) through U+007E (tilde) — i.e. every character produced
+ * by a US layout without dead keys or IME. Returns null for everything else,
+ * including control characters (tab, newline), DEL, and any non-ASCII byte.
+ *
+ * Reference: USB HID Usage Tables v1.21, §10 Keyboard/Keypad (page 0x07).
+ */
+function asciiToHidKey(ch: string): { usage: number; shift: boolean } | null {
+  if (ch.length !== 1) return null;
   const code = ch.charCodeAt(0);
-  // Lowercase / uppercase letters → HID 0x04 .. 0x1D (a..z)
-  if (code >= 97 && code <= 122) return 0x04 + (code - 97);
-  if (code >= 65 && code <= 90) return 0x04 + (code - 65);
-  // Digits: '1'..'9' → 0x1E..0x26, '0' → 0x27
-  if (code >= 49 && code <= 57) return 0x1e + (code - 49);
-  if (code === 48) return 0x27;
-  if (code === 32) return 0x2c; // Space
+  if (code < 0x20 || code > 0x7e) return null;
+  // Lowercase letters → HID 0x04..0x1D
+  if (code >= 0x61 && code <= 0x7a) return { usage: 0x04 + (code - 0x61), shift: false };
+  // Uppercase letters → same keys, but Shift is required
+  if (code >= 0x41 && code <= 0x5a) return { usage: 0x04 + (code - 0x41), shift: true };
+  // Digits '1'..'9' → 0x1E..0x26
+  if (code >= 0x31 && code <= 0x39) return { usage: 0x1e + (code - 0x31), shift: false };
+  if (code === 0x30) return { usage: 0x27, shift: false }; // '0'
+  switch (ch) {
+    case ' ': return { usage: 0x2c, shift: false };
+    case '-': return { usage: 0x2d, shift: false };
+    case '_': return { usage: 0x2d, shift: true };
+    case '=': return { usage: 0x2e, shift: false };
+    case '+': return { usage: 0x2e, shift: true };
+    case '[': return { usage: 0x2f, shift: false };
+    case '{': return { usage: 0x2f, shift: true };
+    case ']': return { usage: 0x30, shift: false };
+    case '}': return { usage: 0x30, shift: true };
+    case '\\': return { usage: 0x31, shift: false };
+    case '|': return { usage: 0x31, shift: true };
+    case ';': return { usage: 0x33, shift: false };
+    case ':': return { usage: 0x33, shift: true };
+    case "'": return { usage: 0x34, shift: false };
+    case '"': return { usage: 0x34, shift: true };
+    case '`': return { usage: 0x35, shift: false };
+    case '~': return { usage: 0x35, shift: true };
+    case ',': return { usage: 0x36, shift: false };
+    case '<': return { usage: 0x36, shift: true };
+    case '.': return { usage: 0x37, shift: false };
+    case '>': return { usage: 0x37, shift: true };
+    case '/': return { usage: 0x38, shift: false };
+    case '?': return { usage: 0x38, shift: true };
+    case '!': return { usage: 0x1e, shift: true };
+    case '@': return { usage: 0x1f, shift: true };
+    case '#': return { usage: 0x20, shift: true };
+    case '$': return { usage: 0x21, shift: true };
+    case '%': return { usage: 0x22, shift: true };
+    case '^': return { usage: 0x23, shift: true };
+    case '&': return { usage: 0x24, shift: true };
+    case '*': return { usage: 0x25, shift: true };
+    case '(': return { usage: 0x26, shift: true };
+    case ')': return { usage: 0x27, shift: true };
+  }
   return null;
 }
 
@@ -160,19 +213,34 @@ export class SimulatorKitHIDInputBackend implements InputBackend {
 
   async typeText(deviceId: string, text: string): Promise<void> {
     await timedInput(this.kind, 'typeText', deviceId, async () => {
-      // PoC: ASCII-only. Each character is converted to a HID usage and sent
-      // as an independent `key` event. Non-ASCII characters are rejected until
-      // the Swift bridge gains a text-composition path.
+      // Printable US-ASCII only. Each character is mapped to a US-keyboard
+      // HID usage and sent as an independent event. Shifted characters
+      // (uppercase letters, symbols like `@!#$%^&*()_+{}|:"<>?~`) are sent
+      // via the bridge's `key-mod` subcommand which holds LeftShift around
+      // the key press. Tab, newline, DEL, and non-ASCII characters have no
+      // mapping and are rejected; higher layers should compose those via
+      // WebKit/Flutter/simctl backends instead.
       for (const ch of text) {
-        const usage = asciiToHidUsage(ch);
-        if (usage === null) {
+        const key = asciiToHidKey(ch);
+        if (key === null) {
           throw new InputBackendError(
-            `SimulatorKitHIDInputBackend.typeText: non-ASCII character '${ch}' ` +
-              'is not supported in the PoC. Track follow-up in issue #483.',
+            `SimulatorKitHIDInputBackend.typeText: unsupported character '${ch}' ` +
+              '(no HID mapping). Only printable US-ASCII (U+0020..U+007E) is ' +
+              'supported; tab, newline, and non-ASCII characters are not. ' +
+              'Track follow-up in issue #483.',
             'BAD_ARGS',
           );
         }
-        await this.run([deviceId, 'key', String(usage)]);
+        if (key.shift) {
+          await this.run([
+            deviceId,
+            'key-mod',
+            String(key.usage),
+            String(HID_USAGE_LEFT_SHIFT),
+          ]);
+        } else {
+          await this.run([deviceId, 'key', String(key.usage)]);
+        }
       }
     });
   }

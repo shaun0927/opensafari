@@ -11,6 +11,11 @@
 //   sim-hid-bridge <udid> tap-digitizer <x> <y> [duration] — IOHIDEvent digitizer probe
 //   sim-hid-bridge <udid> swipe  <x1> <y1> <x2> <y2> [duration]
 //   sim-hid-bridge <udid> key    <hidUsage> [duration]
+//   sim-hid-bridge <udid> key-mod <hidUsage> <modUsage> [duration]
+//                                 — holds <modUsage> (e.g. 225 = LeftShift)
+//                                   around the key press so shifted ASCII
+//                                   chars like '@', '!', uppercase letters
+//                                   compose correctly.
 //   sim-hid-bridge <udid> button <home|lock|sound-up|sound-down> [duration]
 //   sim-hid-bridge diag [udid]   — framework + symbol probe (see runDiag)
 //
@@ -78,12 +83,13 @@ enum Command {
     case tapDigitizer(x: Double, y: Double, duration: Double?)
     case swipe(x1: Double, y1: Double, x2: Double, y2: Double, duration: Double?)
     case key(hidUsage: Int, duration: Double?)
+    case keyMod(hidUsage: Int, modUsage: Int, duration: Double?)
     case button(name: String, duration: Double?)
 }
 enum ParseError: Error { case usage(String) }
 
 func parseCommand(_ argv: [String]) throws -> (udid: String, command: Command) {
-    guard argv.count >= 3 else { throw ParseError.usage("usage: sim-hid-bridge <udid> <tap|tap-ps|tap-digitizer|swipe|key|button> <args...>\n       sim-hid-bridge diag [udid]") }
+    guard argv.count >= 3 else { throw ParseError.usage("usage: sim-hid-bridge <udid> <tap|tap-ps|tap-digitizer|swipe|key|key-mod|button> <args...>\n       sim-hid-bridge diag [udid]") }
     let udid = argv[1], kind = argv[2], rest = Array(argv.dropFirst(3))
     switch kind {
     case "tap":
@@ -107,13 +113,17 @@ func parseCommand(_ argv: [String]) throws -> (udid: String, command: Command) {
         guard rest.count >= 1, let h = Int(rest[0]) else {
             throw ParseError.usage("usage: sim-hid-bridge <udid> key <hidUsage> [duration]") }
         return (udid, .key(hidUsage: h, duration: rest.count >= 2 ? Double(rest[1]) : nil))
+    case "key-mod":
+        guard rest.count >= 2, let h = Int(rest[0]), let m = Int(rest[1]) else {
+            throw ParseError.usage("usage: sim-hid-bridge <udid> key-mod <hidUsage> <modUsage> [duration]") }
+        return (udid, .keyMod(hidUsage: h, modUsage: m, duration: rest.count >= 3 ? Double(rest[2]) : nil))
     case "button":
         guard rest.count >= 1 else {
             throw ParseError.usage("usage: sim-hid-bridge <udid> button <home|lock|sound-up|sound-down> [duration]") }
         let ok = ["home", "lock", "sound-up", "sound-down"]
         guard ok.contains(rest[0]) else { throw ParseError.usage("unknown button '\(rest[0])'. Allowed: \(ok.joined(separator: ", "))") }
         return (udid, .button(name: rest[0], duration: rest.count >= 2 ? Double(rest[1]) : nil))
-    default: throw ParseError.usage("unknown command '\(kind)'. Allowed: tap, tap-ps, tap-digitizer, swipe, key, button")
+    default: throw ParseError.usage("unknown command '\(kind)'. Allowed: tap, tap-ps, tap-digitizer, swipe, key, key-mod, button")
     }
 }
 func kindString(_ c: Command) -> String {
@@ -123,6 +133,7 @@ func kindString(_ c: Command) -> String {
     case .tapDigitizer: return "tap-digitizer"
     case .swipe: return "swipe"
     case .key: return "key"
+    case .keyMod: return "key-mod"
     case .button: return "button"
     }
 }
@@ -296,6 +307,20 @@ func execKey(_ h: HID, usage: Int, dur: Double?) -> Bool {
     send(h, dn); Thread.sleep(forTimeInterval: dur ?? 0.05)
     guard let up = h.keyMsg(UInt32(usage), kOpUp) else { return false }
     send(h, up); return true
+}
+
+// Holds `modUsage` (e.g. 0xE1 LeftShift) around a single key press so shifted
+// ASCII characters compose correctly on the simulator's keyboard. Event order
+// is mod-down → key-down → (sleep) → key-up → mod-up.
+func execKeyMod(_ h: HID, usage: Int, modUsage: Int, dur: Double?) -> Bool {
+    guard let modDn = h.keyMsg(UInt32(modUsage), kOpDown) else { return false }
+    send(h, modDn)
+    guard let dn = h.keyMsg(UInt32(usage), kOpDown) else { return false }
+    send(h, dn); Thread.sleep(forTimeInterval: dur ?? 0.05)
+    guard let up = h.keyMsg(UInt32(usage), kOpUp) else { return false }
+    send(h, up)
+    guard let modUp = h.keyMsg(UInt32(modUsage), kOpUp) else { return false }
+    send(h, modUp); return true
 }
 
 func execButton(_ h: HID, name: String, dur: Double?) -> Bool {
@@ -579,6 +604,7 @@ func run() -> Int32 {
     case .tapDigitizer(let x, let y, let d): ok = execTapDigitizer(hid, x: x, y: y, dur: d, sz: sz, skHandle: skH)
     case .swipe(let a, let b, let c, let d, let e): ok = execSwipe(hid, x1: a, y1: b, x2: c, y2: d, dur: e, sz: sz)
     case .key(let u, let d):              ok = execKey(hid, usage: u, dur: d)
+    case .keyMod(let u, let m, let d):    ok = execKeyMod(hid, usage: u, modUsage: m, dur: d)
     case .button(let n, let d):           ok = execButton(hid, name: n, dur: d)
     }
     guard ok else { emitError("HID injection failed. Check stderr.", code: "HID_INJECTION_FAILED"); return 78 }
