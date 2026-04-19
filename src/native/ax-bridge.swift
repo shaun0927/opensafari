@@ -355,9 +355,14 @@ func findMatchingWindow(_ app: AXUIElement, requested: String, target: Simulator
         ))
     }
 
-    let ambiguousPeers = sorted.filter { $0.score == best.score && $0.title != best.title }
-    if !ambiguousPeers.isEmpty && best.score < 1000 {
-        let peerTitles = ([best] + ambiguousPeers).map { $0.title }
+    // Primary rule: if more than one window shares the top score, the match is
+    // ambiguous regardless of whether the titles are identical or different.
+    // Two windows with the same score *and* the same title are equally suspect —
+    // e.g. duplicate device names or identical window titles in multi-simulator
+    // setups — so we must not silently pick one arbitrarily.
+    let topScorePeers = sorted.filter { $0.score == best.score }
+    if topScorePeers.count > 1 && best.score < 1000 {
+        let peerTitles = topScorePeers.map { $0.title }
         return (nil, ErrorJSON(
             error: "Requested device \(requested) matched multiple Simulator windows with the same confidence: \(peerTitles)",
             code: "DEVICE_WINDOW_AMBIGUOUS"
