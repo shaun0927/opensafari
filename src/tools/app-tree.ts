@@ -37,16 +37,32 @@ export function registerAppTreeTool(server: MCPServer): void {
         const maxDepth = params.max_depth as number | undefined;
 
         const bridge = getAccessibilityBridge();
-        const { tree, meta } = await ensureTargetAppContext({
-          bridge,
-          deviceId,
-          bundleId,
-          maxDepth,
-          ensureSemanticsActive: () => ensureSemanticsActive(deviceId, { bundleId }),
-        });
-
-        if (bundleId && meta.sourceKind !== 'target-app') {
-          throw createContextMismatchError(meta);
+        let tree;
+        let meta;
+        if (bundleId) {
+          const context = await ensureTargetAppContext({
+            bridge,
+            deviceId,
+            bundleId,
+            maxDepth,
+            ensureSemanticsActive: () => ensureSemanticsActive(deviceId, { bundleId }),
+          });
+          tree = context.tree;
+          meta = context.meta;
+          if (meta.sourceKind !== 'target-app') {
+            throw createContextMismatchError(meta);
+          }
+        } else {
+          await ensureSemanticsActive(deviceId, { bundleId });
+          tree = await bridge.dumpTree({ deviceId, maxDepth });
+          meta = {
+            requestedBundleId: undefined,
+            deviceId: deviceId ?? '',
+            sourceKind: 'unknown' as const,
+            heuristics: ['not-requested'],
+            activationAttempted: false,
+            activationRetries: 0,
+          };
         }
 
         return {

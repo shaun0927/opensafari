@@ -12,8 +12,8 @@ import type { AXNode, AXPressResponse } from '../native';
 import type { AccessibilityBridge } from '../native/accessibility-bridge';
 import { resolveDeviceId, getInputBackend, runInputOp } from './native-input-utils';
 import {
+  activateAndClassify,
   createContextMismatchError,
-  ensureTargetAppContext,
   NativeContextMeta,
 } from './native-app-context';
 
@@ -114,7 +114,7 @@ export function registerAppTapElementTool(server: MCPServer): void {
           activationRetries: 0,
         };
         if (bundleId) {
-          const context = await ensureTargetAppContext({
+          const context = await activateAndClassify({
             bridge,
             deviceId,
             bundleId,

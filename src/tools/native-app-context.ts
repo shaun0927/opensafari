@@ -23,10 +23,25 @@ interface EnsureTargetContextParams {
   bundleId?: string;
   maxDepth?: number;
   ensureSemanticsActive: () => Promise<unknown>;
+  /** Optional pre-created SimulatorManager; a new one is created when omitted. */
+  manager?: SimulatorManager;
 }
 
 interface EnsureTargetContextResult {
   tree: AXNode;
+  meta: NativeContextMeta;
+}
+
+interface ActivateAndClassifyParams {
+  bridge: AccessibilityBridge;
+  deviceId: string;
+  bundleId: string;
+  ensureSemanticsActive: () => Promise<unknown>;
+  /** Optional pre-created SimulatorManager; a new one is created when omitted. */
+  manager?: SimulatorManager;
+}
+
+interface ActivateAndClassifyResult {
   meta: NativeContextMeta;
 }
 
@@ -82,10 +97,15 @@ export function classifyNativeContext(tree: AXNode): {
   };
 }
 
+/**
+ * Activate a specific app by bundle ID, ensure semantics, dump the tree, and
+ * classify the native context. Returns both the tree and meta. Use this when
+ * the caller needs the tree (e.g. app_tree tool).
+ */
 export async function ensureTargetAppContext(
   params: EnsureTargetContextParams,
 ): Promise<EnsureTargetContextResult> {
-  const { bridge, deviceId, bundleId, maxDepth, ensureSemanticsActive } = params;
+  const { bridge, deviceId, bundleId, maxDepth, ensureSemanticsActive, manager: injectedManager } = params;
 
   const meta: NativeContextMeta = {
     requestedBundleId: bundleId,
@@ -96,7 +116,7 @@ export async function ensureTargetAppContext(
     activationRetries: 0,
   };
 
-  const manager = bundleId ? new SimulatorManager() : null;
+  const manager = bundleId ? (injectedManager ?? new SimulatorManager()) : null;
 
   if (bundleId && manager) {
     await manager.activateApp(deviceId, bundleId);
@@ -118,6 +138,23 @@ export async function ensureTargetAppContext(
   meta.heuristics = classification.heuristics;
 
   return { tree, meta };
+}
+
+/**
+ * Activate a specific app by bundle ID, ensure semantics, dump a single tree
+ * snapshot to classify the native context, then discard the tree.
+ *
+ * Callers that only need `meta` (query/assert/wait/tap-element/inspect) should
+ * use this lighter form and call `bridge.dumpTree()` themselves when they need
+ * the tree, avoiding a redundant dump.
+ */
+export async function activateAndClassify(
+  params: ActivateAndClassifyParams,
+): Promise<ActivateAndClassifyResult> {
+  const { tree, meta } = await ensureTargetAppContext(params);
+  // tree is discarded; callers obtain their own snapshot
+  void tree;
+  return { meta };
 }
 
 export function createContextMismatchError(meta: NativeContextMeta): Error {

@@ -2,8 +2,8 @@ import { MCPServer } from '../mcp-server';
 import { getAccessibilityBridge, ensureSemanticsActive } from '../native';
 import { getSessionManager } from '../session-manager';
 import {
+  activateAndClassify,
   createContextMismatchError,
-  ensureTargetAppContext,
   NativeContextMeta,
 } from './native-app-context';
 
@@ -78,7 +78,7 @@ export function registerAppQueryTool(server: MCPServer): void {
           activationRetries: 0,
         };
         if (bundleId) {
-          const context = await ensureTargetAppContext({
+          const context = await activateAndClassify({
             bridge,
             deviceId,
             bundleId,
