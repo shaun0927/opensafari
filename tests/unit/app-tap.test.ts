@@ -196,6 +196,96 @@ describe('app_tap — semantics activation (Codex P1)', () => {
   });
 });
 
+describe('app_tap — bounded poll verification (Codex P2)', () => {
+  it('detects a late-arriving change within the poll window', async () => {
+    jest.useFakeTimers();
+
+    const before = makeNode();
+    // First few polls: unchanged. Later poll: changed.
+    const after = makeNode({ label: 'App Updated' });
+    mockDumpTree
+      .mockResolvedValueOnce(before)    // pre-tap snapshot
+      .mockResolvedValueOnce(before)    // poll 1: no change
+      .mockResolvedValueOnce(before)    // poll 2: no change
+      .mockResolvedValueOnce(after);    // poll 3: change detected
+
+    const promise = handler('session', { x: 100, y: 200 });
+    await jest.runAllTimersAsync();
+    const result = await promise;
+    const body = JSON.parse(result.content[0].text);
+
+    expect(result.isError).toBeUndefined();
+    expect(body.status).toBe('tapped');
+    expect(body.verified).toBe(true);
+    expect(body.effect).toBe('subtree_changed');
+
+    jest.useRealTimers();
+  });
+
+  it('classifies as no_observable_change only when the poll window times out', async () => {
+    jest.useFakeTimers();
+
+    const before = makeNode();
+    // All polls return the same tree — poll window exhausted
+    mockDumpTree.mockResolvedValue(before);
+
+    const promise = handler('session', { x: 100, y: 200 });
+    await jest.runAllTimersAsync();
+    const result = await promise;
+    const body = JSON.parse(result.content[0].text);
+
+    expect(result.isError).toBe(true);
+    expect(body.error).toBe('TAP_NO_EFFECT');
+    expect(body.effect).toBe('no_observable_change');
+
+    // Poll must have run more than once (bounded polling, not single shot).
+    // Pre-tap is call 1; every subsequent call is a poll sample.
+    expect(mockDumpTree.mock.calls.length).toBeGreaterThan(2);
+
+    jest.useRealTimers();
+  });
+
+  it('detects an immediate change on the first poll sample', async () => {
+    jest.useFakeTimers();
+
+    const before = makeNode();
+    const after = makeNode({ focused: true });
+    mockDumpTree
+      .mockResolvedValueOnce(before)   // pre-tap
+      .mockResolvedValueOnce(after);   // first poll: change detected immediately
+
+    const promise = handler('session', { x: 100, y: 200 });
+    await jest.runAllTimersAsync();
+    const result = await promise;
+    const body = JSON.parse(result.content[0].text);
+
+    expect(body.verified).toBe(true);
+    expect(body.effect).toBe('subtree_changed');
+
+    jest.useRealTimers();
+  });
+
+  it('returns verification_unavailable when dumpTree throws during polling', async () => {
+    jest.useFakeTimers();
+
+    const before = makeNode();
+    mockDumpTree
+      .mockResolvedValueOnce(before)
+      .mockRejectedValue(new Error('bridge crashed'));
+
+    const promise = handler('session', { x: 100, y: 200 });
+    await jest.runAllTimersAsync();
+    const result = await promise;
+    const body = JSON.parse(result.content[0].text);
+
+    expect(result.isError).toBeUndefined();
+    expect(body.status).toBe('tapped');
+    expect(body.effect).toBe('verification_unavailable');
+
+    jest.useRealTimers();
+  });
+});
+
 describe('app_tap — basic behaviour', () => {
   it('returns error for non-finite x', async () => {
     const result = await handler('session', { x: NaN, y: 100 });

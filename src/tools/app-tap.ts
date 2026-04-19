@@ -271,6 +271,9 @@ function fingerprintTree(node: AXNode): string {
   return parts.join('\n');
 }
 
+const VERIFY_POLL_INTERVAL_MS = 150;
+const VERIFY_POLL_TIMEOUT_MS = 1200;
+
 async function verifyCoordinateTapEffect(
   bridge: ReturnType<typeof getAccessibilityBridge>,
   deviceId: string,
@@ -280,11 +283,16 @@ async function verifyCoordinateTapEffect(
     return { verified: false, effect: 'verification_unavailable' };
   }
 
+  const beforeFingerprint = fingerprintTree(beforeTree);
+  const deadline = Date.now() + VERIFY_POLL_TIMEOUT_MS;
+
   try {
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    const afterTree = await bridge.dumpTree({ deviceId, maxDepth: 8 });
-    if (fingerprintTree(beforeTree) !== fingerprintTree(afterTree)) {
-      return { verified: true, effect: 'subtree_changed' };
+    while (Date.now() < deadline) {
+      await new Promise<void>((resolve) => setTimeout(resolve, VERIFY_POLL_INTERVAL_MS));
+      const afterTree = await bridge.dumpTree({ deviceId, maxDepth: 8 });
+      if (beforeFingerprint !== fingerprintTree(afterTree)) {
+        return { verified: true, effect: 'subtree_changed' };
+      }
     }
     return { verified: false, effect: 'no_observable_change' };
   } catch {
