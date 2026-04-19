@@ -9,6 +9,7 @@
 import { MCPServer, getWebKitClient } from '../mcp-server';
 import { resolveDeviceId, getInputBackend, runInputOp } from './native-input-utils';
 import { probeMobileContext } from './app-context';
+import { SimulatorManager } from '../simulator';
 
 /** Default swipe distance in points. */
 const DEFAULT_DISTANCE = 300;
@@ -130,22 +131,31 @@ export function registerAppSwipeNativeTool(server: MCPServer): void {
           backend.swipe(deviceId, startX, startY, endX, endY, duration),
         );
 
+        const manager = new SimulatorManager();
         let postInputContext;
         let warning: string | undefined;
         if (verifyContext) {
           await new Promise((resolve) => setTimeout(resolve, settleMs));
           try {
-            const probe = await probeMobileContext({ deviceId, expectedBundle });
+            const probe = await probeMobileContext({ deviceId, expectedBundle, manager });
             postInputContext = probe;
             if (expectedBundle && probe.expectedBundleMatch !== 'matched') {
-              warning =
-                `Post-swipe context did not confirm expected bundle ${expectedBundle}. ` +
-                `surface=${probe.surface}, match=${probe.expectedBundleMatch ?? 'unknown'}.`;
+              warning = JSON.stringify({
+                code: 'POST_SWIPE_CONTEXT_MISMATCH',
+                message:
+                  `Post-swipe context did not confirm expected bundle ${expectedBundle}. ` +
+                  `surface=${probe.surface}, match=${probe.expectedBundleMatch ?? 'unknown'}.`,
+                context: probe,
+              });
             }
           } catch (probeErr) {
             const reason = probeErr instanceof Error ? probeErr.message : String(probeErr);
             console.error(`[app_swipe_native] post-swipe context probe failed: ${reason}`);
-            warning = JSON.stringify({ warning: 'POST_SWIPE_CONTEXT_PROBE_FAILED', reason });
+            warning = JSON.stringify({
+              code: 'POST_SWIPE_CONTEXT_PROBE_FAILED',
+              message: 'Post-swipe context probe failed.',
+              reason,
+            });
           }
         }
 

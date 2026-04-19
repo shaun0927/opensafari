@@ -27,6 +27,10 @@ jest.mock('../../src/tools/app-context', () => ({
   probeMobileContext: (...args: unknown[]) => mockProbeMobileContext(...args),
 }));
 
+jest.mock('../../src/simulator', () => ({
+  SimulatorManager: jest.fn().mockImplementation(() => ({})),
+}));
+
 describe('app_swipe_native tool', () => {
   let handler: (sessionId: string, params: Record<string, unknown>) => Promise<{
     content: Array<{ type: string; text: string }>;
@@ -73,7 +77,9 @@ describe('app_swipe_native tool', () => {
     const body = JSON.parse(result.content[0].text);
     expect(body.status).toBe('swiped');
     expect(body.postInputContext.expectedBundleMatch).toBe('unknown');
-    expect(body.warning).toContain('Post-swipe context did not confirm expected bundle');
+    const warningMismatch = JSON.parse(body.warning);
+    expect(warningMismatch.code).toBe('POST_SWIPE_CONTEXT_MISMATCH');
+    expect(warningMismatch.message).toContain('Post-swipe context did not confirm expected bundle');
   });
 
   test('returns swipe success with warning when post-swipe context probe throws', async () => {
@@ -88,7 +94,7 @@ describe('app_swipe_native tool', () => {
     const body = JSON.parse(result.content[0].text);
     expect(body.status).toBe('swiped');
     const warningObj = JSON.parse(body.warning);
-    expect(warningObj.warning).toBe('POST_SWIPE_CONTEXT_PROBE_FAILED');
+    expect(warningObj.code).toBe('POST_SWIPE_CONTEXT_PROBE_FAILED');
     expect(warningObj.reason).toBe('AX dump failed');
     expect(body.postInputContext).toBeUndefined();
   });

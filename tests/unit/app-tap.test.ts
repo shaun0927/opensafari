@@ -27,6 +27,10 @@ jest.mock('../../src/tools/app-context', () => ({
   probeMobileContext: (...args: unknown[]) => mockProbeMobileContext(...args),
 }));
 
+jest.mock('../../src/simulator', () => ({
+  SimulatorManager: jest.fn().mockImplementation(() => ({})),
+}));
+
 describe('app_tap tool', () => {
   let handler: (sessionId: string, params: Record<string, unknown>) => Promise<{
     content: Array<{ type: string; text: string }>;
@@ -78,6 +82,7 @@ describe('app_tap tool', () => {
     expect(mockProbeMobileContext).toHaveBeenCalledWith({
       deviceId: 'TEST-UDID-1234',
       expectedBundle: 'com.example.target',
+      manager: expect.any(Object),
     });
   });
 
@@ -108,7 +113,9 @@ describe('app_tap tool', () => {
       settleMs: 0,
     });
     const body = JSON.parse(result.content[0].text);
-    expect(body.warning).toContain('Post-tap context did not confirm expected bundle');
+    const warningMismatch = JSON.parse(body.warning);
+    expect(warningMismatch.code).toBe('POST_TAP_CONTEXT_MISMATCH');
+    expect(warningMismatch.message).toContain('Post-tap context did not confirm expected bundle');
   });
 
   test('returns tap success with warning when post-tap context probe throws', async () => {
@@ -124,7 +131,7 @@ describe('app_tap tool', () => {
     const body = JSON.parse(result.content[0].text);
     expect(body.status).toBe('tapped');
     const warningObj = JSON.parse(body.warning);
-    expect(warningObj.warning).toBe('POST_TAP_CONTEXT_PROBE_FAILED');
+    expect(warningObj.code).toBe('POST_TAP_CONTEXT_PROBE_FAILED');
     expect(warningObj.reason).toBe('AX bridge unavailable');
     expect(body.postInputContext).toBeUndefined();
   });

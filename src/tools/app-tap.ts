@@ -9,6 +9,7 @@
 import { MCPServer, getWebKitClient } from '../mcp-server';
 import { resolveDeviceId, getInputBackend, runInputOp } from './native-input-utils';
 import { probeMobileContext } from './app-context';
+import { SimulatorManager } from '../simulator';
 
 export function registerAppTapTool(server: MCPServer): void {
   server.registerTool(
@@ -77,22 +78,31 @@ export function registerAppTapTool(server: MCPServer): void {
           backend.tap(deviceId, x, y, duration > 0 ? duration : undefined),
         );
 
+        const manager = new SimulatorManager();
         let postInputContext;
         let warning: string | undefined;
         if (verifyContext) {
           await new Promise((resolve) => setTimeout(resolve, settleMs));
           try {
-            const probe = await probeMobileContext({ deviceId, expectedBundle });
+            const probe = await probeMobileContext({ deviceId, expectedBundle, manager });
             postInputContext = probe;
             if (expectedBundle && probe.expectedBundleMatch !== 'matched') {
-              warning =
-                `Post-tap context did not confirm expected bundle ${expectedBundle}. ` +
-                `surface=${probe.surface}, match=${probe.expectedBundleMatch ?? 'unknown'}.`;
+              warning = JSON.stringify({
+                code: 'POST_TAP_CONTEXT_MISMATCH',
+                message:
+                  `Post-tap context did not confirm expected bundle ${expectedBundle}. ` +
+                  `surface=${probe.surface}, match=${probe.expectedBundleMatch ?? 'unknown'}.`,
+                context: probe,
+              });
             }
           } catch (probeErr) {
             const reason = probeErr instanceof Error ? probeErr.message : String(probeErr);
             console.error(`[app_tap] post-tap context probe failed: ${reason}`);
-            warning = JSON.stringify({ warning: 'POST_TAP_CONTEXT_PROBE_FAILED', reason });
+            warning = JSON.stringify({
+              code: 'POST_TAP_CONTEXT_PROBE_FAILED',
+              message: 'Post-tap context probe failed.',
+              reason,
+            });
           }
         }
 

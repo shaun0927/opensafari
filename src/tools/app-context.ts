@@ -8,8 +8,9 @@ export async function probeMobileContext(params: {
   deviceId: string;
   expectedBundle?: string;
   maxDepth?: number;
+  manager?: SimulatorManager;
 }): Promise<MobileContextProbe> {
-  const manager = new SimulatorManager();
+  const manager = params.manager ?? new SimulatorManager();
   const bridge = getAccessibilityBridge();
   const tree = await bridge.dumpTree({
     deviceId: params.deviceId,
@@ -92,6 +93,7 @@ export function registerAppContextTool(server: MCPServer): void {
           deviceId,
           expectedBundle,
           maxDepth,
+          manager,
         });
 
         const isMatched =
