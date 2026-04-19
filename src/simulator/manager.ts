@@ -300,7 +300,7 @@ export class SimulatorManager {
     }
   }
 
-  async activateApp(deviceId: string, bundleId: string): Promise<{ activated: boolean; bundleId: string; deviceId: string }> {
+  async activateApp(deviceId: string, bundleId: string): Promise<{ activated: boolean; bundleId: string; deviceId: string; pid: number }> {
     const device = await this.getDevice(deviceId);
     if (!device || device.state !== 'Booted') {
       throw new DeviceNotBootedError(deviceId);
@@ -309,7 +309,10 @@ export class SimulatorManager {
     // simctl launch brings an already-running app to the foreground;
     // if the app is not running it starts it.
     try {
-      await this.simctl.exec(['launch', deviceId, bundleId]);
+      const output = await this.simctl.exec(['launch', deviceId, bundleId]);
+      const pidMatch = output.match(/:\s*(\d+)/);
+      const pid = pidMatch ? parseInt(pidMatch[1], 10) : -1;
+      return { activated: true, bundleId, deviceId, pid };
     } catch (err) {
       if (err instanceof SimctlError) {
         if (err.message.includes('domain not found') || err.message.includes('not installed')) {
@@ -318,7 +321,6 @@ export class SimulatorManager {
       }
       throw err;
     }
-    return { activated: true, bundleId, deviceId };
   }
 
   async listRunningApps(deviceId: string): Promise<Array<{ label: string; pid: number }>> {

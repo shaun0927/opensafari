@@ -51,6 +51,7 @@ describe('app_tree tool', () => {
     const parsed = JSON.parse(result.content[0].text!);
     expect(parsed.role).toBe('AXGroup');
     expect(parsed.children).toHaveLength(1);
+    expect(parsed._meta.context.deviceId).toBe('mock-device-id');
   });
 
   it('passes device_id and max_depth options', async () => {

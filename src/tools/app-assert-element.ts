@@ -9,6 +9,11 @@
 import { MCPServer } from '../mcp-server';
 import { getAccessibilityBridge, ensureSemanticsActive } from '../native';
 import { getSessionManager } from '../session-manager';
+import {
+  createContextMismatchError,
+  ensureTargetAppContext,
+  NativeContextMeta,
+} from './native-app-context';
 
 type AssertCondition = 'exists' | 'not_exists' | 'visible' | 'enabled' | 'disabled' | 'has_text';
 
@@ -56,6 +61,10 @@ export function registerAppAssertElementTool(server: MCPServer): void {
             type: 'string',
             description: 'Simulator UDID (uses active device if omitted)',
           },
+          bundle_id: {
+            type: 'string',
+            description: 'Target app bundle ID. When provided, the tool re-activates the app and rejects mismatched native contexts.',
+          },
         },
         required: [],
       },
@@ -91,6 +100,7 @@ export function registerAppAssertElementTool(server: MCPServer): void {
         const condition = (params.assert as AssertCondition | undefined) ?? 'exists';
         const expectedText = params.expected_text as string | undefined;
         const message = params.message as string | undefined;
+        const bundleId = params.bundle_id as string | undefined;
         const query = { identifier, label, text, role };
 
         if (condition === 'has_text' && !expectedText) {
@@ -105,10 +115,29 @@ export function registerAppAssertElementTool(server: MCPServer): void {
           };
         }
 
-        // Ensure Flutter semantics are active
-        await ensureSemanticsActive(deviceId);
-
         const bridge = getAccessibilityBridge();
+        let meta: NativeContextMeta = {
+          requestedBundleId: bundleId,
+          deviceId,
+          sourceKind: 'unknown',
+          heuristics: ['not-requested'],
+          activationAttempted: false,
+          activationRetries: 0,
+        };
+        if (bundleId) {
+          const context = await ensureTargetAppContext({
+            bridge,
+            deviceId,
+            bundleId,
+            ensureSemanticsActive: () => ensureSemanticsActive(deviceId, { bundleId }),
+          });
+          meta = context.meta;
+          if (meta.sourceKind !== 'target-app') {
+            throw createContextMismatchError(meta);
+          }
+        } else {
+          await ensureSemanticsActive(deviceId, { bundleId });
+        }
         const result = await bridge.query(query, { deviceId });
         const matches = result.matches;
         const match = matches.length > 0 ? matches[0] : null;
@@ -155,6 +184,7 @@ export function registerAppAssertElementTool(server: MCPServer): void {
           actual,
           expected: condition === 'has_text' ? expectedText : condition,
           message: message ?? `Assert ${condition} for element`,
+          _meta: { context: meta },
           element: match ? {
             role: match.role,
             label: match.label,
