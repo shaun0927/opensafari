@@ -22,11 +22,17 @@ export class AccessibilityBridge {
   private bridgePath: string | null = null;
 
   /**
-   * Resolve the path to the ax-bridge binary or Swift source.
+   * Resolve the path to the ax-bridge-native binary or its Swift source.
+   *
+   * Only the native Swift binary (`ax-bridge-native`) and its source are
+   * considered here. The Node wrapper at `dist/ax-bridge` is invoked from
+   * `cli/` — it MUST NOT appear in this candidate list, otherwise a failed
+   * native compile would cause the wrapper to `execFile` itself recursively
+   * (fork bomb).
    *
    * Search order:
-   *   1. Compiled binary — parent dir (tsc output layout: dist/native/)
-   *   2. Compiled binary — same dir (webpack flat layout: dist/)
+   *   1. Compiled native binary — parent dir (tsc output layout: dist/native/)
+   *   2. Compiled native binary — same dir (webpack flat layout: dist/)
    *   3. Swift source — parent dir
    *   4. Swift source — same dir (postbuild copy to dist/)
    *   5. Dev-only source tree fallback, gated behind OPENSAFARI_ALLOW_SWIFT_INTERPRETER=1
@@ -34,18 +40,14 @@ export class AccessibilityBridge {
   private async resolveBridgePath(): Promise<string> {
     if (this.bridgePath) return this.bridgePath;
 
-   const candidates: string[] = [
+    const candidates: string[] = [
       // 1. Compiled native binary — parent dir (tsc output layout: dist/native/)
       path.resolve(__dirname, '..', 'ax-bridge-native'),
       // 2. Compiled native binary — same dir (webpack flat layout: dist/)
       path.resolve(__dirname, 'ax-bridge-native'),
-      // 3. Legacy compiled binary name — parent dir
-      path.resolve(__dirname, '..', 'ax-bridge'),
-      // 4. Legacy compiled binary name — same dir
-      path.resolve(__dirname, 'ax-bridge'),
-      // 5. Swift source — parent dir
+      // 3. Swift source — parent dir
       path.resolve(__dirname, '..', 'ax-bridge.swift'),
-      // 6. Swift source — same dir (postbuild copy to dist/)
+      // 4. Swift source — same dir (postbuild copy to dist/)
       path.resolve(__dirname, 'ax-bridge.swift'),
     ];
 
@@ -56,7 +58,7 @@ export class AccessibilityBridge {
       }
     }
 
-    // 7. Dev-only: source tree fallback (same gate as sim-hid-bridge)
+    // 5. Dev-only: source tree fallback (same gate as sim-hid-bridge)
     if (process.env.OPENSAFARI_ALLOW_SWIFT_INTERPRETER === '1') {
       const devSrc = path.resolve(__dirname, '..', '..', 'src', 'native', 'ax-bridge.swift');
       if (fs.existsSync(devSrc)) {
@@ -67,7 +69,7 @@ export class AccessibilityBridge {
 
     const searched = candidates.map(c => `  - ${c}`).join('\n');
     throw new AccessibilityBridgeError(
-      `ax-bridge not found. Searched:\n${searched}\n` +
+      `ax-bridge-native not found. Searched:\n${searched}\n` +
       'Run npm run build or set OPENSAFARI_ALLOW_SWIFT_INTERPRETER=1 for dev mode.',
       'BRIDGE_NOT_FOUND',
     );

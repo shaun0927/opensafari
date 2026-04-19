@@ -99,8 +99,9 @@ describe('AccessibilityBridge path resolution', () => {
       code: 'BRIDGE_NOT_FOUND',
     });
 
-    expect(existsSyncMock).toHaveBeenCalledTimes(7);
-    const lastChecked = existsSyncMock.mock.calls[6][0] as string;
+    // 4 normal candidates + 1 dev fallback = 5 existsSync calls.
+    expect(existsSyncMock).toHaveBeenCalledTimes(5);
+    const lastChecked = existsSyncMock.mock.calls[4][0] as string;
     expect(lastChecked).toMatch(/src[\\/]native[\\/]ax-bridge\.swift$/);
   });
 
@@ -114,8 +115,8 @@ describe('AccessibilityBridge path resolution', () => {
       code: 'BRIDGE_NOT_FOUND',
     });
 
-    // Exactly 6 existsSync calls — the dev path must not be checked.
-    expect(existsSyncMock).toHaveBeenCalledTimes(6);
+    // Exactly 4 existsSync calls — the dev path must not be checked.
+    expect(existsSyncMock).toHaveBeenCalledTimes(4);
     expect(execFileMock).not.toHaveBeenCalled();
   });
 
@@ -132,14 +133,14 @@ describe('AccessibilityBridge path resolution', () => {
 
     expect(err).toBeInstanceOf(AccessibilityBridgeError);
     expect(err?.code).toBe('BRIDGE_NOT_FOUND');
-    expect(err?.message).toMatch(/ax-bridge not found/);
+    expect(err?.message).toMatch(/ax-bridge-native not found/);
     expect(err?.message).toMatch(/Searched:/);
     expect(err?.message).toMatch(/ax-bridge/);
   });
 
   test('second call returns cached path without re-scanning fs', async () => {
     existsSyncMock.mockImplementation((p) => {
-      return typeof p === 'string' && p.endsWith('/ax-bridge');
+      return typeof p === 'string' && p.endsWith('/ax-bridge-native');
     });
     execFileMock.mockResolvedValue(makeSuccessResult());
 

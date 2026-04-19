@@ -14,6 +14,9 @@ interface ErrorJSON {
   code: string;
 }
 
+// This CLI is a standalone process consumed by the internal AccessibilityBridge via execFile,
+// which parses stdout as JSON. stdout is the contract for structured success AND error payloads here.
+// DO NOT import outputError into the MCP server process — it would corrupt JSON-RPC on stdout.
 function outputError(message: string, code: string): never {
   process.stdout.write(`${JSON.stringify({ error: message, code }, null, 2)}\n`);
   process.exit(1);
@@ -127,6 +130,7 @@ async function main(): Promise<void> {
   process.stdout.write(stdout);
 }
 
+// Reminder: stdout is the structured-JSON contract consumed by AccessibilityBridge — do not write non-JSON here.
 main().catch((error) => {
   const message = error instanceof Error ? error.message : String(error);
   const payload: ErrorJSON = {
