@@ -229,6 +229,12 @@ func listSimulatorDevices() -> [SimulatorDeviceRecord] {
 
     var records: [SimulatorDeviceRecord] = []
     for (runtimeIdentifier, value) in devices {
+        // Only include iOS Simulator runtimes. watchOS, tvOS, visionOS/xrOS
+        // simulators share the same simctl output but are irrelevant to this
+        // bridge which targets iOS Simulator windows exclusively.
+        let isIOSRuntime = runtimeIdentifier.contains("com.apple.CoreSimulator.SimRuntime.iOS")
+            || runtimeIdentifier.hasPrefix("iOS ")
+        guard isIOSRuntime else { continue }
         guard let entries = value as? [[String: Any]] else { continue }
         for entry in entries {
             guard let udid = entry["udid"] as? String,
