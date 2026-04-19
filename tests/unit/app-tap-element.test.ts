@@ -88,6 +88,20 @@ function makeQueryResult(matches: AXNode[], ambiguous = false): AXQueryResult {
   };
 }
 
+function makeNodeTree(node: AXNode): AXNode {
+  return {
+    role: 'AXWindow',
+    label: 'Test App',
+    traits: [],
+    frame: { x: 0, y: 0, width: 375, height: 812 },
+    visible: true,
+    enabled: true,
+    focused: false,
+    path: '',
+    children: [node],
+  };
+}
+
 // ── Test Setup ───────────────────────────────────────────────────────────────
 
 let server: MCPServer;
@@ -125,6 +139,7 @@ beforeEach(() => {
     message: 'Element does not support AXPress',
     axErrorCode: null,
   });
+  mockDumpTree.mockResolvedValue(makeNodeTree(makeNode()));
 });
 
 // ── Tests ──────────────────────────────────────────────────────────────────
@@ -505,6 +520,9 @@ describe('app_tap_element — Tier 1.5 AX press', () => {
   it('routes to AX press when the element advertises the AXPress action', async () => {
     const node = makeNode();
     mockQuery.mockResolvedValue(makeQueryResult([node]));
+    mockDumpTree
+      .mockResolvedValueOnce(makeNodeTree(node))
+      .mockResolvedValueOnce(makeNodeTree({ ...node, focused: true }));
     mockPress.mockResolvedValueOnce({
       ok: true,
       code: 'OK',
@@ -523,6 +541,8 @@ describe('app_tap_element — Tier 1.5 AX press', () => {
     expect(result.isError).toBeUndefined();
     expect(body.status).toBe('tapped');
     expect(body.backend).toBe('ax-press');
+    expect(body.verified).toBe(true);
+    expect(body.effect).toBe('focus_changed');
     expect(body._meta).toMatchObject({
       backendKind: 'ax-press',
       headless: true,
@@ -545,6 +565,32 @@ describe('app_tap_element — Tier 1.5 AX press', () => {
     expect(body.backend).toBe('simctl');
     expect(mockTap).toHaveBeenCalledTimes(1);
     expect(mockPress).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls back to coordinate tap when AX press reports OK but no observable effect is detected', async () => {
+    const node = makeNode();
+    mockQuery.mockResolvedValue(makeQueryResult([node]));
+    mockDumpTree
+      .mockResolvedValueOnce(makeNodeTree(node))
+      .mockResolvedValueOnce(makeNodeTree(node));
+    mockPress.mockResolvedValueOnce({
+      ok: true,
+      code: 'OK',
+      path: '0/1',
+      actions: ['AXPress'],
+      role: 'AXButton',
+      identifier: 'login_btn',
+      label: 'Login',
+      message: null,
+      axErrorCode: null,
+    });
+
+    const result = await handler('session', { label: 'Login', timeout: 0 });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(result.isError).toBeUndefined();
+    expect(body.backend).toBe('simctl');
+    expect(mockTap).toHaveBeenCalledTimes(1);
   });
 
   it('falls back to coordinate tap when AX press reports PRESS_FAILED', async () => {
