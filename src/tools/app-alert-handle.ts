@@ -6,6 +6,13 @@ import { runInputOp } from './native-input-utils';
 import { getAccessibilityBridge } from '../native/accessibility-bridge';
 import type { AXNode } from '../native/ax-types';
 
+type AlertVerification = {
+  verified: boolean;
+  effect: 'button_disappeared' | 'subtree_changed' | 'no_observable_change';
+  matchedStillPresent: boolean;
+  visibleLabelsAfter: string[];
+};
+
 /**
  * Walk an AX tree looking for button nodes whose label matches one of the
  * supplied candidate labels (case-insensitive, trimmed). Returns the first
@@ -63,6 +70,146 @@ function collectButtonLabels(node: AXNode): string[] {
     }
   }
   return labels;
+}
+
+function walkTree(node: AXNode, visit: (node: AXNode) => void): void {
+  visit(node);
+  for (const child of node.children ?? []) {
+    walkTree(child, visit);
+  }
+}
+
+function countAlertLikeDescendants(node: AXNode): {
+  buttons: number;
+  text: number;
+  total: number;
+} {
+  let buttons = 0;
+  let text = 0;
+  let total = 0;
+  walkTree(node, (current) => {
+    if (!current.visible) return;
+    total += 1;
+    if (current.role === 'AXButton' && (current.label ?? '').trim().length > 0) {
+      buttons += 1;
+    }
+    if (
+      current.role === 'AXStaticText' &&
+      ((current.label ?? '').trim().length > 0 ||
+        (current.value ?? '').trim().length > 0)
+    ) {
+      text += 1;
+    }
+  });
+  return { buttons, text, total };
+}
+
+/**
+ * Best-effort alert subtree detector.
+ *
+ * We prefer the smallest visible subtree that looks like a modal: a handful
+ * of visible text nodes and buttons, instead of the entire application tree.
+ * If no such subtree exists, callers fall back to the full tree.
+ */
+function findLikelyAlertSubtree(root: AXNode): AXNode | null {
+  let bestNode: AXNode | null = null;
+  let bestScore = Number.POSITIVE_INFINITY;
+
+  walkTree(root, (node) => {
+    if (!node.visible || !node.children || node.children.length === 0) {
+      return;
+    }
+
+    const stats = countAlertLikeDescendants(node);
+    if (stats.buttons < 1 || stats.text < 1) {
+      return;
+    }
+
+    // Alerts are usually compact: a few buttons, a few text nodes, and not
+    // an entire home screen worth of descendants.
+    if (stats.buttons > 4 || stats.text > 6 || stats.total > 14) {
+      return;
+    }
+
+    const depth = node.path === '' ? 0 : node.path.split('/').length;
+    const score = stats.total * 100 - depth;
+    if (!bestNode || score < bestScore) {
+      bestNode = node;
+      bestScore = score;
+    }
+  });
+
+  return bestNode;
+}
+
+function fingerprintTree(node: AXNode): string {
+  const parts: string[] = [];
+  walkTree(node, (current) => {
+    if (!current.visible) return;
+    parts.push(
+      [
+        current.path,
+        current.role,
+        current.label ?? '',
+        current.value ?? '',
+        current.enabled ? '1' : '0',
+        current.focused ? '1' : '0',
+        Math.round(current.frame.x),
+        Math.round(current.frame.y),
+        Math.round(current.frame.width),
+        Math.round(current.frame.height),
+      ].join('|'),
+    );
+  });
+  return parts.join('\n');
+}
+
+function findNodeByPath(node: AXNode, path: string): AXNode | null {
+  let match: AXNode | null = null;
+  walkTree(node, (current) => {
+    if (!match && current.path === path) {
+      match = current;
+    }
+  });
+  return match;
+}
+
+function verifyAlertEffect(
+  beforeRoot: AXNode,
+  afterRoot: AXNode,
+  matchedNode: AXNode,
+): AlertVerification {
+  const beforeContext = findLikelyAlertSubtree(beforeRoot) ?? beforeRoot;
+  const afterContext = findLikelyAlertSubtree(afterRoot) ?? afterRoot;
+  const beforeFingerprint = fingerprintTree(beforeContext);
+  const afterFingerprint = fingerprintTree(afterContext);
+  const matchedStillPresent = findNodeByPath(afterRoot, matchedNode.path) !== null;
+  const visibleLabelsAfter = collectButtonLabels(afterContext);
+
+  if (!matchedStillPresent) {
+    return {
+      verified: true,
+      effect: 'button_disappeared',
+      matchedStillPresent,
+      visibleLabelsAfter,
+    };
+  }
+
+  if (beforeFingerprint !== afterFingerprint) {
+    return {
+      verified: true,
+      effect: 'subtree_changed',
+      matchedStillPresent,
+      visibleLabelsAfter,
+    };
+  }
+
+  return {
+    verified: false,
+    effect: 'no_observable_change',
+    matchedStillPresent,
+    visibleLabelsAfter,
+  };
 }
 
 export function registerAppAlertHandleTool(server: MCPServer): void {
@@ -142,11 +289,20 @@ export function registerAppAlertHandleTool(server: MCPServer): void {
         try {
           const bridge = getAccessibilityBridge();
           const tree = await bridge.dumpTree({ deviceId, maxDepth: 8 });
+          const alertTree = findLikelyAlertSubtree(tree) ?? tree;
 
-          const matchedNode = findButtonByLabels(tree, buttonLabels);
+          // Search the (possibly narrowed) alert subtree first.
+          // If no match is found and alertTree is a subtree (not the full dump),
+          // fall back to searching the full tree so we never miss real alert
+          // buttons that lie outside the heuristic subtree window.
+          let matchedNode = findButtonByLabels(alertTree, buttonLabels);
+          const usedSubtree = alertTree !== tree;
+          if (!matchedNode && usedSubtree) {
+            matchedNode = findButtonByLabels(tree, buttonLabels);
+          }
 
           if (!matchedNode) {
-            const visibleLabels = collectButtonLabels(tree);
+            const visibleLabels = collectButtonLabels(alertTree);
             return {
               content: [
                 {
@@ -196,6 +352,54 @@ export function registerAppAlertHandleTool(server: MCPServer): void {
             };
           }
 
+          // Bounded poll loop: check every ~150 ms, stop early on any state
+          // change, give up after ~1200 ms total to avoid false "no_effect"
+          // reports caused by slow simulator transitions or animation jitter.
+          const POLL_INTERVAL_MS = 150;
+          const POLL_TIMEOUT_MS = 1200;
+          let afterTree = await bridge.dumpTree({ deviceId, maxDepth: 8 });
+          let verification = verifyAlertEffect(tree, afterTree, matchedNode);
+          if (!verification.verified) {
+            const deadline = Date.now() + POLL_TIMEOUT_MS;
+            while (Date.now() < deadline) {
+              await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+              afterTree = await bridge.dumpTree({ deviceId, maxDepth: 8 });
+              verification = verifyAlertEffect(tree, afterTree, matchedNode);
+              if (verification.verified) break;
+            }
+          }
+
+          if (!verification.verified) {
+            return {
+              content: [
+                {
+                  type: 'text' as const,
+                  text: JSON.stringify({
+                    error: 'ALERT_HANDLE_NO_EFFECT',
+                    message:
+                      `Pressed "${matchedNode.label ?? matchedNode.path}" via AXPress, ` +
+                      'but no observable alert transition was detected.',
+                    buttonLabel: matchedNode.label,
+                    deviceId,
+                    verified: false,
+                    effect: verification.effect,
+                    visibleLabelsAfter: verification.visibleLabelsAfter,
+                    _meta: {
+                      _telemetry: [
+                        {
+                          backend: 'ax-press',
+                          path: matchedNode.path,
+                          label: matchedNode.label,
+                        },
+                      ],
+                    },
+                  }),
+                },
+              ],
+              isError: true,
+            };
+          }
+
           return {
             content: [
               {
@@ -205,6 +409,8 @@ export function registerAppAlertHandleTool(server: MCPServer): void {
                   buttonLabel: matchedNode.label,
                   deviceId,
                   method: 'ax-press',
+                  verified: true,
+                  effect: verification.effect,
                   _meta: {
                     _telemetry: [
                       {
