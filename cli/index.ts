@@ -290,4 +290,7 @@ program
     process.exit(exitCode);
   });
 
-program.parse();
+program.parseAsync(process.argv).catch(err => {
+  console.error(err);
+  process.exit(1);
+});
