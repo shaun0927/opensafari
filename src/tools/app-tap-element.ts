@@ -10,6 +10,7 @@ import { MCPServer, getWebKitClient } from '../mcp-server';
 import { getAccessibilityBridge, ensureSemanticsActive } from '../native';
 import type { AXNode, AXPressResponse } from '../native';
 import type { AccessibilityBridge } from '../native/accessibility-bridge';
+import { walkTree, fingerprintTree } from '../native/ax-verification';
 import { resolveDeviceId, getInputBackend, runInputOp } from './native-input-utils';
 import {
   activateAndClassify,
@@ -24,7 +25,8 @@ type AXPressVerification = {
     | 'target_appeared'
     | 'focus_changed'
     | 'subtree_changed'
-    | 'no_observable_change';
+    | 'no_observable_change'
+    | 'verification_unavailable';
 };
 
 export function registerAppTapElementTool(server: MCPServer): void {
@@ -273,7 +275,7 @@ export function registerAppTapElementTool(server: MCPServer): void {
             const verification =
               beforeTree !== null && afterTree !== null
                 ? verifyAXPressEffect(beforeTree, afterTree, match)
-                : { verified: false, effect: 'no_observable_change' as const };
+                : { verified: false, effect: 'verification_unavailable' as const };
             if (verification.verified) {
               const response = buildAXPressResponse({
                 match,
@@ -461,35 +463,6 @@ export async function tryPress(
     }
     throw err;
   }
-}
-
-function walkTree(node: AXNode, visit: (node: AXNode) => void): void {
-  visit(node);
-  for (const child of node.children ?? []) {
-    walkTree(child, visit);
-  }
-}
-
-function fingerprintTree(node: AXNode): string {
-  const parts: string[] = [];
-  walkTree(node, (current) => {
-    if (!current.visible) return;
-    parts.push(
-      [
-        current.path,
-        current.role,
-        current.label ?? '',
-        current.value ?? '',
-        current.enabled ? '1' : '0',
-        current.focused ? '1' : '0',
-        Math.round(current.frame.x),
-        Math.round(current.frame.y),
-        Math.round(current.frame.width),
-        Math.round(current.frame.height),
-      ].join('|'),
-    );
-  });
-  return parts.join('\n');
 }
 
 function findNodeByPath(node: AXNode, path: string): AXNode | null {
