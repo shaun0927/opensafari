@@ -34,14 +34,18 @@ export class AccessibilityBridge {
   private async resolveBridgePath(): Promise<string> {
     if (this.bridgePath) return this.bridgePath;
 
-    const candidates: string[] = [
-      // 1. Compiled binary — parent dir (tsc output layout: dist/native/)
+   const candidates: string[] = [
+      // 1. Compiled native binary — parent dir (tsc output layout: dist/native/)
+      path.resolve(__dirname, '..', 'ax-bridge-native'),
+      // 2. Compiled native binary — same dir (webpack flat layout: dist/)
+      path.resolve(__dirname, 'ax-bridge-native'),
+      // 3. Legacy compiled binary name — parent dir
       path.resolve(__dirname, '..', 'ax-bridge'),
-      // 2. Compiled binary — same dir (webpack flat layout: dist/)
+      // 4. Legacy compiled binary name — same dir
       path.resolve(__dirname, 'ax-bridge'),
-      // 3. Swift source — parent dir
+      // 5. Swift source — parent dir
       path.resolve(__dirname, '..', 'ax-bridge.swift'),
-      // 4. Swift source — same dir (postbuild copy to dist/)
+      // 6. Swift source — same dir (postbuild copy to dist/)
       path.resolve(__dirname, 'ax-bridge.swift'),
     ];
 
@@ -52,7 +56,7 @@ export class AccessibilityBridge {
       }
     }
 
-    // 5. Dev-only: source tree fallback (same gate as sim-hid-bridge)
+    // 7. Dev-only: source tree fallback (same gate as sim-hid-bridge)
     if (process.env.OPENSAFARI_ALLOW_SWIFT_INTERPRETER === '1') {
       const devSrc = path.resolve(__dirname, '..', '..', 'src', 'native', 'ax-bridge.swift');
       if (fs.existsSync(devSrc)) {

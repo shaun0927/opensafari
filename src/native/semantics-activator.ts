@@ -57,6 +57,57 @@ export function countNodes(node: AXNode): number {
   return count;
 }
 
+function flattenTree(node: AXNode): AXNode[] {
+  const nodes: AXNode[] = [node];
+  for (const child of node.children ?? []) {
+    nodes.push(...flattenTree(child));
+  }
+  return nodes;
+}
+
+const CHROME_LABELS = new Set([
+  'Action',
+  'Volume Up',
+  'Volume Down',
+  'Sleep/Wake',
+  'Home',
+  'Save Screen',
+  'Rotate',
+  'Capture Pointer',
+  'Capture Keyboard',
+]);
+
+function isChromeValue(value: string): boolean {
+  return /^iPhone\b/.test(value)
+    || /^iPad\b/.test(value)
+    || /^iOS \d/.test(value);
+}
+
+/**
+ * Heuristic guard against simulator-chrome-only trees.
+ *
+ * A tree is considered "chrome-only" when:
+ *   - it has a low node count,
+ *   - it contains no identifiers,
+ *   - it contains no obvious app roles like text fields,
+ *   - and every label/value is consistent with Simulator chrome.
+ */
+export function isLikelyChromeOnlyTree(node: AXNode): boolean {
+  const nodes = flattenTree(node);
+  if (nodes.length > 20) return false;
+  if (nodes.some((n) => Boolean(n.identifier))) return false;
+  if (nodes.some((n) => /AX(TextField|SecureTextField|TextArea|WebArea)/.test(n.role))) {
+    return false;
+  }
+
+  const meaningfulStrings = nodes.flatMap((n) => [n.label, n.value].filter(Boolean) as string[]);
+  if (meaningfulStrings.length === 0) return false;
+
+  return meaningfulStrings.every((value) =>
+    CHROME_LABELS.has(value) || isChromeValue(value),
+  );
+}
+
 /**
  * Attempt to activate Flutter semantics for a given simulator device.
  *
@@ -131,7 +182,7 @@ async function treeIsPopulated(
 ): Promise<boolean> {
   try {
     const tree = await bridge.dumpTree({ deviceId, maxDepth: 4 });
-    return countNodes(tree) >= minNodes;
+    return countNodes(tree) >= minNodes && !isLikelyChromeOnlyTree(tree);
   } catch {
     return false;
   }

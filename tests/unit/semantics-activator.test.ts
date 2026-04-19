@@ -5,7 +5,7 @@
  * to populate their accessibility/semantics tree.
  */
 
-import { countNodes } from '../../src/native/semantics-activator';
+import { countNodes, isLikelyChromeOnlyTree } from '../../src/native/semantics-activator';
 import type { AXNode } from '../../src/native/ax-types';
 
 // ── Mocks ──────────────────────────────────────────────────────────────────
@@ -76,6 +76,82 @@ function makeTree(nodeCount: number): AXNode {
   return root;
 }
 
+function makeChromeOnlyTree(): AXNode {
+  return {
+    role: 'AXWindow',
+    label: 'iPhone 16 Verify 2 – iOS 26.4',
+    traits: [],
+    frame: { x: 0, y: 0, width: 390, height: 844 },
+    visible: true,
+    enabled: true,
+    focused: false,
+    path: '',
+    children: [
+      {
+        role: 'AXButton',
+        label: 'Action',
+        traits: ['button'],
+        frame: { x: 0, y: 0, width: 10, height: 10 },
+        visible: true,
+        enabled: true,
+        focused: false,
+        path: '0',
+      },
+      {
+        role: 'AXButton',
+        label: 'Volume Up',
+        traits: ['button'],
+        frame: { x: 0, y: 0, width: 10, height: 10 },
+        visible: true,
+        enabled: true,
+        focused: false,
+        path: '1',
+      },
+      {
+        role: 'AXToolbar',
+        traits: [],
+        frame: { x: 0, y: 0, width: 10, height: 10 },
+        visible: true,
+        enabled: true,
+        focused: false,
+        path: '2',
+        children: [
+          {
+            role: 'AXButton',
+            label: 'Home',
+            traits: ['button'],
+            frame: { x: 0, y: 0, width: 10, height: 10 },
+            visible: true,
+            enabled: true,
+            focused: false,
+            path: '2/0',
+          },
+        ],
+      },
+      {
+        role: 'AXStaticText',
+        value: 'iPhone 16 Verify 2',
+        traits: [],
+        frame: { x: 0, y: 0, width: 10, height: 10 },
+        visible: true,
+        enabled: true,
+        focused: false,
+        path: '3',
+      },
+      {
+        role: 'AXStaticText',
+        value: 'iOS 26.4',
+        traits: [],
+        frame: { x: 0, y: 0, width: 10, height: 10 },
+        visible: true,
+        enabled: true,
+        focused: false,
+        path: '4',
+      },
+    ],
+  };
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────────
 
 describe('countNodes', () => {
@@ -127,6 +203,18 @@ describe('countNodes', () => {
       }],
     };
     expect(countNodes(root)).toBe(3);
+  });
+});
+
+describe('isLikelyChromeOnlyTree', () => {
+  it('detects simulator chrome-only trees', () => {
+    expect(isLikelyChromeOnlyTree(makeChromeOnlyTree())).toBe(true);
+  });
+
+  it('does not flag real app trees with identifiers as chrome-only', () => {
+    const tree = makeTree(6);
+    tree.children![0].identifier = 'login-btn';
+    expect(isLikelyChromeOnlyTree(tree)).toBe(false);
   });
 });
 
@@ -191,6 +279,21 @@ describe('ensureSemanticsActive', () => {
     );
     // simctl succeeded — VM Service fallback must not have been invoked
     expect(mockDiscoverVMServiceUrl).not.toHaveBeenCalled();
+  });
+
+  it('treats chrome-only trees as unpopulated and attempts activation', async () => {
+    mockDumpTree
+      .mockResolvedValueOnce(makeChromeOnlyTree())
+      .mockResolvedValue(makeTree(10));
+
+    mockExecFile.mockResolvedValue({ stdout: '', stderr: '' });
+
+    const promise = ensureSemanticsActive('test-device-id');
+    await jest.advanceTimersByTimeAsync(400);
+    const result = await promise;
+
+    expect(result).toBe(true);
+    expect(mockExecFile).toHaveBeenCalled();
   });
 
   it('returns false on timeout when tree never populates', async () => {

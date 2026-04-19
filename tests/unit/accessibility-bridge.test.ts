@@ -58,10 +58,10 @@ describe('AccessibilityBridge path resolution', () => {
     }
   });
 
-  test('compiled binary in same dir (candidate 2) is used when it exists', async () => {
-    // Only candidate 2 (same dir, compiled binary) exists.
+  test('compiled native binary in same dir is preferred when it exists', async () => {
+    // Only the same-dir native binary exists.
     existsSyncMock.mockImplementation((p) => {
-      return typeof p === 'string' && p.endsWith('/ax-bridge') && !p.includes('/../ax-bridge');
+      return typeof p === 'string' && p.endsWith('/ax-bridge-native') && !p.includes('/../ax-bridge-native');
     });
     execFileMock.mockResolvedValueOnce(makeSuccessResult());
 
@@ -69,7 +69,7 @@ describe('AccessibilityBridge path resolution', () => {
     await bridge.dumpTree();
 
     const [cmd] = execFileMock.mock.calls[0];
-    expect(cmd).toMatch(/ax-bridge$/);
+    expect(cmd).toMatch(/ax-bridge-native$/);
     expect(cmd).not.toMatch(/\.swift$/);
   });
 
@@ -89,10 +89,8 @@ describe('AccessibilityBridge path resolution', () => {
   });
 
   test('with env var set, a 5th path (dev source tree) is checked when all 4 candidates miss', async () => {
-    // When OPENSAFARI_ALLOW_SWIFT_INTERPRETER=1 and all 4 normal candidates miss,
-    // the implementation checks a 5th path: the dev source tree.
-    // We verify this by counting existsSync calls: exactly 5 should be made
-    // (4 candidates + 1 dev path), and the last one should end in src/native/ax-bridge.swift.
+    // When OPENSAFARI_ALLOW_SWIFT_INTERPRETER=1 and all normal candidates miss,
+    // the implementation checks one final dev-source path.
     process.env.OPENSAFARI_ALLOW_SWIFT_INTERPRETER = '1';
     existsSyncMock.mockReturnValue(false);
 
@@ -101,8 +99,8 @@ describe('AccessibilityBridge path resolution', () => {
       code: 'BRIDGE_NOT_FOUND',
     });
 
-    expect(existsSyncMock).toHaveBeenCalledTimes(5);
-    const lastChecked = existsSyncMock.mock.calls[4][0] as string;
+    expect(existsSyncMock).toHaveBeenCalledTimes(7);
+    const lastChecked = existsSyncMock.mock.calls[6][0] as string;
     expect(lastChecked).toMatch(/src[\\/]native[\\/]ax-bridge\.swift$/);
   });
 
@@ -116,8 +114,8 @@ describe('AccessibilityBridge path resolution', () => {
       code: 'BRIDGE_NOT_FOUND',
     });
 
-    // Exactly 4 existsSync calls — the dev path must not be checked.
-    expect(existsSyncMock).toHaveBeenCalledTimes(4);
+    // Exactly 6 existsSync calls — the dev path must not be checked.
+    expect(existsSyncMock).toHaveBeenCalledTimes(6);
     expect(execFileMock).not.toHaveBeenCalled();
   });
 
