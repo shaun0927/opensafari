@@ -8,6 +8,8 @@
 
 import { MCPServer, getWebKitClient } from '../mcp-server';
 import { resolveDeviceId, getInputBackend, runInputOp } from './native-input-utils';
+import { probeMobileContext } from './app-context';
+import { SimulatorManager } from '../simulator';
 
 export function registerAppTapTool(server: MCPServer): void {
   server.registerTool(
@@ -20,6 +22,21 @@ export function registerAppTapTool(server: MCPServer): void {
         properties: {
           x: { type: 'number', description: 'X coordinate to tap' },
           y: { type: 'number', description: 'Y coordinate to tap' },
+          expectedBundle: {
+            type: 'string',
+            description:
+              'Optional bundle identifier expected to remain foreground after the tap settles.',
+          },
+          verifyContext: {
+            type: 'boolean',
+            description:
+              'When true, run a post-tap context probe and include it in the response.',
+          },
+          settleMs: {
+            type: 'number',
+            description:
+              'Milliseconds to wait before probing the post-tap context (default: 1200).',
+          },
           deviceId: {
             type: 'string',
             description: 'Simulator UDID (uses active device if omitted)',
@@ -39,6 +56,10 @@ export function registerAppTapTool(server: MCPServer): void {
         const x = params.x as number;
         const y = params.y as number;
         const duration = (params.duration as number | undefined) ?? 0;
+        const expectedBundle = params.expectedBundle as string | undefined;
+        const verifyContext =
+          params.verifyContext === true || typeof expectedBundle === 'string';
+        const settleMs = (params.settleMs as number | undefined) ?? 1200;
 
         if (!Number.isFinite(x) || !Number.isFinite(y)) {
           return {
@@ -57,6 +78,34 @@ export function registerAppTapTool(server: MCPServer): void {
           backend.tap(deviceId, x, y, duration > 0 ? duration : undefined),
         );
 
+        const manager = new SimulatorManager();
+        let postInputContext;
+        let warning: string | undefined;
+        if (verifyContext) {
+          await new Promise((resolve) => setTimeout(resolve, settleMs));
+          try {
+            const probe = await probeMobileContext({ deviceId, expectedBundle, manager });
+            postInputContext = probe;
+            if (expectedBundle && probe.expectedBundleMatch !== 'matched') {
+              warning = JSON.stringify({
+                code: 'POST_TAP_CONTEXT_MISMATCH',
+                message:
+                  `Post-tap context did not confirm expected bundle ${expectedBundle}. ` +
+                  `surface=${probe.surface}, match=${probe.expectedBundleMatch ?? 'unknown'}.`,
+                context: probe,
+              });
+            }
+          } catch (probeErr) {
+            const reason = probeErr instanceof Error ? probeErr.message : String(probeErr);
+            console.error(`[app_tap] post-tap context probe failed: ${reason}`);
+            warning = JSON.stringify({
+              code: 'POST_TAP_CONTEXT_PROBE_FAILED',
+              message: 'Post-tap context probe failed.',
+              reason,
+            });
+          }
+        }
+
         return {
           content: [
             {
@@ -69,6 +118,8 @@ export function registerAppTapTool(server: MCPServer): void {
                 deviceId,
                 backend: backend.kind,
                 _meta: meta,
+                postInputContext,
+                warning,
               }),
             },
           ],
