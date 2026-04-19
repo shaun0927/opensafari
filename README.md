@@ -546,7 +546,11 @@ through a 5-tier fallback chain and surfaces the selected path in each tool
 result via a `backend` field. Coordinate and element-targeted tap tools also
 surface whether the interaction was **verified** by a post-action AX-tree check.
 Transport success alone is no longer treated as interaction success when no
-observable UI effect can be confirmed.
+observable UI effect can be confirmed. `app_tap_element` now applies the same
+contract after it falls back from `ax-press` to a coordinate backend: callers
+get `verified: false` with `effect: "verification_unavailable"` when the AX
+proof is unavailable, or a typed `TAP_NO_EFFECT` result when the UI stays
+unchanged after the dispatched tap.
 
 | Tier | Backend | Identifier | Headless? | When used |
 |------|---------|------------|-----------|-----------|

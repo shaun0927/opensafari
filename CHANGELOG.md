@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- **`app_tap_element` coordinate fallback now preserves the verified-interaction contract.** When `ax-press` cannot prove a post-action effect and the tool falls back to a coordinate backend, OpenSafari no longer returns a plain clean success by transport alone. The response now carries `verified: false` / `effect: "verification_unavailable"` when proof is unavailable, or a typed `TAP_NO_EFFECT` error when the post-tap AX tree stays unchanged. The stricter contract matches `app_tap` and closes the false-positive-success gap for bundle-scoped native taps.
+
 ## [0.5.0] - 2026-04-17
 
 **OpenSafari 0.5.0 is a *stability-commitments* release.** It closes out the Xcode 26 investigation epic with an authoritative stability table, makes cross-context automation first-class (WebView-in-Flutter and WebView-in-native live harnesses land as product-grade E2E tests), expands alert / PointerService / IAP coverage, and — because we would rather ship truthful docs than broken tools — reverts the `simctl storekit` bindings that could not be made to work against real Xcode. Input telemetry is now on by default for every MCP input tool. Private-API deployment scope, StoreKit posture, and fork-friendly sentinel routing are all documented so teams operating forks or inside regulated orgs get clean upgrade guidance from the release notes alone.

@@ -12,11 +12,13 @@ import type { AXNode, AXPressResponse } from '../native';
 import type { AccessibilityBridge } from '../native/accessibility-bridge';
 import { walkTree, fingerprintTree } from '../native/ax-verification';
 import { resolveDeviceId, getInputBackend, runInputOp } from './native-input-utils';
+import { probeMobileContext } from './app-context';
 import {
   activateAndClassify,
   createContextMismatchError,
   NativeContextMeta,
 } from './native-app-context';
+import { SimulatorManager } from '../simulator';
 
 type AXPressVerification = {
   verified: boolean;
@@ -27,6 +29,11 @@ type AXPressVerification = {
     | 'subtree_changed'
     | 'no_observable_change'
     | 'verification_unavailable';
+};
+
+type CoordinateTapVerification = {
+  verified: boolean;
+  effect: 'subtree_changed' | 'no_observable_change' | 'verification_unavailable';
 };
 
 export function registerAppTapElementTool(server: MCPServer): void {
@@ -238,6 +245,8 @@ export function registerAppTapElementTool(server: MCPServer): void {
           );
         }
 
+        let coordinateVerificationBaseline: AXNode | null = null;
+
         // Tier 1.5 — AX press: drive interaction through the macOS AX API
         // instead of synthesising OS-level input. Works on every Xcode
         // version (including Xcode 26+ where SimHID tap/swipe is disabled
@@ -304,6 +313,7 @@ export function registerAppTapElementTool(server: MCPServer): void {
                 `but no observable UI effect was detected (${verification.effect}); ` +
                 `falling back to coordinate tap.`,
             );
+            coordinateVerificationBaseline = beforeTree;
           }
           if (pressResponse && pressResponse.code === 'PRESS_NOT_ACTIONABLE') {
             console.error(
@@ -321,11 +331,34 @@ export function registerAppTapElementTool(server: MCPServer): void {
           }
         }
 
+        if (bundleId && coordinateVerificationBaseline === null) {
+          try {
+            await ensureSemanticsActive(deviceId, { bundleId });
+            coordinateVerificationBaseline = await bridge.dumpTree({ deviceId, maxDepth: 8 });
+          } catch (dumpErr) {
+            const dumpMsg = dumpErr instanceof Error ? dumpErr.message : String(dumpErr);
+            console.error(
+              `[app_tap_element] pre-coordinate AX tree dump failed; verification will be skipped. Reason: ${dumpMsg}`,
+            );
+          }
+        }
+
         // Tap via input backend
         const backend = await getInputBackend(deviceId, getWebKitClient(deviceId));
         const { meta } = await runInputOp(backend, deviceId, () =>
           backend.tap(deviceId, centerX, centerY, duration > 0 ? duration : undefined),
         );
+        const shouldVerifyCoordinateTap = bundleId || coordinateVerificationBaseline !== null;
+        const verification = shouldVerifyCoordinateTap
+          ? await verifyCoordinateTapEffect(
+            bridge,
+            deviceId,
+            coordinateVerificationBaseline,
+          )
+          : undefined;
+        const postInputContext = bundleId
+          ? await probePostInputContext({ deviceId, expectedBundle: bundleId })
+          : undefined;
 
         // Flag an implicit ambiguous tap: several candidates matched but
         // the caller did not disambiguate via `index`. We still tap the
@@ -357,6 +390,13 @@ export function registerAppTapElementTool(server: MCPServer): void {
             context: contextMeta,
           },
         };
+        if (verification) {
+          response.verified = verification.verified;
+          response.effect = verification.effect;
+        }
+        if (postInputContext) {
+          response.postInputContext = postInputContext.probe;
+        }
         if (clampedFrom) {
           response.clampedFrom = clampedFrom;
         }
@@ -373,6 +413,35 @@ export function registerAppTapElementTool(server: MCPServer): void {
         }
         if (warnings.length > 0) {
           response.warning = warnings.join('; ');
+        }
+        if (postInputContext?.warning) {
+          response.warning = response.warning
+            ? `${response.warning}; ${postInputContext.warning}`
+            : postInputContext.warning;
+        }
+
+        if (verification?.effect === 'verification_unavailable') {
+          response.warning = response.warning
+            ? `${response.warning}; The tap was dispatched but post-action AX verification was unavailable.`
+            : 'The tap was dispatched but post-action AX verification was unavailable.';
+          return {
+            content: [{ type: 'text' as const, text: JSON.stringify(response) }],
+          };
+        }
+
+        if (verification && !verification.verified) {
+          return {
+            content: [{
+              type: 'text' as const,
+              text: JSON.stringify({
+                error: 'TAP_NO_EFFECT',
+                message:
+                  'The tap was dispatched successfully, but no observable AX tree change was detected afterward.',
+                ...response,
+              }),
+            }],
+            isError: true,
+          };
         }
 
         return {
@@ -511,6 +580,92 @@ export function verifyAXPressEffect(
   }
 
   return { verified: false, effect: 'no_observable_change' };
+}
+
+const VERIFY_POLL_INTERVAL_MS = 150;
+const VERIFY_POLL_TIMEOUT_MS = 1200;
+
+async function verifyCoordinateTapEffect(
+  bridge: AccessibilityBridge,
+  deviceId: string,
+  beforeTree: AXNode | null,
+): Promise<CoordinateTapVerification> {
+  if (!beforeTree) {
+    return { verified: false, effect: 'verification_unavailable' };
+  }
+
+  const beforeFingerprint = fingerprintTree(beforeTree);
+  const deadline = Date.now() + VERIFY_POLL_TIMEOUT_MS;
+  const maxIterations = Math.ceil(VERIFY_POLL_TIMEOUT_MS / VERIFY_POLL_INTERVAL_MS) + 1;
+  let iteration = 0;
+
+  try {
+    while (Date.now() < deadline && iteration < maxIterations) {
+      iteration += 1;
+      await sleep(VERIFY_POLL_INTERVAL_MS);
+      const afterTree = await bridge.dumpTree({ deviceId, maxDepth: 8 });
+      if (beforeFingerprint !== fingerprintTree(afterTree)) {
+        return { verified: true, effect: 'subtree_changed' };
+      }
+    }
+    return { verified: false, effect: 'no_observable_change' };
+  } catch {
+    return { verified: false, effect: 'verification_unavailable' };
+  }
+}
+
+async function probePostInputContext(args: {
+  deviceId: string;
+  expectedBundle: string;
+}): Promise<{
+  probe: Awaited<ReturnType<typeof probeMobileContext>>;
+  warning?: string;
+}> {
+  try {
+    const probe = await probeMobileContext({
+      deviceId: args.deviceId,
+      expectedBundle: args.expectedBundle,
+      manager: new SimulatorManager(),
+    });
+    const warning =
+      probe.expectedBundleMatch !== 'matched'
+        ? JSON.stringify({
+          code: 'POST_TAP_CONTEXT_MISMATCH',
+          message:
+            `Post-tap context did not confirm expected bundle ${args.expectedBundle}. ` +
+            `surface=${probe.surface}, match=${probe.expectedBundleMatch ?? 'unknown'}.`,
+          context: probe,
+        })
+        : undefined;
+    return { probe, warning };
+  } catch (probeErr) {
+    const reason = probeErr instanceof Error ? probeErr.message : String(probeErr);
+    console.error(`[app_tap_element] post-tap context probe failed: ${reason}`);
+    return {
+      probe: {
+        deviceId: args.deviceId,
+        surface: 'unknown',
+        contextVerified: false,
+        expectedBundle: args.expectedBundle,
+        expectedBundleMatch: 'unknown',
+        expectedBundleMatchConfidence: 'unknown',
+        reason: 'Post-tap context probe failed.',
+        warnings: [reason],
+        runningApps: [],
+        visibleSummary: {
+          buttonLabels: [],
+          staticTexts: [],
+          textFieldLabels: [],
+          nodeCount: 0,
+        },
+      },
+      warning: JSON.stringify({
+        code: 'POST_TAP_CONTEXT_PROBE_FAILED',
+        message: 'Post-tap context probe failed.',
+        reason,
+      }),
+    };
+  }
 }
 
 /**
