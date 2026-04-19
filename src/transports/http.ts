@@ -63,7 +63,7 @@ export class HTTPTransport implements MCPTransport {
     }
   }
 
-  start(): Promise<void> {
+  async start(): Promise<void> {
     this.server = http.createServer((req, res) => {
       this.handleHTTPRequest(req, res);
     });
@@ -79,27 +79,22 @@ export class HTTPTransport implements MCPTransport {
       console.error(`[HTTPTransport] Server closed (port ${this.port})`);
     });
 
-    return new Promise((resolve, reject) => {
-      let settled = false;
-
-      const handleError = (err: Error) => {
-        if (!settled) {
-          settled = true;
-          reject(err);
-          return;
-        }
-        console.error(`[HTTPTransport] Server error:`, err);
+    await new Promise<void>((resolve, reject) => {
+      const startupError = (err: NodeJS.ErrnoException) => {
+        this.server!.removeListener('listening', onListening);
+        reject(err);
       };
 
-      this.server!.once('listening', () => {
-        settled = true;
+      const onListening = () => {
+        this.server!.removeListener('error', startupError);
+        this.server!.on('error', (err) => console.error('[HTTPTransport] Server error:', err));
         console.error(`[HTTPTransport] Listening on port ${this.port}`);
         console.error(`[HTTPTransport] MCP endpoint: http://localhost:${this.port}/mcp`);
         resolve();
-      });
+      };
 
-      this.server!.on('error', handleError);
-
+      this.server!.once('error', startupError);
+      this.server!.once('listening', onListening);
       this.server!.listen(this.port);
     });
   }
