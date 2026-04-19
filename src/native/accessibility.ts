@@ -86,23 +86,23 @@ function walkTree(
 
 function matchesQuery(node: AccessibilityNode, options: QueryOptions): boolean {
   const { strategy, value } = options;
-  const valueLower = value.toLowerCase();
+  const normalizedValue = normalizeQueryText(value);
 
   switch (strategy) {
     case 'accessibilityId':
-      return node.identifier?.toLowerCase() === valueLower;
+      return node.identifier?.toLowerCase() === value.toLowerCase();
 
     case 'label':
-      return node.label?.toLowerCase().includes(valueLower) ?? false;
+      return normalizedContains(node.label, normalizedValue);
 
     case 'text':
       return (
-        (node.label?.toLowerCase().includes(valueLower) ?? false) ||
-        (node.value?.toLowerCase().includes(valueLower) ?? false)
+        normalizedContains(node.label, normalizedValue) ||
+        normalizedContains(node.value, normalizedValue)
       );
 
     case 'role':
-      return node.role.toLowerCase() === valueLower;
+      return node.role.toLowerCase() === value.toLowerCase();
 
     case 'predicate':
       return evaluatePredicate(node, value);
@@ -110,6 +110,26 @@ function matchesQuery(node: AccessibilityNode, options: QueryOptions): boolean {
     default:
       return false;
   }
+}
+
+function normalizeQueryText(value: string): string {
+  // Two-step normalize is intentional: NFKD decomposes characters so diacritic
+  // marks (U+0300–U+036F) can be stripped (café → cafe), then NFKC re-composes
+  // and folds fullwidth/halfwidth variants (ａｂｃ → abc) while collapsing
+  // whitespace for multiline labels.
+  return value
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .normalize('NFKC')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLocaleLowerCase();
+}
+
+function normalizedContains(haystack: string | undefined, normalizedNeedle: string): boolean {
+  if (!haystack) return false;
+  if (!normalizedNeedle) return false;
+  return normalizeQueryText(haystack).includes(normalizedNeedle);
 }
 
 /**
@@ -148,8 +168,15 @@ function evaluateSingleCondition(node: AccessibilityNode, condition: string): bo
       return actualLower === expectedLower;
     case '!=':
       return actualLower !== expectedLower;
-    case '~=':
+    case '~=': {
+      // Apply the same diacritic/width folding as the label strategy so that
+      // predicate matching is consistent with normalizeQueryText used elsewhere.
+      const fieldName = field.toLowerCase();
+      if (fieldName === 'label' || fieldName === 'value') {
+        return normalizeQueryText(String(fieldValue)).includes(normalizeQueryText(expected.trim()));
+      }
       return actualLower.includes(expectedLower);
+    }
     default:
       return false;
   }
