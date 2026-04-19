@@ -38,11 +38,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/shaun0927/opensafari.git"
+    "url": "git+https://github.com/junghwan-oss/opensafari.git"
   },
-  "homepage": "https://github.com/shaun0927/opensafari#readme",
+  "homepage": "https://github.com/junghwan-oss/opensafari#readme",
   "bugs": {
-    "url": "https://github.com/shaun0927/opensafari/issues"
+    "url": "https://github.com/junghwan-oss/opensafari/issues"
   },
   "types": "dist/index.d.ts",
   "files": [
