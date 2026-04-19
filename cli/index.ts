@@ -132,7 +132,7 @@ program
     const transport = options.http ? 'http' as const : 'stdio' as const;
     const port = typeof options.http === 'string' ? parseInt(options.http, 10) : 3100;
 
-    server.start({ transport, port });
+    await server.start({ transport, port });
     console.error('[OpenSafari] MCP server running');
   });
 

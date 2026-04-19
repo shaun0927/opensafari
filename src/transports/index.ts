@@ -27,7 +27,7 @@ export interface MCPTransport {
   send(response: MCPResponse): void;
 
   /** Start listening for messages (bind port or attach readline). */
-  start(): void;
+  start(): void | Promise<void>;
 
   /** Graceful shutdown. */
   close(): Promise<void>;
