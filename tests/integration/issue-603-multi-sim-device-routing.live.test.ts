@@ -20,6 +20,7 @@ const describeLive = shouldRun ? describe : describe.skip;
 
 const IPHONE_NAME = 'OSF MultiSim iPhone';
 const IPAD_NAME = 'OSF MultiSim iPad';
+const IPHONE_TYPE = 'com.apple.CoreSimulator.SimDeviceType.iPhone-16';
 
 function simctl(args: string[], timeout = 30000): string {
   return execFileSync('xcrun', ['simctl', ...args], {
@@ -39,6 +40,22 @@ function latestRuntimeIdentifier(): string {
   return runtimes[runtimes.length - 1].identifier;
 }
 
+function resolveDeviceTypeId(kind: 'iphone' | 'ipad'): string {
+  const raw = simctl(['list', 'devicetypes', '-j']);
+  const parsed = JSON.parse(raw) as {
+    devicetypes: Array<{ identifier: string; name: string; productFamily?: string; isAvailable?: boolean }>;
+  };
+  const candidates = parsed.devicetypes.filter((deviceType) => deviceType.isAvailable !== false);
+  const preferred =
+    kind === 'iphone'
+      ? candidates.find((deviceType) => deviceType.identifier === IPHONE_TYPE)
+      : candidates.find((deviceType) => /iPad/i.test(deviceType.name));
+  if (!preferred) {
+    throw new Error(`No available ${kind} simulator device type found`);
+  }
+  return preferred.identifier;
+}
+
 function createDevice(name: string, typeId: string, runtimeId: string): string {
   return simctl(['create', name, typeId, runtimeId]);
 }
@@ -54,14 +71,16 @@ describeLive('issue #603 — multi-simulator device routing', () => {
 
   beforeAll(() => {
     const runtimeId = latestRuntimeIdentifier();
+    const iphoneTypeId = resolveDeviceTypeId('iphone');
+    const ipadTypeId = resolveDeviceTypeId('ipad');
     iphoneId = createDevice(
       IPHONE_NAME,
-      'com.apple.CoreSimulator.SimDeviceType.iPhone-16',
+      iphoneTypeId,
       runtimeId,
     );
     ipadId = createDevice(
       IPAD_NAME,
-      'com.apple.CoreSimulator.SimDeviceType.iPad-Pro-13-inch-M4',
+      ipadTypeId,
       runtimeId,
     );
 
@@ -94,6 +113,16 @@ describeLive('issue #603 — multi-simulator device routing', () => {
     // We do not assert exact points because Simulator zoom / window scale can
     // vary by host, but iPad content must be materially larger than iPhone
     // content if the correct window was selected for each UDID.
+    expect(ipadTree.frame.width).toBeGreaterThan(iphoneTree.frame.width + 100);
+    expect(ipadTree.frame.height).toBeGreaterThan(iphoneTree.frame.height + 100);
+  });
+
+  test('device-name targeting resolves the exact booted simulator', async () => {
+    const bridge = new AccessibilityBridge();
+
+    const iphoneTree = await bridge.dumpTree({ deviceId: IPHONE_NAME, maxDepth: 1 });
+    const ipadTree = await bridge.dumpTree({ deviceId: IPAD_NAME, maxDepth: 1 });
+
     expect(ipadTree.frame.width).toBeGreaterThan(iphoneTree.frame.width + 100);
     expect(ipadTree.frame.height).toBeGreaterThan(iphoneTree.frame.height + 100);
   });
