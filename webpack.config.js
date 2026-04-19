@@ -57,4 +57,33 @@ module.exports = [
       }),
     ],
   },
+  // Raw ax-bridge wrapper CLI
+  {
+    name: 'ax-bridge-cli',
+    entry: './cli/ax-bridge.ts',
+    target: 'node',
+    mode: 'production',
+    devtool: 'source-map',
+    output: {
+      filename: 'ax-bridge',
+      path: path.resolve(__dirname, 'dist'),
+    },
+    resolve: {
+      extensions: ['.ts', '.js'],
+    },
+    module: {
+      rules: [{
+        test: /\.ts$/,
+        use: { loader: 'ts-loader', options: { configFile: 'tsconfig.cli.json' } },
+        exclude: /node_modules/,
+      }],
+    },
+    externals: [nodeExternals()],
+    plugins: [
+      new webpack.BannerPlugin({ banner: '#!/usr/bin/env node', raw: true }),
+      new webpack.DefinePlugin({
+        '__OPENSAFARI_VERSION__': JSON.stringify(require('./package.json').version),
+      }),
+    ],
+  },
 ];
