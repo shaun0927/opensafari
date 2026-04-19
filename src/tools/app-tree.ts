@@ -1,6 +1,10 @@
 import { MCPServer } from '../mcp-server';
 import { getAccessibilityBridge, ensureSemanticsActive } from '../native';
 import { getSessionManager } from '../session-manager';
+import {
+  createContextMismatchError,
+  ensureTargetAppContext,
+} from './native-app-context';
 
 export function registerAppTreeTool(server: MCPServer): void {
   server.registerTool(
@@ -33,18 +37,41 @@ export function registerAppTreeTool(server: MCPServer): void {
         const maxDepth = params.max_depth as number | undefined;
 
         const bridge = getAccessibilityBridge();
-
-        // Ensure Flutter semantics are activated before reading the tree
-        if (deviceId) {
+        let tree;
+        let meta;
+        if (bundleId) {
+          const context = await ensureTargetAppContext({
+            bridge,
+            deviceId,
+            bundleId,
+            maxDepth,
+            ensureSemanticsActive: () => ensureSemanticsActive(deviceId, { bundleId }),
+          });
+          tree = context.tree;
+          meta = context.meta;
+          if (meta.sourceKind !== 'target-app') {
+            throw createContextMismatchError(meta);
+          }
+        } else {
           await ensureSemanticsActive(deviceId, { bundleId });
+          tree = await bridge.dumpTree({ deviceId, maxDepth });
+          meta = {
+            requestedBundleId: undefined,
+            deviceId: deviceId ?? '',
+            sourceKind: 'unknown' as const,
+            heuristics: ['not-requested'],
+            activationAttempted: false,
+            activationRetries: 0,
+          };
         }
-
-        const tree = await bridge.dumpTree({ deviceId, maxDepth });
 
         return {
           content: [{
             type: 'text' as const,
-            text: JSON.stringify(tree, null, 2),
+            text: JSON.stringify({
+              ...tree,
+              _meta: { context: meta },
+            }, null, 2),
           }],
         };
       } catch (err) {

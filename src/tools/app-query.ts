@@ -1,6 +1,11 @@
 import { MCPServer } from '../mcp-server';
 import { getAccessibilityBridge, ensureSemanticsActive } from '../native';
 import { getSessionManager } from '../session-manager';
+import {
+  activateAndClassify,
+  createContextMismatchError,
+  NativeContextMeta,
+} from './native-app-context';
 
 export function registerAppQueryTool(server: MCPServer): void {
   server.registerTool(
@@ -64,9 +69,26 @@ export function registerAppQueryTool(server: MCPServer): void {
         const maxResults = params.max_results as number | undefined;
 
         const bridge = getAccessibilityBridge();
-
-        // Ensure Flutter semantics are activated before querying
-        if (deviceId) {
+        let meta: NativeContextMeta = {
+          requestedBundleId: bundleId,
+          deviceId,
+          sourceKind: 'unknown',
+          heuristics: ['not-requested'],
+          activationAttempted: false,
+          activationRetries: 0,
+        };
+        if (bundleId) {
+          const context = await activateAndClassify({
+            bridge,
+            deviceId,
+            bundleId,
+            ensureSemanticsActive: () => ensureSemanticsActive(deviceId, { bundleId }),
+          });
+          meta = context.meta;
+          if (meta.sourceKind !== 'target-app') {
+            throw createContextMismatchError(meta);
+          }
+        } else {
           await ensureSemanticsActive(deviceId, { bundleId });
         }
 
@@ -81,6 +103,7 @@ export function registerAppQueryTool(server: MCPServer): void {
               type: 'text' as const,
               text: JSON.stringify({
                 warning: `Ambiguous query: identifier "${identifier}" matched ${result.total} elements. Use a more specific query or inspect individual paths.`,
+                _meta: { context: meta },
                 ...result,
               }, null, 2),
             }],
@@ -90,7 +113,10 @@ export function registerAppQueryTool(server: MCPServer): void {
         return {
           content: [{
             type: 'text' as const,
-            text: JSON.stringify(result, null, 2),
+            text: JSON.stringify({
+              ...result,
+              _meta: { context: meta },
+            }, null, 2),
           }],
         };
       } catch (err) {

@@ -10,6 +10,11 @@ import { MCPServer } from '../mcp-server';
 import { getAccessibilityBridge, ensureSemanticsActive } from '../native';
 import type { AXNode } from '../native';
 import { getSessionManager } from '../session-manager';
+import {
+  activateAndClassify,
+  createContextMismatchError,
+  NativeContextMeta,
+} from './native-app-context';
 
 const DEFAULT_TIMEOUT_MS = 10000;
 const DEFAULT_INTERVAL_MS = 500;
@@ -60,6 +65,10 @@ export function registerAppWaitForNativeTool(server: MCPServer): void {
             type: 'string',
             description: 'Simulator UDID (uses active device if omitted)',
           },
+          bundle_id: {
+            type: 'string',
+            description: 'Target app bundle ID. When provided, the tool re-activates the app and rejects mismatched native contexts.',
+          },
         },
         required: [],
       },
@@ -95,12 +104,32 @@ export function registerAppWaitForNativeTool(server: MCPServer): void {
         const condition = (params.condition as WaitCondition | undefined) ?? 'exists';
         const timeout = (params.timeout as number | undefined) ?? DEFAULT_TIMEOUT_MS;
         const interval = (params.interval as number | undefined) ?? DEFAULT_INTERVAL_MS;
+        const bundleId = params.bundle_id as string | undefined;
         const query = { identifier, label, text, role };
 
-        // Ensure Flutter semantics are active
-        await ensureSemanticsActive(deviceId);
-
         const bridge = getAccessibilityBridge();
+        let meta: NativeContextMeta = {
+          requestedBundleId: bundleId,
+          deviceId,
+          sourceKind: 'unknown',
+          heuristics: ['not-requested'],
+          activationAttempted: false,
+          activationRetries: 0,
+        };
+        if (bundleId) {
+          const context = await activateAndClassify({
+            bridge,
+            deviceId,
+            bundleId,
+            ensureSemanticsActive: () => ensureSemanticsActive(deviceId, { bundleId }),
+          });
+          meta = context.meta;
+          if (meta.sourceKind !== 'target-app') {
+            throw createContextMismatchError(meta);
+          }
+        } else {
+          await ensureSemanticsActive(deviceId, { bundleId });
+        }
         const startTime = Date.now();
         const deadline = startTime + timeout;
         let pollCount = 0;
@@ -130,6 +159,7 @@ export function registerAppWaitForNativeTool(server: MCPServer): void {
                         path: result.matches[0].path,
                       }
                       : null,
+                    _meta: { context: meta },
                   }),
                 }],
               };

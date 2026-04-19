@@ -11,6 +11,11 @@ import { getAccessibilityBridge, ensureSemanticsActive } from '../native';
 import type { AXNode, AXPressResponse } from '../native';
 import type { AccessibilityBridge } from '../native/accessibility-bridge';
 import { resolveDeviceId, getInputBackend, runInputOp } from './native-input-utils';
+import {
+  activateAndClassify,
+  createContextMismatchError,
+  NativeContextMeta,
+} from './native-app-context';
 
 type AXPressVerification = {
   verified: boolean;
@@ -65,6 +70,10 @@ export function registerAppTapElementTool(server: MCPServer): void {
             type: 'string',
             description: 'Simulator UDID (uses active device if omitted)',
           },
+          bundle_id: {
+            type: 'string',
+            description: 'Target app bundle ID. When provided, the tool re-activates the app and rejects mismatched native contexts.',
+          },
         },
         required: [],
       },
@@ -93,11 +102,31 @@ export function registerAppTapElementTool(server: MCPServer): void {
         const index = (params.index as number | undefined) ?? 0;
         const timeout = (params.timeout as number | undefined) ?? 5000;
         const duration = (params.duration as number | undefined) ?? 0;
-
-        // Ensure Flutter semantics are active
-        await ensureSemanticsActive(deviceId);
+        const bundleId = params.bundle_id as string | undefined;
 
         const bridge = getAccessibilityBridge();
+        let contextMeta: NativeContextMeta = {
+          requestedBundleId: bundleId,
+          deviceId,
+          sourceKind: 'unknown',
+          heuristics: ['not-requested'],
+          activationAttempted: false,
+          activationRetries: 0,
+        };
+        if (bundleId) {
+          const context = await activateAndClassify({
+            bridge,
+            deviceId,
+            bundleId,
+            ensureSemanticsActive: () => ensureSemanticsActive(deviceId, { bundleId }),
+          });
+          contextMeta = context.meta;
+          if (contextMeta.sourceKind !== 'target-app') {
+            throw createContextMismatchError(contextMeta);
+          }
+        } else {
+          await ensureSemanticsActive(deviceId, { bundleId });
+        }
         const query = { identifier, label, text, role };
 
         // Wait for element to appear (with timeout). We also track the
@@ -137,6 +166,7 @@ export function registerAppTapElementTool(server: MCPServer): void {
                 query,
                 index,
                 timeout,
+                _meta: { context: contextMeta },
               }),
             }],
             isError: true,
@@ -258,6 +288,10 @@ export function registerAppTapElementTool(server: MCPServer): void {
                 pressActions: pressResponse.actions,
                 effect: verification.effect,
               });
+              response._meta = {
+                ...(response._meta as Record<string, unknown>),
+                context: contextMeta,
+              };
               return {
                 content: [{ type: 'text' as const, text: JSON.stringify(response) }],
               };
@@ -316,7 +350,10 @@ export function registerAppTapElementTool(server: MCPServer): void {
           backend: backend.kind,
           deviceId,
           totalMatches,
-          _meta: meta,
+          _meta: {
+            ...meta,
+            context: contextMeta,
+          },
         };
         if (clampedFrom) {
           response.clampedFrom = clampedFrom;
