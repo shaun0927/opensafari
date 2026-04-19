@@ -247,17 +247,34 @@ func findDeviceContent(_ app: AXUIElement, deviceUDID: String) -> (element: AXUI
 
 // MARK: - Query Matching
 
+func normalizeQueryText(_ value: String) -> String {
+    let collapsedWhitespace = value
+        .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+
+    return collapsedWhitespace.folding(
+        options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive],
+        locale: Locale.current
+    )
+}
+
+func normalizedContains(_ haystack: String?, needle: String) -> Bool {
+    guard let haystack = haystack else { return false }
+    let normalizedNeedle = normalizeQueryText(needle)
+    if normalizedNeedle.isEmpty { return false }
+    return normalizeQueryText(haystack).contains(normalizedNeedle)
+}
+
 func matchesQuery(_ node: AXNodeJSON, identifier: String?, label: String?, text: String?, role: String?) -> Bool {
     if let id = identifier {
         guard node.identifier == id else { return false }
     }
     if let lbl = label {
-        guard let nodeLabel = node.label,
-              nodeLabel.localizedCaseInsensitiveContains(lbl) else { return false }
+        guard normalizedContains(node.label, needle: lbl) else { return false }
     }
     if let txt = text {
-        let hasText = (node.value?.localizedCaseInsensitiveContains(txt) ?? false)
-            || (node.label?.localizedCaseInsensitiveContains(txt) ?? false)
+        let hasText = normalizedContains(node.value, needle: txt)
+            || normalizedContains(node.label, needle: txt)
         guard hasText else { return false }
     }
     if let r = role {

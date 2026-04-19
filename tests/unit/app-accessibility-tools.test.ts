@@ -121,6 +121,41 @@ describe('Native Accessibility Tools', () => {
       expect(matches[0].node.role).toBe('TextField');
     });
 
+    test('query by label normalizes multiline whitespace', () => {
+      const multilineTree: AccessibilityNode = {
+        ...sampleTree,
+        children: [
+          {
+            ...sampleTree.children[0],
+            children: [
+              {
+                role: 'Button',
+                label: '마이\n탭 4개 중 4번째',
+                identifier: 'my-tab',
+                traits: ['ButtonTrait'],
+                frame: { x: 10, y: 10, width: 100, height: 44 },
+                isVisible: true,
+                isEnabled: true,
+                children: [],
+              },
+            ],
+          },
+        ],
+      };
+
+      const exactMatches = filterTree(multilineTree, {
+        strategy: 'label',
+        value: '마이 탭 4개 중 4번째',
+      });
+      const partialMatches = filterTree(multilineTree, {
+        strategy: 'label',
+        value: '마이',
+      });
+
+      expect(exactMatches).toHaveLength(1);
+      expect(partialMatches).toHaveLength(1);
+    });
+
     test('query by text matches label and value', () => {
       const matches = filterTree(sampleTree, {
         strategy: 'text',
@@ -128,6 +163,36 @@ describe('Native Accessibility Tools', () => {
       });
       expect(matches).toHaveLength(1);
       expect(matches[0].node.role).toBe('TextField');
+    });
+
+    test('query by text matches visible Korean static text', () => {
+      const koreanTree: AccessibilityNode = {
+        ...sampleTree,
+        children: [
+          {
+            ...sampleTree.children[0],
+            children: [
+              {
+                role: 'StaticText',
+                label: '매일 무료 오픈',
+                traits: ['StaticTextTrait'],
+                frame: { x: 10, y: 10, width: 200, height: 30 },
+                isVisible: true,
+                isEnabled: true,
+                children: [],
+              },
+            ],
+          },
+        ],
+      };
+
+      const matches = filterTree(koreanTree, {
+        strategy: 'text',
+        value: '매일 무료 오픈',
+      });
+
+      expect(matches).toHaveLength(1);
+      expect(matches[0].node.label).toBe('매일 무료 오픈');
     });
 
     test('query by role', () => {

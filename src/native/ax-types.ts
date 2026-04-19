@@ -43,9 +43,9 @@ export interface AXFrame {
 export interface AXQuery {
   /** Match by accessibility identifier (exact) */
   identifier?: string;
-  /** Match by accessibility label (substring, case-insensitive) */
+  /** Match by accessibility label (Unicode-aware substring, whitespace-normalized) */
   label?: string;
-  /** Match by text content in value (substring, case-insensitive) */
+  /** Match by text content in label/value (Unicode-aware substring, whitespace-normalized) */
   text?: string;
   /** Match by accessibility role (exact) */
   role?: string;
