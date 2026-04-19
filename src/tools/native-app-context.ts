@@ -31,8 +31,8 @@ interface EnsureTargetContextResult {
 }
 
 const SIMULATOR_CHROME_LABELS = ['Home', 'Save Screen', 'Rotate'];
-const SPRINGBOARD_IDENTIFIERS = ['spotlight-pill'];
-const SPRINGBOARD_LABELS = ['Safari', 'Messages', '메시지', 'Settings', '설정'];
+const SPRINGBOARD_DOCK_IDENTIFIERS = ['dock', 'floating-dock'];
+const SPRINGBOARD_LABELS = ['Safari', 'Messages', '메시지', 'Settings', '설정', 'Phone', 'Mail', 'Maps', 'Photos', 'Camera'];
 
 export function classifyNativeContext(tree: AXNode): {
   sourceKind: NativeContextSourceKind;
@@ -49,15 +49,30 @@ export function classifyNativeContext(tree: AXNode): {
     return { sourceKind: 'simulator-window', heuristics };
   }
 
+  // Strong structural signal: spotlight-pill identifier is exclusive to SpringBoard search bar
   const hasSpotlightPill = texts.some((value) => value === 'spotlight-pill');
+  // Secondary structural signal: dock identifier is exclusive to the SpringBoard home-screen dock
+  const hasDock = SPRINGBOARD_DOCK_IDENTIFIERS.some((id) => texts.some((value) => value === id));
+  // SpringBoard-specific bundle-id prefix in any identifier
+  const hasSpringboardBundleId = texts.some((value) =>
+    value.startsWith('com.apple.springboard'),
+  );
+
+  if (hasSpotlightPill || hasSpringboardBundleId) {
+    if (hasSpotlightPill) heuristics.push('springboard-identifier:spotlight-pill');
+    if (hasSpringboardBundleId) heuristics.push('springboard-bundle-id:com.apple.springboard');
+    return { sourceKind: 'springboard', heuristics };
+  }
+
+  // Label co-occurrence only counts when combined with the dock structural signal, AND requires
+  // at least 3 distinct home-screen app labels. This prevents in-app screens (e.g. a chat app
+  // that lists "Messages" or a settings screen listing "Settings") from being misclassified.
   const springboardLabelHits = SPRINGBOARD_LABELS.filter((label) =>
     texts.some((value) => value === label),
   );
-  if (hasSpotlightPill || springboardLabelHits.length >= 2) {
-    if (hasSpotlightPill) heuristics.push('springboard-identifier:spotlight-pill');
-    if (springboardLabelHits.length >= 2) {
-      heuristics.push(`springboard-labels:${springboardLabelHits.join(',')}`);
-    }
+  if (hasDock && springboardLabelHits.length >= 3) {
+    heuristics.push('springboard-identifier:dock');
+    heuristics.push(`springboard-labels:${springboardLabelHits.join(',')}`);
     return { sourceKind: 'springboard', heuristics };
   }
 
