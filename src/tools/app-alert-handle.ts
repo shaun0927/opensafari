@@ -291,7 +291,15 @@ export function registerAppAlertHandleTool(server: MCPServer): void {
           const tree = await bridge.dumpTree({ deviceId, maxDepth: 8 });
           const alertTree = findLikelyAlertSubtree(tree) ?? tree;
 
-          const matchedNode = findButtonByLabels(alertTree, buttonLabels);
+          // Search the (possibly narrowed) alert subtree first.
+          // If no match is found and alertTree is a subtree (not the full dump),
+          // fall back to searching the full tree so we never miss real alert
+          // buttons that lie outside the heuristic subtree window.
+          let matchedNode = findButtonByLabels(alertTree, buttonLabels);
+          const usedSubtree = alertTree !== tree;
+          if (!matchedNode && usedSubtree) {
+            matchedNode = findButtonByLabels(tree, buttonLabels);
+          }
 
           if (!matchedNode) {
             const visibleLabels = collectButtonLabels(alertTree);
@@ -344,9 +352,22 @@ export function registerAppAlertHandleTool(server: MCPServer): void {
             };
           }
 
-          await new Promise((resolve) => setTimeout(resolve, 250));
-          const afterTree = await bridge.dumpTree({ deviceId, maxDepth: 8 });
-          const verification = verifyAlertEffect(tree, afterTree, matchedNode);
+          // Bounded poll loop: check every ~150 ms, stop early on any state
+          // change, give up after ~1200 ms total to avoid false "no_effect"
+          // reports caused by slow simulator transitions or animation jitter.
+          const POLL_INTERVAL_MS = 150;
+          const POLL_TIMEOUT_MS = 1200;
+          let afterTree = await bridge.dumpTree({ deviceId, maxDepth: 8 });
+          let verification = verifyAlertEffect(tree, afterTree, matchedNode);
+          if (!verification.verified) {
+            const deadline = Date.now() + POLL_TIMEOUT_MS;
+            while (Date.now() < deadline) {
+              await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+              afterTree = await bridge.dumpTree({ deviceId, maxDepth: 8 });
+              verification = verifyAlertEffect(tree, afterTree, matchedNode);
+              if (verification.verified) break;
+            }
+          }
 
           if (!verification.verified) {
             return {
