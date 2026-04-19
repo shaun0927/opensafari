@@ -83,6 +83,18 @@ Report the current mobile context for a booted simulator using accessibility-tre
 - **Output:** `{ deviceId, surface, contextVerified, inferredBundleId?, expectedBundle?, expectedBundleMatch?, expectedBundleMatchConfidence?, reason, warnings, runningApps, visibleSummary }`
 - **Errors:** `EXPECTED_BUNDLE_MISMATCH` when `requireMatch=true` and the expected bundle cannot be matched
 
+#### app_tap
+Tap at screen coordinates in the simulator.
+- **Input:** `{ x: number, y: number, duration?: number, deviceId?: string, expectedBundle?: string, verifyContext?: boolean, settleMs?: number }`
+- **Output:** `{ status: "tapped", x, y, duration, deviceId, backend, _meta, postInputContext?, warning? }`
+- **Notes:** When `verifyContext=true` or `expectedBundle` is supplied, the tool waits `settleMs` (default 1200 ms) and attaches a post-input context probe.
+
+#### app_swipe_native
+Perform a swipe gesture on the simulator.
+- **Input:** `{ direction: "up"|"down"|"left"|"right", startX?: number, startY?: number, distance?: number, duration?: number, deviceId?: string, expectedBundle?: string, verifyContext?: boolean, settleMs?: number }`
+- **Output:** `{ status: "swiped", from, to, distance, duration, deviceId, backend, _meta, postInputContext?, warning? }`
+- **Notes:** When `verifyContext=true` or `expectedBundle` is supplied, the tool waits `settleMs` (default 1200 ms) and attaches a post-input context probe.
+
 #### app_reset
 Reset app state: terminate, reset privacy permissions, uninstall. The app must be reinstalled after reset.
 - **Input:** `{ bundleId: string, deviceId?: string }`

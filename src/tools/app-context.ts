@@ -2,7 +2,31 @@ import { MCPServer } from '../mcp-server';
 import { getAccessibilityBridge } from '../native/accessibility-bridge';
 import { getSessionManager } from '../session-manager';
 import { SimulatorManager } from '../simulator';
-import { classifyMobileContext } from './mobile-context';
+import { classifyMobileContext, type MobileContextProbe } from './mobile-context';
+
+export async function probeMobileContext(params: {
+  deviceId: string;
+  expectedBundle?: string;
+  maxDepth?: number;
+}): Promise<MobileContextProbe> {
+  const manager = new SimulatorManager();
+  const bridge = getAccessibilityBridge();
+  const tree = await bridge.dumpTree({
+    deviceId: params.deviceId,
+    maxDepth: params.maxDepth ?? 6,
+  });
+  const runningAppsRaw = await manager.listRunningApps(params.deviceId);
+  const runningApps = runningAppsRaw.map((app) => ({
+    bundleId: app.label,
+    pid: app.pid,
+  }));
+  return classifyMobileContext({
+    deviceId: params.deviceId,
+    tree,
+    runningApps,
+    expectedBundle: params.expectedBundle,
+  });
+}
 
 export function registerAppContextTool(server: MCPServer): void {
   server.registerTool(
@@ -64,19 +88,10 @@ export function registerAppContextTool(server: MCPServer): void {
         const requireMatch = params.requireMatch === true;
         const maxDepth = (params.maxDepth as number | undefined) ?? 6;
 
-        const bridge = getAccessibilityBridge();
-        const tree = await bridge.dumpTree({ deviceId, maxDepth });
-        const runningAppsRaw = await manager.listRunningApps(deviceId);
-        const runningApps = runningAppsRaw.map((app) => ({
-          bundleId: app.label,
-          pid: app.pid,
-        }));
-
-        const probe = classifyMobileContext({
+        const probe = await probeMobileContext({
           deviceId,
-          tree,
-          runningApps,
           expectedBundle,
+          maxDepth,
         });
 
         const isMatched =
