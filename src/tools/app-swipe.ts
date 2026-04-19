@@ -134,12 +134,18 @@ export function registerAppSwipeNativeTool(server: MCPServer): void {
         let warning: string | undefined;
         if (verifyContext) {
           await new Promise((resolve) => setTimeout(resolve, settleMs));
-          const probe = await probeMobileContext({ deviceId, expectedBundle });
-          postInputContext = probe;
-          if (expectedBundle && probe.expectedBundleMatch !== 'matched') {
-            warning =
-              `Post-swipe context did not confirm expected bundle ${expectedBundle}. ` +
-              `surface=${probe.surface}, match=${probe.expectedBundleMatch ?? 'unknown'}.`;
+          try {
+            const probe = await probeMobileContext({ deviceId, expectedBundle });
+            postInputContext = probe;
+            if (expectedBundle && probe.expectedBundleMatch !== 'matched') {
+              warning =
+                `Post-swipe context did not confirm expected bundle ${expectedBundle}. ` +
+                `surface=${probe.surface}, match=${probe.expectedBundleMatch ?? 'unknown'}.`;
+            }
+          } catch (probeErr) {
+            const reason = probeErr instanceof Error ? probeErr.message : String(probeErr);
+            console.error(`[app_swipe_native] post-swipe context probe failed: ${reason}`);
+            warning = JSON.stringify({ warning: 'POST_SWIPE_CONTEXT_PROBE_FAILED', reason });
           }
         }
 

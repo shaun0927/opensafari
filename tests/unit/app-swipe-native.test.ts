@@ -75,4 +75,21 @@ describe('app_swipe_native tool', () => {
     expect(body.postInputContext.expectedBundleMatch).toBe('unknown');
     expect(body.warning).toContain('Post-swipe context did not confirm expected bundle');
   });
+
+  test('returns swipe success with warning when post-swipe context probe throws', async () => {
+    mockProbeMobileContext.mockRejectedValueOnce(new Error('AX dump failed'));
+
+    const result = await handler('test', {
+      direction: 'up',
+      verifyContext: true,
+      settleMs: 0,
+    });
+    expect(result.isError).toBeUndefined();
+    const body = JSON.parse(result.content[0].text);
+    expect(body.status).toBe('swiped');
+    const warningObj = JSON.parse(body.warning);
+    expect(warningObj.warning).toBe('POST_SWIPE_CONTEXT_PROBE_FAILED');
+    expect(warningObj.reason).toBe('AX dump failed');
+    expect(body.postInputContext).toBeUndefined();
+  });
 });

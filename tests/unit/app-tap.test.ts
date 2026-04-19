@@ -110,4 +110,22 @@ describe('app_tap tool', () => {
     const body = JSON.parse(result.content[0].text);
     expect(body.warning).toContain('Post-tap context did not confirm expected bundle');
   });
+
+  test('returns tap success with warning when post-tap context probe throws', async () => {
+    mockProbeMobileContext.mockRejectedValueOnce(new Error('AX bridge unavailable'));
+
+    const result = await handler('test', {
+      x: 100,
+      y: 200,
+      verifyContext: true,
+      settleMs: 0,
+    });
+    expect(result.isError).toBeUndefined();
+    const body = JSON.parse(result.content[0].text);
+    expect(body.status).toBe('tapped');
+    const warningObj = JSON.parse(body.warning);
+    expect(warningObj.warning).toBe('POST_TAP_CONTEXT_PROBE_FAILED');
+    expect(warningObj.reason).toBe('AX bridge unavailable');
+    expect(body.postInputContext).toBeUndefined();
+  });
 });
