@@ -10,6 +10,7 @@ import { MCPServer, getWebKitClient } from '../mcp-server';
 import { getAccessibilityBridge } from '../native/accessibility-bridge';
 import { ensureSemanticsActive, countNodes } from '../native/semantics-activator';
 import type { AXNode } from '../native/ax-types';
+import { walkTree, fingerprintTree } from '../native/ax-verification';
 import { resolveDeviceId, getInputBackend, runInputOp } from './native-input-utils';
 import { probeMobileContext } from './app-context';
 import { SimulatorManager } from '../simulator';
@@ -242,35 +243,6 @@ export function registerAppTapTool(server: MCPServer): void {
   );
 }
 
-function walkTree(node: AXNode, visit: (node: AXNode) => void): void {
-  visit(node);
-  for (const child of node.children ?? []) {
-    walkTree(child, visit);
-  }
-}
-
-function fingerprintTree(node: AXNode): string {
-  const parts: string[] = [];
-  walkTree(node, (current) => {
-    if (!current.visible) return;
-    parts.push(
-      [
-        current.path,
-        current.role,
-        current.label ?? '',
-        current.value ?? '',
-        current.enabled ? '1' : '0',
-        current.focused ? '1' : '0',
-        Math.round(current.frame.x),
-        Math.round(current.frame.y),
-        Math.round(current.frame.width),
-        Math.round(current.frame.height),
-      ].join('|'),
-    );
-  });
-  return parts.join('\n');
-}
-
 const VERIFY_POLL_INTERVAL_MS = 150;
 const VERIFY_POLL_TIMEOUT_MS = 1200;
 
@@ -285,9 +257,12 @@ async function verifyCoordinateTapEffect(
 
   const beforeFingerprint = fingerprintTree(beforeTree);
   const deadline = Date.now() + VERIFY_POLL_TIMEOUT_MS;
+  const maxIterations = Math.ceil(VERIFY_POLL_TIMEOUT_MS / VERIFY_POLL_INTERVAL_MS) + 1;
+  let iteration = 0;
 
   try {
-    while (Date.now() < deadline) {
+    while (Date.now() < deadline && iteration < maxIterations) {
+      iteration++;
       await new Promise<void>((resolve) => setTimeout(resolve, VERIFY_POLL_INTERVAL_MS));
       const afterTree = await bridge.dumpTree({ deviceId, maxDepth: 8 });
       if (beforeFingerprint !== fingerprintTree(afterTree)) {
