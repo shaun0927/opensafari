@@ -18,8 +18,9 @@ jest.setTimeout(240000);
 const shouldRun = process.env.OSF_LIVE === '1';
 const describeLive = shouldRun ? describe : describe.skip;
 
-const IPHONE_NAME = 'OSF MultiSim iPhone';
-const IPAD_NAME = 'OSF MultiSim iPad';
+const RUN_SUFFIX = `${Date.now()}-${process.pid}`;
+const IPHONE_NAME = `OSF MultiSim iPhone ${RUN_SUFFIX}`;
+const IPAD_NAME = `OSF MultiSim iPad ${RUN_SUFFIX}`;
 const IPHONE_TYPE = 'com.apple.CoreSimulator.SimDeviceType.iPhone-16';
 
 function simctl(args: string[], timeout = 30000): string {
