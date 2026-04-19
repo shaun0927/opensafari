@@ -191,6 +191,12 @@ Tap on an element or coordinate in a native app.
 
 - Either `(x, y)` coordinates or `identifier` / `label` must be provided.
 - **Implementation:** Coordinate-based touch injection via simctl HID events
+- **Success semantics:** A plain success response should only be treated as a
+  verified interaction when `verified === true`. If OpenSafari can dispatch the
+  tap but cannot confirm a post-action AX-tree change, it returns either:
+  - an error shape such as `TAP_NO_EFFECT`, or
+  - a downgraded success payload with `verified: false` / `effect: "verification_unavailable"`
+    when post-action verification itself is unavailable.
 
 ---
 

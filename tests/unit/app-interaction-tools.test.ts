@@ -23,6 +23,7 @@ import { KEY_MAP } from '../../src/tools/native-input-utils';
 // ── Mocks ──────────────────────────────────────────────────────────────────
 
 const execMock = jest.fn().mockResolvedValue('');
+const mockDumpTree = jest.fn();
 
 jest.mock('../../src/simulator/simctl', () => ({
   SimctlExecutor: jest.fn().mockImplementation(() => ({
@@ -82,10 +83,41 @@ jest.mock('../../src/session-manager', () => ({
   }),
 }));
 
+jest.mock('../../src/native/accessibility-bridge', () => ({
+  getAccessibilityBridge: () => ({
+    dumpTree: mockDumpTree,
+  }),
+}));
+
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 function parseResult(result: { content: { type: string; text: string }[] }) {
   return JSON.parse(result.content[0].text);
+}
+
+function makeTree(label: string) {
+  return {
+    role: 'AXWindow',
+    label: 'Test App',
+    traits: [],
+    frame: { x: 0, y: 0, width: 375, height: 812 },
+    visible: true,
+    enabled: true,
+    focused: false,
+    path: '',
+    children: [
+      {
+        role: 'AXStaticText',
+        label,
+        traits: ['text'],
+        frame: { x: 0, y: 0, width: 200, height: 44 },
+        visible: true,
+        enabled: true,
+        focused: false,
+        path: '0',
+      },
+    ],
+  };
 }
 
 // ── Test suites ────────────────────────────────────────────────────────────
@@ -100,6 +132,10 @@ describe('app_tap tool', () => {
 
   beforeEach(() => {
     execMock.mockClear();
+    mockDumpTree.mockReset();
+    mockDumpTree
+      .mockResolvedValueOnce(makeTree('before'))
+      .mockResolvedValue(makeTree('after'));
   });
 
   test('is registered with correct name', () => {
@@ -114,6 +150,8 @@ describe('app_tap tool', () => {
     expect(body.x).toBe(100);
     expect(body.y).toBe(200);
     expect(body.backend).toBe('simctl');
+    expect(body.verified).toBe(true);
+    expect(body.effect).toBe('subtree_changed');
     expect(body._meta).toEqual({ backendKind: 'simctl', headless: true, deviceId: 'MOCK-DEVICE-UDID' });
     expect(execMock).toHaveBeenCalledWith(
       ['io', 'MOCK-DEVICE-UDID', 'input', 'tap', '100', '200'],
@@ -153,6 +191,21 @@ describe('app_tap tool', () => {
     expect((result as any).isError).toBe(true);
     const body = parseResult(result as any);
     expect(body.error).toContain('simctl io failed');
+  });
+
+  test('returns TAP_NO_EFFECT when the AX tree does not change after the tap', async () => {
+    mockDumpTree.mockReset();
+    mockDumpTree
+      .mockResolvedValueOnce(makeTree('same'))
+      .mockResolvedValueOnce(makeTree('same'));
+
+    const handler = server.getToolHandler('app_tap')!;
+    const result = await handler('s', { x: 10, y: 20 });
+    expect((result as any).isError).toBe(true);
+    const body = parseResult(result as any);
+    expect(body.error).toBe('TAP_NO_EFFECT');
+    expect(body.verified).toBe(false);
+    expect(body.effect).toBe('no_observable_change');
   });
 });
 

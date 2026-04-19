@@ -7,9 +7,16 @@
  */
 
 import { MCPServer, getWebKitClient } from '../mcp-server';
+import { getAccessibilityBridge } from '../native/accessibility-bridge';
+import type { AXNode } from '../native/ax-types';
 import { resolveDeviceId, getInputBackend, runInputOp } from './native-input-utils';
 import { probeMobileContext } from './app-context';
 import { SimulatorManager } from '../simulator';
+
+type CoordinateTapVerification = {
+  verified: boolean;
+  effect: 'subtree_changed' | 'no_observable_change' | 'verification_unavailable';
+};
 
 export function registerAppTapTool(server: MCPServer): void {
   server.registerTool(
@@ -73,10 +80,96 @@ export function registerAppTapTool(server: MCPServer): void {
           };
         }
 
+        const bridge = getAccessibilityBridge();
+        let beforeTree: AXNode | null = null;
+        try {
+          beforeTree = await bridge.dumpTree({ deviceId, maxDepth: 8 });
+        } catch {
+          beforeTree = null;
+        }
+
         const backend = await getInputBackend(deviceId, getWebKitClient(deviceId));
         const { meta } = await runInputOp(backend, deviceId, () =>
           backend.tap(deviceId, x, y, duration > 0 ? duration : undefined),
         );
+
+        const verification = await verifyCoordinateTapEffect(bridge, deviceId, beforeTree);
+
+        if (verification.effect === 'verification_unavailable') {
+          const manager = new SimulatorManager();
+          let postInputContext;
+          let warning: string | undefined;
+          if (verifyContext) {
+            await new Promise((resolve) => setTimeout(resolve, settleMs));
+            try {
+              const probe = await probeMobileContext({ deviceId, expectedBundle, manager });
+              postInputContext = probe;
+              if (expectedBundle && probe.expectedBundleMatch !== 'matched') {
+                warning = JSON.stringify({
+                  code: 'POST_TAP_CONTEXT_MISMATCH',
+                  message:
+                    `Post-tap context did not confirm expected bundle ${expectedBundle}. ` +
+                    `surface=${probe.surface}, match=${probe.expectedBundleMatch ?? 'unknown'}.`,
+                  context: probe,
+                });
+              }
+            } catch (probeErr) {
+              const reason = probeErr instanceof Error ? probeErr.message : String(probeErr);
+              console.error(`[app_tap] post-tap context probe failed: ${reason}`);
+              warning = JSON.stringify({
+                code: 'POST_TAP_CONTEXT_PROBE_FAILED',
+                message: 'Post-tap context probe failed.',
+                reason,
+              });
+            }
+          }
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: JSON.stringify({
+                  status: 'tapped',
+                  x,
+                  y,
+                  duration,
+                  deviceId,
+                  backend: backend.kind,
+                  verified: false,
+                  effect: verification.effect,
+                  warning:
+                    warning ??
+                    'The tap was dispatched but post-action AX verification was unavailable.',
+                  _meta: meta,
+                  postInputContext,
+                }),
+              },
+            ],
+          };
+        }
+
+        if (!verification.verified) {
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: JSON.stringify({
+                  error: 'TAP_NO_EFFECT',
+                  message:
+                    'The tap was dispatched successfully, but no observable AX tree change was detected afterward.',
+                  x,
+                  y,
+                  duration,
+                  deviceId,
+                  backend: backend.kind,
+                  verified: false,
+                  effect: verification.effect,
+                  _meta: meta,
+                }),
+              },
+            ],
+            isError: true,
+          };
+        }
 
         const manager = new SimulatorManager();
         let postInputContext;
@@ -117,6 +210,8 @@ export function registerAppTapTool(server: MCPServer): void {
                 duration,
                 deviceId,
                 backend: backend.kind,
+                verified: true,
+                effect: verification.effect,
                 _meta: meta,
                 postInputContext,
                 warning,
@@ -134,4 +229,54 @@ export function registerAppTapTool(server: MCPServer): void {
       }
     },
   );
+}
+
+function walkTree(node: AXNode, visit: (node: AXNode) => void): void {
+  visit(node);
+  for (const child of node.children ?? []) {
+    walkTree(child, visit);
+  }
+}
+
+function fingerprintTree(node: AXNode): string {
+  const parts: string[] = [];
+  walkTree(node, (current) => {
+    if (!current.visible) return;
+    parts.push(
+      [
+        current.path,
+        current.role,
+        current.label ?? '',
+        current.value ?? '',
+        current.enabled ? '1' : '0',
+        current.focused ? '1' : '0',
+        Math.round(current.frame.x),
+        Math.round(current.frame.y),
+        Math.round(current.frame.width),
+        Math.round(current.frame.height),
+      ].join('|'),
+    );
+  });
+  return parts.join('\n');
+}
+
+async function verifyCoordinateTapEffect(
+  bridge: ReturnType<typeof getAccessibilityBridge>,
+  deviceId: string,
+  beforeTree: AXNode | null,
+): Promise<CoordinateTapVerification> {
+  if (!beforeTree) {
+    return { verified: false, effect: 'verification_unavailable' };
+  }
+
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    const afterTree = await bridge.dumpTree({ deviceId, maxDepth: 8 });
+    if (fingerprintTree(beforeTree) !== fingerprintTree(afterTree)) {
+      return { verified: true, effect: 'subtree_changed' };
+    }
+    return { verified: false, effect: 'no_observable_change' };
+  } catch {
+    return { verified: false, effect: 'verification_unavailable' };
+  }
 }

@@ -543,7 +543,10 @@ Multiple Claude Code sessions can share the same proxy. When a session detects a
 OpenSafari dispatches native input (`app_tap`, `app_swipe_native`,
 `app_scroll_native`, `app_double_tap`, `app_type_text`, `app_key_input`)
 through a 5-tier fallback chain and surfaces the selected path in each tool
-result via a `backend` field.
+result via a `backend` field. Coordinate and element-targeted tap tools also
+surface whether the interaction was **verified** by a post-action AX-tree check.
+Transport success alone is no longer treated as interaction success when no
+observable UI effect can be confirmed.
 
 | Tier | Backend | Identifier | Headless? | When used |
 |------|---------|------------|-----------|-----------|
@@ -567,6 +570,8 @@ Example tool result:
   "y": 200,
   "deviceId": "…",
   "backend": "simhid",
+  "verified": true,
+  "effect": "subtree_changed",
   "_meta": { "backendKind": "simhid", "headless": true, "deviceId": "…" }
 }
 ```
