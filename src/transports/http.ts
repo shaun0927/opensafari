@@ -82,6 +82,15 @@ export class HTTPTransport implements MCPTransport {
     return new Promise((resolve, reject) => {
       let settled = false;
 
+      const handleError = (err: Error) => {
+        if (!settled) {
+          settled = true;
+          reject(err);
+          return;
+        }
+        console.error(`[HTTPTransport] Server error:`, err);
+      };
+
       this.server!.once('listening', () => {
         settled = true;
         console.error(`[HTTPTransport] Listening on port ${this.port}`);
@@ -89,14 +98,7 @@ export class HTTPTransport implements MCPTransport {
         resolve();
       });
 
-      this.server!.once('error', (err) => {
-        if (!settled) {
-          settled = true;
-          reject(err);
-          return;
-        }
-        console.error(`[HTTPTransport] Server error:`, err);
-      });
+      this.server!.on('error', handleError);
 
       this.server!.listen(this.port);
     });
