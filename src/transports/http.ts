@@ -63,18 +63,39 @@ export class HTTPTransport implements MCPTransport {
     }
   }
 
-  start(): void {
+  async start(): Promise<void> {
     this.server = http.createServer((req, res) => {
       this.handleHTTPRequest(req, res);
     });
 
-    this.server.listen(this.port, () => {
-      console.error(`[HTTPTransport] Listening on port ${this.port}`);
-      console.error(`[HTTPTransport] MCP endpoint: http://localhost:${this.port}/mcp`);
+    this.server.on('clientError', (err, socket) => {
+      console.error('[HTTPTransport] Client error:', err);
+      if (socket.writable) {
+        socket.end('HTTP/1.1 400 Bad Request\r\n\r\n');
+      }
     });
 
-    this.server.on('error', (err) => {
-      console.error(`[HTTPTransport] Server error:`, err);
+    this.server.on('close', () => {
+      console.error(`[HTTPTransport] Server closed (port ${this.port})`);
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      const startupError = (err: NodeJS.ErrnoException) => {
+        this.server!.removeListener('listening', onListening);
+        reject(err);
+      };
+
+      const onListening = () => {
+        this.server!.removeListener('error', startupError);
+        this.server!.on('error', (err) => console.error('[HTTPTransport] Server error:', err));
+        console.error(`[HTTPTransport] Listening on port ${this.port}`);
+        console.error(`[HTTPTransport] MCP endpoint: http://localhost:${this.port}/mcp`);
+        resolve();
+      };
+
+      this.server!.once('error', startupError);
+      this.server!.once('listening', onListening);
+      this.server!.listen(this.port);
     });
   }
 

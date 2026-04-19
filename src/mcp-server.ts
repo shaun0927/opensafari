@@ -129,7 +129,7 @@ export class MCPServer {
     this.transport = await createTransport(mode, { port: options.port });
 
     this.transport.onMessage((msg) => this.handleMessage(msg));
-    this.transport.start();
+    await this.transport.start();
 
     console.error(`[OpenSafari] MCP server started (${mode})`);
   }
