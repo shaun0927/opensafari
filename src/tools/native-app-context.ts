@@ -44,8 +44,7 @@ export function classifyNativeContext(tree: AXNode): {
   const hasAllSimulatorChrome = SIMULATOR_CHROME_LABELS.every((label) =>
     texts.some((value) => value === label),
   );
-  if (tree.role === 'AXWindow' || hasAllSimulatorChrome) {
-    if (tree.role === 'AXWindow') heuristics.push('root-role:AXWindow');
+  if (hasAllSimulatorChrome) {
     if (hasAllSimulatorChrome) heuristics.push('chrome-labels:Home/Save Screen/Rotate');
     return { sourceKind: 'simulator-window', heuristics };
   }

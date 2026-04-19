@@ -28,7 +28,7 @@ describe('native app context classification', () => {
 
     const result = classifyNativeContext(tree);
     expect(result.sourceKind).toBe('simulator-window');
-    expect(result.heuristics).toContain('root-role:AXWindow');
+    expect(result.heuristics).toContain('chrome-labels:Home/Save Screen/Rotate');
   });
 
   test('classifies springboard via spotlight pill heuristic', () => {
@@ -48,6 +48,19 @@ describe('native app context classification', () => {
       children: [
         makeTree({ role: 'AXStaticText', label: 'Create Account', path: '0' }),
         makeTree({ role: 'AXButton', label: 'Continue', path: '1' }),
+      ],
+    });
+
+    const result = classifyNativeContext(tree);
+    expect(result.sourceKind).toBe('target-app');
+  });
+
+  test('does not classify bare AXWindow roots as simulator chrome without toolbar labels', () => {
+    const tree = makeTree({
+      role: 'AXWindow',
+      children: [
+        makeTree({ role: 'AXStaticText', label: 'System Alert', path: '0' }),
+        makeTree({ role: 'AXButton', label: 'Allow', path: '1' }),
       ],
     });
 
