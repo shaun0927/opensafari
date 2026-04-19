@@ -50,6 +50,7 @@ import { registerNetworkInterceptTool } from './network-intercept';
 import { registerNetworkOfflineTool } from './network-offline';
 import { registerHybridQATools } from './hybrid-qa-tools';
 import { registerAppTreeTool } from './app-tree';
+import { registerAppContextTool } from './app-context';
 import { registerAppQueryTool } from './app-query';
 import { registerAppInspectTool } from './app-inspect';
 import { registerAppLaunchTool } from './app-launch';
@@ -228,6 +229,7 @@ export function registerAllTools(server: MCPServer): void {
   registerHybridQATools(server);
 
   // Tier 2: Native App Inspection
+  registerAppContextTool(server);
   registerAppTreeTool(server);
   registerAppQueryTool(server);
   registerAppInspectTool(server);
