@@ -204,9 +204,15 @@ func runCommand(_ launchPath: String, arguments: [String]) -> String? {
     task.standardOutput = pipe
     task.standardError = FileHandle.nullDevice
     try? task.run()
+    // Drain stdout BEFORE waiting for exit. Swift `Process` pipes have a
+    // ~64KB in-kernel buffer; if the child writes more than that, its
+    // `write` blocks until something reads, and `waitUntilExit()` then
+    // hangs forever (classic pipe deadlock). `simctl list devices -j`
+    // output easily exceeds 64KB on machines with many runtimes.
+    // stderr is redirected to /dev/null so only stdout can fill up.
+    let data = pipe.fileHandleForReading.readDataToEndOfFile()
     task.waitUntilExit()
     guard task.terminationStatus == 0 else { return nil }
-    let data = pipe.fileHandleForReading.readDataToEndOfFile()
     return String(data: data, encoding: .utf8)
 }
 
@@ -294,17 +300,28 @@ func resolveRequestedDevice(_ requested: String) -> (target: SimulatorDeviceReco
         return (device, nil)
     }
 
-    let nameMatches = booted.filter { $0.name == requested }
-    if nameMatches.count == 1 { return (nameMatches[0], nil) }
-    if nameMatches.count > 1 {
+    // Search ALL devices by name first, then filter by boot state. This
+    // mirrors the UDID path: an existing-but-not-booted device returns a
+    // specific "device exists but not booted" error instead of a generic
+    // "couldn't resolve" that hides the root cause from the caller.
+    let allNameMatches = devices.filter { $0.name == requested }
+    let bootedNameMatches = allNameMatches.filter { $0.state == "Booted" }
+    if bootedNameMatches.count == 1 { return (bootedNameMatches[0], nil) }
+    if bootedNameMatches.count > 1 {
         return (nil, ErrorJSON(
-            error: "Requested device name '\(requested)' matched multiple booted simulators: \(nameMatches.map { $0.udid })",
+            error: "Requested device name '\(requested)' matched multiple booted simulators: \(bootedNameMatches.map { $0.udid })",
             code: "DEVICE_RESOLUTION_AMBIGUOUS"
+        ))
+    }
+    if !allNameMatches.isEmpty {
+        return (nil, ErrorJSON(
+            error: "Requested device name '\(requested)' matched \(allNameMatches.count) simulator(s) (\(allNameMatches.map { $0.udid })), but none are booted.",
+            code: "DEVICE_RESOLUTION_FAILED"
         ))
     }
 
     return (nil, ErrorJSON(
-        error: "Could not resolve requested device '\(requested)' to a booted simulator via simctl list devices -j.",
+        error: "Could not resolve requested device '\(requested)' to a simulator via simctl list devices -j.",
         code: "DEVICE_RESOLUTION_FAILED"
     ))
 }
@@ -356,12 +373,13 @@ func findMatchingWindow(_ app: AXUIElement, requested: String, target: Simulator
     }
 
     // Primary rule: if more than one window shares the top score, the match is
-    // ambiguous regardless of whether the titles are identical or different.
-    // Two windows with the same score *and* the same title are equally suspect —
-    // e.g. duplicate device names or identical window titles in multi-simulator
-    // setups — so we must not silently pick one arbitrarily.
+    // ambiguous regardless of whether the titles are identical or different
+    // and regardless of score tier. Even at the UDID-exact tier (score=1000),
+    // two windows matching the same UDID must not be silently collapsed to
+    // one — that would route AX traffic to an arbitrary simulator. Surface
+    // DEVICE_WINDOW_AMBIGUOUS on every score tie.
     let topScorePeers = sorted.filter { $0.score == best.score }
-    if topScorePeers.count > 1 && best.score < 1000 {
+    if topScorePeers.count > 1 {
         let peerTitles = topScorePeers.map { $0.title }
         return (nil, ErrorJSON(
             error: "Requested device \(requested) matched multiple Simulator windows with the same confidence: \(peerTitles)",
