@@ -197,4 +197,29 @@ describeLive('issue #4 — raw dist/ax-bridge exposes Flutter semantics', () => 
     expect(parsed.frame?.width ?? 0).toBeGreaterThan(100);
     expect(parsed.frame?.height ?? 0).toBeGreaterThan(100);
   });
+
+  test('terminated fixture: raw bridge must never return a silent chrome-only success', async () => {
+    // Core issue #4 contract: even when the expected foreground app is gone,
+    // the raw bridge must NOT return exit 0 with `chromeOnly: true`. It is
+    // allowed to either:
+    //   (a) fail-closed with APP_CONTENT_NOT_EXPOSED / DEVICE_CONTENT_ROOT_EMPTY
+    //       (the wrapper promotion or the native typed error), or
+    //   (b) return exit 0 with `chromeOnly: false` when the surface is a
+    //       legitimate non-chrome shape (e.g., SpringBoard app grid exposing
+    //       genuine app-semantics icons, which the scorer treats as content).
+    // The assertion must fail only when the bridge regresses to a silent
+    // chrome-only exit-0 — exactly the shape issue #4 forbids.
+    execFileSync('xcrun', ['simctl', 'terminate', targetDeviceId, BUNDLE_ID], { stdio: 'ignore', timeout: 10_000 });
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+
+    const result = await runRawBridge(['dump', '--device', targetDeviceId, '--max-depth', '6']);
+    if (result.exitCode !== 0) {
+      const parsed = JSON.parse(result.stdout) as { code?: string };
+      expect(['APP_CONTENT_NOT_EXPOSED', 'DEVICE_CONTENT_ROOT_EMPTY']).toContain(parsed.code);
+      return;
+    }
+    const parsed = JSON.parse(result.stdout) as { chromeOnly?: boolean };
+    // The single contract line: silent chrome-only exit-0 is forbidden.
+    expect(parsed.chromeOnly).not.toBe(true);
+  });
 });
