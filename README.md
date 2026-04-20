@@ -589,6 +589,67 @@ Example tool result:
 }
 ```
 
+### Raw `dist/ax-bridge` Contract
+
+`dist/ax-bridge` is a Node.js wrapper that sits in front of the compiled
+Swift binary `dist/ax-bridge-native` (Mach-O). The wrapper intercepts
+`--help` / `-h` before argument validation, runs `ensureSemanticsActive()`
+for tree-read commands by default (opt out with `--ensure-semantics off`),
+then delegates every other invocation unchanged to `dist/ax-bridge-native`.
+
+**Bridge resolution order:**
+
+1. `dist/ax-bridge-native` next to the script (standard installed layout)
+2. Swift interpreter fallback — only when `dist/ax-bridge.swift` is present
+
+**Contract:** commands that cannot expose app content return a typed error
+code as JSON on stdout (exit 1) instead of an empty-success tree:
+
+| Code | Meaning |
+|------|---------|
+| `DEVICE_RESOLUTION_FAILED` | Requested device not found / not booted |
+| `DEVICE_RESOLUTION_AMBIGUOUS` | Multiple booted simulators match |
+| `DEVICE_WINDOW_NOT_FOUND` | No AX window matched the requested device |
+| `DEVICE_CONTENT_ROOT_EMPTY` | Window resolved but no app-semantics content (#40) |
+| `APP_CONTENT_NOT_EXPOSED` | Tree is Simulator chrome only after bootstrap (#41) |
+| `EXPECTED_BUNDLE_MISMATCH` | (context) Expected bundle not foreground |
+| `BRIDGE_NOT_FOUND` | `ax-bridge-native` / `ax-bridge.swift` missing |
+| `AX_WRAPPER_FAILED` | Wrapper-level unexpected error |
+| `BAD_ARGS` | Invalid or missing CLI flags |
+| `UNKNOWN_COMMAND` | Command not recognized |
+
+**Example invocations:**
+
+```bash
+# dump — success: full JSON accessibility tree on stdout, exit 0
+node dist/ax-bridge dump --device booted
+# dump — error: chrome-only tree after bootstrap, exit 1
+# stdout: {"error":"...","code":"APP_CONTENT_NOT_EXPOSED"}
+
+# query — success: matched elements on stdout, exit 0
+node dist/ax-bridge query --device booted --label "Sign In"
+# query — error: device not found, exit 1
+# stdout: {"error":"...","code":"DEVICE_RESOLUTION_FAILED"}
+
+# inspect — success: single element detail on stdout, exit 0
+node dist/ax-bridge inspect --device booted --path "0/1/2"
+# inspect — error: empty content root, exit 1
+# stdout: {"error":"...","code":"DEVICE_CONTENT_ROOT_EMPTY"}
+
+# press — success: {"ok":true,"code":"OK",...} on stdout, exit 0
+node dist/ax-bridge press --device booted --path "0/1/2"
+
+# context — success: foreground bundle info on stdout, exit 0
+node dist/ax-bridge context --device booted
+# context — expected bundle mismatch, exit 1
+# stdout: {"error":"...","code":"EXPECTED_BUNDLE_MISMATCH"}
+```
+
+> **Note:** The higher-level `app_*` MCP tools provide the same semantics
+> activation plus richer heuristics (retry, partial-tree promotion, and
+> cross-session device resolution). Use the raw bridge for downstream
+> harnesses that prefer direct CLI access without the MCP layer.
+
 ### Focus-theft protection (`OPENSAFARI_ALLOW_FOCUS_INPUT`)
 
 Tier 3 is **default-deny**. On Xcode 26+ with no Safari connection,
