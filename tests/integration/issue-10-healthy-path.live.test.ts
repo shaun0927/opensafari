@@ -93,7 +93,6 @@ describeLive('issue #10 — healthy in-app tap/swipe classifications', () => {
   beforeAll(async () => {
     targetDeviceId = deviceId!;
 
-    // eslint-disable-next-line no-console
     console.error(`[issue-10-healthy] Building and installing fixture on ${targetDeviceId} …`);
     await execFileAsync('/bin/sh', [BUILD_SCRIPT, '--mode', 'release', '--device-id', targetDeviceId, '--install'], {
       timeout: 240_000,
