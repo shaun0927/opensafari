@@ -256,6 +256,16 @@ async function runAssertions(): Promise<void> {
     console.log(`[WARN] ax-bridge dump failed for primary button: ${(err as Error).message}`);
   }
 
+  // Capture pre-tap visibleSummary BEFORE H2 so H4 can assert a real
+  // navigation advance (detail button absent before, present after).
+  let preTapSummary: unknown = null;
+  try {
+    const ctxBefore = runBridge(['context', DEVICE_ID, '--expect-bundle', FLUTTER_BUNDLE]);
+    preTapSummary = (ctxBefore as Record<string, unknown>)['visibleSummary'];
+  } catch {
+    // H4 will record the miss if this fails.
+  }
+
   // H2 — Healthy tap
   await assert('H2', 'healthy tap on verify.button.primary: ok+verified+TARGET_BUNDLE_CONFIRMED', async () => {
     if (!primaryCenter) throw new Error(`Could not locate node "${PRIMARY_LABEL}" via ax-bridge`);
@@ -274,15 +284,6 @@ async function runAssertions(): Promise<void> {
   });
 
   await delay(500);
-
-  // H4 — Navigation advance observable (check after H2, before H3 resets state)
-  let preTapSummary: unknown = null;
-  try {
-    const ctxBefore = runBridge(['context', DEVICE_ID, '--expect-bundle', FLUTTER_BUNDLE]);
-    preTapSummary = (ctxBefore as Record<string, unknown>)['visibleSummary'];
-  } catch {
-    // will be caught in H4
-  }
 
   await assert('H4', 'navigation advance: detail button visible after H2 tap', async () => {
     const ctxAfter = runBridge(['context', DEVICE_ID, '--expect-bundle', FLUTTER_BUNDLE]);
