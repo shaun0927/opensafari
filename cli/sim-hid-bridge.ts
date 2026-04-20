@@ -117,6 +117,9 @@ async function handleContextCommand(args: string[]): Promise<never> {
   }
   const { flags } = parseWrapperFlags(args.slice(2));
   const context = await probeContext(deviceId, flags);
+  if (context.error) {
+    outputJSON(context, 1);
+  }
   if (flags.requireMatch && context.expectedBundleMatched === false) {
     outputJSON({ error: `Expected bundle ${flags.expectBundle} is not frontmost.`, code: 'EXPECTED_BUNDLE_MISMATCH', ...context }, 1);
   }

@@ -78,8 +78,7 @@ async function outputContext(flags: Record<string, string>): Promise<never> {
   }
 
   const manager = new SimulatorManager();
-  const bridgeOutput = await execNative(['dump', '--device', deviceId, '--max-depth', flags['max-depth'] ?? '6']);
-  const parsed = JSON.parse(bridgeOutput.stdout);
+  const parsed = await readNativeContextDump(deviceId, flags['max-depth'] ?? '6');
   if (parsed?.error) {
     process.stdout.write(`${JSON.stringify(parsed, null, 2)}\n`);
     process.exit(1);
@@ -93,7 +92,7 @@ async function outputContext(flags: Record<string, string>): Promise<never> {
   }));
   const result = buildRawMobileContext({
     deviceId,
-    tree: parsed,
+    tree: parsed as any,
     runningApps,
     expectedBundle: flags['expect-bundle'],
   });
@@ -112,19 +111,12 @@ async function outputContext(flags: Record<string, string>): Promise<never> {
 }
 
 async function resolveRunningAppsDeviceId(requested: string): Promise<string> {
-  if (looksLikeUDID(requested)) return requested;
+  const devices = await listSimctlDevices();
+  if (looksLikeUDID(requested)) {
+    const exact = devices.find((device) => device.udid.toLowerCase() === requested.toLowerCase());
+    return exact?.udid ?? requested;
+  }
 
-  const { stdout } = await execFileAsync('/usr/bin/xcrun', ['simctl', 'list', 'devices', '-j'], {
-    timeout: 10_000,
-    encoding: 'utf8',
-    maxBuffer: 10 * 1024 * 1024,
-  });
-  const parsed = JSON.parse(stdout) as {
-    devices: Record<string, Array<{ udid: string; name: string; state: string; isAvailable?: boolean }>>;
-  };
-  const devices = Object.values(parsed.devices)
-    .flat()
-    .filter((device) => device.isAvailable !== false);
   const booted = devices.filter((device) => device.state === 'Booted');
 
   if (requested === 'any') {
@@ -138,8 +130,49 @@ async function resolveRunningAppsDeviceId(requested: string): Promise<string> {
   return exact?.udid ?? requested;
 }
 
+async function listSimctlDevices(): Promise<Array<{
+  udid: string;
+  name: string;
+  state: string;
+  isAvailable?: boolean;
+}>> {
+  const { stdout } = await execFileAsync('/usr/bin/xcrun', ['simctl', 'list', 'devices', '-j'], {
+    timeout: 10_000,
+    encoding: 'utf8',
+    maxBuffer: 10 * 1024 * 1024,
+  });
+  const parsed = JSON.parse(stdout) as {
+    devices: Record<string, Array<{ udid: string; name: string; state: string; isAvailable?: boolean }>>;
+  };
+  const devices = Object.values(parsed.devices)
+    .flat()
+    .filter((device) => device.isAvailable !== false);
+  return devices;
+}
+
 function looksLikeUDID(value: string): boolean {
   return /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/i.test(value);
+}
+
+async function readNativeContextDump(deviceId: string, maxDepth: string): Promise<Record<string, unknown>> {
+  try {
+    const bridgeOutput = await execNative(['dump', '--device', deviceId, '--max-depth', maxDepth]);
+    return JSON.parse(bridgeOutput.stdout);
+  } catch (error) {
+    const execError = error as Error & { stdout?: string; stderr?: string };
+    if (execError.stderr) process.stderr.write(execError.stderr);
+    if (execError.stdout) {
+      try {
+        return JSON.parse(execError.stdout);
+      } catch {
+        // fall through to generic wrapper error below
+      }
+    }
+    return {
+      error: `ax-bridge wrapper failed: ${error instanceof Error ? error.message : String(error)}`,
+      code: 'AX_WRAPPER_FAILED',
+    };
+  }
 }
 
 async function main(): Promise<void> {
