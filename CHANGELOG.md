@@ -4,10 +4,30 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-### Docs
+## [0.6.0] - 2026-04-20
 
-- Document the `dist/sim-hid-bridge` wrapper CLI, including `--settle-ms`, response-shape table, and classification table, in [`docs/headless-architecture.md`](docs/headless-architecture.md#raw-simhid-cli-reference). Adds a cross-reference from [`docs/api-reference.md`](docs/api-reference.md) so MCP consumers can jump to the raw-CLI contract when scripting without the MCP server. Closes #45.
+**OpenSafari 0.6.0 is a *simulator-chrome-regression* release.** It replaces the single-pass immediate-child content-root heuristic in `ax-bridge` with a recursive, deterministic, integer-scored search, closing the silent-empty-content bug that blocked the "Functional success" section of #4 on Xcode 26.4 / iOS 26.4. The raw bridge now refuses to return a chrome-only tree: when no subtree exposes any app-level accessibility semantics, it emits a typed `DEVICE_CONTENT_ROOT_EMPTY` error with exit code 1 instead of silently falling back to the bare `AXWindow`.
 
+### Fixed — `ax-bridge` recursive scored content-root search (#40, follow-up to #4)
+
+- **`src/native/ax-bridge.swift`**: `findDeviceContentInWindow` replaced with `findDeviceContentRecursively`. Scoring is deterministic and integer-based so fixtures can be asserted exactly:
+  - `AXGroup`/`AXScrollArea` with `iOSContentGroup` trait → +10
+  - frame fits expected device-content rect (±15pt per edge) → +8
+  - each app-semantics descendant (`AXTextField`, `AXStaticText`, `AXButton` with non-chrome label, `AXCell`, `AXImage`, `AXLink`) → +5, capped at +25
+  - `AXToolbar` / `AXMenuBar` → −10
+  - zero descendants → −5
+- **Chrome denylist** rejects exact labels (Action, Home, Save Screen, Rotate, Volume Up/Down, Sleep/Wake, AXCloseButton, AXFullScreenButton, AXMinimizeButton) and the simulator window-title prefix (`"iPhone <model> – iOS <version>"`). `AXMenuBar` and `AXWindow` are rejected at depth > 0.
+- **Typed error**: when no candidate subtree contains any app-semantics role, the bridge returns `{"code":"DEVICE_CONTENT_ROOT_EMPTY"}` with exit code 1 instead of falling back to the bare `AXWindow`. The wrapper at `cli/ax-bridge.ts` forwards error JSON untouched.
+- **Reproduction closed** (Xcode 26.4 / iOS 26.4): `node dist/ax-bridge query --device <udid> --role AXTextField` on a booted simulator with no foreground app now fails fast with `DEVICE_CONTENT_ROOT_EMPTY` (exit 1) instead of returning `{"total":0,"matches":[]}` with exit code 0.
+
+### Added — TS reference scorer and 6-fixture unit suite
+
+- **`src/native/ax-bridge-content-root.ts`**: TypeScript port of the Swift rubric so the algorithm is unit-testable from Jest. The two implementations MUST stay in lock-step; any change to the rubric, chrome denylist, geometry formula, or fallback policy must land in both files together.
+- **`tests/unit/ax-bridge-content-root.test.ts`**: 6 fixture trees covering (a) empty `iOSContentGroup` between chrome children → `DEVICE_CONTENT_ROOT_EMPTY`, (b) populated Flutter tree with `iOSContentGroup` + ≥ 3 app-semantics descendants, (c) SpringBoard-only, (d) nested content two levels below window, (e) two candidate groups where only one contains app-semantics (DOM-order-independent), (f) Settings-app shape with `AXTable` at top level (no `iOSContentGroup` trait).
+
+### Unreleased items carried forward into 0.6.0
+
+- **`dist/sim-hid-bridge` wrapper CLI documented** in [`docs/headless-architecture.md`](docs/headless-architecture.md#raw-simhid-cli-reference), including `--settle-ms`, response-shape table, and classification table. Adds a cross-reference from [`docs/api-reference.md`](docs/api-reference.md) so MCP consumers can jump to the raw-CLI contract when scripting without the MCP server. Closes #45.
 - **`app_tap_element` coordinate fallback now preserves the verified-interaction contract.** When `ax-press` cannot prove a post-action effect and the tool falls back to a coordinate backend, OpenSafari no longer returns a plain clean success by transport alone. The response now carries `verified: false` / `effect: "verification_unavailable"` when proof is unavailable, or a typed `TAP_NO_EFFECT` error when the post-tap AX tree stays unchanged. The stricter contract matches `app_tap` and closes the false-positive-success gap for bundle-scoped native taps.
 - **Raw mobile-bridge context diagnostics and expect-bundle guards.** `dist/ax-bridge` now exposes `context --device <udid> [--expect-bundle <bundle>] [--require-match true]`, returning machine-readable foreground classifications and expected-bundle matches for downstream QA. `dist/sim-hid-bridge` now ships as a wrapper around the native bridge and enriches `tap` / `swipe` JSON with post-input `classification`, `verified`, `frontmost`, and `expectedBundleMatched`, plus a matching `context` command. Raw HID commands can now fail fast with `--require-match true` instead of looking like a clean success after the simulator drifts to SpringBoard or chrome.
 
