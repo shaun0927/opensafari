@@ -168,6 +168,27 @@ Accept, dismiss, or press a named button on a system alert/dialog on a booted iO
   - For non-English simulators, build the candidate list with `resolveLocalizedButtonLabels` from `src/native/localized-button-matcher.ts` or seed it from `src/native/system-button-catalog.ts`.
   - For StoreKit / In-App Purchase QA see [StoreKit Automation Guide](storekit-automation.md).
 
+#### app_handle_alert
+Accept or dismiss the currently visible simulator alert using a locale-aware detector (en / ko / ja / zh-Hans) with AppleScript fallback. Unlike `app_alert_handle`, this tool does not take explicit button labels — it infers the correct button from the AX tree + built-in label corpus and is designed for permission prompts and iOS 26 full-screen modals.
+- **Input:**
+  - `action: 'accept' | 'dismiss'` — Accept or dismiss the dialog.
+  - `deviceId?: string` — Simulator UDID (active device if omitted).
+- **Output fields (always present):**
+  - `dismissed: boolean` — Whether the dialog was confirmed gone.
+  - `strategy: 'ax-scan' | 'applescript-sheet' | 'none'` — Which tier succeeded.
+  - `strategy_attempted: string[]` — Ordered list of tiers tried.
+  - `matchedButton?: string` — Label of the button that was pressed (ax-scan only).
+  - `reason: 'ok' | 'no_candidate_button' | 'ax_scan_timeout' | ...` — Closed enum from `src/errors/alert-reasons.ts`.
+  - `surface: 'simulator_chrome' | 'system_dialog_unknown' | 'app_content'` — Inferred post-call context.
+  - `visibleButtons: string[]`, `visibleStaticTexts: string[]` — Raw AX diagnostics.
+  - `suggestedLabelsToAdd: string[]` — Labels observed in the tree but missing from the corpus — use this to file a one-PR corpus update when a new locale or dialog shows up.
+  - `fallbackAvailable: string[]` — Recovery options (e.g. `"permission_reset"`, `"simulator_reboot"`).
+  - `elapsedMs: number`, `handledAt: string` (ISO).
+- **Tiers:**
+  1. AX-scan — dumps the native AX tree and presses the best matching button via `AXPress`.
+  2. AppleScript fallback — clicks a button labeled from the full corpus inside `sheet 1 of window 1`.
+- **Use when:** a system permission prompt (location, photos, ATT, etc.) blocks automation and you do not know the exact locale-specific label. Use `app_alert_handle` instead when you want to press a specific in-app button by label.
+
 ### Advanced Tools (Tier 2)
 
 inspect, wait_for, long_press, swipe, press, dismiss_keyboard, select_option, device_list, device_rotate, appearance_toggle
