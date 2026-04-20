@@ -17,6 +17,7 @@ import {
   type AlertAction,
 } from './app-handle-alert-labels';
 import type { AlertReason } from '../errors/alert-reasons';
+import { inferServices, type PermissionService } from './alert-service-hints';
 
 const execFileAsync = promisify(execFile);
 
@@ -25,8 +26,38 @@ const DEFAULT_DEVICE_WIDTH = 393;
 const AX_POLL_TIMEOUT_MS = 3000;
 const AX_POLL_INTERVAL_MS = 250;
 
-type Strategy = 'ax-scan' | 'applescript-sheet' | 'none';
+type Strategy = 'ax-scan' | 'applescript-sheet' | 'permission-reset' | 'none';
 type Surface = 'simulator_chrome' | 'system_dialog_unknown' | 'app_content';
+type FallbackMode = 'permission_reset' | 'none';
+
+const VALID_FALLBACKS: FallbackMode[] = ['permission_reset', 'none'];
+
+/**
+ * simctl maps some public-facing permission service names differently.
+ * Accept the caller-facing names from PermissionService and return the
+ * exact service string understood by `xcrun simctl privacy ... reset`.
+ */
+const SIMCTL_SERVICE_MAP: Record<PermissionService, string> = {
+  location: 'location',
+  photos: 'photos',
+  contacts: 'contacts',
+  notifications: 'notifications',
+  tracking: 'userTracking',
+  camera: 'camera',
+  microphone: 'microphone',
+  bluetooth: 'bluetooth',
+  calendars: 'calendar',
+  reminders: 'reminders',
+};
+
+interface PermissionResetResult {
+  service: PermissionService | null;
+  servicesConsidered: PermissionService[];
+  executed: boolean;
+  dryRun: boolean;
+  command?: string;
+  error?: string;
+}
 
 interface HandleAlertResponse {
   action: AlertAction;
@@ -41,6 +72,7 @@ interface HandleAlertResponse {
   visibleStaticTexts: string[];
   suggestedLabelsToAdd: string[];
   fallbackAvailable: string[];
+  permissionReset?: PermissionResetResult;
   handledAt: string;
   elapsedMs: number;
 }
@@ -212,6 +244,17 @@ export function registerAppHandleAlertTool(server: MCPServer): void {
             type: 'string',
             description: 'Simulator UDID (uses active device if omitted)',
           },
+          fallback: {
+            type: 'string',
+            enum: ['permission_reset', 'none'],
+            description:
+              'When Tier 1 (AX-scan) and Tier 2 (AppleScript) both miss the dialog, optionally run `xcrun simctl privacy <udid> reset <service>` with a service inferred from visibleStaticTexts. Default "none".',
+          },
+          dryRun: {
+            type: 'boolean',
+            description:
+              'When fallback="permission_reset", do not actually execute simctl — report the command that would run. Default false.',
+          },
         },
         required: ['action'],
       },
@@ -241,6 +284,13 @@ export function registerAppHandleAlertTool(server: MCPServer): void {
           isError: true,
         };
       }
+
+      const fallbackRaw = params.fallback;
+      const fallback: FallbackMode =
+        typeof fallbackRaw === 'string' && (VALID_FALLBACKS as string[]).includes(fallbackRaw)
+          ? (fallbackRaw as FallbackMode)
+          : 'none';
+      const dryRun = params.dryRun === true;
 
       const strategyAttempted: Strategy[] = [];
       let finalTree: AXNode | null = null;
@@ -301,15 +351,160 @@ export function registerAppHandleAlertTool(server: MCPServer): void {
         return { content: [{ type: 'text' as const, text: JSON.stringify(body) }] };
       }
 
-      // Both tiers failed — diagnostics response
+      // Both detection tiers failed — gather diagnostics.
       const visibleButtons = finalTree ? collectVisibleButtonLabels(finalTree) : [];
       const visibleStaticTexts = finalTree ? collectVisibleStaticTexts(finalTree) : [];
       const suggestedLabelsToAdd = suggestLabels(visibleButtons, action);
+      const surface: Surface = finalTree ? inferSurface(finalTree) : 'simulator_chrome';
+
+      // Tier 3: permission_reset fallback (opt-in).
+      if (fallback === 'permission_reset') {
+        strategyAttempted.push('permission-reset');
+        const services = inferServices(visibleStaticTexts);
+
+        if (services.length === 0) {
+          const body: HandleAlertResponse = {
+            action,
+            deviceId,
+            dismissed: false,
+            strategy: 'none',
+            strategy_attempted: strategyAttempted,
+            reason: 'permission_reset_unknown_service',
+            surface,
+            visibleButtons,
+            visibleStaticTexts,
+            suggestedLabelsToAdd,
+            fallbackAvailable: ['simulator_reboot'],
+            permissionReset: {
+              service: null,
+              servicesConsidered: [],
+              executed: false,
+              dryRun,
+            },
+            handledAt: isoNow(),
+            elapsedMs: Date.now() - started,
+          };
+          return { content: [{ type: 'text' as const, text: JSON.stringify(body) }] };
+        }
+
+        if (services.length >= 2) {
+          const body: HandleAlertResponse = {
+            action,
+            deviceId,
+            dismissed: false,
+            strategy: 'none',
+            strategy_attempted: strategyAttempted,
+            reason: 'permission_reset_ambiguous',
+            surface,
+            visibleButtons,
+            visibleStaticTexts,
+            suggestedLabelsToAdd,
+            fallbackAvailable: ['simulator_reboot'],
+            permissionReset: {
+              service: null,
+              servicesConsidered: services,
+              executed: false,
+              dryRun,
+            },
+            handledAt: isoNow(),
+            elapsedMs: Date.now() - started,
+          };
+          return { content: [{ type: 'text' as const, text: JSON.stringify(body) }] };
+        }
+
+        const service = services[0];
+        const simctlService = SIMCTL_SERVICE_MAP[service];
+        const command = `xcrun simctl privacy ${deviceId} reset ${simctlService}`;
+
+        if (dryRun) {
+          const body: HandleAlertResponse = {
+            action,
+            deviceId,
+            dismissed: false,
+            strategy: 'permission-reset',
+            strategy_attempted: strategyAttempted,
+            reason: 'ok',
+            surface,
+            visibleButtons,
+            visibleStaticTexts,
+            suggestedLabelsToAdd,
+            fallbackAvailable: [],
+            permissionReset: {
+              service,
+              servicesConsidered: services,
+              executed: false,
+              dryRun: true,
+              command,
+            },
+            handledAt: isoNow(),
+            elapsedMs: Date.now() - started,
+          };
+          return { content: [{ type: 'text' as const, text: JSON.stringify(body) }] };
+        }
+
+        try {
+          await execFileAsync(
+            'xcrun',
+            ['simctl', 'privacy', deviceId, 'reset', simctlService],
+            { timeout: 10_000 },
+          );
+        } catch (err) {
+          const body: HandleAlertResponse = {
+            action,
+            deviceId,
+            dismissed: false,
+            strategy: 'none',
+            strategy_attempted: strategyAttempted,
+            reason: 'no_candidate_button',
+            surface,
+            visibleButtons,
+            visibleStaticTexts,
+            suggestedLabelsToAdd,
+            fallbackAvailable: ['simulator_reboot'],
+            permissionReset: {
+              service,
+              servicesConsidered: services,
+              executed: false,
+              dryRun: false,
+              command,
+              error: errorToString(err),
+            },
+            handledAt: isoNow(),
+            elapsedMs: Date.now() - started,
+          };
+          return { content: [{ type: 'text' as const, text: JSON.stringify(body) }] };
+        }
+
+        const body: HandleAlertResponse = {
+          action,
+          deviceId,
+          dismissed: true,
+          strategy: 'permission-reset',
+          strategy_attempted: strategyAttempted,
+          reason: 'ok',
+          surface: 'app_content',
+          visibleButtons,
+          visibleStaticTexts,
+          suggestedLabelsToAdd,
+          fallbackAvailable: [],
+          permissionReset: {
+            service,
+            servicesConsidered: services,
+            executed: true,
+            dryRun: false,
+            command,
+          },
+          handledAt: isoNow(),
+          elapsedMs: Date.now() - started,
+        };
+        return { content: [{ type: 'text' as const, text: JSON.stringify(body) }] };
+      }
+
+      // Fallback disabled — emit diagnostics-only response.
       const reason: AlertReason =
         axResult.error === 'ax_scan_timeout' && !finalTree
           ? 'ax_scan_timeout'
           : 'no_candidate_button';
-      const surface: Surface = finalTree ? inferSurface(finalTree) : 'simulator_chrome';
 
       const body: HandleAlertResponse = {
         action,
