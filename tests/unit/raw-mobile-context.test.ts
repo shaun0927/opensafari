@@ -1,5 +1,8 @@
 import type { AXNode } from '../../src/native/ax-types';
-import { buildRawMobileContext } from '../../src/tools/raw-mobile-context';
+import {
+  buildRawMobileContext,
+  type RawMobileClassification,
+} from '../../src/tools/raw-mobile-context';
 
 function node(overrides: Partial<AXNode> = {}): AXNode {
   return {
@@ -144,5 +147,30 @@ describe('raw mobile context projection', () => {
     expect(result.frontmost.bundleId).toBe('com.example.other');
     expect(result.expectedBundleMatched).toBe(false);
     expect(result.verified).toBe(false);
+  });
+
+  it('emits FOREGROUND_CONTEXT_UNAVAILABLE for an empty AX tree — the classifier itself never promotes to TRANSITIONAL_STATE_TIMEOUT', () => {
+    // Regression guard for issue #46: promotion to TRANSITIONAL_STATE_TIMEOUT
+    // is a wrapper-layer concern. The surface classifier must stay
+    // surface-scoped and keep emitting FOREGROUND_CONTEXT_UNAVAILABLE for
+    // empty / unknown surfaces so the wrapper can key off that signal.
+    const tree = node({ children: [] });
+
+    const result = buildRawMobileContext({
+      deviceId: 'device-1',
+      tree,
+      runningApps: [{ bundleId: 'com.opensafari.fixtures.flutterSpinnerQa', pid: 42 }],
+      expectedBundle: 'com.opensafari.fixtures.flutterSpinnerQa',
+    });
+
+    expect(result.classification).toBe('FOREGROUND_CONTEXT_UNAVAILABLE');
+    expect(result.verified).toBe(false);
+  });
+
+  it('exposes TRANSITIONAL_STATE_TIMEOUT on the RawMobileClassification type literal', () => {
+    // Compile-time guard: if the literal is ever removed from the union,
+    // this test fails to typecheck (ts-jest) before it reaches runtime.
+    const marker: RawMobileClassification = 'TRANSITIONAL_STATE_TIMEOUT';
+    expect(marker).toBe('TRANSITIONAL_STATE_TIMEOUT');
   });
 });
