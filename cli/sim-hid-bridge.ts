@@ -140,10 +140,11 @@ async function main(): Promise<void> {
     stdout = result.stdout;
     stderr = result.stderr;
   } catch (error) {
-    const execError = error as Error & { stdout?: string; stderr?: string };
+    const execError = error as Error & { stdout?: string; stderr?: string; code?: number | string };
     if (execError.stdout) process.stdout.write(execError.stdout);
     if (execError.stderr) process.stderr.write(execError.stderr);
-    process.exit(1);
+    const exitCode = typeof execError.code === 'number' ? execError.code : 1;
+    process.exit(exitCode);
   }
 
   if (stderr.trim()) {

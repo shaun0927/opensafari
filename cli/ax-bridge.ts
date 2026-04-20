@@ -85,7 +85,8 @@ async function outputContext(flags: Record<string, string>): Promise<never> {
     process.exit(1);
   }
 
-  const runningAppsRaw = await manager.listRunningApps(deviceId);
+  const runningAppsDeviceId = await resolveRunningAppsDeviceId(deviceId);
+  const runningAppsRaw = await manager.listRunningApps(runningAppsDeviceId);
   const runningApps = runningAppsRaw.map((app) => ({
     bundleId: app.label,
     pid: app.pid,
@@ -108,6 +109,37 @@ async function outputContext(flags: Record<string, string>): Promise<never> {
 
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   process.exit(0);
+}
+
+async function resolveRunningAppsDeviceId(requested: string): Promise<string> {
+  if (looksLikeUDID(requested)) return requested;
+
+  const { stdout } = await execFileAsync('/usr/bin/xcrun', ['simctl', 'list', 'devices', '-j'], {
+    timeout: 10_000,
+    encoding: 'utf8',
+    maxBuffer: 10 * 1024 * 1024,
+  });
+  const parsed = JSON.parse(stdout) as {
+    devices: Record<string, Array<{ udid: string; name: string; state: string; isAvailable?: boolean }>>;
+  };
+  const devices = Object.values(parsed.devices)
+    .flat()
+    .filter((device) => device.isAvailable !== false);
+  const booted = devices.filter((device) => device.state === 'Booted');
+
+  if (requested === 'any') {
+    return booted[0]?.udid ?? requested;
+  }
+  if (requested === 'booted') {
+    return booted[0]?.udid ?? requested;
+  }
+
+  const exact = booted.find((device) => device.name === requested);
+  return exact?.udid ?? requested;
+}
+
+function looksLikeUDID(value: string): boolean {
+  return /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/i.test(value);
 }
 
 async function main(): Promise<void> {
