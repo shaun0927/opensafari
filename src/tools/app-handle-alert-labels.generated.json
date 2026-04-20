@@ -1,0 +1,1118 @@
+{
+  "_generated": {
+    "generator": "scripts/dev/dump-springboard-permission-strings.ts",
+    "runtime": "iOS 26.4 (23E244)",
+    "regenerateCommand": "npx ts-node scripts/dev/dump-springboard-permission-strings.ts > src/tools/app-handle-alert-labels.generated.json"
+  },
+  "runtime": "iOS 26.4 (23E244)",
+  "locales": {
+    "ar": {
+      "accept": [
+        "إبقاء الإضافة فقط",
+        "استخدام التطبيق",
+        "السماح",
+        "السماح بالوصول إلى جميع الصور",
+        "السماح بالوصول الكامل",
+        "تمكين",
+        "متابعة",
+        "مشاركة البيانات",
+        "موافق"
+      ],
+      "dismiss": [
+        "إلغاء",
+        "عدم التمكين",
+        "عدم السماح",
+        "عدم مشاركة البيانات",
+        "مطالبة التطبيق بعدم التتبع"
+      ]
+    },
+    "bg": {
+      "accept": [
+        "Активиране",
+        "Използвай приложение",
+        "ОК",
+        "Позволи",
+        "Позволи достъп до всички снимки",
+        "Позволи пълен достъп",
+        "Продължи",
+        "Само добавяне",
+        "Сподели данни"
+      ],
+      "dismiss": [
+        "Заяви да не проследява",
+        "Не позволявай",
+        "Не разрешавай",
+        "Не споделяй данни",
+        "Отказ"
+      ]
+    },
+    "bn": {
+      "accept": [
+        "“শুধুমাত্র যোগ করুন” রাখুন",
+        "অনুমতি দিন",
+        "অ্যাপ ব্যবহার করুন",
+        "চালিয়ে যান",
+        "ঠিক আছে",
+        "ডেটা শেয়ার করুন",
+        "সক্রিয় করুন",
+        "সমস্ত ছবি অ্যাক্সেস করার অনুমতি দিন",
+        "সম্পূর্ণ অ্যাক্সেসের অনুমতি দিন"
+      ],
+      "dismiss": [
+        "অনুমতি দেবেন না",
+        "অ্যাপকে ট্র্যাক করার অনুমতি দেবেন না",
+        "চালু করবেন না",
+        "ডেটা শেয়ার করবেন না",
+        "বাতিল করুন"
+      ]
+    },
+    "ca": {
+      "accept": [
+        "Activa",
+        "Comparteix les dades",
+        "Continua",
+        "OK",
+        "Permet",
+        "Permet l’accés a totes les fotos",
+        "Permet l’accés complet",
+        "Permet només l’addició",
+        "Utilitza l’app"
+      ],
+      "dismiss": [
+        "Cancel·la",
+        "Demana a l’app que no em rastregi",
+        "No activis",
+        "No comparteixis les dades",
+        "No permetis"
+      ]
+    },
+    "cs": {
+      "accept": [
+        "OK",
+        "Pokračovat",
+        "Použít aplikaci",
+        "Povolit",
+        "Povolit plný přístup",
+        "Povolit přístup ke všem fotkám",
+        "Sdílet data",
+        "Zachovat přístup jen pro přidávání",
+        "Zapnout"
+      ],
+      "dismiss": [
+        "Nepovolovat",
+        "Nesdílet data",
+        "Nezapínat",
+        "Požádat aplikaci o nesledování",
+        "Zrušit"
+      ]
+    },
+    "da": {
+      "accept": [
+        "Behold kun mulighed for tilføjelse",
+        "Brug app",
+        "Del data",
+        "Fortsæt",
+        "OK",
+        "Slå til",
+        "Tillad",
+        "Tillad adgang til alle fotos",
+        "Tillad fuld adgang"
+      ],
+      "dismiss": [
+        "Annuller",
+        "Bed app om ikke at spore",
+        "Del ikke data",
+        "Slå ikke til",
+        "Tillad ikke"
+      ]
+    },
+    "de": {
+      "accept": [
+        "Aktivieren",
+        "App verwenden",
+        "Daten teilen",
+        "Erlauben",
+        "Fortfahren",
+        "OK",
+        "Vollen Zugriff erlauben",
+        "Weiterhin nur Zugriff zum Hinzufügen",
+        "Zugriff auf alle Fotos erlauben"
+      ],
+      "dismiss": [
+        "Abbrechen",
+        "App-Tracking ablehnen",
+        "Daten nicht teilen",
+        "Nicht aktivieren",
+        "Nicht erlauben"
+      ]
+    },
+    "el": {
+      "accept": [
+        "OK",
+        "Κοινοποίηση δεδομένων",
+        "Να επιτραπεί",
+        "ΟΚ",
+        "Πλήρης πρόσβαση",
+        "Συνέχεια",
+        "Χρήση εφαρμογής"
+      ],
+      "dismiss": [
+        "Αίτημα στην εφαρμογή για μη ανίχνευση",
+        "Ακύρωση",
+        "Άρνηση",
+        "Δεν επιθυμώ κοινοποίηση δεδομένων",
+        "Να μην επιτραπεί"
+      ]
+    },
+    "en": {
+      "accept": [
+        "Allow",
+        "Allow access to all Photos",
+        "Allow Full Access",
+        "Continue",
+        "Enable",
+        "Keep Add Only",
+        "OK",
+        "Share Data",
+        "Use App"
+      ],
+      "dismiss": [
+        "Ask App Not to Track",
+        "Cancel",
+        "Don't Allow",
+        "Don’t Allow",
+        "Don’t Enable",
+        "Don’t Share Data"
+      ]
+    },
+    "en-AU": {
+      "accept": [
+        "Allow",
+        "Allow access to all Photos",
+        "Allow Full Access",
+        "Continue",
+        "Enable",
+        "Keep Add Only",
+        "OK",
+        "Share Data",
+        "Use App"
+      ],
+      "dismiss": [
+        "Ask App Not to Track",
+        "Cancel",
+        "Don’t Allow",
+        "Don’t Enable",
+        "Don’t Share Data"
+      ]
+    },
+    "en-GB": {
+      "accept": [
+        "Allow",
+        "Allow access to all Photos",
+        "Allow Full Access",
+        "Continue",
+        "Enable",
+        "Keep Add Only",
+        "OK",
+        "Share Data",
+        "Use App"
+      ],
+      "dismiss": [
+        "Ask App Not to Track",
+        "Cancel",
+        "Don’t Allow",
+        "Don’t Enable",
+        "Don’t Share Data"
+      ]
+    },
+    "en-IN": {
+      "accept": [
+        "Allow",
+        "OK"
+      ],
+      "dismiss": [
+        "Cancel",
+        "Don’t Allow"
+      ]
+    },
+    "es": {
+      "accept": [
+        "Activar",
+        "Compartir datos",
+        "Continuar",
+        "Mantener acceso solo para añadir",
+        "OK",
+        "Permitir",
+        "Permitir acceso a todas las fotos",
+        "Permitir acceso total",
+        "Usar app"
+      ],
+      "dismiss": [
+        "Cancelar",
+        "No activar",
+        "No compartir datos",
+        "No permitir",
+        "Pedir a la app que no rastree"
+      ]
+    },
+    "es-419": {
+      "accept": [
+        "Activar",
+        "Compartir datos",
+        "Conservar Sólo agregar",
+        "Continuar",
+        "OK",
+        "Otorgar acceso completo",
+        "Permitir",
+        "Permitir acceso a todas las fotos",
+        "Permitir acceso completo",
+        "Usar app"
+      ],
+      "dismiss": [
+        "Cancelar",
+        "No activar",
+        "No compartir datos",
+        "No permitir",
+        "Solicitar a la app no rastrear"
+      ]
+    },
+    "es-US": {
+      "accept": [
+        "Activar",
+        "Compartir datos",
+        "Conservar Sólo agregar",
+        "Continuar",
+        "OK",
+        "Otorgar acceso completo",
+        "Permitir",
+        "Permitir acceso a todas las fotos",
+        "Permitir acceso completo",
+        "Usar app"
+      ],
+      "dismiss": [
+        "Cancelar",
+        "No activar",
+        "No compartir datos",
+        "No permitir",
+        "Solicitar a la app no rastrear"
+      ]
+    },
+    "fi": {
+      "accept": [
+        "Jaa tiedot",
+        "Jatka",
+        "Käytä appia",
+        "OK",
+        "Ota käyttöön",
+        "Säilytä vain lisäys",
+        "Salli",
+        "Salli kaikkien kuvien käyttö",
+        "Salli täysi käyttöoikeus"
+      ],
+      "dismiss": [
+        "Älä jaa tietoja",
+        "Älä ota käyttöön",
+        "Älä salli",
+        "Kumoa",
+        "Pyydä, ettei appi seuraa sinua"
+      ]
+    },
+    "fr": {
+      "accept": [
+        "Activer",
+        "Ajout uniquement",
+        "Autoriser",
+        "Autoriser l’accès à toutes les photos",
+        "Autoriser l’accès complet",
+        "Continuer",
+        "OK",
+        "Partager",
+        "Utiliser l’app"
+      ],
+      "dismiss": [
+        "Annuler",
+        "Demander à l’app de ne pas me suivre",
+        "Ne pas activer",
+        "Ne pas autoriser",
+        "Ne pas partager les données",
+        "Refuser"
+      ]
+    },
+    "fr-CA": {
+      "accept": [
+        "Activer",
+        "Autoriser",
+        "Autoriser l’accès à toutes les photos",
+        "Autoriser l’accès complet",
+        "Continuer",
+        "OK",
+        "Partager les données",
+        "Utiliser l’app"
+      ],
+      "dismiss": [
+        "Annuler",
+        "Ne pas activer",
+        "Ne pas partager les données",
+        "Refuser"
+      ]
+    },
+    "gu": {
+      "accept": [
+        "“માત્ર ઉમેરો” રાખો",
+        "અનુમતિ આપો",
+        "આગળ વધો",
+        "ઍપનો ઉપયોગ કરો",
+        "ડેટા શેર કરો",
+        "તમામ ફોટોના ઍક્સેસની અનુમતિ આપો",
+        "બરાબર",
+        "સક્ષમ કરો",
+        "સંપૂર્ણ ઍક્સેસની અનુમતિ આપો"
+      ],
+      "dismiss": [
+        "અનુમતિ આપશો નહિ",
+        "ઍપને ટ્રૅક ન કરવાનું કહો",
+        "ડેટા શેર કરશો નહિ",
+        "રદ કરો",
+        "સક્ષમ કરશો નહિ"
+      ]
+    },
+    "he": {
+      "accept": [
+        "אישור",
+        "המשך",
+        "מתן גישה מלאה",
+        "מתן הרשאת גישה לכל התמונות",
+        "שימוש ביישום",
+        "שיתוף הנתונים",
+        "שמירת הרשאת ההוספה בלבד"
+      ],
+      "dismiss": [
+        "ביטול",
+        "בקשה מהיישום לא לבצע מעקב",
+        "לא לשתף נתונים",
+        "סירוב"
+      ]
+    },
+    "hi": {
+      "accept": [
+        "“ऐड ओनली” रखें",
+        "अनुमति दें",
+        "ऐप का उपयोग करें",
+        "जारी रखें",
+        "ठीक",
+        "डेटा शेयर करें",
+        "पूर्ण ऐक्सेस की अनुमति दें",
+        "सक्षम करें",
+        "सभी तस्वीरों के लिए ऐक्सेस की अनुमति दें"
+      ],
+      "dismiss": [
+        "अनुमति न दें",
+        "ऐप से ट्रैक न करने के लिए कहें",
+        "डेटा शेयर न करें",
+        "रद्द करें",
+        "सक्षम न करें"
+      ]
+    },
+    "hr": {
+      "accept": [
+        "Dozvoli",
+        "Dozvoli pristup svim fotografijama",
+        "Dozvoli puni pristup",
+        "Koristi aplikaciju",
+        "Nastavi",
+        "OK",
+        "Omogući",
+        "Podijeli podatke",
+        "Zadrži samo dodavanje"
+      ],
+      "dismiss": [
+        "Nemoj dijeliti podatke",
+        "Nemoj dozvoliti",
+        "Nemoj omogućiti",
+        "Poništi",
+        "Zatraži od aplikacije da ne prati"
+      ]
+    },
+    "hu": {
+      "accept": [
+        "Adatok megosztása",
+        "App használata",
+        "Csak hozzáadás megtartása",
+        "Engedélyezés",
+        "Folytatás",
+        "OK",
+        "Teljes hozzáférés engedélyezése"
+      ],
+      "dismiss": [
+        "Adatok megosztásának mellőzése",
+        "App megkérése, hogy mellőzze a követést",
+        "Mégsem",
+        "Nem engedélyezem",
+        "Tiltás"
+      ]
+    },
+    "id": {
+      "accept": [
+        "Aktifkan",
+        "Bagikan Data",
+        "Gunakan App",
+        "Izinkan",
+        "Izinkan akses ke semua Foto",
+        "Izinkan Akses Penuh",
+        "Lanjutkan",
+        "OKE",
+        "Tetap Hanya Tambah"
+      ],
+      "dismiss": [
+        "Batalkan",
+        "Jangan Aktifkan",
+        "Jangan Bagikan Data",
+        "Jangan Izinkan",
+        "Minta App Tidak Melacak",
+        "Tidak Boleh"
+      ]
+    },
+    "it": {
+      "accept": [
+        "Abilita",
+        "Condividi dati",
+        "Consenti",
+        "Consenti accesso completo",
+        "Consenti l’accesso a tutte le foto",
+        "Continua",
+        "Mantieni solo aggiunta",
+        "OK",
+        "Usa l’app"
+      ],
+      "dismiss": [
+        "Annulla",
+        "No",
+        "Non abilitare",
+        "Non condividere i dati",
+        "Non consentire",
+        "Non tracciarmi"
+      ]
+    },
+    "ja": {
+      "accept": [
+        "OK",
+        "アプリを使用",
+        "すべての写真へのアクセスを許可",
+        "データを共有",
+        "フルアクセスを許可",
+        "有効にする",
+        "続ける",
+        "許可",
+        "追加のみのまま"
+      ],
+      "dismiss": [
+        "アプリにトラッキングしないように要求",
+        "キャンセル",
+        "データを共有しない",
+        "有効にしない",
+        "許可しない"
+      ]
+    },
+    "kk": {
+      "accept": [
+        "OK",
+        "Барлық фотоға қол жеткізуге рұқсат беру",
+        "Деректерді бөлісу",
+        "Жалғастыру",
+        "Қолданбаны пайдалану",
+        "Қосу",
+        "Рұқсат беру",
+        "Тек қосуды сақтау",
+        "Толық рұқсат беру"
+      ],
+      "dismiss": [
+        "Бас тарту",
+        "Деректерді бөліспеу",
+        "Қолданбадан қадағаламауды сұрау",
+        "Қоспау",
+        "Рұқсат бермеу"
+      ]
+    },
+    "kn": {
+      "accept": [
+        "ಅನುಮತಿಸಿ",
+        "ಆ್ಯಪ್ ಅನ್ನು ಬಳಸಿ",
+        "ಎಲ್ಲಾ ಫೋಟೋಗಳಿಗೆ ಆ್ಯಕ್ಸೆಸ್ ಅನ್ನು ಅನುಮತಿಸಿ",
+        "ಮುಂದುವರಿಸಿ",
+        "ಸಕ್ರಿಯಗೊಳಿಸಿ",
+        "ಸಂಪೂರ್ಣ ಆ್ಯಕ್ಸೆಸ್ ಅನುಮತಿಸಿ",
+        "ಸರಿ",
+        "ಸೇರಿಸಲು ಮಾತ್ರ ಎಂಬುದನ್ನು ಇರಿಸಿಕೊಳ್ಳಿ",
+        "ಹಂಚಿಕೊಂಡ ಡೇಟ"
+      ],
+      "dismiss": [
+        "ಅನುಮತಿಸಬೇಡಿ",
+        "ಆ್ಯಪ್‌ಗೆ ಟ್ರ್ಯಾಕ್ ಮಾಡಬೇಡಿ ಎಂದು ಹೇಳಿ",
+        "ಡೇಟವನ್ನು ಹಂಚಿಕೊಳ್ಳಬೇಡಿ",
+        "ರದ್ದು",
+        "ಸಕ್ರಿಯಗೊಳಿಸಬೇಡಿ"
+      ]
+    },
+    "ko": {
+      "accept": [
+        "계속",
+        "데이터 공유",
+        "모든 사진에 대한 접근 허용",
+        "앱 사용",
+        "전체 접근 허용",
+        "추가만 허용 유지",
+        "허용",
+        "확인",
+        "활성화"
+      ],
+      "dismiss": [
+        "데이터 공유 안 함",
+        "앱에 추적 금지 요청",
+        "취소",
+        "허용 안 함",
+        "활성화 안 함"
+      ]
+    },
+    "lt": {
+      "accept": [
+        "Bendrinti duomenis",
+        "Gerai",
+        "Įjungti",
+        "Leisti",
+        "Leisti visateisę prieigą",
+        "Naudoti programą",
+        "Palikti „Tik įtraukti“",
+        "Suteikti prieigą prie visų nuotraukų",
+        "Tęsti"
+      ],
+      "dismiss": [
+        "Atšaukti",
+        "Nebendrinti duomenų",
+        "Neįjungti",
+        "Neleisti",
+        "Paprašyti programos nesekti"
+      ]
+    },
+    "ml": {
+      "accept": [
+        "‘ചേർക്കൂ മാത്രം’ നിലനിർത്തൂ",
+        "അനുവദിക്കൂ",
+        "ആപ്പ് ഉപയോഗിക്കൂ",
+        "എനേബിൾ ചെയ്യൂ",
+        "എല്ലാ ഫോട്ടോകളിലേക്കും ആക്സസ് അനുവദിക്കൂ",
+        "തുടരൂ",
+        "പങ്കിട്ട ഡാറ്റ",
+        "പൂർണ ആക്സസ് അനുവദിക്കൂ",
+        "ശരി"
+      ],
+      "dismiss": [
+        "അനുവദിക്കേണ്ട",
+        "എനേബിൾ ചെയ്യരുത്",
+        "ഡാറ്റ പങ്കിടരുത്",
+        "റദ്ദാക്കൂ"
+      ]
+    },
+    "mr": {
+      "accept": [
+        "‘केवळ जोडा’ ठेवा",
+        "ॲपचा वापर करा",
+        "अनुमती द्या",
+        "एनेबल करा",
+        "ओके करा",
+        "चालू ठेवा",
+        "पूर्ण ॲक्सेसची अनुमती द्या",
+        "शेअर केलेला डेटा"
+      ],
+      "dismiss": [
+        "ॲपना ट्रॅक करू नका असे सांगा",
+        "अनुमती देऊ नका",
+        "एनेबल करू नका",
+        "डेटा शेअर करू नका",
+        "रद्द करा"
+      ]
+    },
+    "ms": {
+      "accept": [
+        "Benarkan",
+        "Benarkan akses kepada semua Foto",
+        "Benarkan Akses Penuh",
+        "Dayakan",
+        "Gunakan App",
+        "Kekalkan Tambah Sahaja",
+        "Kongsi Data",
+        "OK",
+        "Teruskan"
+      ],
+      "dismiss": [
+        "Batal",
+        "Jangan Benarkan",
+        "Jangan Dayakan",
+        "Jangan Kongsi Data",
+        "Minta App untuk Tidak Menjejak"
+      ]
+    },
+    "nl": {
+      "accept": [
+        "Behoud alleen toevoegen",
+        "Deel gegevens",
+        "Ga door",
+        "Gebruik app",
+        "Geef toegang tot alle foto's",
+        "Geef volledige toegang",
+        "OK",
+        "Schakel in",
+        "Sta toe"
+      ],
+      "dismiss": [
+        "Annuleer",
+        "Deel gegevens niet",
+        "Schakel niet in",
+        "Sta niet toe",
+        "Vraag app om niet te tracken",
+        "Weiger"
+      ]
+    },
+    "no": {
+      "accept": [
+        "Aktiver",
+        "Behold Kun legge til",
+        "Bruk app",
+        "Del data",
+        "Fortsett",
+        "Gi full tilgang",
+        "Gi tilgang til alle bilder",
+        "OK",
+        "Tillat"
+      ],
+      "dismiss": [
+        "Avbryt",
+        "Be om å ikke bli sporet",
+        "Ikke aktiver",
+        "Ikke del data",
+        "Ikke tillat"
+      ]
+    },
+    "or": {
+      "accept": [
+        "“କେବଳ ଯୋଡ଼ନ୍ତୁ” ରଖନ୍ତୁ",
+        "ଅନୁମତି ଦିଅନ୍ତୁ",
+        "ଆପ୍ ବ୍ଯବହାର କରନ୍ତୁ",
+        "ଜାରି ରଖନ୍ତୁ",
+        "ଠିକ୍ ଅଛି",
+        "ଡେଟା ଶେୟର୍ କରନ୍ତୁ",
+        "ସକ୍ଷମ କରନ୍ତୁ",
+        "ସମସ୍ତ ଫଟୋ ଆକ୍ସେସ୍ କରିବାକୁ ଅନୁମତି ଦିଅନ୍ତୁ",
+        "ସମ୍ପୂର୍ଣ୍ଣ ଆକ୍ସେସ୍ ପାଇଁ ଅନୁମତି ଦିଅନ୍ତୁ"
+      ],
+      "dismiss": [
+        "ଅନୁମତି ଦିଅନ୍ତୁ ନାହିଁ",
+        "ଟ୍ରାକ୍ ନକରିବା ପାଇଁ ଆପ୍‌କୁ କୁହନ୍ତୁ",
+        "ଡେଟା ଶେୟର୍ କରନ୍ତୁ ନାହିଁ",
+        "ବାତିଲ୍ କରନ୍ତୁ",
+        "ସକ୍ଷମ କରନ୍ତୁ ନାହିଁ"
+      ]
+    },
+    "pa": {
+      "accept": [
+        "ਆਗਿਆ ਦਿਓ",
+        "ਐਪ ਦੀ ਵਰਤੋਂ ਕਰੋ",
+        "ਸਮਰੱਥ ਕਰੋ",
+        "ਸਾਰੀਆਂ ਤਸਵੀਰਾਂ ਐਕਸੈੱਸ ਕਰਨ ਦੀ ਆਗਿਆ ਦਿਓ",
+        "ਸਿਰਫ਼ ਜੋੜ ਰੱਖੋ",
+        "ਜਾਰੀ ਰੱਖੋ",
+        "ਠੀਕ ਹੈ",
+        "ਡੇਟਾ ਸਾਂਝਾ ਕਰੋ",
+        "ਪੂਰਾ ਐਕਸੈੱਸ ਕਰਨ ਦੀ ਆਗਿਆ ਦਿਓ"
+      ],
+      "dismiss": [
+        "ਆਗਿਆ ਨਹੀਂ ਦਿੱਤੀ",
+        "ਆਗਿਆ ਨਾ ਦਿਓ",
+        "ਐਪਾਂ ਨੂੰ ਕਹੋ ਕਿ ਟ੍ਰੈਕ ਨਾ ਕਰਨ",
+        "ਸਮਰੱਥ ਨਾ ਕਰੋ",
+        "ਡੇਟਾ ਸਾਂਝਾ ਨਾ ਕਰੋ",
+        "ਰੱਦ ਕਰੋ"
+      ]
+    },
+    "pl": {
+      "accept": [
+        "Dalej",
+        "OK",
+        "Pełny dostęp",
+        "Pozwól",
+        "Pozwól na dostęp do wszystkich zdjęć",
+        "Udostępniaj dane",
+        "Używaj aplikacji",
+        "Włącz",
+        "Zostaw tylko dodawanie"
+      ],
+      "dismiss": [
+        "Anuluj",
+        "Nie pozwalaj",
+        "Nie udostępniaj danych",
+        "Nie włączaj",
+        "Poproś aplikację o nieśledzenie"
+      ]
+    },
+    "pt-BR": {
+      "accept": [
+        "Ativar",
+        "Compartilhar Dados",
+        "Continuar",
+        "Manter Apenas Adicionados",
+        "OK",
+        "Permitir",
+        "Permitir Acesso a Todas as Fotos",
+        "Permitir Acesso Total",
+        "Usar App"
+      ],
+      "dismiss": [
+        "Cancelar",
+        "Não Ativar",
+        "Não Compartilhar Dados",
+        "Não Permitir",
+        "Pedir ao App para Não Rastrear"
+      ]
+    },
+    "pt-PT": {
+      "accept": [
+        "Ativar",
+        "Continuar",
+        "Manter só adição",
+        "OK",
+        "Partilhar dados",
+        "Permitir",
+        "Permitir acesso a todas as fotografias",
+        "Permitir acesso total",
+        "Usar aplicação"
+      ],
+      "dismiss": [
+        "Cancelar",
+        "Não ativar",
+        "Não partilhar dados",
+        "Não permitir",
+        "Pedir à aplicação para não seguir"
+      ]
+    },
+    "ro": {
+      "accept": [
+        "Activați",
+        "Continuați",
+        "OK",
+        "Partajați date",
+        "Păstrați accesul doar pentru adăugare",
+        "Permiteți",
+        "Permiteți accesul complet",
+        "Permiteți accesul la toate pozele",
+        "Utilizați aplicația"
+      ],
+      "dismiss": [
+        "Anulați",
+        "Cereți aplicației să nu vă urmărească",
+        "Nu activați",
+        "Nu partajați date",
+        "Nu permiteți"
+      ]
+    },
+    "ru": {
+      "accept": [
+        "Включить",
+        "Использовать приложение",
+        "ОК",
+        "Поделиться данными",
+        "Продолжить",
+        "Разрешить",
+        "Разрешить полный доступ",
+        "Разрешить только добавление"
+      ],
+      "dismiss": [
+        "Запретить",
+        "Не включать",
+        "Не делиться данными",
+        "Не разрешать",
+        "Не разрешать",
+        "Отменить",
+        "Попросить не отслеживать"
+      ]
+    },
+    "sk": {
+      "accept": [
+        "Len pridávanie",
+        "OK",
+        "Pokračovať",
+        "Použiť apku",
+        "Povoliť",
+        "Povoliť plný prístup",
+        "Povoliť prístup ku všetkým fotkám",
+        "Zapnúť",
+        "Zdieľať dáta"
+      ],
+      "dismiss": [
+        "Nepovoliť",
+        "Nezapínať",
+        "Nezdieľať dáta",
+        "Požiadať apku o nesledovanie",
+        "Zrušiť"
+      ]
+    },
+    "sl": {
+      "accept": [
+        "Deli podatke",
+        "Dovoli",
+        "Dovoli dostop do vseh fotografij",
+        "Dovoli poln dostop",
+        "Nadaljuj",
+        "Ohrani samo dodajanje",
+        "Omogoči",
+        "Uporabi aplikacijo",
+        "V redu"
+      ],
+      "dismiss": [
+        "Aplikaciji ne dovoli sledenja",
+        "Ne deli podatkov",
+        "Ne dovoli",
+        "Ne omogoči",
+        "Prekliči"
+      ]
+    },
+    "sv": {
+      "accept": [
+        "Aktivera",
+        "Använd app",
+        "Behåll Endast lägga till",
+        "Dela data",
+        "Fortsätt",
+        "OK",
+        "Tillåt",
+        "Tillåt åtkomst till alla bilder",
+        "Tillåt full åtkomst"
+      ],
+      "dismiss": [
+        "Aktivera inte",
+        "Avbryt",
+        "Begär att inte bli spårad av appen",
+        "Dela inte data",
+        "Tillåt inte"
+      ]
+    },
+    "ta": {
+      "accept": [
+        "“சேர்” விருப்பத்தை மட்டும் வைத்திரு",
+        "அனுமதி",
+        "சரி",
+        "செயலியைப் பயன்படுத்து",
+        "செயல்படுத்து",
+        "தரவைப் பகிர்",
+        "தொடர்க",
+        "முழு அணுகலை அனுமதி"
+      ],
+      "dismiss": [
+        "அனுமதிக்காதே",
+        "செயலி கண்காணிக்க வேண்டாம் எனக் கோருக",
+        "தரவுகளைப் பகிர வேண்டாம்",
+        "ரத்துசெய்"
+      ]
+    },
+    "te": {
+      "accept": [
+        "‘జోడించడం మాత్రమే’ను ఉంచండి",
+        "అనుమతించండి",
+        "అన్ని ఫోటోలకు యాక్సెస్‌ను అనుమతించండి",
+        "ఎనేబల్ చేయండి",
+        "కొనసాగించండి",
+        "డేటాను షేర్ చేయండి",
+        "పూర్తి యాక్సెస్‌ను అనుమతించండి",
+        "యాప్‌ను ఉపయోగించండి",
+        "సరే"
+      ],
+      "dismiss": [
+        "అనుమతించవద్దు",
+        "ఎనేబల్ చేయవద్దు",
+        "ట్ర్యాక్ చేయకూడదని యాప్‌కి చెప్పండి",
+        "డేటాను షేర్ చేయవద్దు",
+        "రద్దు"
+      ]
+    },
+    "th": {
+      "accept": [
+        "แชร์ข้อมูล",
+        "ใช้แอป",
+        "ดำเนินการต่อ",
+        "ตกลง",
+        "เปิดใช้งาน",
+        "เพิ่มรูปภาพเท่านั้นต่อไป",
+        "อนุญาต",
+        "อนุญาตการเข้าถึงทั้งหมด",
+        "อนุญาตให้เข้าถึงรูปภาพทั้งหมด"
+      ],
+      "dismiss": [
+        "บอกแอปไม่ให้ติดตาม",
+        "ไม่แชร์ข้อมูล",
+        "ไม่เปิดใช้งาน",
+        "ไม่อนุญาต",
+        "ยกเลิก"
+      ]
+    },
+    "tr": {
+      "accept": [
+        "Etkinleştir",
+        "İzin Ver",
+        "Sürdür",
+        "Tam Erişime İzin Ver",
+        "Tamam",
+        "Tüm fotoğraflara erişime izin ver",
+        "Uygulamayı Kullan",
+        "Verileri Paylaş",
+        "Yalnızca Ekle"
+      ],
+      "dismiss": [
+        "Etkinleştirme",
+        "İzin Verme",
+        "Uygulama Beni Takip Etmesin",
+        "Vazgeç",
+        "Verileri Paylaşma"
+      ]
+    },
+    "uk": {
+      "accept": [
+        "OK",
+        "Використовувати програму",
+        "Дозволити",
+        "Дозволити доступ до всіх фотографій",
+        "Дозволити повний доступ",
+        "Поширювати дані",
+        "Продовжити",
+        "Тільки додавання",
+        "Увімкнути"
+      ],
+      "dismiss": [
+        "Заборонити",
+        "Не вмикати",
+        "Не дозволяти",
+        "Не поширювати дані",
+        "Просити програму не стежити",
+        "Скасувати"
+      ]
+    },
+    "ur": {
+      "accept": [
+        "“صرف شامل کریں” رکھیں",
+        "اجازت دیں",
+        "ایپ کا استعمال کریں",
+        "ٹھیک ہے",
+        "جاری رکھیں",
+        "ڈیٹا شیئر کریں",
+        "سبھی تصویروں تک رسائی کی اجازت دیں",
+        "فعال کریں",
+        "مکمل رسائی کی اجازت دیں"
+      ],
+      "dismiss": [
+        "اجازت نہ دیں",
+        "ایپ سے ٹریک نہ کرنے کے لیے کہیں",
+        "ڈیٹا شیئر نہ کریں",
+        "فعال نہ کریں",
+        "منسوخ کریں"
+      ]
+    },
+    "vi": {
+      "accept": [
+        "Bật",
+        "Chia sẻ dữ liệu",
+        "Cho phép",
+        "Cho phép truy cập đầy đủ",
+        "Cho phép truy cập vào tất cả ảnh",
+        "Giữ Chỉ thêm",
+        "OK",
+        "Sử dụng ứng dụng",
+        "Tiếp tục"
+      ],
+      "dismiss": [
+        "Hủy",
+        "Không bật",
+        "Không chia sẻ dữ liệu",
+        "Không cho phép",
+        "Từ chối",
+        "Yêu cầu ứng dụng không theo dõi"
+      ]
+    },
+    "yue-Hans": {
+      "accept": [
+        "使用App",
+        "保持“仅添加”",
+        "允许",
+        "允许完全访问",
+        "允许访问所有照片",
+        "共享数据",
+        "启用",
+        "好",
+        "继续"
+      ],
+      "dismiss": [
+        "不允许",
+        "不共享数据",
+        "不启用",
+        "取消",
+        "要求App不跟踪"
+      ]
+    },
+    "zh-Hans": {
+      "accept": [
+        "使用App",
+        "保持“仅添加”",
+        "允许",
+        "允许完全访问",
+        "允许访问所有照片",
+        "共享数据",
+        "启用",
+        "好",
+        "继续"
+      ],
+      "dismiss": [
+        "不允许",
+        "不共享数据",
+        "不启用",
+        "取消",
+        "要求App不跟踪"
+      ]
+    },
+    "zh-Hant": {
+      "accept": [
+        "使用App",
+        "保留「只限加入」",
+        "允許",
+        "允許取用所有「照片」",
+        "允許完整取用",
+        "分享資料",
+        "好",
+        "啟用",
+        "繼續"
+      ],
+      "dismiss": [
+        "不允許",
+        "不分享資料",
+        "不啟用",
+        "取消",
+        "要求App不要追蹤"
+      ]
+    },
+    "zh-Hant-HK": {
+      "accept": [
+        "使用App",
+        "保留「只限加入」",
+        "允許",
+        "允許全權取用",
+        "允許取用全部「相片」",
+        "分享資料",
+        "好",
+        "啟用",
+        "繼續"
+      ],
+      "dismiss": [
+        "不允許",
+        "不分享資料",
+        "不要啟用",
+        "取消",
+        "要求App不要追蹤"
+      ]
+    }
+  }
+}
