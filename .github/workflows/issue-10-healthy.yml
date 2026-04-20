@@ -58,6 +58,15 @@ jobs:
           bash tests/fixtures/flutter-qa-app/build.sh \
             --device-id "${{ inputs.device_id }}" \
             --install
+          # Validate that the requested bundle id is actually installed —
+          # the fixture's build script bakes its own bundle id in, so a
+          # mismatched workflow_dispatch input would silently run the
+          # healthy-path against the wrong app. Fail fast with a clear
+          # pointer to the fixture's real bundle id.
+          if ! xcrun simctl listapps "${{ inputs.device_id }}" | grep -q '"${{ inputs.flutter_bundle_id }}"'; then
+            echo "::error::Requested flutter_bundle_id='${{ inputs.flutter_bundle_id }}' is not installed on ${{ inputs.device_id }}. The checked-in fixture builds com.opensafari.fixtures.flutterQaApp — re-dispatch with that bundle id, or add a new fixture."
+            exit 1
+          fi
 
       - name: Run healthy-path verification
         run: |
