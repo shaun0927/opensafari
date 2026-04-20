@@ -17,41 +17,6 @@ const MockBridge = AccessibilityBridge as jest.MockedClass<typeof AccessibilityB
 const mockGetBridge = getAccessibilityBridge as jest.MockedFunction<typeof getAccessibilityBridge>;
 const mockEnsureSemanticsActive = ensureSemanticsActive as jest.MockedFunction<typeof ensureSemanticsActive>;
 
-function makeTree() {
-  return {
-    role: 'AXGroup',
-    traits: [],
-    frame: { x: 0, y: 0, width: 390, height: 844 },
-    visible: true,
-    enabled: true,
-    focused: false,
-    path: '',
-    children: [
-      {
-        role: 'AXButton',
-        label: '마이\n탭 4개 중 4번째',
-        identifier: 'my-tab',
-        traits: [],
-        frame: { x: 0, y: 0, width: 100, height: 40 },
-        visible: true,
-        enabled: true,
-        focused: false,
-        path: '0',
-      },
-      {
-        role: 'AXStaticText',
-        label: '매일 무료 오픈',
-        traits: [],
-        frame: { x: 0, y: 50, width: 100, height: 20 },
-        visible: true,
-        enabled: true,
-        focused: false,
-        path: '1',
-      },
-    ],
-  };
-}
-
 describe('app_query tool', () => {
   let server: MCPServer;
   let handler: (sessionId: string, params: Record<string, unknown>) => Promise<{ content: Array<{ type: string; text?: string }>; isError?: boolean }>;

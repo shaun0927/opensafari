@@ -1,7 +1,7 @@
 describe('setupGracefulShutdown', () => {
   const originalExit = process.exit;
   const events = ['SIGTERM', 'SIGINT', 'uncaughtException', 'unhandledRejection'] as const;
-  let baselineListeners: Record<string, Function[]>;
+  let baselineListeners: Record<string, unknown[]>;
 
   beforeEach(() => {
     jest.resetModules();
@@ -16,7 +16,7 @@ describe('setupGracefulShutdown', () => {
   afterEach(() => {
     process.exit = originalExit;
     for (const event of events) {
-      const current = (process as any).listeners(event) as Function[];
+      const current = (process as any).listeners(event) as unknown[];
       for (const listener of current) {
         if (!baselineListeners[event].includes(listener)) {
           (process as any).removeListener(event, listener);

@@ -2,7 +2,7 @@ import { HTTPTransport } from '../../src/transports/http';
 
 describe('HTTPTransport logging', () => {
   test('logs structured server_error payloads', async () => {
-    const transport = new HTTPTransport(19444);
+    const transport = new HTTPTransport(0);
     transport.onMessage(async () => null);
     const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
 
@@ -22,7 +22,7 @@ describe('HTTPTransport logging', () => {
   });
 
   test('logs structured client_error payloads', async () => {
-    const transport = new HTTPTransport(19445);
+    const transport = new HTTPTransport(0);
     transport.onMessage(async () => null);
     const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
     const socket = { writable: true, end: jest.fn() } as any;
