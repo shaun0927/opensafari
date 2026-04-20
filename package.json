@@ -49,6 +49,8 @@
     "dist/",
     "!dist/src/",
     "!dist/node_modules/",
+    "docs/",
+    "CHANGELOG.md",
     "README.md",
     "LICENSE"
   ],
