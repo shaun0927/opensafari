@@ -73,6 +73,35 @@ jest.mock('../../src/session-manager', () => ({
   }),
 }));
 
+// Mutable classification so individual tests can simulate simulator-chrome vs
+// target-app resolution. Default: target-app (the happy path).
+let mockActivateSourceKind: 'target-app' | 'simulator-window' | 'springboard' | 'unknown' =
+  'target-app';
+const mockActivateAndClassify = jest.fn(
+  async ({ deviceId, bundleId }: { deviceId: string; bundleId: string }) => ({
+    meta: {
+      requestedBundleId: bundleId,
+      deviceId,
+      sourceKind: mockActivateSourceKind,
+      heuristics: ['mock:' + mockActivateSourceKind],
+      activationAttempted: true,
+      activationRetries: 0,
+    },
+  }),
+);
+jest.mock('../../src/tools/native-app-context', () => ({
+  activateAndClassify: (params: unknown) => mockActivateAndClassify(params as never),
+  createContextMismatchError: (meta: unknown) => {
+    const err = new Error(
+      `Native context mismatch for bundle ${JSON.stringify(
+        (meta as { requestedBundleId?: string }).requestedBundleId,
+      )}`,
+    );
+    (err as unknown as { meta: unknown }).meta = meta;
+    return err;
+  },
+}));
+
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 function makeNode(overrides: Partial<AXNode> = {}): AXNode {
@@ -152,6 +181,8 @@ beforeEach(() => {
     message: 'Element does not support AXPress',
     axErrorCode: null,
   });
+  mockActivateSourceKind = 'target-app';
+  mockActivateAndClassify.mockClear();
 });
 
 // ── Tests ──────────────────────────────────────────────────────────────────
@@ -620,5 +651,75 @@ describe('app_type_element — Tier 3 readback verification (issue #39)', () => 
     // truncation ellipsis is the proof the cap ran.
     expect(body.verify_reason).toContain('…');
     expect(body.verify_reason).not.toContain(longObserved);
+  });
+
+  // ── bundle_id context resolution (issue #34 / #39 cold-start) ────────────
+
+  it('routes bundle_id through activateAndClassify and allows target-app typing', async () => {
+    mockActivateSourceKind = 'target-app';
+    const node = makeNode({ identifier: 'email-field' });
+    mockQuery.mockResolvedValue(makeQueryResult([node]));
+
+    const result = await handler('session', {
+      bundle_id: 'com.opensafari.fixtures.flutterQaApp',
+      identifier: 'email-field',
+      text: 'qa@example.com',
+      timeout: 0,
+      focusDelay: 0,
+    });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(mockActivateAndClassify).toHaveBeenCalledTimes(1);
+    const activateArgs = mockActivateAndClassify.mock.calls[0][0];
+    expect(activateArgs.bundleId).toBe('com.opensafari.fixtures.flutterQaApp');
+    expect(activateArgs.deviceId).toBe('test-device-id');
+
+    expect(body.status).toBe('typed');
+    expect(body._meta.context).toMatchObject({
+      requestedBundleId: 'com.opensafari.fixtures.flutterQaApp',
+      sourceKind: 'target-app',
+      activationAttempted: true,
+    });
+    expect(mockTypeText).toHaveBeenCalledWith('test-device-id', 'qa@example.com');
+  });
+
+  it('rejects typing when bundle_id resolves to simulator chrome (no AX dispatch)', async () => {
+    mockActivateSourceKind = 'simulator-window';
+
+    const result = await handler('session', {
+      bundle_id: 'com.opensafari.fixtures.flutterQaApp',
+      identifier: 'email-field',
+      text: 'qa@example.com',
+      timeout: 0,
+      focusDelay: 0,
+    });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(result.isError).toBe(true);
+    expect(body.error).toContain('Native context mismatch');
+    // Typing must never fire when the resolved context is not the target app.
+    expect(mockTypeText).not.toHaveBeenCalled();
+    expect(mockQuery).not.toHaveBeenCalled();
+  });
+
+  it('still types without bundle_id (back-compat — activateAndClassify not invoked)', async () => {
+    const node = makeNode({ identifier: 'email-field' });
+    mockQuery.mockResolvedValue(makeQueryResult([node]));
+
+    const result = await handler('session', {
+      identifier: 'email-field',
+      text: 'qa@example.com',
+      timeout: 0,
+      focusDelay: 0,
+    });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(mockActivateAndClassify).not.toHaveBeenCalled();
+    expect(body.status).toBe('typed');
+    expect(body._meta.context).toMatchObject({
+      sourceKind: 'unknown',
+      heuristics: ['not-requested'],
+      activationAttempted: false,
+    });
   });
 });

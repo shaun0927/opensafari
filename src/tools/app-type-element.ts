@@ -20,6 +20,11 @@ import type { AXNode, AXQuery } from '../native';
 import { resolveDeviceId, getInputBackend, runInputOp } from './native-input-utils';
 import { tryPress } from './app-tap-element';
 import { typeViaPasteboard } from './pasteboard-input';
+import {
+  activateAndClassify,
+  createContextMismatchError,
+  NativeContextMeta,
+} from './native-app-context';
 
 const execFileAsync = promisify(execFile);
 
@@ -113,6 +118,11 @@ export function registerAppTypeElementTool(server: MCPServer): void {
             type: 'string',
             description: 'Simulator UDID (uses active device if omitted)',
           },
+          bundle_id: {
+            type: 'string',
+            description:
+              'Target app bundle ID. When provided, the tool re-activates the app, lets Flutter VM-service discovery target that bundle for semantics activation, and rejects mismatched native contexts (e.g. simulator chrome foreground). Required for cold-start Flutter typing when this is the first AX-targeting call after app_launch.',
+          },
           verify: {
             type: 'boolean',
             description:
@@ -150,10 +160,31 @@ export function registerAppTypeElementTool(server: MCPServer): void {
         const focusDelay = (params.focusDelay as number | undefined) ?? DEFAULT_FOCUS_DELAY_MS;
         const verifyOptIn =
           typeof params.verify === 'boolean' ? (params.verify as boolean) : true;
-
-        await ensureSemanticsActive(deviceId);
+        const bundleId = params.bundle_id as string | undefined;
 
         const bridge = getAccessibilityBridge();
+        let contextMeta: NativeContextMeta = {
+          requestedBundleId: bundleId,
+          deviceId,
+          sourceKind: 'unknown',
+          heuristics: ['not-requested'],
+          activationAttempted: false,
+          activationRetries: 0,
+        };
+        if (bundleId) {
+          const context = await activateAndClassify({
+            bridge,
+            deviceId,
+            bundleId,
+            ensureSemanticsActive: () => ensureSemanticsActive(deviceId, { bundleId }),
+          });
+          contextMeta = context.meta;
+          if (contextMeta.sourceKind !== 'target-app') {
+            throw createContextMismatchError(contextMeta);
+          }
+        } else {
+          await ensureSemanticsActive(deviceId);
+        }
         // Note: the bridge supports a `text` query param (searches label/value),
         // but `text` here is overloaded to mean "text to type". So we never pass
         // `text` as a query — callers disambiguate via identifier/label/role.
@@ -177,7 +208,12 @@ export function registerAppTypeElementTool(server: MCPServer): void {
           }
         }
         if (!match) {
-          return jsonError('Element not found', { query, index, timeout });
+          return jsonError('Element not found', {
+            query,
+            index,
+            timeout,
+            _meta: { context: contextMeta },
+          });
         }
 
         if (!match.visible || match.frame.width <= 0 || match.frame.height <= 0) {
@@ -189,6 +225,7 @@ export function registerAppTypeElementTool(server: MCPServer): void {
               frame: match.frame,
               visible: match.visible,
             },
+            _meta: { context: contextMeta },
           });
         }
 
@@ -264,6 +301,7 @@ export function registerAppTypeElementTool(server: MCPServer): void {
                     pasteResult.permissionDialogMatchedLabel,
                   elapsedMs: pasteResult.elapsedMs,
                   deviceId,
+                  _meta: { context: contextMeta },
                 }),
               },
             ],
@@ -308,7 +346,7 @@ export function registerAppTypeElementTool(server: MCPServer): void {
           deviceId,
           verified: verify.verified,
           verify_method: verify.verify_method,
-          _meta: meta,
+          _meta: { ...(meta as unknown as Record<string, unknown>), context: contextMeta },
         };
         if (verify.verify_reason) {
           responseBody.verify_reason = verify.verify_reason;
