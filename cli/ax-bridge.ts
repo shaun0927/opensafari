@@ -383,14 +383,23 @@ async function main(): Promise<void> {
 
 // Reminder: stdout is the structured-JSON contract consumed by AccessibilityBridge — do not write non-JSON here.
 // Webpack bundles this file as the CLI entry; `require.main === module` does
-// not survive the webpack transform (the resulting guard never evaluates true
-// when run as `node dist/ax-bridge`), so we invoke `main()` unconditionally.
-main().catch((error) => {
-  const message = error instanceof Error ? error.message : String(error);
-  const payload: ErrorJSON = {
-    error: `ax-bridge wrapper failed: ${message}`,
-    code: 'AX_WRAPPER_FAILED',
-  };
-  process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
-  process.exit(1);
-});
+// not survive that transform, so we detect CLI invocation by inspecting
+// `process.argv[1]`. Jest/ts-jest imports run with `argv[1]` pointing at the
+// jest worker, so `main()` is only invoked when the ax-bridge binary itself
+// is the entry — keeping `decidePromotion` importable by unit tests.
+function isCliEntry(): boolean {
+  const entry = process.argv[1] ?? '';
+  return /(^|\/)ax-bridge(\.js)?$/.test(entry);
+}
+
+if (isCliEntry()) {
+  main().catch((error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    const payload: ErrorJSON = {
+      error: `ax-bridge wrapper failed: ${message}`,
+      code: 'AX_WRAPPER_FAILED',
+    };
+    process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    process.exit(1);
+  });
+}
