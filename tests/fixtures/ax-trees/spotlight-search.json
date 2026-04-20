@@ -1,0 +1,88 @@
+{
+  "role": "AXApplication",
+  "label": "SpringBoard",
+  "traits": [],
+  "frame": { "x": 0, "y": 0, "width": 393, "height": 852 },
+  "visible": true,
+  "enabled": true,
+  "focused": false,
+  "path": "0",
+  "children": [
+    {
+      "role": "AXWindow",
+      "traits": [],
+      "frame": { "x": 0, "y": 0, "width": 393, "height": 852 },
+      "visible": true,
+      "enabled": true,
+      "focused": false,
+      "path": "0/0",
+      "children": [
+        {
+          "role": "AXGroup",
+          "traits": [],
+          "frame": { "x": 0, "y": 0, "width": 393, "height": 852 },
+          "visible": true,
+          "enabled": true,
+          "focused": false,
+          "path": "0/0/0",
+          "children": [
+            {
+              "role": "AXTextField",
+              "label": "Search",
+              "identifier": "spotlight_search_field",
+              "traits": ["AXSearchField"],
+              "frame": { "x": 16, "y": 60, "width": 361, "height": 44 },
+              "visible": true,
+              "enabled": true,
+              "focused": true,
+              "path": "0/0/0/0"
+            },
+            {
+              "role": "AXStaticText",
+              "label": "Siri Suggestions",
+              "traits": [],
+              "frame": { "x": 16, "y": 130, "width": 200, "height": 30 },
+              "visible": true,
+              "enabled": true,
+              "focused": false,
+              "path": "0/0/0/1"
+            },
+            {
+              "role": "AXGroup",
+              "traits": [],
+              "frame": { "x": 0, "y": 170, "width": 393, "height": 200 },
+              "visible": true,
+              "enabled": true,
+              "focused": false,
+              "path": "0/0/0/2",
+              "children": [
+                {
+                  "role": "AXButton",
+                  "label": "Maps",
+                  "identifier": "spotlight_app_Maps",
+                  "traits": [],
+                  "frame": { "x": 20, "y": 180, "width": 80, "height": 80 },
+                  "visible": true,
+                  "enabled": true,
+                  "focused": false,
+                  "path": "0/0/0/2/0"
+                },
+                {
+                  "role": "AXButton",
+                  "label": "Settings",
+                  "identifier": "spotlight_app_Settings",
+                  "traits": [],
+                  "frame": { "x": 120, "y": 180, "width": 80, "height": 80 },
+                  "visible": true,
+                  "enabled": true,
+                  "focused": false,
+                  "path": "0/0/0/2/1"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

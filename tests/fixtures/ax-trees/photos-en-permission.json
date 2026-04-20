@@ -1,0 +1,74 @@
+{
+  "role": "AXApplication",
+  "label": "SpringBoard",
+  "traits": [],
+  "frame": { "x": 0, "y": 0, "width": 393, "height": 852 },
+  "visible": true,
+  "enabled": true,
+  "focused": false,
+  "path": "0",
+  "children": [
+    {
+      "role": "AXWindow",
+      "traits": [],
+      "frame": { "x": 0, "y": 0, "width": 393, "height": 852 },
+      "visible": true,
+      "enabled": true,
+      "focused": false,
+      "path": "0/0",
+      "children": [
+        {
+          "role": "AXDialog",
+          "traits": [],
+          "frame": { "x": 30, "y": 280, "width": 333, "height": 260 },
+          "visible": true,
+          "enabled": true,
+          "focused": false,
+          "path": "0/0/0",
+          "children": [
+            {
+              "role": "AXStaticText",
+              "label": "Allow \"App\" to access your Photos?",
+              "traits": ["AXHeading"],
+              "frame": { "x": 50, "y": 300, "width": 293, "height": 50 },
+              "visible": true,
+              "enabled": true,
+              "focused": false,
+              "path": "0/0/0/0"
+            },
+            {
+              "role": "AXStaticText",
+              "label": "This app wants to access photos from your library.",
+              "traits": [],
+              "frame": { "x": 50, "y": 360, "width": 293, "height": 40 },
+              "visible": true,
+              "enabled": true,
+              "focused": false,
+              "path": "0/0/0/1"
+            },
+            {
+              "role": "AXButton",
+              "label": "Allow",
+              "traits": [],
+              "frame": { "x": 50, "y": 420, "width": 293, "height": 44 },
+              "visible": true,
+              "enabled": true,
+              "focused": false,
+              "path": "0/0/0/2"
+            },
+            {
+              "role": "AXButton",
+              "label": "Don't Allow",
+              "traits": [],
+              "frame": { "x": 50, "y": 474, "width": 293, "height": 44 },
+              "visible": true,
+              "enabled": true,
+              "focused": false,
+              "path": "0/0/0/3"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
