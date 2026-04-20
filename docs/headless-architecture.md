@@ -325,6 +325,7 @@ below exactly once.
 | `APP_CONTENT_FOREGROUND` | inherits `contextVerified` when `--expect-bundle` is unset; `false` otherwise | `surface === 'app_content'` AND a single non-system bundle was inferred, **but** the caller's expectation was not satisfied (no `--expect-bundle` supplied, or expectation is indeterminate). | `context $UDID` against a foregrounded app without `--expect-bundle`. |
 | `APP_CONTENT_UNVERIFIED` | inherits `contextVerified` when `--expect-bundle` is unset; `false` otherwise | `surface === 'app_content'` but the probe could not pin down a single frontmost bundle (zero or multiple candidates survived filtering). | `context $UDID` during a cold-launch splash with no AX-visible app identity. |
 | `FOREGROUND_CONTEXT_UNAVAILABLE` | `false` | `surface` was `'empty'` or `'unknown'` — the AX root was missing or unreadable. Also used as the wrapper-level fallback when `ax-bridge` errored. Inspect `warnings` for the specific failure mode. | `context $UDID` against a locked device, or immediately after boot before SpringBoard finished rendering. |
+| `TRANSITIONAL_STATE_TIMEOUT` | `false` | Promoted by the sim-hid-bridge wrapper when `--expect-bundle <b>` is supplied, `<b>` is present in `runningApps`, and the AX tree stays empty across two settle windows (`--max-settle-retries ≥ 1`). Distinguishes "expected app is running but its UI is still loading" (retryable) from `FOREGROUND_CONTEXT_UNAVAILABLE` ("no AX data at all", abort). Gated by `--max-settle-retries <0|1|2|3>` (default `1`); set `0` to restore the pre-issue single-probe behavior. | `context $UDID --expect-bundle com.example.app` during a long-lived cold-launch spinner where `com.example.app` is running but its first frame has not rendered yet. |
 
 ##### Settle-window rationale
 
@@ -351,7 +352,6 @@ it when the default does not fit the scenario:
   `SIMULATOR_CHROME_FOREGROUND` or `FOREGROUND_CONTEXT_UNAVAILABLE` reliably
   instead of racing past it; the populated `warnings` array then names the
   specific failure mode.
-
 Selection contract:
 
 - Enabled for `app_tap_element` / `app_type_element` by default.

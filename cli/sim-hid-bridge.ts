@@ -4,13 +4,21 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import * as fs from 'fs';
 import * as path from 'path';
+import {
+  applyTransitionalPromotion,
+  effectiveSettleMs,
+  normalizeMaxSettleRetries,
+  type ProbeResult,
+  type WrapperProbeFlags,
+} from '../src/tools/sim-hid-bridge-wrapper';
 
 const execFileAsync = promisify(execFile);
 
-interface WrapperFlags {
+interface WrapperFlags extends WrapperProbeFlags {
   expectBundle?: string;
   requireMatch?: boolean;
   settleMs?: number;
+  maxSettleRetries?: number;
 }
 
 function outputJSON(payload: unknown, exitCode = 0): never {
@@ -59,6 +67,12 @@ function parseWrapperFlags(args: string[]): { passthrough: string[]; flags: Wrap
       i += 1;
       continue;
     }
+    if (arg === '--max-settle-retries' && i + 1 < args.length) {
+      const parsed = Number.parseInt(args[i + 1], 10);
+      if (!Number.isNaN(parsed)) flags.maxSettleRetries = normalizeMaxSettleRetries(parsed);
+      i += 1;
+      continue;
+    }
     passthrough.push(arg);
   }
   return { passthrough, flags };
@@ -73,12 +87,8 @@ async function execNative(rawArgs: string[]): Promise<{ stdout: string; stderr: 
   });
 }
 
-async function probeContext(deviceId: string, flags: WrapperFlags): Promise<Record<string, unknown>> {
-  if (flags.settleMs && flags.settleMs > 0) {
-    await new Promise((resolve) => setTimeout(resolve, flags.settleMs));
-  } else {
-    await new Promise((resolve) => setTimeout(resolve, 1200));
-  }
+async function singleProbeContext(deviceId: string, flags: WrapperFlags): Promise<ProbeResult> {
+  await new Promise((resolve) => setTimeout(resolve, effectiveSettleMs(flags)));
 
   const axBridge = resolveAxBridge();
   const args = ['context', '--device', deviceId];
@@ -110,10 +120,15 @@ async function probeContext(deviceId: string, flags: WrapperFlags): Promise<Reco
   }
 }
 
+async function probeContext(deviceId: string, flags: WrapperFlags): Promise<ProbeResult> {
+  const firstResult = await singleProbeContext(deviceId, flags);
+  return applyTransitionalPromotion(firstResult, flags, () => singleProbeContext(deviceId, flags));
+}
+
 async function handleContextCommand(args: string[]): Promise<never> {
   const deviceId = args[1];
   if (!deviceId) {
-    outputJSON({ error: 'Usage: sim-hid-bridge context <udid> [--expect-bundle <bundle>] [--require-match true|false]' , code: 'USAGE' }, 64);
+    outputJSON({ error: 'Usage: sim-hid-bridge context <udid> [--expect-bundle <bundle>] [--require-match true|false] [--settle-ms <ms>] [--max-settle-retries 0|1|2|3]' , code: 'USAGE' }, 64);
   }
   const { flags } = parseWrapperFlags(args.slice(2));
   const context = await probeContext(deviceId, flags);

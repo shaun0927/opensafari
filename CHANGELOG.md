@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **`TRANSITIONAL_STATE_TIMEOUT` classification + `--max-settle-retries` flag for `dist/sim-hid-bridge`** (#46). The wrapper now distinguishes "expected app is running but its UI is still loading" from "no AX data at all": when `--expect-bundle <b>` is supplied and the first settle window returns `FOREGROUND_CONTEXT_UNAVAILABLE` while `<b>` is in `runningApps`, the wrapper performs one bounded re-probe (another `settleMs` window) and promotes to `TRANSITIONAL_STATE_TIMEOUT` if the tree is still empty. The re-probe is capped by `--max-settle-retries <0|1|2|3>` (default `1`); set `0` to restore the pre-issue single-probe behavior byte-for-byte. The surface classifier in `src/tools/raw-mobile-context.ts` stays surface-scoped and never emits the new variant itself — promotion is a wrapper-layer concern.
+
 ## [0.6.0] - 2026-04-20
 
 **OpenSafari 0.6.0 is a *simulator-chrome-regression* release.** It replaces the single-pass immediate-child content-root heuristic in `ax-bridge` with a recursive, deterministic, integer-scored search, closing the silent-empty-content bug that blocked the "Functional success" section of #4 on Xcode 26.4 / iOS 26.4. The raw bridge now refuses to return a chrome-only tree: when no subtree exposes any app-level accessibility semantics, it emits a typed `DEVICE_CONTENT_ROOT_EMPTY` error with exit code 1 instead of silently falling back to the bare `AXWindow`.

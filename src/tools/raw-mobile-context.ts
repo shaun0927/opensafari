@@ -22,7 +22,13 @@ export type RawMobileClassification =
   | 'SIMULATOR_CHROME_FOREGROUND'
   | 'APP_CONTENT_FOREGROUND'
   | 'APP_CONTENT_UNVERIFIED'
-  | 'FOREGROUND_CONTEXT_UNAVAILABLE';
+  | 'FOREGROUND_CONTEXT_UNAVAILABLE'
+  // Emitted only by the sim-hid-bridge wrapper (never by the surface
+  // classifier). Signals that the expected bundle is running but the
+  // foreground AX tree stayed empty across two settle windows — a
+  // long-lived spinner / transitional screen rather than genuinely
+  // unknown foreground state. See cli/sim-hid-bridge.ts.
+  | 'TRANSITIONAL_STATE_TIMEOUT';
 
 export interface RawMobileContextResult {
   deviceId: string;
