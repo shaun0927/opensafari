@@ -76,10 +76,8 @@ const describeLive = shouldRun ? describe : describe.skip;
 
 if (LIVE_ENABLED && !shouldRun && !process.env.CI) {
   if (!hasFlutter) {
-    // eslint-disable-next-line no-console
     console.error('[issue-4-raw-bridge] SKIP: flutter not on PATH');
   } else {
-    // eslint-disable-next-line no-console
     console.error('[issue-4-raw-bridge] SKIP: no booted simulator and FIXTURE_DEVICE_ID/OSF_DEVICE_ID unset');
   }
 }
@@ -114,7 +112,6 @@ describeLive('issue #4 — raw dist/ax-bridge exposes Flutter semantics', () => 
   beforeAll(async () => {
     targetDeviceId = deviceId!;
 
-    // eslint-disable-next-line no-console
     console.error(`[issue-4-raw-bridge] Building and installing fixture on ${targetDeviceId} …`);
     await execFileAsync('/bin/sh', [BUILD_SCRIPT, '--mode', 'release', '--device-id', targetDeviceId, '--install'], {
       timeout: 240_000,
