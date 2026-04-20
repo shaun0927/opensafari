@@ -159,6 +159,14 @@ export function registerAppQueryTool(server: MCPServer): void {
           }
         }
 
+        if (result.total === 0) {
+          console.error(
+            `[app_query] no match for fields=${JSON.stringify({ identifier, label, text, role })}; ` +
+            `searched=identifier|label|value|role; ` +
+            `visibleSummary=${JSON.stringify(queryDiagnostics?.visibleSummary ?? null)}`,
+          );
+        }
+
         if (result.ambiguous) {
           return {
             content: [{

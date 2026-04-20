@@ -263,6 +263,59 @@ describe('Native Accessibility Tools', () => {
       expect(matches[0].path).toContain('Window');
       expect(matches[0].depth).toBeGreaterThan(0);
     });
+
+    test('AXButton lookup stays within the large-tree performance budget', () => {
+      const buttons = Array.from({ length: 4000 }, (_, index) => ({
+        role: 'Button',
+        label: `Button ${index}`,
+        identifier: `button-${index}`,
+        traits: ['ButtonTrait'],
+        frame: { x: 0, y: index, width: 100, height: 44 },
+        isVisible: true,
+        isEnabled: true,
+        children: [],
+      }));
+      const tree: AccessibilityNode = {
+        ...sampleTree,
+        children: [{ ...sampleTree.children[0], children: buttons }],
+      };
+
+      const started = Date.now();
+      const matches = filterTree(tree, {
+        strategy: 'role',
+        value: 'Button',
+      });
+      const elapsedMs = Date.now() - started;
+
+      expect(matches).toHaveLength(4000);
+      expect(elapsedMs).toBeLessThan(250);
+    });
+
+    test('AXStaticText lookup stays within the large-tree performance budget', () => {
+      const texts = Array.from({ length: 4000 }, (_, index) => ({
+        role: 'StaticText',
+        label: `매일 무료 오픈 ${index}`,
+        traits: ['StaticTextTrait'],
+        frame: { x: 0, y: index, width: 200, height: 20 },
+        isVisible: true,
+        isEnabled: true,
+        children: [],
+      }));
+      const tree: AccessibilityNode = {
+        ...sampleTree,
+        children: [{ ...sampleTree.children[0], children: texts }],
+      };
+
+      const started = Date.now();
+      const matches = filterTree(tree, {
+        strategy: 'text',
+        value: '매일 무료 오픈',
+      });
+      const elapsedMs = Date.now() - started;
+
+      expect(matches).toHaveLength(4000);
+      expect(elapsedMs).toBeLessThan(250);
+    });
   });
 
   describe('evaluatePredicate', () => {

@@ -8,6 +8,7 @@
 
 import { MCPServer } from '../mcp-server';
 import { getAccessibilityBridge, ensureSemanticsActive } from '../native';
+import type { AXNode } from '../native';
 import { getSessionManager } from '../session-manager';
 import {
   activateAndClassify,
@@ -184,6 +185,9 @@ export function registerAppAssertElementTool(server: MCPServer): void {
           actual,
           expected: condition === 'has_text' ? expectedText : condition,
           message: message ?? `Assert ${condition} for element`,
+          debug: !passed && match === null
+            ? await collectNoMatchDebug(bridge, deviceId, query)
+            : undefined,
           _meta: { context: meta },
           element: match ? {
             role: match.role,
@@ -195,6 +199,13 @@ export function registerAppAssertElementTool(server: MCPServer): void {
             enabled: match.enabled,
           } : null,
         };
+
+        if (!passed && match === null) {
+          console.error(
+            `[app_assert_element] no match for fields=${JSON.stringify(query)}; ` +
+            `searched=identifier|label|value|role; candidates=${JSON.stringify(assertResult.debug?.candidates ?? [])}`,
+          );
+        }
 
         return {
           content: [{
@@ -213,4 +224,50 @@ export function registerAppAssertElementTool(server: MCPServer): void {
       }
     },
   );
+}
+
+async function collectNoMatchDebug(
+  bridge: ReturnType<typeof getAccessibilityBridge>,
+  deviceId: string,
+  query: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  try {
+    const tree = await bridge.dumpTree({ deviceId, maxDepth: 6 });
+    const candidates = collectCandidateStrings(tree).slice(0, 10);
+    return {
+      searchedFields: ['identifier', 'label', 'value', 'role'],
+      normalizedQuery: Object.fromEntries(
+        Object.entries(query)
+          .filter(([, value]) => typeof value === 'string' && value.trim().length > 0)
+          .map(([key, value]) => [key, normalizeCandidate(value as string)]),
+      ),
+      candidates,
+    };
+  } catch (error) {
+    return {
+      searchedFields: ['identifier', 'label', 'value', 'role'],
+      debugError: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+function collectCandidateStrings(node: AXNode): string[] {
+  const values = new Set<string>();
+  const stack = [node];
+  while (stack.length > 0) {
+    const current = stack.pop()!;
+    for (const raw of [current.identifier, current.label, current.value]) {
+      if (!raw) continue;
+      const normalized = normalizeCandidate(raw);
+      if (normalized) values.add(normalized);
+    }
+    for (const child of current.children ?? []) {
+      stack.push(child);
+    }
+  }
+  return [...values];
+}
+
+function normalizeCandidate(value: string): string {
+  return value.replace(/\s+/g, ' ').trim();
 }
