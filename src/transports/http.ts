@@ -24,6 +24,10 @@ interface SSEConnection {
   sessionId: string;
 }
 
+function logTransportEvent(event: string, details: Record<string, unknown>): void {
+  console.error(`[HTTPTransport] ${JSON.stringify({ event, ...details })}`);
+}
+
 export class HTTPTransport implements MCPTransport {
   private server: http.Server | null = null;
   private messageHandler: ((msg: Record<string, unknown>) => Promise<MCPResponse | null>) | null = null;
@@ -69,14 +73,17 @@ export class HTTPTransport implements MCPTransport {
     });
 
     this.server.on('clientError', (err, socket) => {
-      console.error('[HTTPTransport] Client error:', err);
+      logTransportEvent('client_error', {
+        port: this.port,
+        message: err.message,
+      });
       if (socket.writable) {
         socket.end('HTTP/1.1 400 Bad Request\r\n\r\n');
       }
     });
 
     this.server.on('close', () => {
-      console.error(`[HTTPTransport] Server closed (port ${this.port})`);
+      logTransportEvent('server_closed', { port: this.port });
     });
 
     await new Promise<void>((resolve, reject) => {
@@ -87,7 +94,11 @@ export class HTTPTransport implements MCPTransport {
 
       const onListening = () => {
         this.server!.removeListener('error', startupError);
-        this.server!.on('error', (err) => console.error('[HTTPTransport] Server error:', err));
+        this.server!.on('error', (err) =>
+          logTransportEvent('server_error', {
+            port: this.port,
+            message: err.message,
+          }));
         console.error(`[HTTPTransport] Listening on port ${this.port}`);
         console.error(`[HTTPTransport] MCP endpoint: http://localhost:${this.port}/mcp`);
         resolve();
@@ -307,7 +318,10 @@ export class HTTPTransport implements MCPTransport {
     });
 
     req.on('error', (err) => {
-      console.error('[HTTPTransport] Request read error:', err);
+      logTransportEvent('request_read_error', {
+        port: this.port,
+        message: err.message,
+      });
       if (!res.headersSent) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({

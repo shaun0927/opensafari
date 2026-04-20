@@ -224,6 +224,17 @@ element-scoped also cleanly preserves `app_tap({x, y})`'s contract:
 coordinate-only callers continue down the existing Tier 0 → 1 → 2 → 3
 → 4 chain.
 
+Raw-bridge consumers can now query the same foreground diagnostics without
+going through MCP:
+
+- `dist/ax-bridge context --device <udid> [--expect-bundle <bundle>]`
+- `dist/sim-hid-bridge context <udid> [--expect-bundle <bundle>]`
+- `dist/sim-hid-bridge tap|swipe ... --expect-bundle <bundle> [--require-match true]`
+
+The raw SimHID wrapper appends post-input `classification`, `verified`,
+`frontmost`, and `expectedBundleMatched` fields so downstream QA can separate a
+clean in-app dispatch from simulator-chrome or SpringBoard outcomes.
+
 Selection contract:
 
 - Enabled for `app_tap_element` / `app_type_element` by default.
@@ -246,7 +257,11 @@ Selection contract:
 Response shape includes `_meta.backendKind === 'ax-press'`,
 `_meta.headless === true`, and `_meta.axActions` listing every action the
 element advertised — useful for diagnosing why a press landed where it
-did.
+did. When `ax-press` cannot prove a post-action effect and the tool falls back
+to a coordinate backend, `app_tap_element` now preserves the same verified
+interaction contract as `app_tap`: transport-only success is downgraded to
+`verified: false` / `effect: "verification_unavailable"` or surfaced as
+`TAP_NO_EFFECT` when the UI fingerprint stays unchanged after the tap.
 
 Status: **Production** (Tier 1.5). Shipped in
 [#552](https://github.com/shaun0927/opensafari/issues/552). This is the

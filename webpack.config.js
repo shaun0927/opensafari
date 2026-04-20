@@ -86,4 +86,33 @@ module.exports = [
       }),
     ],
   },
+  // Raw sim-hid-bridge wrapper CLI
+  {
+    name: 'sim-hid-bridge-cli',
+    entry: './cli/sim-hid-bridge.ts',
+    target: 'node',
+    mode: 'production',
+    devtool: 'source-map',
+    output: {
+      filename: 'sim-hid-bridge',
+      path: path.resolve(__dirname, 'dist'),
+    },
+    resolve: {
+      extensions: ['.ts', '.js'],
+    },
+    module: {
+      rules: [{
+        test: /\.ts$/,
+        use: { loader: 'ts-loader', options: { configFile: 'tsconfig.cli.json' } },
+        exclude: /node_modules/,
+      }],
+    },
+    externals: [nodeExternals()],
+    plugins: [
+      new webpack.BannerPlugin({ banner: '#!/usr/bin/env node', raw: true }),
+      new webpack.DefinePlugin({
+        '__OPENSAFARI_VERSION__': JSON.stringify(require('./package.json').version),
+      }),
+    ],
+  },
 ];

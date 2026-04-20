@@ -46,6 +46,7 @@ jest.mock('../../src/native/accessibility-bridge', () => ({
 jest.mock('../../src/native/semantics-activator', () => ({
   ensureSemanticsActive: jest.fn().mockResolvedValue(true),
   countNodes: jest.fn().mockReturnValue(10),
+  isLikelyChromeOnlyTree: jest.fn().mockReturnValue(false),
 }));
 
 jest.mock('../../src/tools/native-input-backend', () => ({
@@ -608,8 +609,11 @@ describe('app_tap_element — Tier 1.5 AX press', () => {
     const result = await handler('session', { label: 'Login', timeout: 0 });
     const body = JSON.parse(result.content[0].text);
 
-    expect(result.isError).toBeUndefined();
+    expect(result.isError).toBe(true);
+    expect(body.error).toBe('TAP_NO_EFFECT');
     expect(body.backend).toBe('simctl');
+    expect(body.verified).toBe(false);
+    expect(body.effect).toBe('no_observable_change');
     expect(mockTap).toHaveBeenCalledTimes(1);
   });
 
@@ -798,9 +802,12 @@ describe('app_tap_element — Tier 1.5 AX press', () => {
     const result = await handler('session', { label: 'Login', timeout: 0 });
     const body = JSON.parse(result.content[0].text);
 
-    expect(result.isError).toBeUndefined();
+    expect(result.isError).toBe(true);
+    expect(body.error).toBe('TAP_NO_EFFECT');
     // Must have fallen back to the coordinate tap, not returned ax-press.
     expect(body.backend).toBe('simctl');
+    expect(body.verified).toBe(false);
+    expect(body.effect).toBe('no_observable_change');
     expect(mockTap).toHaveBeenCalledTimes(1);
   });
 
@@ -909,8 +916,11 @@ describe('app_tap_element — Tier 1.5 AX press', () => {
     const result = await handler('session', { label: 'Login', timeout: 0 });
     const body = JSON.parse(result.content[0].text);
 
-    expect(result.isError).toBeUndefined();
+    expect(result.isError).toBe(true);
+    expect(body.error).toBe('TAP_NO_EFFECT');
     expect(body.backend).toBe('simctl');
+    expect(body.verified).toBe(false);
+    expect(body.effect).toBe('no_observable_change');
     expect(mockTap).toHaveBeenCalledTimes(1);
     expect(warnSpy).toHaveBeenCalledWith(
       expect.stringMatching(/post-press AX tree dump failed/),

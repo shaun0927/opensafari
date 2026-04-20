@@ -10,7 +10,7 @@ import { MCPServer, getWebKitClient } from '../mcp-server';
 import { getAccessibilityBridge } from '../native/accessibility-bridge';
 import { ensureSemanticsActive, countNodes } from '../native/semantics-activator';
 import type { AXNode } from '../native/ax-types';
-import { walkTree, fingerprintTree } from '../native/ax-verification';
+import { fingerprintTree } from '../native/ax-verification';
 import { resolveDeviceId, getInputBackend, runInputOp } from './native-input-utils';
 import { probeMobileContext } from './app-context';
 import { SimulatorManager } from '../simulator';

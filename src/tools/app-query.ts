@@ -93,17 +93,77 @@ export function registerAppQueryTool(server: MCPServer): void {
           await ensureSemanticsActive(deviceId, { bundleId });
         }
 
-        const result = await bridge.query(
+        let result = await bridge.query(
           { identifier, label, text, role },
           { deviceId, maxResults },
         );
+        let queryRecovery:
+          | {
+            retriedAfterForceRefresh: boolean;
+            recovered: boolean;
+            matchStrategy?: 'native' | 'relaxed-tree-scan';
+          }
+          | undefined;
+        let queryDiagnostics:
+          | {
+            nodeCount: number;
+            visibleSummary: {
+              buttonLabels: string[];
+              staticTexts: string[];
+              textFieldLabels: string[];
+            };
+          }
+          | undefined;
 
-        let debug: Record<string, unknown> | undefined;
         if (result.total === 0) {
-          debug = await collectNoMatchDebug(bridge, deviceId, { identifier, label, text, role });
+          await ensureSemanticsActive(deviceId, {
+            bundleId,
+            forceRefresh: true,
+          });
+          result = await bridge.query(
+            { identifier, label, text, role },
+            { deviceId, maxResults },
+          );
+          queryRecovery = {
+            retriedAfterForceRefresh: true,
+            recovered: result.total > 0,
+            matchStrategy: result.total > 0 ? 'native' : undefined,
+          };
+
+          if (result.total === 0) {
+            try {
+              const tree = await bridge.dumpTree({ deviceId, maxDepth: 8 });
+              const relaxedMatches = findRelaxedMatches(
+                tree,
+                { identifier, label, text, role },
+                maxResults ?? 50,
+              );
+              if (relaxedMatches.length > 0) {
+                result = {
+                  matches: relaxedMatches,
+                  total: relaxedMatches.length,
+                  query: { identifier, label, text, role },
+                  ambiguous: Boolean(identifier) && relaxedMatches.length > 1,
+                };
+                queryRecovery = {
+                  retriedAfterForceRefresh: true,
+                  recovered: true,
+                  matchStrategy: 'relaxed-tree-scan',
+                };
+              }
+              queryDiagnostics = buildQueryDiagnostics(tree);
+            } catch {
+              // Diagnostics are best-effort. If tree dumping fails we still
+              // return the query response without an additional fatal error.
+            }
+          }
+        }
+
+        if (result.total === 0) {
           console.error(
             `[app_query] no match for fields=${JSON.stringify({ identifier, label, text, role })}; ` +
-            `searched=identifier|label|value|role; candidates=${JSON.stringify(debug.candidates)}`,
+            `searched=identifier|label|value|role; ` +
+            `visibleSummary=${JSON.stringify(queryDiagnostics?.visibleSummary ?? null)}`,
           );
         }
 
@@ -113,8 +173,11 @@ export function registerAppQueryTool(server: MCPServer): void {
               type: 'text' as const,
               text: JSON.stringify({
                 warning: `Ambiguous query: identifier "${identifier}" matched ${result.total} elements. Use a more specific query or inspect individual paths.`,
-                _meta: { context: meta },
-                debug,
+                _meta: {
+                  context: meta,
+                  queryRecovery,
+                  queryDiagnostics,
+                },
                 ...result,
               }, null, 2),
             }],
@@ -126,8 +189,11 @@ export function registerAppQueryTool(server: MCPServer): void {
             type: 'text' as const,
             text: JSON.stringify({
               ...result,
-              debug,
-              _meta: { context: meta },
+              _meta: {
+                context: meta,
+                queryRecovery,
+                queryDiagnostics,
+              },
             }, null, 2),
           }],
         };
@@ -144,48 +210,161 @@ export function registerAppQueryTool(server: MCPServer): void {
   );
 }
 
-async function collectNoMatchDebug(
-  bridge: ReturnType<typeof getAccessibilityBridge>,
-  deviceId: string | undefined,
-  query: Record<string, unknown>,
-): Promise<Record<string, unknown>> {
-  try {
-    const tree = await bridge.dumpTree({ deviceId, maxDepth: 6 });
-    const candidates = collectCandidateStrings(tree).slice(0, 10);
-    return {
-      searchedFields: ['identifier', 'label', 'value', 'role'],
-      normalizedQuery: Object.fromEntries(
-        Object.entries(query)
-          .filter(([, value]) => typeof value === 'string' && value.trim().length > 0)
-          .map(([key, value]) => [key, normalizeCandidate(value as string)]),
-      ),
-      candidates,
-    };
-  } catch (error) {
-    return {
-      searchedFields: ['identifier', 'label', 'value', 'role'],
-      debugError: error instanceof Error ? error.message : String(error),
-    };
-  }
-}
+function buildQueryDiagnostics(tree: AXNode): {
+  nodeCount: number;
+  visibleSummary: {
+    buttonLabels: string[];
+    staticTexts: string[];
+    textFieldLabels: string[];
+  };
+} {
+  const buttons = new Set<string>();
+  const texts = new Set<string>();
+  const textFields = new Set<string>();
 
-function collectCandidateStrings(node: AXNode): string[] {
-  const values = new Set<string>();
-  const stack = [node];
+  const stack: AXNode[] = [tree];
+  let nodeCount = 0;
   while (stack.length > 0) {
-    const current = stack.pop()!;
-    for (const raw of [current.identifier, current.label, current.value]) {
-      if (!raw) continue;
-      const normalized = normalizeCandidate(raw);
-      if (normalized) values.add(normalized);
+    const node = stack.pop()!;
+    nodeCount += 1;
+    if (node.visible !== false) {
+      if (/AXButton/.test(node.role) && node.label) {
+        buttons.add(node.label);
+      }
+      if (/AX(TextField|SecureTextField|TextArea)/.test(node.role)) {
+        if (node.label) textFields.add(node.label);
+        if (node.value) textFields.add(node.value);
+      }
+      if (/AXStaticText/.test(node.role)) {
+        if (node.label) texts.add(node.label);
+        if (node.value) texts.add(node.value);
+      }
     }
-    for (const child of current.children ?? []) {
+    for (const child of node.children ?? []) {
       stack.push(child);
     }
   }
-  return [...values];
+
+  return {
+    nodeCount,
+    visibleSummary: {
+      buttonLabels: [...buttons].slice(0, 8),
+      staticTexts: [...texts].slice(0, 8),
+      textFieldLabels: [...textFields].slice(0, 8),
+    },
+  };
 }
 
-function normalizeCandidate(value: string): string {
-  return value.replace(/\s+/g, ' ').trim();
+function findRelaxedMatches(
+  tree: AXNode,
+  query: {
+    identifier?: string;
+    label?: string;
+    text?: string;
+    role?: string;
+  },
+  maxResults: number,
+): AXNode[] {
+  const scored: Array<{ node: AXNode; score: number; direct: boolean }> = [];
+
+  function visit(node: AXNode): {
+    subtreeText: string[];
+    matchedNodes: number;
+  } {
+    let subtreeText = collectNodeSearchText(node);
+    let matchedNodes = 0;
+    let descendantMatched = false;
+
+    for (const child of node.children ?? []) {
+      const childResult = visit(child);
+      subtreeText = subtreeText.concat(childResult.subtreeText);
+      matchedNodes += childResult.matchedNodes;
+      descendantMatched = descendantMatched || childResult.matchedNodes > 0;
+    }
+
+    const direct = nodeMatchesRelaxedQuery(node, query, subtreeText);
+    if (direct && !descendantMatched && node.visible !== false) {
+      const score = scoreRelaxedMatch(node, subtreeText);
+      scored.push({ node: flattenNode(node), score, direct });
+      matchedNodes += 1;
+    }
+
+    return { subtreeText, matchedNodes };
+  }
+
+  visit(tree);
+
+  return scored
+    .sort((a, b) => b.score - a.score)
+    .slice(0, maxResults)
+    .map((entry) => entry.node);
+}
+
+function nodeMatchesRelaxedQuery(
+  node: AXNode,
+  query: {
+    identifier?: string;
+    label?: string;
+    text?: string;
+    role?: string;
+  },
+  subtreeText: string[],
+): boolean {
+  if (query.identifier && node.identifier !== query.identifier) {
+    return false;
+  }
+  if (query.role && node.role !== query.role && node.role !== `AX${query.role}`) {
+    return false;
+  }
+  if (query.label) {
+    const labelNeedle = normalizeQueryText(query.label);
+    if (!subtreeText.some((value) => normalizeQueryText(value).includes(labelNeedle))) {
+      return false;
+    }
+  }
+  if (query.text) {
+    const textNeedle = normalizeQueryText(query.text);
+    if (!subtreeText.some((value) => normalizeQueryText(value).includes(textNeedle))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function collectNodeSearchText(node: AXNode): string[] {
+  return [node.label, node.value, node.identifier].filter(
+    (value): value is string => Boolean(value && value.trim().length > 0),
+  );
+}
+
+function normalizeQueryText(value: string): string {
+  return value
+    .normalize('NFKC')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLocaleLowerCase();
+}
+
+function scoreRelaxedMatch(node: AXNode, subtreeText: string[]): number {
+  const ownTextCount = collectNodeSearchText(node).length;
+  const descendantTextCount = Math.max(0, subtreeText.length - ownTextCount);
+  let score = 0;
+
+  if (node.identifier) score += 6;
+  if (node.label) score += 4;
+  if (/AX(TextField|SecureTextField|TextArea)/.test(node.role)) score += 5;
+  if (/AXButton/.test(node.role)) score += 4;
+  if (/AXStaticText/.test(node.role)) score += 3;
+  if (node.enabled) score += 1;
+  if (node.focused) score += 1;
+  score -= descendantTextCount;
+
+  return score;
+}
+
+function flattenNode(node: AXNode): AXNode {
+  return {
+    ...node,
+    children: undefined,
+  };
 }
