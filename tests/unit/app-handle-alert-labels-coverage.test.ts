@@ -215,11 +215,15 @@ describe('app-handle-alert-labels.generated.json coverage (#67)', () => {
             strict: true,
           }),
           scriptPath,
+          '--runtime',
+          runtimePath!,
         ],
         {
           encoding: 'utf8',
           maxBuffer: 32 * 1024 * 1024,
-          env: { ...process.env },
+          // Pin the runtime the suite resolved so the subprocess cannot
+          // drift to a different simruntime if multiple are installed.
+          env: { ...process.env, OPENSAFARI_SIMRUNTIME: runtimePath! },
         },
       );
       return out;

@@ -178,10 +178,13 @@ function resolveRuntime(explicit?: string): ResolvedRuntime {
     candidates.push(process.env.OPENSAFARI_SIMRUNTIME);
   }
   // Default search: standalone CoreSimulator volume first (newer installs).
+  // Sort volume names before evaluating so the result is deterministic
+  // across machines where fs.readdirSync returns entries in filesystem order.
   try {
     const volRoot = '/Library/Developer/CoreSimulator/Volumes';
     if (fs.existsSync(volRoot)) {
-      for (const vol of fs.readdirSync(volRoot)) {
+      const volumes = fs.readdirSync(volRoot).slice().sort();
+      for (const vol of volumes) {
         const p = path.join(
           volRoot,
           vol,
