@@ -33,6 +33,7 @@
     "test:ci": "jest --config jest.ci.config.js",
     "test:sentinel": "jest --config jest.sentinel.config.js",
     "test:coverage": "jest --coverage",
+    "verify:issue-10-healthy": "ts-node --transpile-only --skip-project -O '{\"module\":\"commonjs\",\"moduleResolution\":\"node\",\"target\":\"ES2022\",\"esModuleInterop\":true,\"strict\":true}' scripts/verify-issue-10-healthy.ts",
     "lint": "eslint 'src/**/*.ts' 'cli/**/*.ts' 'tests/**/*.ts'",
     "lint:fix": "eslint --fix 'src/**/*.ts' 'cli/**/*.ts' 'tests/**/*.ts'",
     "prepare": "npm run build",
