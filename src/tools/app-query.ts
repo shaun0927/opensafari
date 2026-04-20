@@ -1,5 +1,6 @@
 import { MCPServer } from '../mcp-server';
 import { getAccessibilityBridge, ensureSemanticsActive } from '../native';
+import type { AXNode } from '../native';
 import { getSessionManager } from '../session-manager';
 import {
   activateAndClassify,
@@ -92,10 +93,51 @@ export function registerAppQueryTool(server: MCPServer): void {
           await ensureSemanticsActive(deviceId, { bundleId });
         }
 
-        const result = await bridge.query(
+        let result = await bridge.query(
           { identifier, label, text, role },
           { deviceId, maxResults },
         );
+        let queryRecovery:
+          | {
+            retriedAfterForceRefresh: boolean;
+            recovered: boolean;
+          }
+          | undefined;
+        let queryDiagnostics:
+          | {
+            nodeCount: number;
+            visibleSummary: {
+              buttonLabels: string[];
+              staticTexts: string[];
+              textFieldLabels: string[];
+            };
+          }
+          | undefined;
+
+        if (result.total === 0) {
+          await ensureSemanticsActive(deviceId, {
+            bundleId,
+            forceRefresh: true,
+          });
+          result = await bridge.query(
+            { identifier, label, text, role },
+            { deviceId, maxResults },
+          );
+          queryRecovery = {
+            retriedAfterForceRefresh: true,
+            recovered: result.total > 0,
+          };
+
+          if (result.total === 0) {
+            try {
+              const tree = await bridge.dumpTree({ deviceId, maxDepth: 8 });
+              queryDiagnostics = buildQueryDiagnostics(tree);
+            } catch {
+              // Diagnostics are best-effort. If tree dumping fails we still
+              // return the query response without an additional fatal error.
+            }
+          }
+        }
 
         if (result.ambiguous) {
           return {
@@ -103,7 +145,11 @@ export function registerAppQueryTool(server: MCPServer): void {
               type: 'text' as const,
               text: JSON.stringify({
                 warning: `Ambiguous query: identifier "${identifier}" matched ${result.total} elements. Use a more specific query or inspect individual paths.`,
-                _meta: { context: meta },
+                _meta: {
+                  context: meta,
+                  queryRecovery,
+                  queryDiagnostics,
+                },
                 ...result,
               }, null, 2),
             }],
@@ -115,7 +161,11 @@ export function registerAppQueryTool(server: MCPServer): void {
             type: 'text' as const,
             text: JSON.stringify({
               ...result,
-              _meta: { context: meta },
+              _meta: {
+                context: meta,
+                queryRecovery,
+                queryDiagnostics,
+              },
             }, null, 2),
           }],
         };
@@ -130,4 +180,49 @@ export function registerAppQueryTool(server: MCPServer): void {
       }
     },
   );
+}
+
+function buildQueryDiagnostics(tree: AXNode): {
+  nodeCount: number;
+  visibleSummary: {
+    buttonLabels: string[];
+    staticTexts: string[];
+    textFieldLabels: string[];
+  };
+} {
+  const buttons = new Set<string>();
+  const texts = new Set<string>();
+  const textFields = new Set<string>();
+
+  const stack: AXNode[] = [tree];
+  let nodeCount = 0;
+  while (stack.length > 0) {
+    const node = stack.pop()!;
+    nodeCount += 1;
+    if (node.visible !== false) {
+      if (/AXButton/.test(node.role) && node.label) {
+        buttons.add(node.label);
+      }
+      if (/AX(TextField|SecureTextField|TextArea)/.test(node.role)) {
+        if (node.label) textFields.add(node.label);
+        if (node.value) textFields.add(node.value);
+      }
+      if (/AXStaticText/.test(node.role)) {
+        if (node.label) texts.add(node.label);
+        if (node.value) texts.add(node.value);
+      }
+    }
+    for (const child of node.children ?? []) {
+      stack.push(child);
+    }
+  }
+
+  return {
+    nodeCount,
+    visibleSummary: {
+      buttonLabels: [...buttons].slice(0, 8),
+      staticTexts: [...texts].slice(0, 8),
+      textFieldLabels: [...textFields].slice(0, 8),
+    },
+  };
 }

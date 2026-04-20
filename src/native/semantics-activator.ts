@@ -34,6 +34,12 @@ export interface EnsureSemanticsOptions {
   timeout?: number;
   /** Minimum node count that signals an active tree (default 5). */
   minNodes?: number;
+  /**
+   * Force a fresh activation attempt even when the existing tree already looks
+   * populated. Useful after route transitions/direct-route launches where the
+   * tree can still be stale-but-populated from a previous screen.
+   */
+  forceRefresh?: boolean;
   /** Bundle ID of the target app — helps Dart VM Service discovery. */
   bundleId?: string;
   /**
@@ -134,12 +140,13 @@ export async function ensureSemanticsActive(
 ): Promise<boolean> {
   const timeout = options?.timeout ?? DEFAULT_TIMEOUT_MS;
   const minNodes = options?.minNodes ?? MIN_NODE_THRESHOLD;
+  const forceRefresh = options?.forceRefresh ?? false;
   const useVMServiceFallback = options?.useVMServiceFallback ?? true;
   const bridge = getAccessibilityBridge();
   const deadline = Date.now() + timeout;
 
   // A. Quick check — tree already populated?
-  if (await treeIsPopulated(bridge, deviceId, minNodes)) {
+  if (!forceRefresh && await treeIsPopulated(bridge, deviceId, minNodes)) {
     return true;
   }
 

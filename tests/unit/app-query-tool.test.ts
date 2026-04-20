@@ -1,6 +1,10 @@
 import { MCPServer } from '../../src/mcp-server';
 import { registerAppQueryTool } from '../../src/tools/app-query';
-import { AccessibilityBridge, getAccessibilityBridge } from '../../src/native';
+import {
+  AccessibilityBridge,
+  ensureSemanticsActive,
+  getAccessibilityBridge,
+} from '../../src/native';
 
 jest.mock('../../src/native');
 jest.mock('../../src/session-manager', () => ({
@@ -11,6 +15,7 @@ jest.mock('../../src/session-manager', () => ({
 
 const MockBridge = AccessibilityBridge as jest.MockedClass<typeof AccessibilityBridge>;
 const mockGetBridge = getAccessibilityBridge as jest.MockedFunction<typeof getAccessibilityBridge>;
+const mockEnsureSemanticsActive = ensureSemanticsActive as jest.MockedFunction<typeof ensureSemanticsActive>;
 
 describe('app_query tool', () => {
   let server: MCPServer;
@@ -18,6 +23,7 @@ describe('app_query tool', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    mockEnsureSemanticsActive.mockResolvedValue(true);
     server = {
       registerTool: jest.fn((_def, h) => { handler = h; }),
     } as unknown as MCPServer;
@@ -89,5 +95,94 @@ describe('app_query tool', () => {
     const parsed = JSON.parse(result.content[0].text!);
     expect(parsed.warning).toContain('Ambiguous');
     expect(parsed.total).toBe(2);
+  });
+
+  it('force-refreshes semantics and retries the query after an initial zero-match result', async () => {
+    const queryMock = jest.fn()
+      .mockResolvedValueOnce({
+        matches: [],
+        total: 0,
+        query: { label: 'Email address field' },
+        ambiguous: false,
+      })
+      .mockResolvedValueOnce({
+        matches: [{ role: 'AXTextField', label: 'Email address field', path: '0/1' }],
+        total: 1,
+        query: { label: 'Email address field' },
+        ambiguous: false,
+      });
+    MockBridge.prototype.query = queryMock;
+    mockGetBridge.mockReturnValue(new MockBridge());
+
+    const result = await handler('session-1', { label: 'Email address field' });
+
+    expect(queryMock).toHaveBeenCalledTimes(2);
+    expect(mockEnsureSemanticsActive).toHaveBeenNthCalledWith(1, 'mock-device-id', {
+      bundleId: undefined,
+    });
+    expect(mockEnsureSemanticsActive).toHaveBeenNthCalledWith(2, 'mock-device-id', {
+      bundleId: undefined,
+      forceRefresh: true,
+    });
+
+    const parsed = JSON.parse(result.content[0].text!);
+    expect(parsed.total).toBe(1);
+    expect(parsed._meta.queryRecovery).toEqual({
+      retriedAfterForceRefresh: true,
+      recovered: true,
+    });
+  });
+
+  it('includes visible-tree diagnostics when force-refresh still yields zero matches', async () => {
+    MockBridge.prototype.query = jest.fn().mockResolvedValue({
+      matches: [],
+      total: 0,
+      query: { label: 'Send verification code' },
+      ambiguous: false,
+    });
+    MockBridge.prototype.dumpTree = jest.fn().mockResolvedValue({
+      role: 'AXGroup',
+      path: '',
+      visible: true,
+      enabled: true,
+      focused: false,
+      traits: [],
+      frame: { x: 0, y: 0, width: 390, height: 844 },
+      children: [
+        {
+          role: 'AXStaticText',
+          label: 'Create Account',
+          path: '0',
+          visible: true,
+          enabled: true,
+          focused: false,
+          traits: ['text'],
+          frame: { x: 0, y: 0, width: 100, height: 20 },
+        },
+        {
+          role: 'AXButton',
+          label: 'Send code',
+          path: '1',
+          visible: true,
+          enabled: true,
+          focused: false,
+          traits: ['button'],
+          frame: { x: 0, y: 30, width: 100, height: 20 },
+        },
+      ],
+    });
+    mockGetBridge.mockReturnValue(new MockBridge());
+
+    const result = await handler('session-1', { label: 'Send verification code' });
+    const parsed = JSON.parse(result.content[0].text!);
+
+    expect(parsed.total).toBe(0);
+    expect(parsed._meta.queryRecovery).toEqual({
+      retriedAfterForceRefresh: true,
+      recovered: false,
+    });
+    expect(parsed._meta.queryDiagnostics.nodeCount).toBeGreaterThan(0);
+    expect(parsed._meta.queryDiagnostics.visibleSummary.staticTexts).toContain('Create Account');
+    expect(parsed._meta.queryDiagnostics.visibleSummary.buttonLabels).toContain('Send code');
   });
 });
