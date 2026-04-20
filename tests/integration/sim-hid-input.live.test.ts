@@ -68,6 +68,13 @@ const MAPS_BUNDLE = 'com.apple.Maps';
 const FLUTTER_BUNDLE = process.env.OSF_FLUTTER_BUNDLE_ID ?? 'com.example.osftest';
 const SIMHID_SMOKE = process.env.OPENSAFARI_SIMHID_SMOKE === '1';
 
+// Gate for tests previously skipped pending Tier-1 simhid tap routing restoration
+// (see issues #4, #34, #47). Set `OPENSAFARI_TIER1_SIMHID_RESTORED=1` when
+// running against a simulator build where simhid tap/swipe dispatch is
+// reliable; otherwise these blocks stay skipped to avoid red CI.
+const TIER1_SIMHID_RESTORED = process.env.OPENSAFARI_TIER1_SIMHID_RESTORED === '1';
+const describeIfTier1SimhidRestored = TIER1_SIMHID_RESTORED ? describe : describe.skip;
+
 const SETTINGS_GENERAL = process.env.SETTINGS_GENERAL ?? '일반';
 const SETTINGS_ABOUT = process.env.SETTINGS_ABOUT ?? '정보';
 const SETTINGS_WIFI = process.env.SETTINGS_WIFI ?? 'Wi-Fi';
@@ -388,13 +395,12 @@ describePerformance('SimulatorKitHIDInputBackend — performance', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Settings.app automation scenarios — skipped until the Swift bridge migrates
-// off `IndigoHIDMessageForMouseNSEvent`. See #491 comment and PR #537 for the
-// device-lock root cause. When Tier-1 tap routing is restored flip this to
-// `describe(...)` and the seven scenarios below should go green.
-// TODO(#491): re-enable once sim-hid-bridge mouse-event path is rewritten.
+// Settings.app automation scenarios — gated behind OPENSAFARI_TIER1_SIMHID_RESTORED.
+// Tap dispatch via `IndigoHIDMessageForMouseNSEvent` is disabled until the
+// upstream bridge bug tracked in #4 / #34 is resolved (see #47 for context).
+// Set the env var to '1' once Tier-1 simhid tap routing is confirmed reliable.
 // ─────────────────────────────────────────────────────────────────────────────
-describe.skip('SimulatorKitHIDInputBackend — Settings.app automation', () => {
+describeIfTier1SimhidRestored('SimulatorKitHIDInputBackend — Settings.app automation', () => {
   beforeEach(async () => {
     await relaunchSettings();
   });
@@ -472,13 +478,12 @@ describe.skip('SimulatorKitHIDInputBackend — Settings.app automation', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Cross-app compatibility — skipped alongside the Settings.app automation
-// block because the assertion (`backend.kind === 'simhid'`) is invalidated by
-// PR #537. It will be re-enabled together with the Settings.app automation
-// when Tier-1 tap routing is restored.
-// TODO(#491): re-enable once sim-hid-bridge mouse-event path is rewritten.
+// Cross-app compatibility — gated behind OPENSAFARI_TIER1_SIMHID_RESTORED alongside
+// the Settings.app automation block. The `backend.kind === 'simhid'` assertion
+// is only valid once Tier-1 tap routing is restored (see #4, #34, #47).
+// Set the env var to '1' to run these assertions against a fixed simulator build.
 // ─────────────────────────────────────────────────────────────────────────────
-describe.skip('SimulatorKitHIDInputBackend — cross-app backend consistency', () => {
+describeIfTier1SimhidRestored('SimulatorKitHIDInputBackend — cross-app backend consistency', () => {
   test.each([
     ['Settings', SETTINGS_BUNDLE],
     ['Photos', PHOTOS_BUNDLE],
