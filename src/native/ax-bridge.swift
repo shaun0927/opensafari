@@ -390,24 +390,211 @@ func findMatchingWindow(_ app: AXUIElement, requested: String, target: Simulator
     return (best.window, nil)
 }
 
-/// Navigate AX tree to find the device content area inside a matched window.
-/// Traverses: matched Simulator window → likely device frame → content.
-func findDeviceContentInWindow(_ window: AXUIElement) -> (element: AXUIElement, originX: Double, originY: Double)? {
-    let pos = getPosition(window) ?? (0, 0)
-    let children = getChildren(window)
+// MARK: - Device Content Root Search
 
-    for child in children {
-        let childRole = getStringAttr(child, kAXRoleAttribute as String) ?? ""
-        if childRole == "AXGroup" || childRole == "AXScrollArea" {
-            let childPos = getPosition(child) ?? pos
-            let grandchildren = getChildren(child)
-            if !grandchildren.isEmpty {
-                return (child, childPos.0, childPos.1)
+/// Exact case-sensitive labels that belong to the Simulator chrome — buttons
+/// in the title bar, toolbar, and menu bar. Any node whose `AXLabel` matches
+/// is rejected so a chrome-only shape cannot score as a content-root
+/// candidate.
+let SimulatorChromeDenylistExact: Set<String> = [
+    "Action", "Home", "Save Screen", "Rotate",
+    "Volume Up", "Volume Down", "Sleep/Wake",
+    "AXCloseButton", "AXFullScreenButton", "AXMinimizeButton"
+]
+
+/// Matches the simulator window title shape
+/// ("iPhone 16 Verify 77-80 – iOS 26.4"). The separator is a literal em
+/// dash, not an ASCII hyphen — that is what Simulator emits.
+func isSimulatorWindowTitleLabel(_ label: String) -> Bool {
+    return label.hasPrefix("iPhone ") && label.contains(" – iOS ")
+}
+
+func isChromeLabel(_ label: String?) -> Bool {
+    guard let label = label, !label.isEmpty else { return false }
+    if SimulatorChromeDenylistExact.contains(label) { return true }
+    if isSimulatorWindowTitleLabel(label) { return true }
+    return false
+}
+
+/// AX roles that indicate a subtree exposes app-level semantics. Chrome
+/// buttons (denylisted labels) are excluded from this count at scoring time.
+let AppSemanticsRoles: Set<String> = [
+    "AXTextField", "AXStaticText", "AXButton", "AXCell", "AXImage", "AXLink"
+]
+
+struct ContentRect {
+    let x: Double
+    let y: Double
+    let width: Double
+    let height: Double
+}
+
+func getFrameRect(_ element: AXUIElement) -> ContentRect? {
+    guard let pos = getPosition(element), let sz = getSize(element) else { return nil }
+    return ContentRect(x: pos.0, y: pos.1, width: sz.0, height: sz.1)
+}
+
+/// Expected device-content rectangle inside a Simulator window. Insets are
+/// empirical (matched against the `iOSContentGroup` frame observed on Xcode
+/// 26.4); the per-edge tolerance in `fitsExpectedRect` absorbs per-device
+/// variance.
+func expectedContentRect(window: AXUIElement) -> ContentRect? {
+    guard let wf = getFrameRect(window) else { return nil }
+    let bezelInsetX: Double = 25
+    let bezelInsetY: Double = 102  // title bar + bezel top
+    let bezelInsetBot: Double = 16
+    return ContentRect(
+        x: wf.x + bezelInsetX,
+        y: wf.y + bezelInsetY,
+        width: wf.width - 2 * bezelInsetX,
+        height: wf.height - bezelInsetY - bezelInsetBot
+    )
+}
+
+func fitsExpectedRect(_ candidate: ContentRect, expected: ContentRect, tolerance: Double = 15) -> Bool {
+    let leftDelta = abs(candidate.x - expected.x)
+    let topDelta = abs(candidate.y - expected.y)
+    let rightDelta = abs((candidate.x + candidate.width) - (expected.x + expected.width))
+    let bottomDelta = abs((candidate.y + candidate.height) - (expected.y + expected.height))
+    return leftDelta <= tolerance
+        && topDelta <= tolerance
+        && rightDelta <= tolerance
+        && bottomDelta <= tolerance
+}
+
+func hasContentGroupTrait(_ element: AXUIElement) -> Bool {
+    if let subrole = getStringAttr(element, kAXSubroleAttribute as String), subrole == "iOSContentGroup" {
+        return true
+    }
+    if let roleDesc = getStringAttr(element, kAXRoleDescriptionAttribute as String), roleDesc == "iOSContentGroup" {
+        return true
+    }
+    return false
+}
+
+/// Count app-semantics descendants in the subtree rooted at `element`, up to
+/// `cap`. Chrome-labelled AXButton nodes do not contribute. Used both for
+/// the scoring signal and for the fallback "has any semantics" probe.
+func countAppSemanticsDescendants(_ element: AXUIElement, cap: Int = 5) -> Int {
+    var count = 0
+    var stack: [AXUIElement] = getChildren(element)
+    while !stack.isEmpty && count < cap {
+        let node = stack.removeLast()
+        let role = getStringAttr(node, kAXRoleAttribute as String) ?? ""
+        if AppSemanticsRoles.contains(role) {
+            if role == "AXButton" {
+                let label = getStringAttr(node, kAXTitleAttribute as String)
+                    ?? getStringAttr(node, kAXDescriptionAttribute as String)
+                if !isChromeLabel(label) {
+                    count += 1
+                }
+            } else {
+                count += 1
+            }
+            if count >= cap { break }
+        }
+        stack.append(contentsOf: getChildren(node))
+    }
+    return min(count, cap)
+}
+
+func scoreContentCandidate(_ element: AXUIElement, expected: ContentRect?) -> (score: Int, appSemanticsCount: Int) {
+    var score = 0
+    let role = getStringAttr(element, kAXRoleAttribute as String) ?? ""
+
+    if (role == "AXGroup" || role == "AXScrollArea") && hasContentGroupTrait(element) {
+        score += 10
+    }
+
+    if let expected = expected, let frame = getFrameRect(element) {
+        if fitsExpectedRect(frame, expected: expected) {
+            score += 8
+        }
+    }
+
+    let descendants = countAppSemanticsDescendants(element, cap: 5)
+    score += descendants * 5
+
+    if role == "AXToolbar" || role == "AXMenuBar" {
+        score -= 10
+    }
+
+    if getChildren(element).isEmpty {
+        score -= 5
+    }
+
+    return (score, descendants)
+}
+
+struct ContentCandidate {
+    let element: AXUIElement
+    let score: Int
+    let appSemanticsCount: Int
+}
+
+/// Recursive, scored content-root search.
+///
+/// Walks the matched Simulator window up to `maxDepth` levels. For each
+/// non-rejected descendant we compute a deterministic integer score via
+/// `scoreContentCandidate` and track the highest-scored candidate.
+/// Traversal terminates early once any candidate clears score ≥ 25 AND
+/// contains at least one app-semantics descendant.
+///
+/// Returns `nil` when no candidate's subtree contains an
+/// `AppSemanticsRoles` match. The caller should then emit
+/// `DEVICE_CONTENT_ROOT_EMPTY` rather than falling back to the bare
+/// `AXWindow` (the pre-refactor behavior responsible for the silent-empty
+/// content bug).
+func findDeviceContentRecursively(_ window: AXUIElement, maxDepth: Int = 8) -> (element: AXUIElement, originX: Double, originY: Double)? {
+    let expected = expectedContentRect(window: window)
+    var best: ContentCandidate? = nil
+    var earlyExit = false
+
+    func visit(_ element: AXUIElement, depth: Int) {
+        if earlyExit { return }
+
+        let role = getStringAttr(element, kAXRoleAttribute as String) ?? ""
+        let label = getStringAttr(element, kAXTitleAttribute as String)
+            ?? getStringAttr(element, kAXDescriptionAttribute as String)
+
+        if depth > 0 {
+            if role == "AXMenuBar" || role == "AXWindow" { return }
+            if isChromeLabel(label) { return }
+        }
+
+        if depth > 0 {
+            let scored = scoreContentCandidate(element, expected: expected)
+            let candidate = ContentCandidate(
+                element: element,
+                score: scored.score,
+                appSemanticsCount: scored.appSemanticsCount
+            )
+            if best == nil || candidate.score > best!.score {
+                best = candidate
+            }
+            if candidate.score >= 25 && candidate.appSemanticsCount > 0 {
+                earlyExit = true
+                return
+            }
+        }
+
+        if depth < maxDepth {
+            for child in getChildren(element) {
+                visit(child, depth: depth + 1)
+                if earlyExit { return }
             }
         }
     }
 
-    return (window, pos.0, pos.1)
+    visit(window, depth: 0)
+
+    guard let winner = best else { return nil }
+    if winner.appSemanticsCount == 0 {
+        return nil
+    }
+
+    let pos = getPosition(winner.element) ?? (0, 0)
+    return (winner.element, pos.0, pos.1)
 }
 
 // MARK: - Query Matching
@@ -616,8 +803,11 @@ func main() {
     }
 
     // Find the device content area inside the matched window.
-    guard let (content, originX, originY) = findDeviceContentInWindow(matchedWindow) else {
-        outputError("Could not find device content area for requested device: \(requestedDevice)", code: "DEVICE_CONTENT_NOT_FOUND")
+    guard let (content, originX, originY) = findDeviceContentRecursively(matchedWindow) else {
+        outputError(
+            "Matched simulator window for \(requestedDevice), but no descendant exposes app-level accessibility semantics. The simulator window is showing only chrome or an empty content group; ensure the target app is foreground and its AX tree is bootstrapped.",
+            code: "DEVICE_CONTENT_ROOT_EMPTY"
+        )
         exit(1)
     }
 
