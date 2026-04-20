@@ -382,14 +382,15 @@ async function main(): Promise<void> {
 }
 
 // Reminder: stdout is the structured-JSON contract consumed by AccessibilityBridge — do not write non-JSON here.
-if (require.main === module) {
-  main().catch((error) => {
-    const message = error instanceof Error ? error.message : String(error);
-    const payload: ErrorJSON = {
-      error: `ax-bridge wrapper failed: ${message}`,
-      code: 'AX_WRAPPER_FAILED',
-    };
-    process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
-    process.exit(1);
-  });
-}
+// Webpack bundles this file as the CLI entry; `require.main === module` does
+// not survive the webpack transform (the resulting guard never evaluates true
+// when run as `node dist/ax-bridge`), so we invoke `main()` unconditionally.
+main().catch((error) => {
+  const message = error instanceof Error ? error.message : String(error);
+  const payload: ErrorJSON = {
+    error: `ax-bridge wrapper failed: ${message}`,
+    code: 'AX_WRAPPER_FAILED',
+  };
+  process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+  process.exit(1);
+});
