@@ -90,6 +90,40 @@ describe('app_activate tool', () => {
     expect(text.context.surface).toBe('simulator_chrome');
   });
 
+  test('returns success with warning when context is unknown', async () => {
+    mockedProbeMobileContext.mockResolvedValueOnce({
+      deviceId: 'TEST-UDID-1234',
+      surface: 'app_content',
+      contextVerified: false,
+      expectedBundle: 'com.example.app',
+      expectedBundleMatch: 'unknown',
+      expectedBundleMatchConfidence: 'unknown',
+      reason: 'ambiguous',
+      warnings: ['ambiguous foreground'],
+      runningApps: [{ bundleId: 'com.example.app', pid: 12345 }, { bundleId: 'com.apple.mobilesafari', pid: 678 }],
+      visibleSummary: { buttonLabels: [], staticTexts: [], textFieldLabels: [], nodeCount: 10 },
+    });
+
+    const handler = server.getToolHandler('app_activate')!;
+    const result = await handler('test', { bundleId: 'com.example.app' });
+    expect(result.isError).toBeUndefined();
+    const text = JSON.parse((result.content as any)[0].text);
+    expect(text.activated).toBe(true);
+    expect(text.warning).toMatch(/could not be verified with confidence/);
+  });
+
+  test('returns success with warning when context probe fails', async () => {
+    mockedProbeMobileContext.mockRejectedValueOnce(new Error('AX timeout'));
+
+    const handler = server.getToolHandler('app_activate')!;
+    const result = await handler('test', { bundleId: 'com.example.app' });
+    expect(result.isError).toBeUndefined();
+    const text = JSON.parse((result.content as any)[0].text);
+    expect(text.activated).toBe(true);
+    expect(text.warning).toMatch(/Foreground context probe failed/);
+    expect(text.context).toBeUndefined();
+  });
+
   test('returns error when no device booted', async () => {
     mockedGetSessionManager.mockReturnValueOnce({ getSoleDeviceId: () => null } as ReturnType<typeof getSessionManager>);
     MockedSimulatorManager.mockImplementationOnce(() => ({

@@ -38,13 +38,13 @@ export function registerAppActivateTool(server: MCPServer): void {
 
       const bundleId = params.bundleId as string;
       const result = await manager.activateApp(deviceId, bundleId);
-      const context = await probeMobileContext({
+      const { context, warning } = await probeActivationContext({
         deviceId,
-        expectedBundle: bundleId,
+        bundleId,
         manager,
       });
 
-      if (context.expectedBundleMatch !== 'matched') {
+      if (context?.expectedBundleMatch === 'mismatch') {
         return {
           content: [{
             type: 'text' as const,
@@ -52,7 +52,7 @@ export function registerAppActivateTool(server: MCPServer): void {
               error: 'EXPECTED_BUNDLE_MISMATCH',
               message:
                 `Activated ${bundleId}, but the foreground context is ${context.surface} ` +
-                `(${context.expectedBundleMatch ?? 'unknown'}).`,
+                `(${context.expectedBundleMatch}).`,
               ...result,
               context,
             }),
@@ -67,9 +67,38 @@ export function registerAppActivateTool(server: MCPServer): void {
           text: JSON.stringify({
             ...result,
             context,
+            warning,
           }),
         }],
       };
     },
   );
+}
+
+async function probeActivationContext(args: {
+  deviceId: string;
+  bundleId: string;
+  manager: SimulatorManager;
+}): Promise<{
+  context?: Awaited<ReturnType<typeof probeMobileContext>>;
+  warning?: string;
+}> {
+  try {
+    const context = await probeMobileContext({
+      deviceId: args.deviceId,
+      expectedBundle: args.bundleId,
+      manager: args.manager,
+    });
+    const warning =
+      context.expectedBundleMatch === 'unknown'
+        ? `Foreground context for ${args.bundleId} could not be verified with confidence after activation.`
+        : undefined;
+    return { context, warning };
+  } catch (error) {
+    return {
+      warning:
+        `Foreground context probe failed after activating ${args.bundleId}: ` +
+        `${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
 }

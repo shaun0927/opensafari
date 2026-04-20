@@ -46,12 +46,13 @@ export function registerAppSwitchAppTool(server: MCPServer): void {
       if (url) {
         // Open URL — the OS routes it to the appropriate app
         await manager.openUrl(deviceId, url);
-        const context = await probeMobileContext({
+        const { context, warning } = await probeSwitchContext({
           deviceId,
-          expectedBundle: bundleId,
+          bundleId,
           manager,
+          action: 'Opened URL for',
         });
-        if (context.expectedBundleMatch !== 'matched') {
+        if (context?.expectedBundleMatch === 'mismatch') {
           return {
             content: [{
               type: 'text' as const,
@@ -59,7 +60,7 @@ export function registerAppSwitchAppTool(server: MCPServer): void {
                 error: 'EXPECTED_BUNDLE_MISMATCH',
                 message:
                   `Opened URL for ${bundleId}, but the foreground context is ${context.surface} ` +
-                  `(${context.expectedBundleMatch ?? 'unknown'}).`,
+                  `(${context.expectedBundleMatch}).`,
                 switched: true,
                 bundleId,
                 deviceId,
@@ -73,20 +74,21 @@ export function registerAppSwitchAppTool(server: MCPServer): void {
         return {
           content: [{
             type: 'text' as const,
-            text: JSON.stringify({ switched: true, bundleId, deviceId, url, context }),
+            text: JSON.stringify({ switched: true, bundleId, deviceId, url, context, warning }),
           }],
         };
       }
 
       // Launch/foreground the app by bundle ID
       const result = await manager.launchApp(deviceId, bundleId);
-      const context = await probeMobileContext({
+      const { context, warning } = await probeSwitchContext({
         deviceId,
-        expectedBundle: bundleId,
+        bundleId,
         manager,
+        action: 'Switched to',
       });
 
-      if (context.expectedBundleMatch !== 'matched') {
+      if (context?.expectedBundleMatch === 'mismatch') {
         return {
           content: [{
             type: 'text' as const,
@@ -94,7 +96,7 @@ export function registerAppSwitchAppTool(server: MCPServer): void {
               error: 'EXPECTED_BUNDLE_MISMATCH',
               message:
                 `Switched to ${bundleId}, but the foreground context is ${context.surface} ` +
-                `(${context.expectedBundleMatch ?? 'unknown'}).`,
+                `(${context.expectedBundleMatch}).`,
               switched: true,
               bundleId,
               deviceId,
@@ -109,9 +111,38 @@ export function registerAppSwitchAppTool(server: MCPServer): void {
       return {
         content: [{
           type: 'text' as const,
-          text: JSON.stringify({ switched: true, bundleId, deviceId, pid: result.pid, context }),
+          text: JSON.stringify({ switched: true, bundleId, deviceId, pid: result.pid, context, warning }),
         }],
       };
     },
   );
+}
+
+async function probeSwitchContext(args: {
+  deviceId: string;
+  bundleId: string;
+  manager: SimulatorManager;
+  action: string;
+}): Promise<{
+  context?: Awaited<ReturnType<typeof probeMobileContext>>;
+  warning?: string;
+}> {
+  try {
+    const context = await probeMobileContext({
+      deviceId: args.deviceId,
+      expectedBundle: args.bundleId,
+      manager: args.manager,
+    });
+    const warning =
+      context.expectedBundleMatch === 'unknown'
+        ? `Foreground context for ${args.bundleId} could not be verified with confidence after ${args.action.toLowerCase()} ${args.bundleId}.`
+        : undefined;
+    return { context, warning };
+  } catch (error) {
+    return {
+      warning:
+        `Foreground context probe failed after ${args.action.toLowerCase()} ${args.bundleId}: ` +
+        `${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
 }
