@@ -5,7 +5,7 @@
  *
  * Environment variables:
  *   OSF_DEVICE_ID            — target simulator UDID (default: 3BEF4E9A-069A-4419-AC62-AB889348EF12)
- *   OSF_FLUTTER_BUNDLE_ID    — Flutter fixture bundle id (default: com.example.osftest)
+ *   OSF_FLUTTER_BUNDLE_ID    — Flutter fixture bundle id (default: com.opensafari.fixtures.flutterQaApp)
  *   OSF_VERIFY_PRIMARY_LABEL — override AXIdentifier/label for primary button (default: verify.button.primary)
  *   OSF_VERIFY_DETAIL_LABEL  — override AXIdentifier/label for detail button (default: verify.button.detail)
  *
@@ -25,7 +25,7 @@ import { tryGetFlutterVMClient } from '../src/tools/native-input-backend';
 const DEVICE_ID =
   process.env.OSF_DEVICE_ID ?? '3BEF4E9A-069A-4419-AC62-AB889348EF12';
 const FLUTTER_BUNDLE =
-  process.env.OSF_FLUTTER_BUNDLE_ID ?? 'com.example.osftest';
+  process.env.OSF_FLUTTER_BUNDLE_ID ?? 'com.opensafari.fixtures.flutterQaApp';
 const PRIMARY_LABEL =
   process.env.OSF_VERIFY_PRIMARY_LABEL ?? 'verify.button.primary';
 const DETAIL_LABEL =

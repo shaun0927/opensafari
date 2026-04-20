@@ -1,3 +1,9 @@
+# ============================================================
+# BLOCKED BY: issue #4 (sim-hid-bridge raw protocol) and
+#             issue #34 (ax-bridge bundle-id targeting)
+# Do NOT trigger this workflow until both issues are closed.
+# ============================================================
+
 # Depends on `npm run verify:issue-10-healthy` added in PR for issue #47 part 1.
 # Merge PR#1 before triggering this workflow.
 
@@ -13,7 +19,7 @@ on:
       flutter_bundle_id:
         description: 'Bundle ID of the Flutter fixture app'
         required: false
-        default: 'com.example.osftest'
+        default: 'com.opensafari.fixtures.flutterQaApp'
 
 jobs:
   verify:
@@ -42,13 +48,16 @@ jobs:
           xcrun simctl boot "${{ inputs.device_id }}" || true
           xcrun simctl bootstatus "${{ inputs.device_id }}" -b
 
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.0'
+          channel: 'stable'
+
       - name: Install fixture app
         run: |
-          # TODO: install fixture ${{ inputs.flutter_bundle_id }} — see tests/integration/fixtures/flutter_sample
-          # Real fixture build/install pipeline is out of scope for this PR.
-          # The verify:issue-10-healthy script performs a preflight check and
-          # will fail cleanly with a descriptive error if the app is not installed.
-          echo "TODO: install fixture ${{ inputs.flutter_bundle_id }} — see tests/integration/fixtures/flutter_sample"
+          bash tests/fixtures/flutter-qa-app/build.sh \
+            --device-id "${{ inputs.device_id }}" \
+            --install
 
       - name: Run healthy-path verification
         run: |
