@@ -130,6 +130,7 @@ describe('app_query tool', () => {
     expect(parsed._meta.queryRecovery).toEqual({
       retriedAfterForceRefresh: true,
       recovered: true,
+      matchStrategy: 'native',
     });
   });
 
@@ -184,5 +185,108 @@ describe('app_query tool', () => {
     expect(parsed._meta.queryDiagnostics.nodeCount).toBeGreaterThan(0);
     expect(parsed._meta.queryDiagnostics.visibleSummary.staticTexts).toContain('Create Account');
     expect(parsed._meta.queryDiagnostics.visibleSummary.buttonLabels).toContain('Send code');
+  });
+
+  it('recovers a visible title through relaxed tree scanning when native query still returns zero matches', async () => {
+    MockBridge.prototype.query = jest.fn().mockResolvedValue({
+      matches: [],
+      total: 0,
+      query: { text: 'Create Account' },
+      ambiguous: false,
+    });
+    MockBridge.prototype.dumpTree = jest.fn().mockResolvedValue({
+      role: 'AXGroup',
+      path: '',
+      visible: true,
+      enabled: true,
+      focused: false,
+      traits: [],
+      frame: { x: 0, y: 0, width: 390, height: 844 },
+      children: [
+        {
+          role: 'AXGroup',
+          path: '0',
+          visible: true,
+          enabled: true,
+          focused: false,
+          traits: ['group'],
+          frame: { x: 0, y: 0, width: 200, height: 44 },
+          children: [
+            {
+              role: 'AXStaticText',
+              label: 'Create Account',
+              path: '0/0',
+              visible: true,
+              enabled: true,
+              focused: false,
+              traits: ['text'],
+              frame: { x: 0, y: 0, width: 200, height: 20 },
+            },
+          ],
+        },
+      ],
+    });
+    mockGetBridge.mockReturnValue(new MockBridge());
+
+    const result = await handler('session-1', { text: 'Create Account' });
+    const parsed = JSON.parse(result.content[0].text!);
+
+    expect(parsed.total).toBe(1);
+    expect(parsed.matches[0].label).toBe('Create Account');
+    expect(parsed._meta.queryRecovery).toEqual({
+      retriedAfterForceRefresh: true,
+      recovered: true,
+      matchStrategy: 'relaxed-tree-scan',
+    });
+  });
+
+  it('prefers the most specific visible descendant match during relaxed tree scanning', async () => {
+    MockBridge.prototype.query = jest.fn().mockResolvedValue({
+      matches: [],
+      total: 0,
+      query: { text: 'Projection' },
+      ambiguous: false,
+    });
+    MockBridge.prototype.dumpTree = jest.fn().mockResolvedValue({
+      role: 'AXGroup',
+      path: '',
+      visible: true,
+      enabled: true,
+      focused: false,
+      traits: [],
+      frame: { x: 0, y: 0, width: 390, height: 844 },
+      children: [
+        {
+          role: 'AXGroup',
+          label: 'Card wrapper',
+          path: '0',
+          visible: true,
+          enabled: true,
+          focused: false,
+          traits: ['group'],
+          frame: { x: 0, y: 0, width: 300, height: 200 },
+          children: [
+            {
+              role: 'AXStaticText',
+              label: 'Projection',
+              path: '0/0',
+              visible: true,
+              enabled: true,
+              focused: false,
+              traits: ['text'],
+              frame: { x: 0, y: 0, width: 100, height: 20 },
+            },
+          ],
+        },
+      ],
+    });
+    mockGetBridge.mockReturnValue(new MockBridge());
+
+    const result = await handler('session-1', { text: 'Projection' });
+    const parsed = JSON.parse(result.content[0].text!);
+
+    expect(parsed.total).toBe(1);
+    expect(parsed.matches[0].path).toBe('0/0');
+    expect(parsed.matches[0].label).toBe('Projection');
   });
 });

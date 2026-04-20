@@ -101,6 +101,7 @@ export function registerAppQueryTool(server: MCPServer): void {
           | {
             retriedAfterForceRefresh: boolean;
             recovered: boolean;
+            matchStrategy?: 'native' | 'relaxed-tree-scan';
           }
           | undefined;
         let queryDiagnostics:
@@ -126,11 +127,30 @@ export function registerAppQueryTool(server: MCPServer): void {
           queryRecovery = {
             retriedAfterForceRefresh: true,
             recovered: result.total > 0,
+            matchStrategy: result.total > 0 ? 'native' : undefined,
           };
 
           if (result.total === 0) {
             try {
               const tree = await bridge.dumpTree({ deviceId, maxDepth: 8 });
+              const relaxedMatches = findRelaxedMatches(
+                tree,
+                { identifier, label, text, role },
+                maxResults ?? 50,
+              );
+              if (relaxedMatches.length > 0) {
+                result = {
+                  matches: relaxedMatches,
+                  total: relaxedMatches.length,
+                  query: { identifier, label, text, role },
+                  ambiguous: Boolean(identifier) && relaxedMatches.length > 1,
+                };
+                queryRecovery = {
+                  retriedAfterForceRefresh: true,
+                  recovered: true,
+                  matchStrategy: 'relaxed-tree-scan',
+                };
+              }
               queryDiagnostics = buildQueryDiagnostics(tree);
             } catch {
               // Diagnostics are best-effort. If tree dumping fails we still
@@ -224,5 +244,119 @@ function buildQueryDiagnostics(tree: AXNode): {
       staticTexts: [...texts].slice(0, 8),
       textFieldLabels: [...textFields].slice(0, 8),
     },
+  };
+}
+
+function findRelaxedMatches(
+  tree: AXNode,
+  query: {
+    identifier?: string;
+    label?: string;
+    text?: string;
+    role?: string;
+  },
+  maxResults: number,
+): AXNode[] {
+  const scored: Array<{ node: AXNode; score: number; direct: boolean }> = [];
+
+  function visit(node: AXNode): {
+    subtreeText: string[];
+    matchedNodes: number;
+  } {
+    let subtreeText = collectNodeSearchText(node);
+    let matchedNodes = 0;
+    let descendantMatched = false;
+
+    for (const child of node.children ?? []) {
+      const childResult = visit(child);
+      subtreeText = subtreeText.concat(childResult.subtreeText);
+      matchedNodes += childResult.matchedNodes;
+      descendantMatched = descendantMatched || childResult.matchedNodes > 0;
+    }
+
+    const direct = nodeMatchesRelaxedQuery(node, query, subtreeText);
+    if (direct && !descendantMatched && node.visible !== false) {
+      const score = scoreRelaxedMatch(node, subtreeText);
+      scored.push({ node: flattenNode(node), score, direct });
+      matchedNodes += 1;
+    }
+
+    return { subtreeText, matchedNodes };
+  }
+
+  visit(tree);
+
+  return scored
+    .sort((a, b) => b.score - a.score)
+    .slice(0, maxResults)
+    .map((entry) => entry.node);
+}
+
+function nodeMatchesRelaxedQuery(
+  node: AXNode,
+  query: {
+    identifier?: string;
+    label?: string;
+    text?: string;
+    role?: string;
+  },
+  subtreeText: string[],
+): boolean {
+  if (query.identifier && node.identifier !== query.identifier) {
+    return false;
+  }
+  if (query.role && node.role !== query.role && node.role !== `AX${query.role}`) {
+    return false;
+  }
+  if (query.label) {
+    const labelNeedle = normalizeQueryText(query.label);
+    if (!subtreeText.some((value) => normalizeQueryText(value).includes(labelNeedle))) {
+      return false;
+    }
+  }
+  if (query.text) {
+    const textNeedle = normalizeQueryText(query.text);
+    if (!subtreeText.some((value) => normalizeQueryText(value).includes(textNeedle))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function collectNodeSearchText(node: AXNode): string[] {
+  return [node.label, node.value, node.identifier].filter(
+    (value): value is string => Boolean(value && value.trim().length > 0),
+  );
+}
+
+function normalizeQueryText(value: string): string {
+  return value
+    .normalize('NFKC')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLocaleLowerCase();
+}
+
+function scoreRelaxedMatch(node: AXNode, subtreeText: string[]): number {
+  const ownTextCount = collectNodeSearchText(node).length;
+  const descendantTextCount = Math.max(0, subtreeText.length - ownTextCount);
+  let score = 0;
+
+  if (node.identifier) score += 6;
+  if (node.label) score += 4;
+  if (/AX(TextField|SecureTextField|TextArea)/.test(node.role)) score += 5;
+  if (/AXButton/.test(node.role)) score += 4;
+  if (/AXStaticText/.test(node.role)) score += 3;
+  if (node.enabled) score += 1;
+  if (node.focused) score += 1;
+  score -= descendantTextCount;
+
+  return score;
+}
+
+function flattenNode(node: AXNode): AXNode {
+  return {
+    ...node,
+    children: undefined,
   };
 }
