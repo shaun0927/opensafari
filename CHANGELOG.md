@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Documentation
+
+- **Flutter route verifier workflow documented (#28 Phase 5)** in [`docs/flutter-inspector.md`](docs/flutter-inspector.md#flutter-route-verifier-workflow-issue-28). Codifies the route-stable queryability model (every bundle-scoped call re-runs `activateAndClassify` + `ensureSemanticsActive` with `bundleId`, so direct-route launches and in-app transitions share the same recovery path), explains the `_meta.queryRecovery.matchStrategy` values (`native` vs `relaxed-tree-scan`) and the four failure classes surfaced by `_meta.queryDiagnostics`, and includes the deterministic multi-route verifier recipe. Complementary [`docs/troubleshooting.md`](docs/troubleshooting.md) rows map "visible but not queryable" symptoms to the exact `_meta` field that identifies the failure class, and document the `app_type_element` cold-start `bundle_id` requirement plus the `backend: "pasteboard"` Unicode-safe typing path.
+
 ### Added
 
 - **`TRANSITIONAL_STATE_TIMEOUT` classification + `--max-settle-retries` flag for `dist/sim-hid-bridge`** (#46). The wrapper now distinguishes "expected app is running but its UI is still loading" from "no AX data at all": when `--expect-bundle <b>` is supplied and the first settle window returns `FOREGROUND_CONTEXT_UNAVAILABLE` while `<b>` is in `runningApps`, the wrapper performs one bounded re-probe (another `settleMs` window) and promotes to `TRANSITIONAL_STATE_TIMEOUT` if the tree is still empty. The re-probe is capped by `--max-settle-retries <0|1|2|3>` (default `1`); set `0` to restore the pre-issue single-probe behavior byte-for-byte. The surface classifier in `src/tools/raw-mobile-context.ts` stays surface-scoped and never emits the new variant itself — promotion is a wrapper-layer concern.

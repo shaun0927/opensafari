@@ -357,9 +357,112 @@ Some Flutter 2.x versions or custom builds may not expose the full inspector ext
 
 **Solution:** `flutter_root_widget` automatically falls back to the older `getRootWidgetSummaryTree` variant. If you encounter persistent errors, file an issue with your Flutter version and device logs.
 
+## Flutter route verifier workflow (issue #28)
+
+Flutter routes expose accessibility differently depending on how the route is entered, how its widgets are composed, and whether Flutter's lazy Semantics tree was already activated by a prior call. The verifier workflow below codifies the behaviour OpenSafari guarantees after the #28 queryability-stabilisation work landed, plus the diagnostics you should read when a route is visibly on screen but `app_query` returns zero matches.
+
+### Route queryability model
+
+OpenSafari treats every route transition as a potential tree invalidation. Bundle-scoped native tools (`app_query`, `app_tap_element`, `app_type_element`, `app_wait_for`, `app_tree`, `app_inspect`, `app_assert_element`) all follow the same activation path when `bundle_id` is provided:
+
+1. `activateAndClassify` — re-foregrounds the target bundle and classifies the visible AX surface (`target-app` / `simulator-window` / `springboard` / `unknown`). Non-`target-app` responses fail fast with `Native context mismatch` instead of silently reading the wrong tree.
+2. `ensureSemanticsActive(deviceId, { bundleId })` — activates Flutter's lazy Semantics via `simctl` first and the Dart VM Service as a fallback. Passing `bundleId` is load-bearing for the VM-service path: without it, debug-build Flutter apps cannot be discovered and the tree stays empty on cold start.
+3. `bridge.query` — reads the just-activated tree. If `total === 0`, the recovery layers below kick in automatically.
+
+Direct-route launches via `QA_INITIAL_ROUTE=/…` and manual navigation through in-app widgets both go through the same post-step (3), so a route that is visibly on screen is also queryable through the same recovery model. Invalidation is implicit: a `query` against the target bundle after a route change always re-reads the current foreground tree rather than a cached snapshot.
+
+### `_meta.queryRecovery` — what the three recovery layers mean
+
+When `app_query` returns, its `_meta` payload tells you which recovery path fired. The shape:
+
+```json
+{
+  "_meta": {
+    "context": {
+      "requestedBundleId": "com.example.myapp",
+      "sourceKind": "target-app",
+      "heuristics": ["default:target-app"],
+      "activationAttempted": true,
+      "activationRetries": 0
+    },
+    "queryRecovery": {
+      "retriedAfterForceRefresh": true,
+      "recovered": true,
+      "matchStrategy": "relaxed-tree-scan"
+    },
+    "queryDiagnostics": {
+      "nodeCount": 8,
+      "visibleSummary": {
+        "buttonLabels": ["Send code", "Send verification code", "뒤로"],
+        "staticTexts": ["Enter your email"],
+        "textFieldLabels": ["you@example.com", "Email address field"]
+      }
+    }
+  }
+}
+```
+
+| `matchStrategy` | When it fires | What it means |
+|---|---|---|
+| _(absent)_ | First `bridge.query` returned matches | The tree was already populated; no recovery needed. |
+| `native` | First query returned zero, but `ensureSemanticsActive(forceRefresh: true)` followed by a re-query recovered matches | The tree was stale. A forced re-activation repopulated it and the native label/identifier matcher found the node on the second pass. |
+| `relaxed-tree-scan` | Native re-query still zero; a tree dump was walked with merged-label / descendant-text / wrapper-group matching and found matches that the native matcher rejected | The node is real but its semantics shape (merged labels, nested groups, descendant text) requires the wider matcher. Treat the result as correct but consider adding a `Semantics(identifier: …)` on the widget so native matching works without the wider pass. |
+
+When **all three layers return zero**, `queryRecovery.recovered: false` and `queryDiagnostics` are attached. The diagnostics tell you which failure class you are dealing with:
+
+- `nodeCount: 0` — the target-app tree is empty. Either Flutter semantics never activated (release builds without `SemanticsBinding.instance.ensureSemantics()`), or the app is not actually foreground despite `activateAndClassify` reporting `target-app`.
+- `nodeCount > 0`, target label _is_ in `visibleSummary.*` — the node exists but the query fields did not match. Usually a label-wording bug in the caller (e.g. querying `"Sign in"` on a route whose button is `"Send verification code"`).
+- `nodeCount > 0`, target label is _not_ in `visibleSummary.*` — the route is rendering but the wanted node is off-screen, or a scroll container has not yet reached it, or the widget is wrapped in `ExcludeSemantics`.
+
+### Writing a deterministic route verifier
+
+For multi-route Flutter apps, use this recipe. Each step operates on a visibly rendered route and returns the evidence a downstream verifier needs.
+
+```ts
+// 1. Launch the app with a direct-route override so the verifier does not
+//    depend on in-app navigation. ensure_semantics_active is idempotent.
+await app_launch({ bundleId, deviceId });
+
+// 2. Query with bundle_id on every call. The bundle_id routes activation
+//    through the VM-service fallback (essential for cold start) and fails
+//    fast on simulator-chrome foreground drift.
+const loginForm = await app_query({
+  bundle_id: bundleId,
+  identifier: 'email-input',
+  device_id: deviceId,
+});
+
+// 3. When `total === 0`, read `_meta.queryRecovery.matchStrategy` and
+//    `_meta.queryDiagnostics.visibleSummary` before retrying with a
+//    different label wording. Never retry blindly — the diagnostics are
+//    designed to be sufficient triage.
+
+// 4. After a tap/type navigates to a new route, the next `app_query` with
+//    the same bundle_id re-reads the post-transition tree. You do not
+//    need to sleep or invalidate manually — the recovery layers handle
+//    the transition window automatically. Use `app_wait_for` when the
+//    transition is animated and you need to block on a specific node.
+await app_wait_for({
+  bundle_id: bundleId,
+  label: 'Create Account',
+  timeout: 10_000,
+});
+```
+
+### Known input-layer gap (#8 / Xcode 26+)
+
+On Xcode 26.4 / iOS 26.4 the input-dispatch backend drops to `SimulatorKitHIDInputBackend` because `simctl io input` is unavailable. When this happens:
+
+- Route **queryability** stays correct: `app_query` and `app_tree` read the right subtree and the recovery layers still recover stale trees.
+- Route **interaction** can fail to fire: `app_tap_element` may return `sim-hid-bridge timed out` or tap with no observable post-action change.
+
+Follow-up on the input side is tracked in #8 (false-positive interaction semantics). The queryability model in this document is orthogonal: if the screen is rendered and `app_query` still reports zero matches after the recovery layers, the bug lives in the query/semantics lane rather than the input lane and should be filed against #28's regression fixtures.
+
 ## See Also
 
+- [Issue #28 — Flutter route-dependent queryability](https://github.com/junghwan-oss/opensafari/issues/28) — verifier workflow rationale
 - [Issue #436 — Flutter widget introspection](https://github.com/opensafari/opensafari/issues/436)
 - [CHANGELOG.md v0.4.0](../CHANGELOG.md#040---2026-04-14) — Flutter Advanced Debugging & Profiling release notes
 - [src/tools/flutter-inspector.ts](../src/tools/flutter-inspector.ts) — Tool implementation
+- [src/tools/app-query.ts](../src/tools/app-query.ts) — Query recovery layer implementation
 - [src/flutter/vm-service-client.ts](../src/flutter/vm-service-client.ts) — VM Service method signatures
