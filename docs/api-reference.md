@@ -96,6 +96,7 @@ Perform a swipe gesture on the simulator.
 - **Input:** `{ direction: "up"|"down"|"left"|"right", startX?: number, startY?: number, distance?: number, duration?: number, deviceId?: string, expectedBundle?: string, verifyContext?: boolean, settleMs?: number }`
 - **Output:** `{ status: "swiped", from, to, distance, duration, deviceId, backend, _meta, postInputContext?, warning? }`
 - **Notes:** When `verifyContext=true` or `expectedBundle` is supplied, the tool waits `settleMs` (default 1200 ms) and attaches a post-input context probe.
+- **Raw CLI:** For driving the same diagnostics without MCP — via the `dist/sim-hid-bridge` wrapper — see the full CLI, wrapper flags, response shape, and classification table in [headless-architecture.md § Raw SimHID CLI reference](headless-architecture.md#raw-simhid-cli-reference).
 
 #### app_reset
 Reset app state: terminate, reset privacy permissions, uninstall. The app must be reinstalled after reset.

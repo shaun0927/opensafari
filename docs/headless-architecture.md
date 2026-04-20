@@ -235,6 +235,123 @@ The raw SimHID wrapper appends post-input `classification`, `verified`,
 `frontmost`, and `expectedBundleMatched` fields so downstream QA can separate a
 clean in-app dispatch from simulator-chrome or SpringBoard outcomes.
 
+#### Raw SimHID CLI reference
+
+This subsection is the single source of truth for the `dist/sim-hid-bridge`
+wrapper contract. It is mirrored out of `cli/sim-hid-bridge.ts` (wrapper argv
+parsing) and `src/tools/raw-mobile-context.ts` (response shape and
+classification union). Downstream QA authors should not have to read TypeScript
+to script against the CLI.
+
+##### CLI synopsis
+
+```bash
+# Foreground-context probe. No HID dispatch; only reads the AX tree.
+dist/sim-hid-bridge context <udid> \
+  [--expect-bundle <bundle-id>] \
+  [--require-match true|false] \
+  [--settle-ms <n>]                         # default 1200
+```
+
+```bash
+# Tap. Forwarded to the native bridge, then the wrapper probes foreground
+# context and appends classification/verified/frontmost/etc.
+dist/sim-hid-bridge <udid> tap <x> <y> [duration] \
+  [--expect-bundle <bundle-id>] \
+  [--require-match true|false] \
+  [--settle-ms <n>]                         # default 1200
+```
+
+```bash
+# Swipe. Same post-input enrichment as tap.
+dist/sim-hid-bridge <udid> swipe <x1> <y1> <x2> <y2> [duration] \
+  [--expect-bundle <bundle-id>] \
+  [--require-match true|false] \
+  [--settle-ms <n>]                         # default 1200
+```
+
+```bash
+# Framework + private-symbol probe. Not subject to wrapper flags.
+dist/sim-hid-bridge diag [udid]
+```
+
+##### Wrapper flags
+
+These flags are parsed by the TypeScript wrapper (`parseWrapperFlags` in
+`cli/sim-hid-bridge.ts`). Any other argv is passed through verbatim to the
+native binary.
+
+| Flag | Type | Default | Applies to | Description |
+|---|---|---|---|---|
+| `--expect-bundle` | `string` (bundle identifier) | — (unset) | `context`, `tap`, `swipe` | Bundle ID the caller expects to be frontmost after the action. Fed to `ax-bridge context --expect-bundle` so the classifier can mark `expectedBundleMatched` as `true`/`false` instead of leaving it `undefined`. |
+| `--require-match` | `true` \| `false` (string) | `false` | `context`, `tap`, `swipe` | When `true` **and** `expectedBundleMatched === false`, the wrapper exits non-zero with `code: "EXPECTED_BUNDLE_MISMATCH"` instead of returning the enriched JSON as success. Used by CI lanes that want a hard failure when the simulator drifts to SpringBoard or Simulator chrome. |
+| `--settle-ms` | `integer` (milliseconds, `≥ 0`) | `1200` | `context`, `tap`, `swipe` | How long the wrapper waits before probing foreground context. Value is applied as a plain `setTimeout`; a non-positive / unparseable value falls back to the 1200ms default. See **§ Settle-window rationale** for tuning guidance. |
+
+##### Response shape
+
+The `context`, `tap`, and `swipe` subcommands emit a JSON object whose
+foreground-diagnostics half is a `RawMobileContextResult`
+(`src/tools/raw-mobile-context.ts:27-41`). For `tap`/`swipe` the native
+bridge's fields (`ok`, `dispatch`, …) are merged on top; the table below lists
+only the context half that this wrapper is responsible for.
+
+| Field | Type | Nullable? | Meaning |
+|---|---|---|---|
+| `deviceId` | `string` | no | UDID of the simulator the probe targeted. Echoes the argv UDID. |
+| `frontmost` | `{ bundleId?: string }` | no | Wrapper object for the inferred foreground bundle. Empty object `{}` when no bundle could be inferred; `bundleId` is populated when the AX probe or `runningApps` heuristic produced a single candidate. |
+| `contextVerified` | `boolean` | no | `true` when the AX probe itself produced a confident foreground reading (not a fallback). Does not consider `--expect-bundle`. |
+| `expectedBundle` | `string` | yes | Echoes the `--expect-bundle` argv value. Omitted (undefined) when the flag was not supplied. |
+| `expectedBundleMatched` | `boolean` | yes | `true` if the probe confirmed the expected bundle is frontmost, `false` if it confirmed a mismatch, `undefined` (omitted) if the probe was inconclusive or `--expect-bundle` was not supplied. |
+| `classification` | `RawMobileClassification` (string enum) | no | One of the seven values documented in **§ Classification values**. Always present; `FOREGROUND_CONTEXT_UNAVAILABLE` is the fallback. |
+| `verified` | `boolean` | no | Convenience mirror of the "the caller can trust `classification` as proof the action landed in the expected app" judgement. See **§ Classification values** for the per-variant value. |
+| `reason` | `string` | no | Human-readable rationale for `classification`. Propagated from the underlying `MobileContextProbe`. |
+| `warnings` | `string[]` | no | Non-fatal issues (missing AX root, ax-bridge fallback fired, etc.). Empty array when clean. Always present. |
+| `runningApps` | `RunningAppInfo[]` | no | Foreground app list observed at probe time, filtered of system chrome. Empty array is valid. |
+| `visibleSummary` | `MobileContextProbe['visibleSummary']` | no | Compact summary of visible AX labels used to seed classification. Structure is stable but opaque to CLI consumers; inspect as-is for debugging. |
+
+##### Classification values
+
+Emission logic lives in `probeToRawMobileContext`
+(`src/tools/raw-mobile-context.ts:43-106`). Every union member of
+`RawMobileClassification` (`src/tools/raw-mobile-context.ts:18-25`) appears
+below exactly once.
+
+| Value | `verified` | Emitted when | Example |
+|---|---|---|---|
+| `TARGET_BUNDLE_CONFIRMED` | `true` | `surface === 'app_content'` AND the probe resolved the frontmost bundle to the value passed via `--expect-bundle`. | `context $UDID --expect-bundle com.omofictions.app` against a foregrounded `com.omofictions.app`. |
+| `EXPECTED_BUNDLE_MISMATCH` | `false` | `surface === 'app_content'` AND `--expect-bundle` was supplied AND the probe confirmed a different bundle is frontmost (not merely unknown). | `context $UDID --expect-bundle com.omofictions.app` while Settings is foregrounded. |
+| `SPRINGBOARD_FOREGROUND` | `true` | The probe detected a SpringBoard-like surface (home screen, app switcher). `verified: true` — SpringBoard is an authoritative surface even though it is not the target app. | `context $UDID` immediately after `app_terminate`. |
+| `SIMULATOR_CHROME_FOREGROUND` | `false` | The probe detected the Simulator.app chrome itself (window frame, menu bar) rather than an iOS foreground app — typically because input routed to the host instead of the guest. | `context $UDID` after a tap that missed the guest viewport. |
+| `APP_CONTENT_FOREGROUND` | inherits `contextVerified` when `--expect-bundle` is unset; `false` otherwise | `surface === 'app_content'` AND a single non-system bundle was inferred, **but** the caller's expectation was not satisfied (no `--expect-bundle` supplied, or expectation is indeterminate). | `context $UDID` against a foregrounded app without `--expect-bundle`. |
+| `APP_CONTENT_UNVERIFIED` | inherits `contextVerified` when `--expect-bundle` is unset; `false` otherwise | `surface === 'app_content'` but the probe could not pin down a single frontmost bundle (zero or multiple candidates survived filtering). | `context $UDID` during a cold-launch splash with no AX-visible app identity. |
+| `FOREGROUND_CONTEXT_UNAVAILABLE` | `false` | `surface` was `'empty'` or `'unknown'` — the AX root was missing or unreadable. Also used as the wrapper-level fallback when `ax-bridge` errored. Inspect `warnings` for the specific failure mode. | `context $UDID` against a locked device, or immediately after boot before SpringBoard finished rendering. |
+
+##### Settle-window rationale
+
+`--settle-ms` defaults to **1200ms**. That value is a compromise: short enough
+that a healthy tight-loop test does not pay seconds of idle wait per dispatch,
+long enough that a cold AX tree has time to settle on typical hardware. Tune
+it when the default does not fit the scenario:
+
+- **Cold-launch of a heavy app → raise to `--settle-ms 2500`.** First-launch
+  AX population for apps that build a large view tree (Flutter shells, Unity
+  viewports) routinely exceeds 1200ms. Without the bump, the probe fires while
+  the root is still empty and classification collapses to
+  `APP_CONTENT_UNVERIFIED` or `FOREGROUND_CONTEXT_UNAVAILABLE`, even though a
+  human would read the screen as "the app is up."
+- **Tight retry loop on a prewarmed app → lower to `--settle-ms 400`.** When
+  the app is already foregrounded and the AX tree is stable, 1200ms per tap
+  is wall-clock waste — a suite that sends 50 taps loses a full minute to the
+  default. 400ms is enough to let a single-frame UI update propagate while
+  keeping the loop honest.
+- **Black-spinner diagnosis → raise to `--settle-ms 5000` and inspect
+  `warnings`.** When a tap "looks successful" but the next screenshot is
+  black, the usual cause is input routing to Simulator chrome instead of the
+  guest. Raising the settle gives the post-input context probe room to detect
+  `SIMULATOR_CHROME_FOREGROUND` or `FOREGROUND_CONTEXT_UNAVAILABLE` reliably
+  instead of racing past it; the populated `warnings` array then names the
+  specific failure mode.
+
 Selection contract:
 
 - Enabled for `app_tap_element` / `app_type_element` by default.
