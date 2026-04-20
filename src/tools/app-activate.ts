@@ -1,6 +1,7 @@
 import { MCPServer } from '../mcp-server';
 import { SimulatorManager } from '../simulator';
 import { getSessionManager } from '../session-manager';
+import { probeMobileContext } from './app-context';
 
 export function registerAppActivateTool(server: MCPServer): void {
   server.registerTool(
@@ -37,11 +38,36 @@ export function registerAppActivateTool(server: MCPServer): void {
 
       const bundleId = params.bundleId as string;
       const result = await manager.activateApp(deviceId, bundleId);
+      const context = await probeMobileContext({
+        deviceId,
+        expectedBundle: bundleId,
+        manager,
+      });
+
+      if (context.expectedBundleMatch !== 'matched') {
+        return {
+          content: [{
+            type: 'text' as const,
+            text: JSON.stringify({
+              error: 'EXPECTED_BUNDLE_MISMATCH',
+              message:
+                `Activated ${bundleId}, but the foreground context is ${context.surface} ` +
+                `(${context.expectedBundleMatch ?? 'unknown'}).`,
+              ...result,
+              context,
+            }),
+          }],
+          isError: true,
+        };
+      }
 
       return {
         content: [{
           type: 'text' as const,
-          text: JSON.stringify(result),
+          text: JSON.stringify({
+            ...result,
+            context,
+          }),
         }],
       };
     },
