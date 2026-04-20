@@ -60,15 +60,86 @@ async function execNative(rawArgs: string[]): Promise<{ stdout: string; stderr: 
   });
 }
 
-async function probeChromeOnly(deviceId: string): Promise<boolean> {
+// Issue #41: unified promotion decision based on the primary native response.
+// Replaces the previous double-dump `probeChromeOnly()` helper which suffered
+// from depth mismatches and race windows between the query and the follow-up
+// probe. When the Swift bridge supplies `chromeOnly` we trust it; older
+// bridges (pre-#41) do not emit the field, so we fall back to a best-effort
+// TS heuristic against the same primary payload — still single-snapshot,
+// still deterministic.
+export function resolveChromeOnly(command: string, parsed: Record<string, unknown>): boolean {
+  if (typeof parsed.chromeOnly === 'boolean') return parsed.chromeOnly;
+  if (command === 'query') {
+    // Query response does not include the content tree, so the TS fallback
+    // is inconclusive — keep pass-through behavior.
+    return false;
+  }
+  // dump/inspect payloads carry enough tree data for the TS heuristic.
   try {
-    const { stdout } = await execNative(['dump', '--device', deviceId, '--max-depth', '6']);
-    const parsed = JSON.parse(stdout);
-    if (parsed?.error) return false;
-    return isLikelyChromeOnlyTree(parsed);
+    return isLikelyChromeOnlyTree(parsed as never);
   } catch {
     return false;
   }
+}
+
+export interface PromotionDecision {
+  promote: boolean;
+  message?: string;
+  code?: 'APP_CONTENT_NOT_EXPOSED';
+}
+
+/**
+ * Decide whether a primary native response should be promoted to a typed
+ * APP_CONTENT_NOT_EXPOSED error. Pure function — no I/O, no subprocesses.
+ *
+ * Rules (Issue #41):
+ *   - dump → promote when chromeOnly is true and the response is not already an error.
+ *   - query → promote when total is 0 AND chromeOnly is true (legitimate hits beat the flag).
+ *   - inspect → promote when found is false AND chromeOnly is true.
+ *   - --ensure-semantics off → never promote (caller has explicitly opted out).
+ */
+export function decidePromotion(args: {
+  command: string;
+  parsed: Record<string, unknown>;
+  deviceId: string | undefined;
+  ensureSemanticsOff: boolean;
+  bootstrapApplicable: boolean;
+}): PromotionDecision {
+  const { command, parsed, deviceId, ensureSemanticsOff, bootstrapApplicable } = args;
+  if (!bootstrapApplicable || ensureSemanticsOff) return { promote: false };
+
+  const errorCode = typeof parsed.code === 'string' ? parsed.code : undefined;
+
+  if (command === 'dump' && !parsed.error) {
+    if (resolveChromeOnly('dump', parsed)) {
+      return {
+        promote: true,
+        code: 'APP_CONTENT_NOT_EXPOSED',
+        message: `Resolved simulator ${deviceId} but found only Simulator chrome after semantics bootstrap.`,
+      };
+    }
+  } else if (command === 'query' && !parsed.error) {
+    const total = typeof parsed.total === 'number' ? parsed.total : undefined;
+    if (total === 0 && resolveChromeOnly('query', parsed)) {
+      return {
+        promote: true,
+        code: 'APP_CONTENT_NOT_EXPOSED',
+        message: `Resolved simulator ${deviceId} but query returned zero app matches because only Simulator chrome is exposed after semantics bootstrap.`,
+      };
+    }
+  } else if (command === 'inspect') {
+    const found = parsed.found === true
+      || (!parsed.error && typeof parsed.path === 'string');
+    if (!found && errorCode === 'ELEMENT_NOT_FOUND' && resolveChromeOnly('inspect', parsed)) {
+      return {
+        promote: true,
+        code: 'APP_CONTENT_NOT_EXPOSED',
+        message: `Resolved simulator ${deviceId} but inspect could not find the path because only Simulator chrome is exposed after semantics bootstrap.`,
+      };
+    }
+  }
+
+  return { promote: false };
 }
 
 async function outputContext(flags: Record<string, string>): Promise<never> {
@@ -184,12 +255,17 @@ async function main(): Promise<void> {
   const deviceId = flags.device;
   const bundleId = flags['bundle-id'] ?? process.env.OPENSAFARI_AX_BUNDLE_ID;
   const ensureSemantics = flags['ensure-semantics'] ?? 'auto';
-  const shouldBootstrap =
+  // Issue #41: `--ensure-semantics off` is a caller-explicit opt-out from
+  // BOTH the semantics bootstrap AND the chrome-only promotion. If the
+  // caller has told us not to ensure semantics, they have also accepted
+  // that they may receive a raw chrome-only tree without the typed error.
+  const bootstrapApplicable =
     ['dump', 'query', 'inspect', 'press'].includes(command)
     && Boolean(deviceId)
     && deviceId !== 'any'
-    && deviceId !== 'booted'
-    && ensureSemantics !== 'off';
+    && deviceId !== 'booted';
+  const ensureSemanticsOff = ensureSemantics === 'off';
+  const shouldBootstrap = bootstrapApplicable && !ensureSemanticsOff;
 
   if (shouldBootstrap) {
     await ensureSemanticsActive(deviceId!, { bundleId, timeout: 5000 });
@@ -197,55 +273,62 @@ async function main(): Promise<void> {
 
   let stdout = '';
   let stderr = '';
+  let nativeExitCode = 0;
   try {
     const result = await execNative(rawArgs);
     stdout = result.stdout;
     stderr = result.stderr;
   } catch (error) {
-    const execError = error as Error & { stdout?: string; stderr?: string };
-    if (execError.stdout) process.stdout.write(execError.stdout);
-    if (execError.stderr) process.stderr.write(execError.stderr);
-    process.exit(1);
+    const execError = error as Error & { stdout?: string; stderr?: string; code?: number | string };
+    stdout = execError.stdout ?? '';
+    stderr = execError.stderr ?? '';
+    const code = execError.code;
+    nativeExitCode = typeof code === 'number' ? code : 1;
+    if (!stdout) {
+      if (stderr) process.stderr.write(stderr);
+      process.exit(nativeExitCode || 1);
+    }
   }
 
   if (stderr.trim()) {
     process.stderr.write(stderr);
   }
 
+  // Issue #41: evaluate promotion on the PRIMARY native response only. No
+  // secondary dump is issued — `chromeOnly` is computed server-side by Swift
+  // and travels with the payload. This eliminates the depth-mismatch and
+  // race-window failure modes of the previous `probeChromeOnly()` helper.
   try {
-    const parsed = JSON.parse(stdout);
-    if (!parsed?.error && shouldBootstrap) {
-      if (command === 'dump' && isLikelyChromeOnlyTree(parsed)) {
-        outputError(
-          `Resolved simulator ${deviceId} but found only Simulator chrome after semantics bootstrap.`,
-          'APP_CONTENT_NOT_EXPOSED',
-        );
-      }
-
-      if (command === 'query' && parsed.total === 0) {
-        const chromeOnly = await probeChromeOnly(deviceId!);
-        if (chromeOnly) {
-          outputError(
-            `Resolved simulator ${deviceId} but query returned zero app matches because only Simulator chrome is exposed after semantics bootstrap.`,
-            'APP_CONTENT_NOT_EXPOSED',
-          );
-        }
-      }
+    const parsed = JSON.parse(stdout) as Record<string, unknown>;
+    const decision = decidePromotion({
+      command,
+      parsed,
+      deviceId,
+      ensureSemanticsOff,
+      bootstrapApplicable,
+    });
+    if (decision.promote && decision.code && decision.message) {
+      outputError(decision.message, decision.code);
     }
   } catch {
-    // Non-JSON output should be forwarded verbatim below.
+    // Non-JSON output is forwarded verbatim below.
   }
 
   process.stdout.write(stdout);
+  if (nativeExitCode !== 0) {
+    process.exit(nativeExitCode);
+  }
 }
 
 // Reminder: stdout is the structured-JSON contract consumed by AccessibilityBridge — do not write non-JSON here.
-main().catch((error) => {
-  const message = error instanceof Error ? error.message : String(error);
-  const payload: ErrorJSON = {
-    error: `ax-bridge wrapper failed: ${message}`,
-    code: 'AX_WRAPPER_FAILED',
-  };
-  process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    const payload: ErrorJSON = {
+      error: `ax-bridge wrapper failed: ${message}`,
+      code: 'AX_WRAPPER_FAILED',
+    };
+    process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    process.exit(1);
+  });
+}
