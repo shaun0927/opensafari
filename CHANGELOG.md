@@ -5,6 +5,7 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 - **`app_tap_element` coordinate fallback now preserves the verified-interaction contract.** When `ax-press` cannot prove a post-action effect and the tool falls back to a coordinate backend, OpenSafari no longer returns a plain clean success by transport alone. The response now carries `verified: false` / `effect: "verification_unavailable"` when proof is unavailable, or a typed `TAP_NO_EFFECT` error when the post-tap AX tree stays unchanged. The stricter contract matches `app_tap` and closes the false-positive-success gap for bundle-scoped native taps.
+- **Raw mobile-bridge context diagnostics and expect-bundle guards.** `dist/ax-bridge` now exposes `context --device <udid> [--expect-bundle <bundle>] [--require-match true]`, returning machine-readable foreground classifications and expected-bundle matches for downstream QA. `dist/sim-hid-bridge` now ships as a wrapper around the native bridge and enriches `tap` / `swipe` JSON with post-input `classification`, `verified`, `frontmost`, and `expectedBundleMatched`, plus a matching `context` command. Raw HID commands can now fail fast with `--require-match true` instead of looking like a clean success after the simulator drifts to SpringBoard or chrome.
 
 ## [0.5.0] - 2026-04-17
 
