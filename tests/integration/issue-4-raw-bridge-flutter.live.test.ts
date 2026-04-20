@@ -169,28 +169,37 @@ describeLive('issue #4 — raw dist/ax-bridge exposes Flutter semantics', () => 
     expect((parsed.children ?? []).length).toBeGreaterThan(0);
   });
 
-  test('chrome-only promotion: --ensure-semantics off + SpringBoard surface fails closed', async () => {
-    // Prove the typed error path is still intact when no foreground app is
-    // running. Terminate the fixture first and query immediately — the raw
-    // bridge must refuse to collapse a chrome-only tree into silent success.
+  test('default (auto) bootstrap + terminated app: wrapper promotes to APP_CONTENT_NOT_EXPOSED', async () => {
+    // With the fixture terminated, the default auto mode must surface a
+    // typed promotion error rather than a silent chrome-only success.
     execFileSync('xcrun', ['simctl', 'terminate', targetDeviceId, BUNDLE_ID], { stdio: 'ignore', timeout: 10_000 });
     await new Promise((resolve) => setTimeout(resolve, 1_500));
 
     const result = await runRawBridge(['query', '--device', targetDeviceId, '--role', 'AXTextField']);
-    // Either the wrapper promotes to APP_CONTENT_NOT_EXPOSED (exit 1) or the
-    // native binary returns DEVICE_CONTENT_ROOT_EMPTY (exit 1). Both satisfy
-    // the #4 contract — no chrome-only success is permitted.
-    if (result.exitCode === 0) {
-      const parsed = JSON.parse(result.stdout) as { total: number; chromeOnly?: boolean };
-      // If exit 0, the bridge must not be claiming chrome-only success.
-      expect(parsed.chromeOnly).not.toBe(true);
-      expect(parsed.total).toBeGreaterThanOrEqual(0);
-    } else {
-      const parsed = JSON.parse(result.stdout) as { code?: string };
-      expect([
-        'APP_CONTENT_NOT_EXPOSED',
-        'DEVICE_CONTENT_ROOT_EMPTY',
-      ]).toContain(parsed.code);
-    }
+    expect(result.exitCode).not.toBe(0);
+    const parsed = JSON.parse(result.stdout) as { code?: string };
+    expect(['APP_CONTENT_NOT_EXPOSED', 'DEVICE_CONTENT_ROOT_EMPTY']).toContain(parsed.code);
+  });
+
+  test('--ensure-semantics off + terminated app: native bridge still fails closed', async () => {
+    // Opt-out from the wrapper promotion path. The native Swift binary
+    // must still refuse to return a chrome-only tree as success — the
+    // fail-closed behavior is a contract of the bridge itself, not only
+    // the wrapper layer.
+    execFileSync('xcrun', ['simctl', 'terminate', targetDeviceId, BUNDLE_ID], { stdio: 'ignore', timeout: 10_000 });
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+
+    const result = await runRawBridge([
+      'query',
+      '--device',
+      targetDeviceId,
+      '--role',
+      'AXTextField',
+      '--ensure-semantics',
+      'off',
+    ]);
+    expect(result.exitCode).not.toBe(0);
+    const parsed = JSON.parse(result.stdout) as { code?: string };
+    expect(parsed.code).toBe('DEVICE_CONTENT_ROOT_EMPTY');
   });
 });
