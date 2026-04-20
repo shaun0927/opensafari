@@ -13,13 +13,14 @@
     "darwin"
   ],
   "scripts": {
-    "build": "npm run clean && npm run build:src && npm run build:cli && npm run build:ax-bridge-native && npm run build:ax-bridge-cli && npm run build:sim-hid-bridge && npm run build:cursor-monitor",
+    "build": "npm run clean && npm run build:src && npm run build:cli && npm run build:ax-bridge-native && npm run build:ax-bridge-cli && npm run build:sim-hid-bridge-native && npm run build:sim-hid-bridge-cli && npm run build:cursor-monitor",
     "postbuild": "cp src/native/ax-bridge.swift dist/ 2>/dev/null || true; cp src/native/sim-hid-bridge.swift dist/ 2>/dev/null || true; cp src/native/cursor-monitor.swift dist/ 2>/dev/null || true",
     "build:src": "webpack --config webpack.config.js --config-name server",
     "build:cli": "webpack --config webpack.config.js --config-name cli",
     "build:ax-bridge-native": "swiftc -O src/native/ax-bridge.swift -o dist/ax-bridge-native && (codesign --sign - dist/ax-bridge-native || echo 'ax-bridge-native: ad-hoc codesign failed, keeping unsigned binary (still runnable for AX queries against booted simulators)') || echo 'ax-bridge-native: swiftc compilation failed, falling back to swift interpreter at runtime'",
     "build:ax-bridge-cli": "webpack --config webpack.config.js --config-name ax-bridge-cli && chmod +x dist/ax-bridge",
-    "build:sim-hid-bridge": "swiftc -O src/native/sim-hid-bridge.swift -o dist/sim-hid-bridge && (codesign --sign - dist/sim-hid-bridge || echo 'sim-hid-bridge: ad-hoc codesign failed, keeping unsigned binary (still runnable for HID dispatch)') || echo 'sim-hid-bridge: swiftc compilation failed, falling back to swift interpreter at runtime'",
+    "build:sim-hid-bridge-native": "swiftc -O src/native/sim-hid-bridge.swift -o dist/sim-hid-bridge-native && (codesign --sign - dist/sim-hid-bridge-native || echo 'sim-hid-bridge-native: ad-hoc codesign failed, keeping unsigned binary (still runnable for HID dispatch)') || echo 'sim-hid-bridge-native: swiftc compilation failed, falling back to swift interpreter at runtime'",
+    "build:sim-hid-bridge-cli": "webpack --config webpack.config.js --config-name sim-hid-bridge-cli && chmod +x dist/sim-hid-bridge",
     "build:cursor-monitor": "swiftc -O src/native/cursor-monitor.swift -o dist/cursor-monitor && (codesign --sign - dist/cursor-monitor || echo 'cursor-monitor: ad-hoc codesign failed, keeping unsigned binary') || echo 'cursor-monitor: swiftc compilation failed, falling back to swift interpreter at runtime'",
     "clean": "rimraf dist",
     "dev": "ts-node --esm src/index.ts",

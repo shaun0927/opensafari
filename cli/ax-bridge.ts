@@ -6,6 +6,8 @@ import * as path from 'path';
 import * as fs from 'fs';
 
 import { ensureSemanticsActive, isLikelyChromeOnlyTree } from '../src/native';
+import { SimulatorManager } from '../src/simulator';
+import { buildRawMobileContext } from '../src/tools/raw-mobile-context';
 
 const execFileAsync = promisify(execFile);
 
@@ -69,9 +71,116 @@ async function probeChromeOnly(deviceId: string): Promise<boolean> {
   }
 }
 
+async function outputContext(flags: Record<string, string>): Promise<never> {
+  const deviceId = flags.device;
+  if (!deviceId) {
+    outputError('The context command requires --device <UDID|device-name|booted>.', 'BAD_ARGS');
+  }
+
+  const manager = new SimulatorManager();
+  const parsed = await readNativeContextDump(deviceId, flags['max-depth'] ?? '6');
+  if (parsed?.error) {
+    process.stdout.write(`${JSON.stringify(parsed, null, 2)}\n`);
+    process.exit(1);
+  }
+
+  const runningAppsDeviceId = await resolveRunningAppsDeviceId(deviceId);
+  const runningAppsRaw = await manager.listRunningApps(runningAppsDeviceId);
+  const runningApps = runningAppsRaw.map((app) => ({
+    bundleId: app.label,
+    pid: app.pid,
+  }));
+  const result = buildRawMobileContext({
+    deviceId,
+    tree: parsed as any,
+    runningApps,
+    expectedBundle: flags['expect-bundle'],
+  });
+
+  if (flags['require-match'] === 'true' && flags['expect-bundle'] && result.expectedBundleMatched === false) {
+    process.stdout.write(`${JSON.stringify({
+      error: `Expected bundle ${flags['expect-bundle']} is not frontmost.`,
+      code: 'EXPECTED_BUNDLE_MISMATCH',
+      ...result,
+    }, null, 2)}\n`);
+    process.exit(1);
+  }
+
+  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+  process.exit(0);
+}
+
+async function resolveRunningAppsDeviceId(requested: string): Promise<string> {
+  const devices = await listSimctlDevices();
+  if (looksLikeUDID(requested)) {
+    const exact = devices.find((device) => device.udid.toLowerCase() === requested.toLowerCase());
+    return exact?.udid ?? requested;
+  }
+
+  const booted = devices.filter((device) => device.state === 'Booted');
+
+  if (requested === 'any') {
+    return booted[0]?.udid ?? requested;
+  }
+  if (requested === 'booted') {
+    return booted[0]?.udid ?? requested;
+  }
+
+  const exact = booted.find((device) => device.name === requested);
+  return exact?.udid ?? requested;
+}
+
+async function listSimctlDevices(): Promise<Array<{
+  udid: string;
+  name: string;
+  state: string;
+  isAvailable?: boolean;
+}>> {
+  const { stdout } = await execFileAsync('/usr/bin/xcrun', ['simctl', 'list', 'devices', '-j'], {
+    timeout: 10_000,
+    encoding: 'utf8',
+    maxBuffer: 10 * 1024 * 1024,
+  });
+  const parsed = JSON.parse(stdout) as {
+    devices: Record<string, Array<{ udid: string; name: string; state: string; isAvailable?: boolean }>>;
+  };
+  const devices = Object.values(parsed.devices)
+    .flat()
+    .filter((device) => device.isAvailable !== false);
+  return devices;
+}
+
+function looksLikeUDID(value: string): boolean {
+  return /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/i.test(value);
+}
+
+async function readNativeContextDump(deviceId: string, maxDepth: string): Promise<Record<string, unknown>> {
+  try {
+    const bridgeOutput = await execNative(['dump', '--device', deviceId, '--max-depth', maxDepth]);
+    return JSON.parse(bridgeOutput.stdout);
+  } catch (error) {
+    const execError = error as Error & { stdout?: string; stderr?: string };
+    if (execError.stderr) process.stderr.write(execError.stderr);
+    if (execError.stdout) {
+      try {
+        return JSON.parse(execError.stdout);
+      } catch {
+        // fall through to generic wrapper error below
+      }
+    }
+    return {
+      error: `ax-bridge wrapper failed: ${error instanceof Error ? error.message : String(error)}`,
+      code: 'AX_WRAPPER_FAILED',
+    };
+  }
+}
+
 async function main(): Promise<void> {
   const rawArgs = process.argv.slice(2);
   const { command, flags } = parseArgs(rawArgs);
+  if (command === 'context') {
+    await outputContext(flags);
+  }
   const deviceId = flags.device;
   const bundleId = flags['bundle-id'] ?? process.env.OPENSAFARI_AX_BUNDLE_ID;
   const ensureSemantics = flags['ensure-semantics'] ?? 'auto';
