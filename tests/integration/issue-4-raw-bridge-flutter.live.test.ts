@@ -179,18 +179,21 @@ describeLive('issue #4 — raw dist/ax-bridge exposes Flutter semantics', () => 
     expect((parsed.children ?? []).length).toBeGreaterThan(0);
   });
 
-  test('dump maxDepth=1 window frame still references the correct simulator window', async () => {
-    // Additional positive assertion: the raw bridge must surface a real
-    // Simulator window frame (non-zero dimensions) when the fixture is
-    // foreground. A chrome-only regression would expose a zero-size frame
-    // or the empty `AXMenuBar` stub.
+  test('dump maxDepth=1 root has non-zero frame (content-root resolved, not chrome stub)', async () => {
+    // Additional positive assertion: the raw bridge returns the resolved
+    // content-root subtree (findDeviceContentRecursively rejects AXWindow
+    // descendants), so we do NOT assert role==='AXWindow'. A chrome-only
+    // regression typically exposes a zero-size frame or an empty
+    // AXMenuBar / AXToolbar stub — assert the root has a real device-sized
+    // frame instead.
     const result = await runRawBridge(['dump', '--device', targetDeviceId, '--max-depth', '1']);
     expect(result.exitCode).toBe(0);
     const parsed = JSON.parse(result.stdout) as {
       role: string;
       frame?: { width?: number; height?: number };
     };
-    expect(parsed.role).toBe('AXWindow');
+    expect(parsed.role).not.toBe('AXMenuBar');
+    expect(parsed.role).not.toBe('AXToolbar');
     expect(parsed.frame?.width ?? 0).toBeGreaterThan(100);
     expect(parsed.frame?.height ?? 0).toBeGreaterThan(100);
   });
