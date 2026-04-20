@@ -29,6 +29,29 @@ struct AXNodeJSON: Codable {
     let focused: Bool
     let children: [AXNodeJSON]?
     let path: String
+    // Issue #41: only emitted on the root node returned by `dump` and on the
+    // node returned by a successful `inspect`. Optional so per-child nodes
+    // do not carry the noise — the wrapper only ever inspects the top-level
+    // value to decide whether to promote a result to APP_CONTENT_NOT_EXPOSED.
+    var chromeOnly: Bool?
+
+    init(role: String, label: String?, value: String?, identifier: String?,
+         traits: [String], frame: FrameJSON, visible: Bool, enabled: Bool,
+         focused: Bool, children: [AXNodeJSON]?, path: String,
+         chromeOnly: Bool? = nil) {
+        self.role = role
+        self.label = label
+        self.value = value
+        self.identifier = identifier
+        self.traits = traits
+        self.frame = frame
+        self.visible = visible
+        self.enabled = enabled
+        self.focused = focused
+        self.children = children
+        self.path = path
+        self.chromeOnly = chromeOnly
+    }
 }
 
 struct FrameJSON: Codable {
@@ -43,6 +66,11 @@ struct QueryResultJSON: Codable {
     let total: Int
     let query: QueryJSON
     let ambiguous: Bool
+    // Issue #41: chromeOnly is computed from the same content tree the query
+    // was evaluated against. The wrapper uses it to promote `total: 0`
+    // results into typed APP_CONTENT_NOT_EXPOSED instead of issuing a
+    // second native dump call.
+    let chromeOnly: Bool
 }
 
 struct QueryJSON: Codable {
@@ -56,6 +84,18 @@ struct QueryJSON: Codable {
 struct ErrorJSON: Codable {
     let error: String
     let code: String
+}
+
+/// Issue #41: ELEMENT_NOT_FOUND emitted by `inspect` carries the same
+/// `chromeOnly` flag the wrapper relies on for query/dump promotion. The
+/// wrapper inspects this field to decide whether to upgrade the response
+/// to APP_CONTENT_NOT_EXPOSED.
+struct InspectNotFoundJSON: Codable {
+    let error: String
+    let code: String
+    let path: String
+    let found: Bool
+    let chromeOnly: Bool
 }
 
 /// Uniform response for `ax-bridge press`.
@@ -709,6 +749,84 @@ func navigateToPath(_ node: AXNodeJSON, path: String) -> AXNodeJSON? {
     return navigateToPath(children[childIdx], path: path)
 }
 
+// MARK: - Chrome-only Heuristic (Issue #41)
+
+/// Roles that indicate real app content (text input surfaces). Any node
+/// matching one of these proves the tree is not chrome-only.
+let appContentRoles: Set<String> = [
+    "AXTextField",
+    "AXSecureTextField",
+    "AXTextArea",
+    "AXWebArea",
+]
+
+/// Labels emitted by the Simulator chrome itself (Action button, hardware
+/// keys, the toolbar, etc.). Mirrors `CHROME_LABELS` in
+/// `src/native/semantics-activator.ts`.
+let chromeLabels: Set<String> = [
+    "Action",
+    "Volume Up",
+    "Volume Down",
+    "Sleep/Wake",
+    "Home",
+    "Save Screen",
+    "Rotate",
+    "Capture Pointer",
+    "Capture Keyboard",
+]
+
+/// Detect device-name labels like `iPhone 16 Pro -- iOS 17.0` or
+/// `iPad Air -- iOS 17.0`. Mirrors `isChromeValue()` in TS.
+func isChromeValueString(_ value: String) -> Bool {
+    if value.range(of: "^iPhone\\b", options: .regularExpression) != nil { return true }
+    if value.range(of: "^iPad\\b", options: .regularExpression) != nil { return true }
+    if value.range(of: "^iOS \\d", options: .regularExpression) != nil { return true }
+    return false
+}
+
+func flattenAXNodes(_ node: AXNodeJSON) -> [AXNodeJSON] {
+    var acc: [AXNodeJSON] = [node]
+    if let children = node.children {
+        for child in children {
+            acc.append(contentsOf: flattenAXNodes(child))
+        }
+    }
+    return acc
+}
+
+/// Single source of truth for "this content tree is just Simulator chrome".
+/// Mirrors `isLikelyChromeOnlyTree()` in `src/native/semantics-activator.ts`
+/// — keep the two implementations in sync until Issue #40 introduces a
+/// shared denylist.
+func isChromeOnlyContent(_ root: AXNodeJSON) -> Bool {
+    let nodes = flattenAXNodes(root)
+    if nodes.count > 20 { return false }
+    if nodes.contains(where: { ($0.identifier ?? "").isEmpty == false }) { return false }
+    if nodes.contains(where: { appContentRoles.contains($0.role) }) { return false }
+
+    var meaningful: [String] = []
+    for n in nodes {
+        if let l = n.label, !l.isEmpty { meaningful.append(l) }
+        if let v = n.value, !v.isEmpty { meaningful.append(v) }
+    }
+    if meaningful.isEmpty { return false }
+
+    let rootLabel = root.label ?? ""
+    let rootMatchesSimulator = rootLabel.range(
+        of: "^(iPhone|iPad).*--",
+        options: [.regularExpression, .caseInsensitive]
+    ) != nil
+    let anyChromeLabel = nodes.contains(where: { node in
+        guard let l = node.label else { return false }
+        return chromeLabels.contains(l)
+    })
+    if !rootMatchesSimulator && !anyChromeLabel { return false }
+
+    return meaningful.allSatisfy { value in
+        chromeLabels.contains(value) || isChromeValueString(value)
+    }
+}
+
 // MARK: - Output Helpers
 
 func outputJSON<T: Encodable>(_ value: T) {
@@ -813,8 +931,12 @@ func main() {
 
     switch command {
     case "dump":
-        let tree = buildNode(content, path: "", maxDepth: maxDepth, currentDepth: 0,
+        var tree = buildNode(content, path: "", maxDepth: maxDepth, currentDepth: 0,
                              originX: originX, originY: originY)
+        // Issue #41: emit `chromeOnly` on the dump root so the wrapper can
+        // promote chrome-only trees in a single snapshot — no second native
+        // call required.
+        tree.chromeOnly = isChromeOnlyContent(tree)
         outputJSON(tree)
 
     case "query":
@@ -836,11 +958,15 @@ func main() {
             role: args["role"],
             traits: nil
         )
+        // Issue #41: compute chromeOnly against the same content tree the
+        // query was evaluated against, eliminating the depth-mismatch and
+        // race-window failure modes of the previous double-dump probe.
         let result = QueryResultJSON(
             matches: matches,
             total: matches.count,
             query: queryInfo,
-            ambiguous: matches.count > 1 && args["id"] != nil
+            ambiguous: matches.count > 1 && args["id"] != nil,
+            chromeOnly: isChromeOnlyContent(tree)
         )
         outputJSON(result)
 
@@ -852,11 +978,22 @@ func main() {
         // Build full tree to navigate to element
         let tree = buildNode(content, path: "", maxDepth: maxDepth, currentDepth: 0,
                              originX: originX, originY: originY)
-        guard let node = navigateToPath(tree, path: path) else {
-            outputError("Element not found at path: \(path)", code: "ELEMENT_NOT_FOUND")
+        guard var node = navigateToPath(tree, path: path) else {
+            // Issue #41: include chromeOnly on ELEMENT_NOT_FOUND so the
+            // wrapper can decide whether the missing path is symptomatic of
+            // a chrome-only tree (promote to APP_CONTENT_NOT_EXPOSED) or a
+            // legitimate not-found on a populated app (pass through).
+            outputJSON(InspectNotFoundJSON(
+                error: "Element not found at path: \(path)",
+                code: "ELEMENT_NOT_FOUND",
+                path: path,
+                found: false,
+                chromeOnly: isChromeOnlyContent(tree)
+            ))
             exit(1)
         }
         // Re-dump with full children for this node
+        node.chromeOnly = isChromeOnlyContent(tree)
         outputJSON(node)
 
     case "press":
