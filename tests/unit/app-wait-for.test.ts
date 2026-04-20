@@ -15,11 +15,12 @@ import type { AXNode, AXQueryResult } from '../../src/native/ax-types';
 // ── Mocks ──────────────────────────────────────────────────────────────────
 
 const mockQuery = jest.fn();
+const mockDumpTree = jest.fn();
 
 jest.mock('../../src/native/accessibility-bridge', () => ({
   getAccessibilityBridge: () => ({
     query: mockQuery,
-    dumpTree: jest.fn().mockResolvedValue({ role: 'AXGroup', children: [], traits: [], frame: { x: 0, y: 0, width: 390, height: 844 }, visible: true, enabled: true, focused: false, path: '' }),
+    dumpTree: mockDumpTree,
   }),
 }));
 
@@ -81,6 +82,16 @@ beforeAll(() => {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockDumpTree.mockResolvedValue({
+    role: 'AXGroup',
+    children: [],
+    traits: [],
+    frame: { x: 0, y: 0, width: 390, height: 844 },
+    visible: true,
+    enabled: true,
+    focused: false,
+    path: '',
+  });
 });
 
 // ── app_wait_for Tests ───────────────────────────────────────────────────────
@@ -215,6 +226,19 @@ describe('app_assert_element', () => {
 
   it('fails when element does not exist', async () => {
     mockQuery.mockResolvedValue(makeQueryResult([]));
+    mockDumpTree.mockResolvedValue({
+      role: 'AXGroup',
+      traits: [],
+      frame: { x: 0, y: 0, width: 390, height: 844 },
+      visible: true,
+      enabled: true,
+      focused: false,
+      path: '',
+      children: [
+        makeNode({ label: '마이\n탭 4개 중 4번째', identifier: 'my-tab', path: '0/1' }),
+        makeNode({ label: '매일 무료 오픈', identifier: 'daily-open', path: '0/2', role: 'AXStaticText' }),
+      ],
+    });
 
     const result = await assertHandler('session', {
       label: 'Missing',
@@ -224,6 +248,8 @@ describe('app_assert_element', () => {
 
     expect(body.passed).toBe(false);
     expect(result.isError).toBe(true);
+    expect(body.debug.candidates).toContain('마이 탭 4개 중 4번째');
+    expect(body.debug.candidates).toContain('매일 무료 오픈');
   });
 
   it('passes assert not_exists when element missing', async () => {

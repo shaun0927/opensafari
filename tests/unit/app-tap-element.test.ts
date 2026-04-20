@@ -290,6 +290,26 @@ describe('app_tap_element', () => {
     );
   });
 
+  it('can tap a multiline label returned from the normalized query path', async () => {
+    const node = makeNode({
+      label: '마이\n탭 4개 중 4번째',
+      identifier: 'my-tab',
+      frame: { x: 10, y: 20, width: 120, height: 40 },
+    });
+    mockQuery.mockResolvedValue(makeQueryResult([node]));
+
+    const result = await handler('session', { label: '마이 탭 4개 중 4번째', timeout: 0 });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(body.status).toBe('tapped');
+    expect(body.element.label).toBe('마이\n탭 4개 중 4번째');
+    expect(mockTap).toHaveBeenCalled();
+    expect(mockQuery).toHaveBeenCalledWith(
+      expect.objectContaining({ label: '마이 탭 4개 중 4번째' }),
+      expect.anything(),
+    );
+  });
+
   it('passes compound query (role + label) to the accessibility bridge', async () => {
     const node = makeNode({
       role: 'AXButton',

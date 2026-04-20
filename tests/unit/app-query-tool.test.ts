@@ -12,6 +12,41 @@ jest.mock('../../src/session-manager', () => ({
 const MockBridge = AccessibilityBridge as jest.MockedClass<typeof AccessibilityBridge>;
 const mockGetBridge = getAccessibilityBridge as jest.MockedFunction<typeof getAccessibilityBridge>;
 
+function makeTree() {
+  return {
+    role: 'AXGroup',
+    traits: [],
+    frame: { x: 0, y: 0, width: 390, height: 844 },
+    visible: true,
+    enabled: true,
+    focused: false,
+    path: '',
+    children: [
+      {
+        role: 'AXButton',
+        label: '마이\n탭 4개 중 4번째',
+        identifier: 'my-tab',
+        traits: [],
+        frame: { x: 0, y: 0, width: 100, height: 40 },
+        visible: true,
+        enabled: true,
+        focused: false,
+        path: '0',
+      },
+      {
+        role: 'AXStaticText',
+        label: '매일 무료 오픈',
+        traits: [],
+        frame: { x: 0, y: 50, width: 100, height: 20 },
+        visible: true,
+        enabled: true,
+        focused: false,
+        path: '1',
+      },
+    ],
+  };
+}
+
 describe('app_query tool', () => {
   let server: MCPServer;
   let handler: (sessionId: string, params: Record<string, unknown>) => Promise<{ content: Array<{ type: string; text?: string }>; isError?: boolean }>;
@@ -89,5 +124,24 @@ describe('app_query tool', () => {
     const parsed = JSON.parse(result.content[0].text!);
     expect(parsed.warning).toContain('Ambiguous');
     expect(parsed.total).toBe(2);
+  });
+
+  it('includes normalized candidate diagnostics when no match is found', async () => {
+    MockBridge.prototype.query = jest.fn().mockResolvedValue({
+      matches: [],
+      total: 0,
+      query: { label: '없는 값' },
+      ambiguous: false,
+    });
+    MockBridge.prototype.dumpTree = jest.fn().mockResolvedValue(makeTree());
+    mockGetBridge.mockReturnValue(new MockBridge());
+
+    const result = await handler('session-1', { label: '없는 값' });
+    const parsed = JSON.parse(result.content[0].text!);
+
+    expect(parsed.total).toBe(0);
+    expect(parsed.debug.candidates).toContain('마이 탭 4개 중 4번째');
+    expect(parsed.debug.candidates).toContain('매일 무료 오픈');
+    expect(parsed.debug.normalizedQuery.label).toBe('없는 값');
   });
 });
