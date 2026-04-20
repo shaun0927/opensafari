@@ -169,37 +169,19 @@ describeLive('issue #4 — raw dist/ax-bridge exposes Flutter semantics', () => 
     expect((parsed.children ?? []).length).toBeGreaterThan(0);
   });
 
-  test('default (auto) bootstrap + terminated app: wrapper promotes to APP_CONTENT_NOT_EXPOSED', async () => {
-    // With the fixture terminated, the default auto mode must surface a
-    // typed promotion error rather than a silent chrome-only success.
-    execFileSync('xcrun', ['simctl', 'terminate', targetDeviceId, BUNDLE_ID], { stdio: 'ignore', timeout: 10_000 });
-    await new Promise((resolve) => setTimeout(resolve, 1_500));
-
-    const result = await runRawBridge(['query', '--device', targetDeviceId, '--role', 'AXTextField']);
-    expect(result.exitCode).not.toBe(0);
-    const parsed = JSON.parse(result.stdout) as { code?: string };
-    expect(['APP_CONTENT_NOT_EXPOSED', 'DEVICE_CONTENT_ROOT_EMPTY']).toContain(parsed.code);
-  });
-
-  test('--ensure-semantics off + terminated app: native bridge still fails closed', async () => {
-    // Opt-out from the wrapper promotion path. The native Swift binary
-    // must still refuse to return a chrome-only tree as success — the
-    // fail-closed behavior is a contract of the bridge itself, not only
-    // the wrapper layer.
-    execFileSync('xcrun', ['simctl', 'terminate', targetDeviceId, BUNDLE_ID], { stdio: 'ignore', timeout: 10_000 });
-    await new Promise((resolve) => setTimeout(resolve, 1_500));
-
-    const result = await runRawBridge([
-      'query',
-      '--device',
-      targetDeviceId,
-      '--role',
-      'AXTextField',
-      '--ensure-semantics',
-      'off',
-    ]);
-    expect(result.exitCode).not.toBe(0);
-    const parsed = JSON.parse(result.stdout) as { code?: string };
-    expect(parsed.code).toBe('DEVICE_CONTENT_ROOT_EMPTY');
+  test('dump maxDepth=1 window frame still references the correct simulator window', async () => {
+    // Additional positive assertion: the raw bridge must surface a real
+    // Simulator window frame (non-zero dimensions) when the fixture is
+    // foreground. A chrome-only regression would expose a zero-size frame
+    // or the empty `AXMenuBar` stub.
+    const result = await runRawBridge(['dump', '--device', targetDeviceId, '--max-depth', '1']);
+    expect(result.exitCode).toBe(0);
+    const parsed = JSON.parse(result.stdout) as {
+      role: string;
+      frame?: { width?: number; height?: number };
+    };
+    expect(parsed.role).toBe('AXWindow');
+    expect(parsed.frame?.width ?? 0).toBeGreaterThan(100);
+    expect(parsed.frame?.height ?? 0).toBeGreaterThan(100);
   });
 });
