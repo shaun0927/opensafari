@@ -35,11 +35,21 @@ export function setupGracefulShutdown(pool: SimulatorPool): void {
 
   process.on('SIGTERM', () => void shutdown('SIGTERM', 0));
   process.on('SIGINT', () => void shutdown('SIGINT', 0));
-  process.on('uncaughtException', (error) => void shutdown('UNCAUGHT_EXCEPTION', 1, error.message));
+  process.on('uncaughtException', (error) =>
+    void shutdown(
+      'UNCAUGHT_EXCEPTION',
+      1,
+      error instanceof Error ? error.message : String(error),
+    ));
   process.on('unhandledRejection', (reason) =>
     void shutdown(
       'UNHANDLED_REJECTION',
       1,
       reason instanceof Error ? reason.message : String(reason),
     ));
+}
+
+export function __resetGracefulShutdownForTests(): void {
+  handlersInstalled = false;
+  shutdownInFlight = false;
 }

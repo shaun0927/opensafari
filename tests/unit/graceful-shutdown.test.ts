@@ -1,14 +1,28 @@
-import { setupGracefulShutdown } from '../../src/reliability/graceful-shutdown';
-
 describe('setupGracefulShutdown', () => {
   const originalExit = process.exit;
+  const events = ['SIGTERM', 'SIGINT', 'uncaughtException', 'unhandledRejection'] as const;
+  let baselineListeners: Record<string, Function[]>;
 
   beforeEach(() => {
     jest.resetModules();
+    baselineListeners = {
+      SIGTERM: [...process.listeners('SIGTERM')],
+      SIGINT: [...process.listeners('SIGINT')],
+      uncaughtException: [...process.listeners('uncaughtException')],
+      unhandledRejection: [...process.listeners('unhandledRejection')],
+    };
   });
 
   afterEach(() => {
     process.exit = originalExit;
+    for (const event of events) {
+      const current = (process as any).listeners(event) as Function[];
+      for (const listener of current) {
+        if (!baselineListeners[event].includes(listener)) {
+          (process as any).removeListener(event, listener);
+        }
+      }
+    }
   });
 
   test('registers SIGTERM/SIGINT/uncaughtException/unhandledRejection handlers', async () => {
@@ -47,6 +61,30 @@ describe('setupGracefulShutdown', () => {
     );
     expect(errorSpy).toHaveBeenCalledWith(
       expect.stringContaining('"detail":"boom"'),
+    );
+    expect(exitSpy).toHaveBeenCalledWith(1);
+
+    errorSpy.mockRestore();
+    exitSpy.mockRestore();
+  });
+
+  test('normalizes non-Error uncaught exceptions before logging', async () => {
+    const module = await import('../../src/reliability/graceful-shutdown');
+    const pool = { shutdownAll: jest.fn().mockResolvedValue(undefined) } as any;
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const exitSpy = jest.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+
+    module.setupGracefulShutdown(pool);
+    const handler = process.listeners('uncaughtException').at(-1) as (error: unknown) => void;
+    handler(undefined);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(pool.shutdownAll).toHaveBeenCalledTimes(1);
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('"reason":"UNCAUGHT_EXCEPTION"'),
+    );
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('"detail":"undefined"'),
     );
     expect(exitSpy).toHaveBeenCalledWith(1);
 
