@@ -1,0 +1,84 @@
+# ============================================================
+# BLOCKED BY: issue #4 (sim-hid-bridge raw protocol) and
+#             issue #34 (ax-bridge bundle-id targeting)
+# Do NOT trigger this workflow until both issues are closed.
+# ============================================================
+
+# Depends on `npm run verify:issue-10-healthy` added in PR for issue #47 part 1.
+# Merge PR#1 before triggering this workflow.
+
+name: Issue #10 healthy-path verification
+
+on:
+  workflow_dispatch:
+    inputs:
+      device_id:
+        description: 'Simulator UDID to target'
+        required: false
+        default: '3BEF4E9A-069A-4419-AC62-AB889348EF12'
+      flutter_bundle_id:
+        description: 'Bundle ID of the Flutter fixture app'
+        required: false
+        default: 'com.opensafari.fixtures.flutterQaApp'
+
+jobs:
+  verify:
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '26.4'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Boot simulator
+        run: |
+          xcrun simctl boot "${{ inputs.device_id }}" || true
+          xcrun simctl bootstatus "${{ inputs.device_id }}" -b
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.0'
+          channel: 'stable'
+
+      - name: Install fixture app
+        run: |
+          bash tests/fixtures/flutter-qa-app/build.sh \
+            --device-id "${{ inputs.device_id }}" \
+            --install
+
+      - name: Run healthy-path verification
+        run: |
+          set -o pipefail
+          npm run verify:issue-10-healthy 2>&1 | tee verify-issue-10-healthy.log
+        env:
+          OSF_DEVICE_ID: ${{ inputs.device_id }}
+          OSF_FLUTTER_BUNDLE_ID: ${{ inputs.flutter_bundle_id }}
+
+      - name: Append output to job summary
+        if: always()
+        run: |
+          echo '## verify:issue-10-healthy output' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat verify-issue-10-healthy.log >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || echo '(no output captured)' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload verification report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-10-healthy-report
+          path: scripts/.verify-issue-10-healthy.report.json
+          if-no-files-found: warn
