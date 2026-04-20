@@ -280,6 +280,26 @@ export class SimulatorKitHIDInputBackend implements InputBackend {
   }
 
   /**
+   * Press `keyUsage` while holding `modifierUsage` (e.g. Cmd+V = keyChord(25, 227)).
+   * Wraps the bridge's `key-mod` subcommand so callers can compose chords
+   * without shelling out manually. Used by the pasteboard typing path.
+   */
+  async keyChord(
+    deviceId: string,
+    keyUsage: number,
+    modifierUsage: number,
+  ): Promise<void> {
+    await timedInput(this.kind, 'keyChord', deviceId, async () => {
+      await this.run([
+        deviceId,
+        'key-mod',
+        String(keyUsage),
+        String(modifierUsage),
+      ]);
+    });
+  }
+
+  /**
    * Spawn the bridge with the given argv (not including the bridge path)
    * and parse its JSON stdout. Surfaces every documented exit code as a
    * structured `InputBackendError`.

@@ -25,7 +25,7 @@ import {
  * Stable set of operations we time. Matches the `InputBackend` interface
  * verbs so a consumer can partition metrics by user-visible action type.
  */
-export type InputOperation = 'tap' | 'swipe' | 'typeText' | 'keypress' | 'sendKey';
+export type InputOperation = 'tap' | 'swipe' | 'typeText' | 'keypress' | 'sendKey' | 'keyChord';
 
 /**
  * One telemetry event. Keys are deliberately snake_case so downstream
