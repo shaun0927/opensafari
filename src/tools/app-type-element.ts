@@ -11,14 +11,43 @@
  * Works with any app including Flutter — no WebKit/DOM required.
  */
 
+import { execFile } from 'child_process';
+import { promisify } from 'util';
+
 import { MCPServer, getWebKitClient } from '../mcp-server';
 import { getAccessibilityBridge, ensureSemanticsActive } from '../native';
 import type { AXNode, AXQuery } from '../native';
 import { resolveDeviceId, getInputBackend, runInputOp } from './native-input-utils';
 import { tryPress } from './app-tap-element';
 
+const execFileAsync = promisify(execFile);
+
 const DEFAULT_TIMEOUT_MS = 5000;
 const DEFAULT_FOCUS_DELAY_MS = 150;
+
+/**
+ * Maximum number of characters of the observed AX value to echo back in
+ * `verify_reason`. The raw value can contain PII (email, password), so we
+ * cap the echo to the first few chars — enough to prove mismatch without
+ * leaking the rest of the field. The expected-text side is truncated
+ * symmetrically.
+ */
+const VERIFY_ECHO_LEN = 24;
+
+/**
+ * Post-typing verification result. Attached to the tool response so callers
+ * can distinguish a real typed value from a silent IME transliteration
+ * (issue #39 Tier 3).
+ */
+interface VerifyResult {
+  verified: boolean | 'unknown';
+  verify_method:
+    | 'ax-value-readback'
+    | 'ax-value-not-readable'
+    | 'skipped-non-simhid'
+    | 'readback-failed';
+  verify_reason?: string;
+}
 
 export function registerAppTypeElementTool(server: MCPServer): void {
   server.registerTool(
@@ -65,6 +94,11 @@ export function registerAppTypeElementTool(server: MCPServer): void {
             type: 'string',
             description: 'Simulator UDID (uses active device if omitted)',
           },
+          verify: {
+            type: 'boolean',
+            description:
+              'Opt out of post-typing readback verification (default: true). When false the tool reports `verified: "unknown"` without reading back the AX value.',
+          },
         },
         required: ['text'],
       },
@@ -89,6 +123,8 @@ export function registerAppTypeElementTool(server: MCPServer): void {
         const index = (params.index as number | undefined) ?? 0;
         const timeout = (params.timeout as number | undefined) ?? DEFAULT_TIMEOUT_MS;
         const focusDelay = (params.focusDelay as number | undefined) ?? DEFAULT_FOCUS_DELAY_MS;
+        const verifyOptIn =
+          typeof params.verify === 'boolean' ? (params.verify as boolean) : true;
 
         await ensureSemanticsActive(deviceId);
 
@@ -171,28 +207,62 @@ export function registerAppTypeElementTool(server: MCPServer): void {
           await backend.typeText(deviceId, textToType);
         });
 
-        return {
-          content: [
-            {
-              type: 'text' as const,
-              text: JSON.stringify({
-                status: 'typed',
-                element: {
-                  role: match.role,
-                  label: match.label,
-                  identifier: match.identifier,
-                  path: match.path,
-                },
-                coordinates: { x: centerX, y: centerY },
-                length: textToType.length,
-                backend: backend.kind,
-                focusBackend: focusedViaAXPress ? 'ax-press' : backend.kind,
-                deviceId,
-                _meta: meta,
-              }),
-            },
-          ],
+        // Tier-3 readback verification (issue #39). We only run the readback
+        // when the dispatch tier was `simhid`, because that is the backend
+        // that silently transliterates on non-Latin keyboards. Tiers that
+        // bypass the software keyboard entirely (flutter-vm, webkit) don't
+        // have the transliteration failure mode. Opt out via `verify: false`.
+        const verify = verifyOptIn
+          ? await verifyTypedText(backend.kind, bridge, match.path, textToType, deviceId)
+          : {
+              verified: 'unknown' as const,
+              verify_method: 'skipped-non-simhid' as const,
+              verify_reason: 'verify: false passed by caller',
+            };
+
+        // Best-effort keyboard-layout detection for the diagnostic field.
+        // Never blocks typing; a failed probe produces `null` and the field
+        // is simply omitted.
+        const keyboardLayoutDetected = await detectKeyboardLayout(deviceId);
+
+        const responseBody: Record<string, unknown> = {
+          status: 'typed',
+          element: {
+            role: match.role,
+            label: match.label,
+            identifier: match.identifier,
+            path: match.path,
+          },
+          coordinates: { x: centerX, y: centerY },
+          length: textToType.length,
+          backend: backend.kind,
+          focusBackend: focusedViaAXPress ? 'ax-press' : backend.kind,
+          deviceId,
+          verified: verify.verified,
+          verify_method: verify.verify_method,
+          _meta: meta,
         };
+        if (verify.verify_reason) {
+          responseBody.verify_reason = verify.verify_reason;
+        }
+        if (keyboardLayoutDetected) {
+          responseBody.keyboard_layout_detected = keyboardLayoutDetected;
+        }
+
+        // Silent-failure fix: when verification detected a real mismatch,
+        // surface `isError: true` so MCP clients / agents don't treat the
+        // call as a trustworthy "typed" step and proceed to submit garbage.
+        const mismatched = verify.verified === false;
+        const result: {
+          content: Array<{ type: 'text'; text: string }>;
+          isError?: boolean;
+        } = {
+          content: [{ type: 'text' as const, text: JSON.stringify(responseBody) }],
+        };
+        if (mismatched) {
+          result.isError = true;
+        }
+        return result;
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         console.error(`[app_type_element] ${message}`);
@@ -200,6 +270,106 @@ export function registerAppTypeElementTool(server: MCPServer): void {
       }
     },
   );
+}
+
+/**
+ * Post-typing verification. Re-reads the focused element's AX value and
+ * compares it to what the caller asked to type. Silent transliteration on
+ * non-Latin simulator keyboards (issue #39) is the primary failure mode
+ * this catches — the raw HID keycodes sent by simhid produce Jamo/Kana/…
+ * in the Dart/native controller, and the readback will diverge immediately.
+ *
+ * Semantics:
+ *   - `verified: true` — observed AX value contains the expected text as a
+ *     suffix. (Suffix match, not equality, because callers may type into a
+ *     field that already contained text; the typed input is appended.)
+ *   - `verified: false` — observed value is readable but does not contain
+ *     the expected text. The `verify_reason` carries truncated expected /
+ *     observed fragments for triage.
+ *   - `verified: 'unknown'` — the element has no AXValue (e.g. a password
+ *     field whose value is suppressed), readback throws, or the backend
+ *     was not simhid so the check was skipped. Callers should treat this
+ *     as "could not prove the typing succeeded" rather than "it succeeded".
+ */
+async function verifyTypedText(
+  backendKind: string,
+  bridge: ReturnType<typeof getAccessibilityBridge>,
+  elementPath: string,
+  expected: string,
+  deviceId: string,
+): Promise<VerifyResult> {
+  if (backendKind !== 'simhid') {
+    return {
+      verified: 'unknown',
+      verify_method: 'skipped-non-simhid',
+      verify_reason: `backend=${backendKind} bypasses software keyboard; readback verification only applies to simhid`,
+    };
+  }
+  if (!elementPath) {
+    return {
+      verified: 'unknown',
+      verify_method: 'ax-value-not-readable',
+      verify_reason: 'element has no AX path to re-inspect',
+    };
+  }
+  let observed: string | undefined;
+  try {
+    const node = await bridge.inspect(elementPath, deviceId);
+    observed = node.value;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return {
+      verified: 'unknown',
+      verify_method: 'readback-failed',
+      verify_reason: `AX inspect failed: ${msg}`,
+    };
+  }
+  if (observed === undefined || observed === null) {
+    return {
+      verified: 'unknown',
+      verify_method: 'ax-value-not-readable',
+      verify_reason: 'element exposes no AXValue (e.g. password field)',
+    };
+  }
+  if (observed.endsWith(expected) || observed.includes(expected)) {
+    return { verified: true, verify_method: 'ax-value-readback' };
+  }
+  return {
+    verified: false,
+    verify_method: 'ax-value-readback',
+    verify_reason:
+      `observed "${truncate(observed)}" does not contain requested "${truncate(expected)}" — ` +
+      'likely caused by a non-Latin simulator keyboard transliterating the HID input (issue #39)',
+  };
+}
+
+function truncate(s: string): string {
+  if (s.length <= VERIFY_ECHO_LEN) return s;
+  return `${s.slice(0, VERIFY_ECHO_LEN)}…`;
+}
+
+/**
+ * Best-effort lookup of the simulator's installed-keyboards entry. We parse
+ * `defaults read .GlobalPreferences AppleKeyboards` and return the first
+ * entry that carries a `sw=…` token. This is *not* guaranteed to be the
+ * currently active keyboard (per issue #39 addendum §1 iOS 26.4 exposes no
+ * deterministic "active" signal), but it is the single most diagnostic
+ * string a caller can attach to an ambiguous typing report — if the first
+ * entry is `ko_KR@sw=Korean - 2 Set;hw=Automatic` and the readback is Jamo
+ * gibberish, the root cause is obvious at a glance.
+ */
+async function detectKeyboardLayout(deviceId: string): Promise<string | null> {
+  try {
+    const { stdout } = await execFileAsync(
+      'xcrun',
+      ['simctl', 'spawn', deviceId, 'defaults', 'read', '.GlobalPreferences', 'AppleKeyboards'],
+      { timeout: 5000 },
+    );
+    const match = stdout.match(/"([^"]*@[^"]*sw=[^"]+)"/);
+    return match ? match[1] : null;
+  } catch {
+    return null;
+  }
 }
 
 function jsonError(error: string, extra: Record<string, unknown> = {}) {
