@@ -15,6 +15,17 @@ export enum ErrorCode {
   APP_NOT_INSTALLED = 'APP_NOT_INSTALLED',
   APP_LAUNCH_FAILED = 'APP_LAUNCH_FAILED',
   APP_NOT_RUNNING = 'APP_NOT_RUNNING',
+  // Keyboard-layout preflight for `app_type_element` / `app_type_text`.
+  // Emitted when the simulator's active software keyboard is not a Latin
+  // (sw=QWERTY) layout and the tool refuses to type through simhid because
+  // the IME would transliterate the requested text (see issue #39).
+  KEYBOARD_LAYOUT_NOT_LATIN = 'KEYBOARD_LAYOUT_NOT_LATIN',
+  // Emitted when none of the inspected signals (AppleKeyboards preference,
+  // TextInput.plist, etc.) exposes a parsable active-keyboard token. The
+  // caller cannot decide whether the layout is safe, so the typing path
+  // errs on the side of aborting rather than typing through a possibly
+  // non-Latin IME.
+  KEYBOARD_LAYOUT_DETECTION_FAILED = 'KEYBOARD_LAYOUT_DETECTION_FAILED',
 }
 
 export interface StructuredError {
@@ -41,4 +52,16 @@ export const ERROR_CATALOG: Record<ErrorCode, Omit<StructuredError, 'message'>> 
   [ErrorCode.APP_NOT_INSTALLED]: { code: ErrorCode.APP_NOT_INSTALLED, recoverable: false, suggestion: 'Install the app on the simulator first (e.g. simctl install)' },
   [ErrorCode.APP_LAUNCH_FAILED]: { code: ErrorCode.APP_LAUNCH_FAILED, recoverable: true, suggestion: 'Verify the bundle ID and that the device is booted' },
   [ErrorCode.APP_NOT_RUNNING]: { code: ErrorCode.APP_NOT_RUNNING, recoverable: true, suggestion: 'Launch the app first using app_launch' },
+  [ErrorCode.KEYBOARD_LAYOUT_NOT_LATIN]: {
+    code: ErrorCode.KEYBOARD_LAYOUT_NOT_LATIN,
+    recoverable: true,
+    suggestion:
+      'Set the simulator keyboard to English (US) (Settings → General → Keyboard → Keyboards), or retry with backend: "ax-value" for Unicode-safe typing.',
+  },
+  [ErrorCode.KEYBOARD_LAYOUT_DETECTION_FAILED]: {
+    code: ErrorCode.KEYBOARD_LAYOUT_DETECTION_FAILED,
+    recoverable: true,
+    suggestion:
+      'Run scripts/dev/probe-keyboard-layout.ts against the booted UDID to capture the raw preference signals, then file a report so the detector can be widened.',
+  },
 };
