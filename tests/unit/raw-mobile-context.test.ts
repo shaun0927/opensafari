@@ -77,4 +77,48 @@ describe('raw mobile context projection', () => {
     expect(result.classification).toBe('APP_CONTENT_FOREGROUND');
     expect(result.frontmost.bundleId).toBe('com.example.app');
   });
+
+  it('classifies springboard-like trees with an explicit springboard bundle', () => {
+    const tree = node({
+      children: [
+        node({ role: 'AXButton', label: 'Safari', path: '0' }),
+        node({ role: 'AXButton', label: '메시지', path: '1' }),
+        node({ role: 'AXButton', label: '설정', path: '2' }),
+        node({ role: 'AXButton', label: '사진', path: '3' }),
+        node({ role: 'AXButton', label: '지도', path: '4' }),
+      ],
+    });
+
+    const result = buildRawMobileContext({
+      deviceId: 'device-1',
+      tree,
+      runningApps: [{ bundleId: 'com.apple.springboard', pid: 10 }],
+      expectedBundle: 'com.example.target',
+    });
+
+    expect(result.classification).toBe('SPRINGBOARD_FOREGROUND');
+    expect(result.frontmost.bundleId).toBe('com.apple.springboard');
+    expect(result.expectedBundleMatched).toBe(false);
+  });
+
+  it('marks another foreground app as an expected-bundle mismatch', () => {
+    const tree = node({
+      children: [
+        node({ role: 'AXStaticText', label: 'Dashboard', path: '0' }),
+        node({ role: 'AXButton', label: 'Continue', path: '1' }),
+      ],
+    });
+
+    const result = buildRawMobileContext({
+      deviceId: 'device-1',
+      tree,
+      runningApps: [{ bundleId: 'com.example.other', pid: 4 }],
+      expectedBundle: 'com.example.target',
+    });
+
+    expect(result.classification).toBe('EXPECTED_BUNDLE_MISMATCH');
+    expect(result.frontmost.bundleId).toBe('com.example.other');
+    expect(result.expectedBundleMatched).toBe(false);
+    expect(result.verified).toBe(false);
+  });
 });
