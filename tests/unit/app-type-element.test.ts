@@ -19,6 +19,7 @@ import type { AXNode, AXQueryResult } from '../../src/native/ax-types';
 // ── Mocks ──────────────────────────────────────────────────────────────────
 
 const mockQuery = jest.fn();
+const mockInspect = jest.fn();
 const mockTap = jest.fn().mockResolvedValue(undefined);
 const mockTypeText = jest.fn().mockResolvedValue(undefined);
 // Default to PRESS_NOT_ACTIONABLE so the pre-existing coordinate-tap +
@@ -42,6 +43,7 @@ jest.mock('../../src/native/accessibility-bridge', () => ({
     query: mockQuery,
     dumpTree: jest.fn(),
     press: mockPress,
+    inspect: mockInspect,
   }),
 }));
 
@@ -50,9 +52,15 @@ jest.mock('../../src/native/semantics-activator', () => ({
   countNodes: jest.fn().mockReturnValue(10),
 }));
 
+// Mutable kind so individual tests can switch the dispatch tier (e.g. to
+// `simhid` for Tier-3 readback coverage) without redefining the whole mock.
+let mockBackendKind: 'simctl' | 'simhid' = 'simctl';
+
 jest.mock('../../src/tools/native-input-backend', () => ({
   getInputBackend: jest.fn(async () => ({
-    kind: 'simctl' as const,
+    get kind() {
+      return mockBackendKind;
+    },
     tap: mockTap,
     typeText: mockTypeText,
   })),
@@ -112,6 +120,23 @@ beforeAll(() => {
 beforeEach(() => {
   jest.clearAllMocks();
   jest.useRealTimers();
+  mockBackendKind = 'simctl';
+  // Default: readback echoes the typed text so the Tier-3 verification
+  // path reports `verified: true` for the existing tests (backend !=
+  // 'simhid' in the default mock, so inspect is not actually invoked —
+  // see the Tier-3 block at the bottom of the file for simhid-specific
+  // coverage).
+  mockInspect.mockReset();
+  mockInspect.mockResolvedValue({
+    role: 'AXTextField',
+    traits: [],
+    frame: { x: 0, y: 0, width: 100, height: 40 },
+    visible: true,
+    enabled: true,
+    focused: true,
+    path: '0/1',
+    value: '',
+  });
   // See the matching note in `app-tap-element.test.ts` — `clearAllMocks`
   // does not drain `mockResolvedValueOnce` queues, so reset the press
   // mock completely and reinstall the default before each test.
@@ -420,5 +445,180 @@ describe('app_type_element — Tier 1.5 AX press focus', () => {
         process.env.OPENSAFARI_DISABLE_AX_PRESS = prev;
       }
     }
+  });
+});
+
+describe('app_type_element — Tier 3 readback verification (issue #39)', () => {
+  function mkNode(overrides: Partial<AXNode> = {}): AXNode {
+    return {
+      role: 'AXTextField',
+      label: 'Email',
+      identifier: 'email-field',
+      traits: [],
+      frame: { x: 20, y: 100, width: 350, height: 40 },
+      visible: true,
+      enabled: true,
+      focused: false,
+      path: '0/1',
+      ...overrides,
+    };
+  }
+
+  it('reports verified: true when observed AXValue contains the typed text (simhid backend)', async () => {
+    mockBackendKind = 'simhid';
+    const node = mkNode({ path: '0/5' });
+    mockQuery.mockResolvedValue(makeQueryResult([node]));
+    mockInspect.mockResolvedValueOnce({
+      ...node,
+      value: 'qa@example.com',
+    });
+
+    const result = await handler('session', {
+      identifier: 'email-field',
+      text: 'qa@example.com',
+      timeout: 0,
+      focusDelay: 0,
+    });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(result.isError).toBeUndefined();
+    expect(body.verified).toBe(true);
+    expect(body.verify_method).toBe('ax-value-readback');
+    expect(body.backend).toBe('simhid');
+    expect(mockInspect).toHaveBeenCalledWith('0/5', 'test-device-id');
+  });
+
+  it('reports verified: false and sets isError when readback diverges (Korean transliteration case)', async () => {
+    mockBackendKind = 'simhid';
+    const node = mkNode({ path: '0/5' });
+    mockQuery.mockResolvedValue(makeQueryResult([node]));
+    // Issue #39 symptom: Korean 2-Set IME transliterates the HID keycodes.
+    mockInspect.mockResolvedValueOnce({
+      ...node,
+      value: '@ㄷㅌㅁ네|ㄷ.채',
+    });
+
+    const result = await handler('session', {
+      identifier: 'email-field',
+      text: 'qa@example.com',
+      timeout: 0,
+      focusDelay: 0,
+    });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(result.isError).toBe(true);
+    expect(body.verified).toBe(false);
+    expect(body.verify_method).toBe('ax-value-readback');
+    expect(body.verify_reason).toContain('qa@example.com');
+    expect(body.verify_reason).toContain('ㄷㅌ');
+    expect(body.backend).toBe('simhid');
+  });
+
+  it('reports verified: "unknown" when the element exposes no AXValue (password field)', async () => {
+    mockBackendKind = 'simhid';
+    const node = mkNode({ path: '0/5', identifier: 'password-field' });
+    mockQuery.mockResolvedValue(makeQueryResult([node]));
+    mockInspect.mockResolvedValueOnce({
+      ...node,
+      value: undefined,
+    });
+
+    const result = await handler('session', {
+      identifier: 'password-field',
+      text: 'hunter2',
+      timeout: 0,
+      focusDelay: 0,
+    });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(result.isError).toBeUndefined();
+    expect(body.verified).toBe('unknown');
+    expect(body.verify_method).toBe('ax-value-not-readable');
+  });
+
+  it('reports verified: "unknown" when bridge.inspect throws during readback', async () => {
+    mockBackendKind = 'simhid';
+    const node = mkNode({ path: '0/5' });
+    mockQuery.mockResolvedValue(makeQueryResult([node]));
+    mockInspect.mockRejectedValueOnce(new Error('bridge exploded'));
+
+    const result = await handler('session', {
+      identifier: 'email-field',
+      text: 'hello',
+      timeout: 0,
+      focusDelay: 0,
+    });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(result.isError).toBeUndefined();
+    expect(body.verified).toBe('unknown');
+    expect(body.verify_method).toBe('readback-failed');
+    expect(body.verify_reason).toContain('bridge exploded');
+  });
+
+  it('skips readback entirely when the dispatch tier is not simhid', async () => {
+    mockBackendKind = 'simctl'; // default mock; readback should be a no-op
+    const node = mkNode({ path: '0/5' });
+    mockQuery.mockResolvedValue(makeQueryResult([node]));
+
+    const result = await handler('session', {
+      identifier: 'email-field',
+      text: 'plain',
+      timeout: 0,
+      focusDelay: 0,
+    });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(result.isError).toBeUndefined();
+    expect(body.verified).toBe('unknown');
+    expect(body.verify_method).toBe('skipped-non-simhid');
+    expect(mockInspect).not.toHaveBeenCalled();
+  });
+
+  it('honors verify: false by skipping readback on simhid', async () => {
+    mockBackendKind = 'simhid';
+    const node = mkNode({ path: '0/5' });
+    mockQuery.mockResolvedValue(makeQueryResult([node]));
+
+    const result = await handler('session', {
+      identifier: 'email-field',
+      text: 'secret-totp',
+      verify: false,
+      timeout: 0,
+      focusDelay: 0,
+    });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(result.isError).toBeUndefined();
+    expect(body.verified).toBe('unknown');
+    expect(body.verify_method).toBe('skipped-non-simhid');
+    expect(body.verify_reason).toContain('verify: false');
+    expect(mockInspect).not.toHaveBeenCalled();
+  });
+
+  it('truncates long observed values in verify_reason to cap PII leakage', async () => {
+    mockBackendKind = 'simhid';
+    const node = mkNode({ path: '0/5' });
+    const longObserved = 'ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ';
+    mockQuery.mockResolvedValue(makeQueryResult([node]));
+    mockInspect.mockResolvedValueOnce({
+      ...node,
+      value: longObserved,
+    });
+
+    const result = await handler('session', {
+      identifier: 'email-field',
+      text: 'qa@example.com',
+      timeout: 0,
+      focusDelay: 0,
+    });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(result.isError).toBe(true);
+    expect(body.verified).toBe(false);
+    // The full 50-char observed string must NOT appear verbatim; the
+    // truncation ellipsis is the proof the cap ran.
+    expect(body.verify_reason).toContain('…');
+    expect(body.verify_reason).not.toContain(longObserved);
   });
 });
