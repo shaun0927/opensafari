@@ -194,6 +194,29 @@ export function decidePromotion(args: {
   return { promote: false };
 }
 
+// Issue #46: DEVICE_CONTENT_ROOT_EMPTY from the native probe is NOT a hard
+// failure for the `context` command. It means the AX root is empty (likely a
+// spinner / loading screen / chrome-only transition), which is exactly the
+// signal the sim-hid-bridge wrapper needs in order to promote to
+// TRANSITIONAL_STATE_TIMEOUT. Coerce it to a synthetic empty AXNode so the
+// surface classifier emits `FOREGROUND_CONTEXT_UNAVAILABLE` and the wrapper's
+// re-probe rule can run. All other native error codes keep exiting 1 unchanged.
+const EMPTY_AX_TREE_WARNING =
+  'Native AX probe reported DEVICE_CONTENT_ROOT_EMPTY — foreground AX tree is empty (likely a spinner/loading or chrome-only transition).';
+
+function buildEmptyAXTree(): any {
+  return {
+    role: '',
+    traits: [],
+    frame: { x: 0, y: 0, width: 0, height: 0 },
+    visible: false,
+    enabled: false,
+    focused: false,
+    children: [],
+    path: '',
+  };
+}
+
 async function outputContext(flags: Record<string, string>): Promise<never> {
   const deviceId = flags.device;
   if (!deviceId) {
@@ -202,7 +225,8 @@ async function outputContext(flags: Record<string, string>): Promise<never> {
 
   const manager = new SimulatorManager();
   const parsed = await readNativeContextDump(deviceId, flags['max-depth'] ?? '6');
-  if (parsed?.error) {
+  const emptyTreeCoerced = parsed?.code === 'DEVICE_CONTENT_ROOT_EMPTY';
+  if (parsed?.error && !emptyTreeCoerced) {
     process.stdout.write(`${JSON.stringify(parsed, null, 2)}\n`);
     process.exit(1);
   }
@@ -213,12 +237,16 @@ async function outputContext(flags: Record<string, string>): Promise<never> {
     bundleId: app.label,
     pid: app.pid,
   }));
+  const tree = emptyTreeCoerced ? buildEmptyAXTree() : (parsed as any);
   const result = buildRawMobileContext({
     deviceId,
-    tree: parsed as any,
+    tree,
     runningApps,
     expectedBundle: flags['expect-bundle'],
   });
+  if (emptyTreeCoerced) {
+    result.warnings = [...result.warnings, EMPTY_AX_TREE_WARNING];
+  }
 
   if (flags['require-match'] === 'true' && flags['expect-bundle'] && result.expectedBundleMatched === false) {
     process.stdout.write(`${JSON.stringify({

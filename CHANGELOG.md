@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`ax-bridge context` now coerces `DEVICE_CONTENT_ROOT_EMPTY` to `FOREGROUND_CONTEXT_UNAVAILABLE`** (#46). The native probe's empty-root error is a legitimate "loading / spinner / chrome-only transition" signal for the `context` command, so the wrapper now substitutes a synthetic empty AX tree (with a `warnings` entry) and exits 0 instead of exiting 1. This unblocks the sim-hid-bridge wrapper's `TRANSITIONAL_STATE_TIMEOUT` promotion rule on the #46 live-integration path — it was never firing because the first probe short-circuited before `runningApps` was populated. All other native error codes (`DEVICE_WINDOW_NOT_FOUND`, `DEVICE_RESOLUTION_FAILED`, `AX_WRAPPER_FAILED`, etc.) still exit 1 with the raw error JSON.
+
 ### Added
 
 - **`TRANSITIONAL_STATE_TIMEOUT` classification + `--max-settle-retries` flag for `dist/sim-hid-bridge`** (#46). The wrapper now distinguishes "expected app is running but its UI is still loading" from "no AX data at all": when `--expect-bundle <b>` is supplied and the first settle window returns `FOREGROUND_CONTEXT_UNAVAILABLE` while `<b>` is in `runningApps`, the wrapper performs one bounded re-probe (another `settleMs` window) and promotes to `TRANSITIONAL_STATE_TIMEOUT` if the tree is still empty. The re-probe is capped by `--max-settle-retries <0|1|2|3>` (default `1`); set `0` to restore the pre-issue single-probe behavior byte-for-byte. The surface classifier in `src/tools/raw-mobile-context.ts` stays surface-scoped and never emits the new variant itself — promotion is a wrapper-layer concern.
