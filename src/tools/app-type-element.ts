@@ -19,11 +19,14 @@ import { getAccessibilityBridge, ensureSemanticsActive } from '../native';
 import type { AXNode, AXQuery } from '../native';
 import { resolveDeviceId, getInputBackend, runInputOp } from './native-input-utils';
 import { tryPress } from './app-tap-element';
+import { typeViaPasteboard } from './pasteboard-input';
 
 const execFileAsync = promisify(execFile);
 
 const DEFAULT_TIMEOUT_MS = 5000;
 const DEFAULT_FOCUS_DELAY_MS = 150;
+const SUPPORTED_BACKENDS = ['auto', 'pasteboard'] as const;
+type TypeBackendChoice = (typeof SUPPORTED_BACKENDS)[number];
 
 /**
  * Maximum number of characters of the observed AX value to echo back in
@@ -90,6 +93,22 @@ export function registerAppTypeElementTool(server: MCPServer): void {
             type: 'number',
             description: `Ms to wait between tap-to-focus and typing (default: ${DEFAULT_FOCUS_DELAY_MS}). Increase for slow keyboards.`,
           },
+          backend: {
+            type: 'string',
+            enum: [...SUPPORTED_BACKENDS],
+            description:
+              'Typing backend. "auto" (default) uses the HID/simhid path — fast, but bound to the simulator\'s active software keyboard layout and silently transliterates through non-Latin keyboards (see #39). "pasteboard" round-trips via the simulator pasteboard + Cmd+V, bypassing the software keyboard entirely — Unicode-safe (CJK, emoji), keyboard-layout-independent.',
+          },
+          restorePasteboard: {
+            type: 'boolean',
+            description:
+              'When backend="pasteboard": restore the original simulator pasteboard after typing (default: true).',
+          },
+          autoAcceptPastePermission: {
+            type: 'boolean',
+            description:
+              'When backend="pasteboard": auto-accept the iOS 16+ paste-permission dialog if it appears (default: true).',
+          },
           deviceId: {
             type: 'string',
             description: 'Simulator UDID (uses active device if omitted)',
@@ -108,6 +127,12 @@ export function registerAppTypeElementTool(server: MCPServer): void {
       const identifier = params.identifier as string | undefined;
       const label = params.label as string | undefined;
       const role = params.role as string | undefined;
+      const backendChoice = ((params.backend as string | undefined) ?? 'auto') as TypeBackendChoice;
+      if (!SUPPORTED_BACKENDS.includes(backendChoice)) {
+        return jsonError(
+          `backend must be one of: ${SUPPORTED_BACKENDS.join(', ')} (got "${backendChoice}")`,
+        );
+      }
 
       if (typeof textToType !== 'string' || textToType.length === 0) {
         return jsonError('text must be a non-empty string');
@@ -197,6 +222,54 @@ export function registerAppTypeElementTool(server: MCPServer): void {
         }
 
         const backend = await getInputBackend(deviceId, getWebKitClient(deviceId));
+        const elementDescriptor = {
+          role: match.role,
+          label: match.label,
+          identifier: match.identifier,
+          path: match.path,
+        };
+
+        if (backendChoice === 'pasteboard') {
+          // Focus first (via AX press when possible, else coordinate tap).
+          if (!focusedViaAXPress) {
+            await backend.tap(deviceId, centerX, centerY);
+          }
+          if (focusDelay > 0) {
+            await sleep(focusDelay);
+          }
+
+          const restorePasteboard = (params.restorePasteboard as boolean | undefined) ?? true;
+          const autoAcceptPastePermission =
+            (params.autoAcceptPastePermission as boolean | undefined) ?? true;
+
+          const pasteResult = await typeViaPasteboard(deviceId, textToType, {
+            restorePasteboard,
+            autoAcceptPastePermission,
+          });
+
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: JSON.stringify({
+                  status: 'typed',
+                  element: elementDescriptor,
+                  coordinates: { x: centerX, y: centerY },
+                  length: textToType.length,
+                  backend: 'pasteboard',
+                  focusBackend: focusedViaAXPress ? 'ax-press' : backend.kind,
+                  pasteboardRestored: pasteResult.pasteboardRestored,
+                  permissionDialog: pasteResult.permissionDialog,
+                  permissionDialogMatchedLabel:
+                    pasteResult.permissionDialogMatchedLabel,
+                  elapsedMs: pasteResult.elapsedMs,
+                  deviceId,
+                }),
+              },
+            ],
+          };
+        }
+
         const { meta } = await runInputOp(backend, deviceId, async () => {
           if (!focusedViaAXPress) {
             await backend.tap(deviceId, centerX, centerY);
@@ -227,12 +300,7 @@ export function registerAppTypeElementTool(server: MCPServer): void {
 
         const responseBody: Record<string, unknown> = {
           status: 'typed',
-          element: {
-            role: match.role,
-            label: match.label,
-            identifier: match.identifier,
-            path: match.path,
-          },
+          element: elementDescriptor,
           coordinates: { x: centerX, y: centerY },
           length: textToType.length,
           backend: backend.kind,
