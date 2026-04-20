@@ -1,0 +1,55 @@
+{
+  "role": "AXApplication",
+  "label": "MyApp",
+  "traits": [],
+  "frame": { "x": 0, "y": 0, "width": 393, "height": 852 },
+  "visible": true,
+  "enabled": true,
+  "focused": false,
+  "path": "0",
+  "children": [
+    {
+      "role": "AXWindow",
+      "traits": [],
+      "frame": { "x": 0, "y": 0, "width": 393, "height": 852 },
+      "visible": true,
+      "enabled": true,
+      "focused": false,
+      "path": "0/0",
+      "children": [
+        {
+          "role": "AXGroup",
+          "traits": [],
+          "frame": { "x": 0, "y": 0, "width": 393, "height": 852 },
+          "visible": true,
+          "enabled": true,
+          "focused": false,
+          "path": "0/0/0",
+          "children": [
+            {
+              "role": "AXStaticText",
+              "label": "Your profile has been saved.",
+              "traits": [],
+              "frame": { "x": 40, "y": 300, "width": 313, "height": 40 },
+              "visible": true,
+              "enabled": true,
+              "focused": false,
+              "path": "0/0/0/0"
+            },
+            {
+              "role": "AXButton",
+              "label": "OK",
+              "identifier": "submit_button",
+              "traits": [],
+              "frame": { "x": 147, "y": 360, "width": 100, "height": 44 },
+              "visible": true,
+              "enabled": true,
+              "focused": false,
+              "path": "0/0/0/1"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
