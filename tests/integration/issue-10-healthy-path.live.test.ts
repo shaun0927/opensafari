@@ -47,12 +47,22 @@ function resolveBootedDeviceId(): string | null {
   const fromEnv = process.env.FIXTURE_DEVICE_ID ?? process.env.OSF_DEVICE_ID;
   if (fromEnv) return fromEnv;
   try {
-    const out = execFileSync('xcrun', ['simctl', 'list', 'devices', 'booted'], {
+    // Filter to iOS simulators only — watchOS/tvOS boots under the same
+    // `booted` section and the Flutter fixture install/launch path would
+    // fail on a non-iOS runtime for reasons unrelated to the test target.
+    const out = execFileSync('xcrun', ['simctl', 'list', 'devices', 'booted', '-j'], {
       encoding: 'utf8',
       timeout: 5_000,
     });
-    const match = out.match(/[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}/i);
-    return match ? match[0] : null;
+    const parsed = JSON.parse(out) as {
+      devices: Record<string, Array<{ udid: string; isAvailable?: boolean }>>;
+    };
+    for (const [runtime, entries] of Object.entries(parsed.devices)) {
+      if (!/SimRuntime\.iOS/.test(runtime) && !/^iOS /i.test(runtime)) continue;
+      const booted = entries.find((d) => d.isAvailable !== false);
+      if (booted) return booted.udid;
+    }
+    return null;
   } catch {
     return null;
   }
