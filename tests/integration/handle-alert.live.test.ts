@@ -58,12 +58,9 @@ const SAFARI_BUNDLE = 'com.apple.mobilesafari';
 const CONFIRM_HTML = `data:text/html,<script>setTimeout(function(){confirm('\uD14C\uC2A4\uD2B8');},500);</script>`;
 
 /** Accept candidates across the v1 shipped corpus (en/ko/ja/zh-Hans). */
-const ACCEPT_CANDIDATES = ['OK', 'Allow', '확인', '허용', 'OK', '許可', '好', '允许'];
+const ACCEPT_CANDIDATES = ['OK', 'Allow', '확인', '허용', '許可', '好', '允许'];
 /** Dismiss candidates across the v1 shipped corpus. */
-const DISMISS_CANDIDATES = ['Cancel', "Don't Allow", '취소', '허용 안 함', 'キャンセル', '许可しない', '取消', '不允许'];
-
-/** How long to wait for the alert dialog to appear (ms). */
-const ALERT_WAIT_MS = 10_000;
+const DISMISS_CANDIDATES = ['Cancel', "Don't Allow", '취소', '허용 안 함', 'キャンセル', '許可しない', '取消', '不允许'];
 
 jest.setTimeout(180_000);
 
