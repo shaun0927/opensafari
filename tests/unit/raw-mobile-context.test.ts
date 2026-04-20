@@ -61,6 +61,30 @@ describe('raw mobile context projection', () => {
     expect(result.expectedBundleMatched).toBe(true);
   });
 
+  it('ignores helper apps when deciding that the expected bundle is foreground', () => {
+    const tree = node({
+      children: [
+        node({ role: 'AXTextField', label: '주소', path: '0' }),
+        node({ role: 'AXButton', label: '뒤로', path: '1' }),
+      ],
+    });
+
+    const result = buildRawMobileContext({
+      deviceId: 'device-1',
+      tree,
+      runningApps: [
+        { bundleId: 'com.apple.mobilesafari', pid: 10 },
+        { bundleId: 'com.apple.iMessageAppsViewService', pid: 11 },
+        { bundleId: 'com.apple.chrono.WidgetRenderer-Default', pid: 12 },
+      ],
+      expectedBundle: 'com.apple.mobilesafari',
+    });
+
+    expect(result.classification).toBe('TARGET_BUNDLE_CONFIRMED');
+    expect(result.frontmost.bundleId).toBe('com.apple.mobilesafari');
+    expect(result.expectedBundleMatched).toBe(true);
+  });
+
   it('falls back to unverified app content when no expected bundle is provided', () => {
     const tree = node({
       children: [

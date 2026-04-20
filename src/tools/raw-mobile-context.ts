@@ -10,6 +10,9 @@ const IGNORED_RUNNING_APP_PREFIXES = [
   'com.apple.spotlight',
   'com.apple.mobilecal',
   'com.apple.Preferences',
+  'com.apple.family',
+  'com.apple.DocumentManager.',
+  'com.apple.iMessageAppsViewService',
 ];
 
 export type RawMobileClassification =
@@ -56,6 +59,9 @@ export function probeToRawMobileContext(probe: MobileContextProbe): RawMobileCon
         if (probe.expectedBundleMatch === 'matched') {
           classification = 'TARGET_BUNDLE_CONFIRMED';
           verified = true;
+        } else if (frontmostBundleId === probe.expectedBundle) {
+          classification = 'TARGET_BUNDLE_CONFIRMED';
+          verified = true;
         } else if (probe.expectedBundleMatch === 'mismatch') {
           classification = 'EXPECTED_BUNDLE_MISMATCH';
           verified = false;
@@ -88,6 +94,8 @@ export function probeToRawMobileContext(probe: MobileContextProbe): RawMobileCon
         ? true
         : probe.expectedBundleMatch === 'mismatch'
           ? false
+          : probe.expectedBundle && frontmostBundleId === probe.expectedBundle
+            ? true
           : undefined,
     classification,
     verified,
