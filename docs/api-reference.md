@@ -86,8 +86,10 @@ Report the current mobile context for a booted simulator using accessibility-tre
 #### app_tap
 Tap at screen coordinates in the simulator.
 - **Input:** `{ x: number, y: number, duration?: number, deviceId?: string, expectedBundle?: string, verifyContext?: boolean, settleMs?: number }`
-- **Output:** `{ status: "tapped", x, y, duration, deviceId, backend, _meta, postInputContext?, warning? }`
+- **Output:** `{ status: "tapped", x, y, duration, deviceId, backend, verified?, effect?, _meta, postInputContext?, warning? }`
 - **Notes:** When `verifyContext=true` or `expectedBundle` is supplied, the tool waits `settleMs` (default 1200 ms) and attaches a post-input context probe.
+  - `verified: false` + `effect: "verification_unavailable"` means transport succeeded but OpenSafari could not prove a UI change.
+  - `TAP_NO_EFFECT` means the tap was dispatched and the post-action AX tree stayed unchanged.
 
 #### app_swipe_native
 Perform a swipe gesture on the simulator.
@@ -139,13 +141,14 @@ Accept, dismiss, or press a named button on a system alert/dialog on a booted iO
   - `buttonLabel?: string` — Exact button label to press (case-insensitive, trimmed). Walks the front-most alert's accessibility tree and invokes `AXPress` on the first match. Takes precedence over `action`.
   - `buttonLabels?: string[]` — Ordered list of candidate labels tried in priority order; the first match is pressed. Takes precedence over `buttonLabel` and `action`. Useful for multi-locale support.
   - `deviceId?: string` — Simulator UDID. Falls back to the active device if omitted.
-- **Output:** `{ handled: true, buttonLabel?, action?, deviceId, method, _meta }`
+- **Output:** `{ handled: true, buttonLabel?, action?, deviceId, method, verified?, effect?, _meta }`
 - **Errors:**
   - `DEVICE_NOT_BOOTED` — No booted simulator found.
   - `MISSING_PARAMS` — Neither `action` nor `buttonLabel`/`buttonLabels` provided.
   - `INVALID_ACTION` — `action` is not `"accept"` or `"dismiss"`.
   - `NO_MATCHING_BUTTON` — None of the supplied labels matched a visible button; the error payload includes `visibleLabels` listing what was found.
   - `ALERT_HANDLE_FAILED` — Key send or AX press failed.
+  - `ALERT_HANDLE_NO_EFFECT` — A button press was dispatched but the same alert stayed visible, so OpenSafari could not confirm dismissal/transition.
 - **Examples:**
   ```json
   // Keyboard fallback — accept the default button
@@ -160,6 +163,7 @@ Accept, dismiss, or press a named button on a system alert/dialog on a booted iO
 - **Notes:**
   - The `buttonLabel`/`buttonLabels` path uses macOS `AXUIElement` accessibility API (`ax-bridge`) — it works on StoreKit password sheets, 3-button permission dialogs, and any alert where the default button is not the accept action.
   - `_meta._telemetry[0].backend` is `"ax-press"` on the label path and the backend kind (e.g. `"simctl"`) on the keyboard path.
+  - Successful responses carry `verified: true` only when the alert subtree changes after the press. If the same alert remains visible, the tool returns `ALERT_HANDLE_NO_EFFECT` instead of a plain success.
   - For non-English simulators, build the candidate list with `resolveLocalizedButtonLabels` from `src/native/localized-button-matcher.ts` or seed it from `src/native/system-button-catalog.ts`.
   - For StoreKit / In-App Purchase QA see [StoreKit Automation Guide](storekit-automation.md).
 
