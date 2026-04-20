@@ -172,9 +172,11 @@ Accept or dismiss the currently visible simulator alert using a locale-aware det
 - **Input:**
   - `action: 'accept' | 'dismiss'` — Accept or dismiss the dialog.
   - `deviceId?: string` — Simulator UDID (active device if omitted).
+  - `fallback?: 'permission_reset' | 'none'` — When Tier 1 (AX-scan) and Tier 2 (AppleScript) both miss the dialog, opt in to `xcrun simctl privacy <udid> reset <service>` with a service inferred from `visibleStaticTexts`. Default `'none'`.
+  - `dryRun?: boolean` — When `fallback='permission_reset'`, report the `simctl` command that would run without executing it. Default `false`.
 - **Output fields (always present):**
   - `dismissed: boolean` — Whether the dialog was confirmed gone.
-  - `strategy: 'ax-scan' | 'applescript-sheet' | 'none'` — Which tier succeeded.
+  - `strategy: 'ax-scan' | 'applescript-sheet' | 'permission-reset' | 'none'` — Which tier succeeded.
   - `strategy_attempted: string[]` — Ordered list of tiers tried.
   - `matchedButton?: string` — Label of the button that was pressed (ax-scan only).
   - `reason: 'ok' | 'no_candidate_button' | 'ax_scan_timeout' | ...` — Closed enum from `src/errors/alert-reasons.ts`.
@@ -186,7 +188,9 @@ Accept or dismiss the currently visible simulator alert using a locale-aware det
 - **Tiers:**
   1. AX-scan — dumps the native AX tree and presses the best matching button via `AXPress`.
   2. AppleScript fallback — clicks a button labeled from the full corpus inside `sheet 1 of window 1`.
-- **Use when:** a system permission prompt (location, photos, ATT, etc.) blocks automation and you do not know the exact locale-specific label. Use `app_alert_handle` instead when you want to press a specific in-app button by label.
+  3. `permission_reset` (opt-in) — when both tiers fail and `fallback='permission_reset'`, the tool infers a permission service (`location`, `photos`, `contacts`, `notifications`, `tracking`, `camera`, `microphone`, `bluetooth`, `calendars`, `reminders`) from `visibleStaticTexts` and runs `xcrun simctl privacy <udid> reset <service>`. If two or more services match, the response is `reason: 'permission_reset_ambiguous'` and no command is executed; if none match, `reason: 'permission_reset_unknown_service'`.
+- **Additional output when Tier 3 runs:** `permissionReset: { service, servicesConsidered, executed, dryRun, command?, error? }`.
+- **Use when:** a system permission prompt (location, photos, ATT, etc.) blocks automation and you do not know the exact locale-specific label. Opt in to `fallback: 'permission_reset'` as a recovery option when the dialog itself cannot be detected. Use `app_alert_handle` instead when you want to press a specific in-app button by label.
 
 ### Advanced Tools (Tier 2)
 
