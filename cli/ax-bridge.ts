@@ -16,6 +16,58 @@ interface ErrorJSON {
   code: string;
 }
 
+const TOP_LEVEL_HELP = `\
+ax-bridge <command> [flags]
+
+Commands:
+  dump       Dump accessibility tree for a simulator device
+  query      Query app elements by role/label/text/identifier
+  inspect    Inspect a single element by path
+  press      Issue a press on an element (advanced)
+  context    Report current foreground native context
+
+Flags:
+  --device <udid|name|booted|any>   Target simulator (required for most commands)
+  --max-depth <n>                   Max tree depth (default: 10)
+  --role <role>                     (query) Accessibility role filter
+  --label <label>                   (query) Accessibility label substring
+  --text <text>                     (query) Text substring
+  --identifier <id>                 (query) Accessibility identifier exact match
+  --path <index/path>               (inspect) Element index path
+  --ensure-semantics <auto|off>     Bootstrap Flutter semantics before read (default: auto)
+  --bundle-id <bundle>              Target bundle (Flutter apps, VM Service disambiguation)
+  --expect-bundle <bundle>          (context) Expected foreground bundle
+  --require-match <true|false>      (context) Error when expected bundle is not foreground
+
+Error codes (stdout JSON, exit 1):
+  DEVICE_RESOLUTION_FAILED         Requested device not found / not booted
+  DEVICE_RESOLUTION_AMBIGUOUS      Multiple booted simulators match
+  DEVICE_WINDOW_NOT_FOUND          No AX window matched the requested device
+  DEVICE_CONTENT_ROOT_EMPTY        Window resolved but no app-semantics content (#40)
+  APP_CONTENT_NOT_EXPOSED          Tree is Simulator chrome only after bootstrap (#41)
+  EXPECTED_BUNDLE_MISMATCH         (context) Expected bundle not foreground
+  BRIDGE_NOT_FOUND                 ax-bridge-native/ax-bridge.swift missing
+  AX_WRAPPER_FAILED                Wrapper-level unexpected error
+  BAD_ARGS                         Invalid or missing CLI flags
+  UNKNOWN_COMMAND                  Command not recognized
+`;
+
+const SUBCOMMAND_FLAGS: Record<string, string> = {
+  dump: '--device, --max-depth, --ensure-semantics, --bundle-id',
+  query: '--device, --role, --label, --text, --identifier, --ensure-semantics, --bundle-id',
+  inspect: '--device, --path, --ensure-semantics, --bundle-id',
+  press: '--device, --path, --ensure-semantics, --bundle-id',
+  context: '--device, --max-depth, --expect-bundle, --require-match',
+};
+
+function printHelp(command?: string): never {
+  process.stdout.write(TOP_LEVEL_HELP);
+  if (command && SUBCOMMAND_FLAGS[command]) {
+    process.stdout.write(`\nRelevant flags for ${command}: ${SUBCOMMAND_FLAGS[command]}\n`);
+  }
+  process.exit(0);
+}
+
 // This CLI is a standalone process consumed by the internal AccessibilityBridge via execFile,
 // which parses stdout as JSON. stdout is the contract for structured success AND error payloads here.
 // DO NOT import outputError into the MCP server process — it would corrupt JSON-RPC on stdout.
@@ -177,6 +229,15 @@ async function readNativeContextDump(deviceId: string, maxDepth: string): Promis
 
 async function main(): Promise<void> {
   const rawArgs = process.argv.slice(2);
+
+  // --help / -h must be intercepted before argument validation so missing
+  // required flags never suppress help output.
+  if (rawArgs.length === 0 || rawArgs.includes('--help') || rawArgs.includes('-h')) {
+    const KNOWN = new Set(['dump', 'query', 'inspect', 'press', 'context']);
+    const first = rawArgs[0];
+    printHelp(first && KNOWN.has(first) ? first : undefined);
+  }
+
   const { command, flags } = parseArgs(rawArgs);
   if (command === 'context') {
     await outputContext(flags);

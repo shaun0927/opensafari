@@ -732,7 +732,7 @@ func main() {
         ))
 
     default:
-        outputError("Unknown command: \(command). Use dump, query, inspect, or press.", code: "UNKNOWN_COMMAND")
+        outputError("Unknown command: \(command). Use dump, query, inspect, press, or context.", code: "UNKNOWN_COMMAND")
         exit(1)
     }
 }
