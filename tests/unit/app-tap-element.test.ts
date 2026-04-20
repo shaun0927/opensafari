@@ -46,6 +46,7 @@ jest.mock('../../src/native/accessibility-bridge', () => ({
 jest.mock('../../src/native/semantics-activator', () => ({
   ensureSemanticsActive: jest.fn().mockResolvedValue(true),
   countNodes: jest.fn().mockReturnValue(10),
+  isLikelyChromeOnlyTree: jest.fn().mockReturnValue(false),
 }));
 
 jest.mock('../../src/tools/native-input-backend', () => ({

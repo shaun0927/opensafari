@@ -7,7 +7,12 @@
  */
 
 import { MCPServer, getWebKitClient } from '../mcp-server';
-import { getAccessibilityBridge, ensureSemanticsActive, countNodes } from '../native';
+import {
+  getAccessibilityBridge,
+  ensureSemanticsActive,
+  countNodes,
+  isLikelyChromeOnlyTree,
+} from '../native';
 import type { AXNode, AXPressResponse } from '../native';
 import type { AccessibilityBridge } from '../native/accessibility-bridge';
 import { walkTree, fingerprintTree } from '../native/ax-verification';
@@ -313,8 +318,9 @@ export function registerAppTapElementTool(server: MCPServer): void {
                 `but no observable UI effect was detected (${verification.effect}); ` +
                 `falling back to coordinate tap.`,
             );
-            coordinateVerificationBaseline =
-              beforeTree !== null && countNodes(beforeTree) >= 5 ? beforeTree : null;
+            coordinateVerificationBaseline = isUsableVerificationBaseline(beforeTree)
+              ? beforeTree
+              : null;
           }
           if (pressResponse && pressResponse.code === 'PRESS_NOT_ACTIONABLE') {
             console.error(
@@ -334,9 +340,10 @@ export function registerAppTapElementTool(server: MCPServer): void {
 
         if (bundleId && coordinateVerificationBaseline === null) {
           try {
-            await ensureSemanticsActive(deviceId, { bundleId });
+            const semanticsActive = await ensureSemanticsActive(deviceId, { bundleId });
             const baseline = await bridge.dumpTree({ deviceId, maxDepth: 8 });
-            coordinateVerificationBaseline = countNodes(baseline) >= 5 ? baseline : null;
+            coordinateVerificationBaseline =
+              semanticsActive && isUsableVerificationBaseline(baseline) ? baseline : null;
           } catch (dumpErr) {
             const dumpMsg = dumpErr instanceof Error ? dumpErr.message : String(dumpErr);
             console.error(
@@ -614,6 +621,10 @@ async function verifyCoordinateTapEffect(
   } catch {
     return { verified: false, effect: 'verification_unavailable' };
   }
+}
+
+function isUsableVerificationBaseline(tree: AXNode | null): tree is AXNode {
+  return tree !== null && countNodes(tree) >= 5 && !isLikelyChromeOnlyTree(tree);
 }
 
 async function probePostInputContext(args: {
