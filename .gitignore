@@ -36,3 +36,6 @@ npm-debug.log*
 *.tmp
 .openchrome/
 .omx/
+
+# Generated verification reports
+scripts/.verify-issue-10-healthy.report.json
