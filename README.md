@@ -561,6 +561,15 @@ decision flowchart and the full scenario matrix. Tool responses also include
 `_meta: { backendKind, headless, deviceId }` so CI can assert
 `_meta.headless === true`.
 
+Raw bridge consumers can now ask for the same foreground diagnostics directly:
+
+- `dist/ax-bridge context --device <udid> [--expect-bundle <bundle>] [--require-match true]`
+- `dist/sim-hid-bridge context <udid> [--expect-bundle <bundle>] [--require-match true]`
+
+`dist/sim-hid-bridge tap|swipe` also appends `classification`, `verified`,
+`frontmost`, and `expectedBundleMatched` to its JSON result so downstream QA can
+tell the difference between a clean in-app tap and a wrong-foreground outcome.
+
 Example tool result:
 
 ```json

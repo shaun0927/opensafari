@@ -224,6 +224,17 @@ element-scoped also cleanly preserves `app_tap({x, y})`'s contract:
 coordinate-only callers continue down the existing Tier 0 → 1 → 2 → 3
 → 4 chain.
 
+Raw-bridge consumers can now query the same foreground diagnostics without
+going through MCP:
+
+- `dist/ax-bridge context --device <udid> [--expect-bundle <bundle>]`
+- `dist/sim-hid-bridge context <udid> [--expect-bundle <bundle>]`
+- `dist/sim-hid-bridge tap|swipe ... --expect-bundle <bundle> [--require-match true]`
+
+The raw SimHID wrapper appends post-input `classification`, `verified`,
+`frontmost`, and `expectedBundleMatched` fields so downstream QA can separate a
+clean in-app dispatch from simulator-chrome or SpringBoard outcomes.
+
 Selection contract:
 
 - Enabled for `app_tap_element` / `app_type_element` by default.

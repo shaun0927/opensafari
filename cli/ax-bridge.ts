@@ -6,6 +6,8 @@ import * as path from 'path';
 import * as fs from 'fs';
 
 import { ensureSemanticsActive, isLikelyChromeOnlyTree } from '../src/native';
+import { SimulatorManager } from '../src/simulator';
+import { buildRawMobileContext } from '../src/tools/raw-mobile-context';
 
 const execFileAsync = promisify(execFile);
 
@@ -69,9 +71,51 @@ async function probeChromeOnly(deviceId: string): Promise<boolean> {
   }
 }
 
+async function outputContext(flags: Record<string, string>): Promise<never> {
+  const deviceId = flags.device;
+  if (!deviceId) {
+    outputError('The context command requires --device <UDID|device-name|booted>.', 'BAD_ARGS');
+  }
+
+  const manager = new SimulatorManager();
+  const bridgeOutput = await execNative(['dump', '--device', deviceId, '--max-depth', flags['max-depth'] ?? '6']);
+  const parsed = JSON.parse(bridgeOutput.stdout);
+  if (parsed?.error) {
+    process.stdout.write(`${JSON.stringify(parsed, null, 2)}\n`);
+    process.exit(1);
+  }
+
+  const runningAppsRaw = await manager.listRunningApps(deviceId);
+  const runningApps = runningAppsRaw.map((app) => ({
+    bundleId: app.label,
+    pid: app.pid,
+  }));
+  const result = buildRawMobileContext({
+    deviceId,
+    tree: parsed,
+    runningApps,
+    expectedBundle: flags['expect-bundle'],
+  });
+
+  if (flags['require-match'] === 'true' && flags['expect-bundle'] && result.expectedBundleMatched === false) {
+    process.stdout.write(`${JSON.stringify({
+      error: `Expected bundle ${flags['expect-bundle']} is not frontmost.`,
+      code: 'EXPECTED_BUNDLE_MISMATCH',
+      ...result,
+    }, null, 2)}\n`);
+    process.exit(1);
+  }
+
+  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+  process.exit(0);
+}
+
 async function main(): Promise<void> {
   const rawArgs = process.argv.slice(2);
   const { command, flags } = parseArgs(rawArgs);
+  if (command === 'context') {
+    await outputContext(flags);
+  }
   const deviceId = flags.device;
   const bundleId = flags['bundle-id'] ?? process.env.OPENSAFARI_AX_BUNDLE_ID;
   const ensureSemantics = flags['ensure-semantics'] ?? 'auto';
