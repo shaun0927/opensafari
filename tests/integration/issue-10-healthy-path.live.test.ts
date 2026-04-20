@@ -168,8 +168,14 @@ describeLive('issue #10 — healthy in-app tap/swipe classifications', () => {
       '1',
     ]);
     expect(result.ok).toBe(true);
-    expect(result.classification).not.toBe('TRANSITIONAL_STATE_TIMEOUT');
-    expect(result.classification).not.toBe('SPRINGBOARD_FOREGROUND');
+    // Positive assertion: the short transition must land on a healthy
+    // foreground, not merely avoid specific degraded codes. Without this,
+    // EXPECTED_BUNDLE_MISMATCH or FOREGROUND_CONTEXT_UNAVAILABLE would
+    // slip through because --require-match is not set.
+    expect(result.classification).toBe('TARGET_BUNDLE_CONFIRMED');
+    expect(result.verified).toBe(true);
+    expect(result.expectedBundleMatched).toBe(true);
+    expect(result.frontmost?.bundleId).toBe(BUNDLE_ID);
   });
 
   test('strict --require-match + healthy foreground keeps ok:true', async () => {
