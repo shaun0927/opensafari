@@ -75,7 +75,7 @@ async function runBridge(
     // SLOW_BRIDGE_TIMEOUT_MS so the execFile budget matches the jest
     // per-test budget.
     const { stdout, stderr } = await execFileAsync(cmd, cmdArgs, {
-      timeout: 30_000,
+      timeout: SLOW_BRIDGE_TIMEOUT_MS,
     });
     return { exitCode: 0, stdout, stderr };
   } catch (err) {
