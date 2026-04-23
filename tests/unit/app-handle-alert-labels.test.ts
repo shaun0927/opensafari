@@ -4,6 +4,7 @@ import {
   ALL_LABELS,
   flattenLabels,
   matchLabel,
+  normalizeLabel,
   type AlertLocale,
 } from '../../src/tools/app-handle-alert-labels';
 
@@ -84,5 +85,59 @@ describe('app-handle-alert-labels corpus', () => {
   test('matchLabel("random", "accept") returns null', () => {
     const result = matchLabel('random', 'accept');
     expect(result).toBeNull();
+  });
+
+  describe('Unicode whitespace normalization (issue #642)', () => {
+    const NBSP = ' ';
+    const NNBSP = ' ';
+    const FIGURE_SPACE = ' ';
+    const WORD_JOINER = '⁠';
+
+    test('matchLabel matches NBSP-separated ko dismiss label', () => {
+      const input = `허용${NBSP}안${NBSP}함`;
+      const result = matchLabel(input, 'dismiss');
+      expect(result).toEqual({ locale: 'ko', label: '허용 안 함' });
+    });
+
+    test('matchLabel matches Narrow-NBSP-separated ko dismiss label', () => {
+      const input = `허용${NNBSP}안${NNBSP}함`;
+      const result = matchLabel(input, 'dismiss');
+      expect(result).toEqual({ locale: 'ko', label: '허용 안 함' });
+    });
+
+    test('matchLabel matches Figure-Space (U+2007) variant', () => {
+      const input = `허용${FIGURE_SPACE}안${FIGURE_SPACE}함`;
+      const result = matchLabel(input, 'dismiss');
+      expect(result).toEqual({ locale: 'ko', label: '허용 안 함' });
+    });
+
+    test('matchLabel collapses Word-Joiner (U+2060) inside the label', () => {
+      const input = `허용${WORD_JOINER}안${WORD_JOINER}함`;
+      const result = matchLabel(input, 'dismiss');
+      expect(result).toEqual({ locale: 'ko', label: '허용 안 함' });
+    });
+
+    test('matchLabel collapses runs of mixed ASCII whitespace', () => {
+      const result = matchLabel('  Allow   While  Using  App  ', 'accept');
+      expect(result).toEqual({ locale: 'en', label: 'Allow While Using App' });
+    });
+
+    test('matchLabel matches NBSP-padded en label', () => {
+      const input = `Allow${NBSP}While${NBSP}Using${NBSP}App`;
+      const result = matchLabel(input, 'accept');
+      expect(result).toEqual({ locale: 'en', label: 'Allow While Using App' });
+    });
+
+    test('normalizeLabel collapses NBSP runs and lowercases', () => {
+      const input = `Allow${NBSP}${NBSP}While${NBSP}Using${NBSP}App`;
+      expect(normalizeLabel(input)).toBe('allow while using app');
+    });
+
+    test('normalizeLabel applies NFC normalization', () => {
+      // Korean syllable "한" decomposed to its jamo: U+1112 U+1161 U+11AB.
+      const decomposed = '한';
+      expect(decomposed.normalize('NFC')).toBe('한');
+      expect(normalizeLabel(decomposed)).toBe('한');
+    });
   });
 });

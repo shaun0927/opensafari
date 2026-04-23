@@ -41,15 +41,37 @@ export function flattenLabels(action: AlertAction): string[] {
   return result;
 }
 
+// Unicode whitespace codepoints frequently embedded in Apple's localized
+// SpringBoard strings to prevent line-wrapping. The corpus stores ASCII
+// U+0020 spaces, while the runtime AX label may contain any of these
+// "fancy" spaces. Equality must compare normalized forms.
+//
+// U+00A0 NO-BREAK SPACE
+// U+202F NARROW NO-BREAK SPACE
+// U+2007 FIGURE SPACE
+// U+2060 WORD JOINER
+// U+2028 LINE SEPARATOR
+// U+2029 PARAGRAPH SEPARATOR
+const FANCY_WHITESPACE = /[\u00A0\u202F\u2007\u2060\u2028\u2029]/g;
+
+export function normalizeLabel(text: string): string {
+  return text
+    .normalize('NFC')
+    .replace(FANCY_WHITESPACE, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
 export function matchLabel(
   text: string,
   action: AlertAction,
 ): { locale: AlertLocale; label: string } | null {
-  const trimmed = text.trim().toLowerCase();
+  const normalized = normalizeLabel(text);
   const localeMap = ALL_LABELS[action];
   for (const locale of Object.keys(localeMap) as AlertLocale[]) {
     for (const label of localeMap[locale]) {
-      if (label.toLowerCase() === trimmed) {
+      if (normalizeLabel(label) === normalized) {
         return { locale, label };
       }
     }
