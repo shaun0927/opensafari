@@ -1,5 +1,6 @@
 import { MCPServer, getWebKitClient, setWebKitClient } from '../../src/mcp-server';
 import { registerAppWebviewConnectTool } from '../../src/tools/app-webview-connect';
+import { getSessionManager } from '../../src/session-manager';
 import * as webkitClientModule from '../../src/webkit/client';
 
 function createMockClient(targets: Array<{ id: string; title: string; url: string; webSocketDebuggerUrl: string; type?: string; appId?: string; bundleId?: string; app_id?: string }>) {
@@ -238,6 +239,48 @@ describe('app_webview_connect tool', () => {
     expect(after).toBeFalsy();
 
     spy.mockRestore();
+  });
+
+  // Regression for the Codex P1 follow-up on #647: cleanup on listTargets
+  // failure must scope to the WebKit connection only. Dropping the simulator
+  // entry alongside it would make a booted device disappear from
+  // `getSoleDeviceId()` on every transient proxy hiccup, breaking downstream
+  // tools that were working fine before `app_webview_connect` was invoked.
+  test('preserves a pre-registered simulator entry when listTargets fails', async () => {
+    const sm = getSessionManager();
+    sm.addSimulator('device-sim-preserved', {
+      deviceId: 'device-sim-preserved',
+      deviceType: 'iPhone 17',
+      state: 'booted',
+      viewport: { width: 390, height: 844 },
+      bootedAt: Date.now(),
+      lastActivity: Date.now(),
+    });
+
+    // No WebKit client yet — app_webview_connect will freshly create one.
+    expect(getWebKitClient('device-sim-preserved')).toBeFalsy();
+    expect(sm.getSimulator('device-sim-preserved')).not.toBeNull();
+
+    const createdClient = createMockClient([]);
+    (createdClient as any).listTargets = jest.fn().mockRejectedValue(
+      new Error('connect ECONNREFUSED 127.0.0.1:9322'),
+    );
+    const spy = jest
+      .spyOn(webkitClientModule, 'WebKitClient')
+      .mockImplementation((() => createdClient) as unknown as (options: any) => any);
+
+    const handler = server.getToolHandler('app_webview_connect')!;
+    const result = await handler('test', { deviceId: 'device-sim-preserved' });
+    expect((result as any).isError).toBe(true);
+
+    // The failed WebKit connection is gone…
+    expect(getWebKitClient('device-sim-preserved')).toBeFalsy();
+    // …but the simulator itself must still be registered so downstream tools
+    // (and `getSoleDeviceId`) continue to see the booted device.
+    expect(sm.getSimulator('device-sim-preserved')).not.toBeNull();
+
+    spy.mockRestore();
+    sm.removeSimulator('device-sim-preserved');
   });
 
   // And the mirror case: a caller-registered client must survive a transient

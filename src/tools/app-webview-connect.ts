@@ -1,6 +1,5 @@
-import { MCPServer, getWebKitClient } from '../mcp-server';
+import { MCPServer, getWebKitClient, setWebKitClient } from '../mcp-server';
 import { WebKitClient } from '../webkit/client';
-import { setWebKitClient } from '../mcp-server';
 import { getSessionManager } from '../session-manager';
 import { getSharedProxy } from '../simulator/proxy';
 
@@ -125,12 +124,18 @@ export function registerAppWebviewConnectTool(server: MCPServer): void {
       try {
         targets = await (client as any).listTargets?.() ?? [];
       } catch (err) {
-        // Deregister the newly-created client so a subsequent call does not
-        // reuse a stale, never-successfully-used instance (e.g. when the
-        // proxy was briefly unreachable). Pre-existing registrations are
-        // intentionally left in place.
+        // Deregister only the freshly-created WebKit client so a subsequent
+        // call does not reuse a stale, never-successfully-used instance (e.g.
+        // when the proxy was briefly unreachable). We deliberately avoid
+        // `setWebKitClient(null, …)` here because its clear branch also
+        // removes the simulator entry from the session map — a device that
+        // was already registered (via `device_boot` or another tool surface)
+        // would then disappear from `getSoleDeviceId()` on a transient proxy
+        // hiccup. `removeConnection` scopes the cleanup to the WebKit
+        // connection only; pre-existing registrations are intentionally left
+        // in place.
         if (clientWasFreshlyRegistered) {
-          setWebKitClient(null, resolvedDeviceId);
+          getSessionManager().removeConnection(resolvedDeviceId);
         }
         const message = err instanceof Error ? err.message : String(err);
         return {
