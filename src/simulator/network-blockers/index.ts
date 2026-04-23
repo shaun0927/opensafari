@@ -9,15 +9,24 @@ export { AutoBlocker } from './auto';
 export type { AutoBlockerOptions } from './auto';
 export { NlcBlocker } from './nlc';
 export type { NlcBlockerOptions } from './nlc';
-export { PfctlBlocker, PFCTL_ANCHOR_NAME } from './pfctl';
+export {
+  PFCTL_ANCHOR_NAME,
+  PFCTL_BLOCK_RULES,
+  PfctlBlocker,
+  PfctlCommandError,
+  PfctlPfDisabledError,
+} from './pfctl';
 export type { PfctlBlockerOptions } from './pfctl';
 export { RealHostExec } from './host-exec';
+export { RealTempFileWriter } from './temp-file';
+export type { RealTempFileWriterOptions } from './temp-file';
 export type {
   HostExec,
   HostExecOptions,
   NetworkBlocker,
   NetworkBlockerKind,
   NetworkBlockerStatus,
+  TempFileWriter,
 } from './types';
 export {
   NetworkBlockerNotImplementedError,
