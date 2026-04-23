@@ -71,17 +71,47 @@ export function isLatinSoftwareLayout(key: string): boolean {
 }
 
 /**
+ * Max characters echoed for `expected` / `actual` in the hint payload.
+ * These fields exist only to prove that HID typing transliterated the input —
+ * a short prefix does that without shipping the full user value (emails,
+ * tokens, passwords) through MCP error payloads / logs. Matches the
+ * `VERIFY_ECHO_LEN` cap `app_type_element` uses in `verify_reason`.
+ */
+const HINT_ECHO_LEN = 24;
+
+function truncateForHint(s: string): string {
+  if (s.length <= HINT_ECHO_LEN) return s;
+  return `${s.slice(0, HINT_ECHO_LEN)}…`;
+}
+
+/**
  * Structured hint returned by `mismatchHint()` when a non-Latin keyboard
  * layout is detected and HID-typed text diverges from the expected value.
  * Surface this as `isError: true` with this object as the error payload so
  * callers can programmatically choose the recommended remediation.
+ *
+ * `expected` / `actual` are truncated echoes (prefix + `…`) of the caller's
+ * input and the AX readback — truncation is done by `mismatchHint` itself so
+ * the hint never carries full user text through MCP logs / telemetry, and
+ * `truncated: true` flags that the caller must not treat them as authoritative
+ * text. The raw readback is only ever exposed via the tool's separate
+ * `verify_reason` (which has matching truncation).
  */
 export interface LayoutMismatchHint {
   code: 'TEXT_INPUT_LAYOUT_MISMATCH';
   expected: string;
   actual: string;
+  truncated: boolean;
   suggestedBackend: 'pasteboard';
   detectedLayout?: string;
+  /**
+   * `detectedLayout` is the first `AppleKeyboards` entry with a `sw=` token,
+   * which is heuristic — iOS 26.4 exposes no deterministic "active layout"
+   * signal from the host (see module header). Callers should treat the
+   * hint as "probably a layout transliteration problem" rather than a
+   * verified active-layout claim.
+   */
+  layoutSource?: 'apple_keyboards_first_entry';
 }
 
 /**
@@ -93,10 +123,16 @@ export interface LayoutMismatchHint {
  * surface this error for Latin layouts, since divergence there indicates a
  * different failure mode (e.g. `TEXT_INPUT_DROPPED` from PR A).
  *
+ * The returned `expected` / `actual` fields are truncated prefix echoes
+ * (see `HINT_ECHO_LEN`). Full values are never included — callers that need
+ * longer echoes should read the tool's `verify_reason`, which applies the
+ * same cap.
+ *
  * @param expected  The text the caller intended to type.
  * @param actual    The text observed in the AX readback.
  * @param detectedLayout  Raw `AppleKeyboards` entry (from `detectKeyboardLayout`).
- *                        May be `null` when the probe failed.
+ *                        May be `null` when the probe failed. Heuristic —
+ *                        not guaranteed to be the currently active layout.
  */
 export function mismatchHint(
   expected: string,
@@ -108,12 +144,16 @@ export function mismatchHint(
   // error code (TEXT_INPUT_DROPPED) applies to the Latin mismatch case.
   if (!detectedLayout) return null;
   if (isLatinSoftwareLayout(detectedLayout)) return null;
+  const truncated =
+    expected.length > HINT_ECHO_LEN || actual.length > HINT_ECHO_LEN;
   const hint: LayoutMismatchHint = {
     code: 'TEXT_INPUT_LAYOUT_MISMATCH',
-    expected,
-    actual,
+    expected: truncateForHint(expected),
+    actual: truncateForHint(actual),
+    truncated,
     suggestedBackend: 'pasteboard',
+    detectedLayout,
+    layoutSource: 'apple_keyboards_first_entry',
   };
-  hint.detectedLayout = detectedLayout;
   return hint;
 }
