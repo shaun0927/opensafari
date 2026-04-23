@@ -1,5 +1,9 @@
 import type { AXNode } from '../native';
 import type { AccessibilityBridge } from '../native/accessibility-bridge';
+import {
+  dumpTreeWithRecovery,
+  type AxBridgeRecoveryReport,
+} from '../native/ax-bridge-recovery';
 import { SimulatorManager } from '../simulator';
 
 export type NativeContextSourceKind =
@@ -15,6 +19,13 @@ export interface NativeContextMeta {
   heuristics: string[];
   activationAttempted: boolean;
   activationRetries: number;
+  /**
+   * Self-healing report from the AX bridge dump (#643). The most recent
+   * invocation wins when the helper performs multiple dumps (activation
+   * retry). Callers that need history should stream per-call reports
+   * directly from `dumpTreeWithRecovery`.
+   */
+  axBridgeRecovery?: AxBridgeRecoveryReport;
 }
 
 interface EnsureTargetContextParams {
@@ -122,7 +133,13 @@ export async function ensureTargetAppContext(
     await manager.activateApp(deviceId, bundleId);
   }
   await ensureSemanticsActive();
-  let tree = await bridge.dumpTree({ deviceId, maxDepth });
+  const firstDump = await dumpTreeWithRecovery(bridge, {
+    deviceId,
+    maxDepth,
+    bundleId,
+  });
+  let tree = firstDump.tree;
+  meta.axBridgeRecovery = firstDump.recovery;
   let classification = classifyNativeContext(tree);
 
   if (bundleId && classification.sourceKind !== 'target-app' && manager) {
@@ -130,7 +147,13 @@ export async function ensureTargetAppContext(
     await sleep(250);
     await manager.activateApp(deviceId, bundleId);
     await ensureSemanticsActive();
-    tree = await bridge.dumpTree({ deviceId, maxDepth });
+    const secondDump = await dumpTreeWithRecovery(bridge, {
+      deviceId,
+      maxDepth,
+      bundleId,
+    });
+    tree = secondDump.tree;
+    meta.axBridgeRecovery = secondDump.recovery;
     classification = classifyNativeContext(tree);
   }
 

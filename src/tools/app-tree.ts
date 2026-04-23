@@ -1,5 +1,6 @@
 import { MCPServer } from '../mcp-server';
 import { getAccessibilityBridge, ensureSemanticsActive } from '../native';
+import { dumpTreeWithRecovery } from '../native/ax-bridge-recovery';
 import { getSessionManager } from '../session-manager';
 import {
   createContextMismatchError,
@@ -54,7 +55,12 @@ export function registerAppTreeTool(server: MCPServer): void {
           }
         } else {
           await ensureSemanticsActive(deviceId, { bundleId });
-          tree = await bridge.dumpTree({ deviceId, maxDepth });
+          const dump = await dumpTreeWithRecovery(bridge, {
+            deviceId,
+            maxDepth,
+            bundleId,
+          });
+          tree = dump.tree;
           meta = {
             requestedBundleId: undefined,
             deviceId: deviceId ?? '',
@@ -62,6 +68,7 @@ export function registerAppTreeTool(server: MCPServer): void {
             heuristics: ['not-requested'],
             activationAttempted: false,
             activationRetries: 0,
+            axBridgeRecovery: dump.recovery,
           };
         }
 
