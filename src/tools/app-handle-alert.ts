@@ -86,6 +86,11 @@ interface HandleAlertResponse {
  * Build an AppleScript that clicks a Simulator alert button, trying every
  * label in the en/ko/ja/zh-Hans corpus for the requested action before
  * giving up.
+ *
+ * For any multi-word label, also try a variant that replaces each ASCII
+ * space with U+00A0 (NBSP). iOS 26.4's SpringBoard embeds NBSP between
+ * syllables of localized labels (e.g. `허용 안 함`) so that
+ * System Events' button-by-name match requires the NBSP form.
  */
 export function buildAlertScript(action: AlertAction): string {
   const labels = [
@@ -93,12 +98,20 @@ export function buildAlertScript(action: AlertAction): string {
     ...(action === 'accept' ? ['Allow', 'OK', 'Allow While Using App'] : ["Don't Allow", 'Cancel']),
   ];
   const seen = new Set<string>();
-  const unique = labels.filter((l) => {
+  const unique: string[] = [];
+  for (const l of labels) {
     const k = l.trim();
-    if (seen.has(k) || k.length === 0) return false;
+    if (k.length === 0 || seen.has(k)) continue;
     seen.add(k);
-    return true;
-  });
+    unique.push(k);
+    if (k.includes(' ')) {
+      const nbspVariant = k.replace(/ /g, ' ');
+      if (!seen.has(nbspVariant)) {
+        seen.add(nbspVariant);
+        unique.push(nbspVariant);
+      }
+    }
+  }
   const tries = unique.map((l) =>
     `      try\n        click button "${escapeAppleScript(l)}" of sheet 1 of window 1\n        return\n      end try`,
   );

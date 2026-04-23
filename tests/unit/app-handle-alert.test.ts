@@ -208,4 +208,29 @@ describe('app_handle_alert tool', () => {
     // "Don't Allow" apostrophe is not a quote; must appear verbatim
     expect(script).toContain("Don't Allow");
   });
+
+  test('buildAlertScript emits both ASCII-space and NBSP-space variants for multi-word labels (issue #642)', () => {
+    const NBSP = ' ';
+    const dismissScript = buildAlertScript('dismiss');
+    // Korean dismiss label with ASCII spaces
+    expect(dismissScript).toContain('click button "허용 안 함"');
+    // Same label with U+00A0 between every syllable
+    expect(dismissScript).toContain(`click button "허용${NBSP}안${NBSP}함"`);
+
+    const acceptScript = buildAlertScript('accept');
+    // English multi-word accept label
+    expect(acceptScript).toContain('click button "Allow While Using App"');
+    expect(acceptScript).toContain(
+      `click button "Allow${NBSP}While${NBSP}Using${NBSP}App"`,
+    );
+  });
+
+  test('buildAlertScript does not emit a redundant NBSP variant for single-word labels', () => {
+    const script = buildAlertScript('accept');
+    const NBSP = ' ';
+    // "OK" is one token; no NBSP variant should be emitted
+    const okCount = (script.match(/click button "OK"/g) ?? []).length;
+    expect(okCount).toBeGreaterThanOrEqual(1);
+    expect(script).not.toContain(`click button "OK${NBSP}`);
+  });
 });
