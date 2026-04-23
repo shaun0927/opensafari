@@ -1,5 +1,6 @@
-import { MCPServer, setWebKitClient } from '../../src/mcp-server';
+import { MCPServer, getWebKitClient, setWebKitClient } from '../../src/mcp-server';
 import { registerAppWebviewConnectTool } from '../../src/tools/app-webview-connect';
+import * as webkitClientModule from '../../src/webkit/client';
 
 function createMockClient(targets: Array<{ id: string; title: string; url: string; webSocketDebuggerUrl: string; type?: string; appId?: string; bundleId?: string; app_id?: string }>) {
   return {
@@ -205,5 +206,53 @@ describe('app_webview_connect tool', () => {
     expect(target).toBeDefined();
     expect(target.classificationReason).toBe('bundle_match');
     expect(target.type).toBe('webview');
+  });
+
+  // Regression: a freshly-registered WebKitClient used to stay in the global
+  // registry even after listTargets rejected, so a transient proxy outage
+  // poisoned every subsequent call for the lifetime of the process.
+  test('deregisters a freshly-created WebKitClient when listTargets fails', async () => {
+    // No pre-existing client: app_webview_connect will construct one.
+    setWebKitClient(null, 'device-reg-test');
+    expect(getWebKitClient('device-reg-test')).toBeFalsy();
+
+    const createdClient = createMockClient([]);
+    (createdClient as any).listTargets = jest.fn().mockRejectedValue(
+      new Error('connect ECONNREFUSED 127.0.0.1:9322'),
+    );
+    const spy = jest
+      .spyOn(webkitClientModule, 'WebKitClient')
+      .mockImplementation((() => createdClient) as unknown as (options: any) => any);
+
+    const handler = server.getToolHandler('app_webview_connect')!;
+    const result = await handler('test', { deviceId: 'device-reg-test' });
+
+    // The tool returns an isError payload\u2026
+    expect((result as any).isError).toBe(true);
+    expect(((result as any).content[0] as any).text).toMatch(/Failed to list targets/);
+    // \u2026and crucially, the failed client is no longer registered. Any falsy
+    // value (`null` / `undefined`) is acceptable here \u2014 the contract we care
+    // about is that a subsequent caller does NOT get back the failed client.
+    const after = getWebKitClient('device-reg-test');
+    expect(after).not.toBe(createdClient as any);
+    expect(after).toBeFalsy();
+
+    spy.mockRestore();
+  });
+
+  // And the mirror case: a caller-registered client must survive a transient
+  // failure so a concurrent tool that owns the client isn't affected.
+  test('leaves a pre-existing WebKitClient registered when listTargets fails', async () => {
+    const existingClient = createMockClient([]);
+    (existingClient as any).listTargets = jest.fn().mockRejectedValue(
+      new Error('connect ECONNREFUSED 127.0.0.1:9322'),
+    );
+    setWebKitClient(existingClient as any, 'device-pre-existing');
+
+    const handler = server.getToolHandler('app_webview_connect')!;
+    const result = await handler('test', { deviceId: 'device-pre-existing' });
+
+    expect((result as any).isError).toBe(true);
+    expect(getWebKitClient('device-pre-existing')).toBe(existingClient as any);
   });
 });

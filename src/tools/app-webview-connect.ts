@@ -104,8 +104,12 @@ export function registerAppWebviewConnectTool(server: MCPServer): void {
       const resolvedDeviceId =
         deviceId ?? getSessionManager().getSoleDeviceId() ?? DEFAULT_PROXY_HOST;
 
-      // Get or create a WebKit client
+      // Get or create a WebKit client. Track whether we registered the
+      // client on *this* call so the error path below can deregister only
+      // what it created — a pre-existing client may be owned by a concurrent
+      // tool call and must not be evicted on our transient failure.
       let client = getWebKitClient(deviceId);
+      let clientWasFreshlyRegistered = false;
       if (!client) {
         const newClient = new WebKitClient({
           host: DEFAULT_PROXY_HOST,
@@ -113,6 +117,7 @@ export function registerAppWebviewConnectTool(server: MCPServer): void {
         });
         setWebKitClient(newClient, resolvedDeviceId);
         client = newClient;
+        clientWasFreshlyRegistered = true;
       }
 
       // List all targets from ios-webkit-debug-proxy
@@ -120,6 +125,13 @@ export function registerAppWebviewConnectTool(server: MCPServer): void {
       try {
         targets = await (client as any).listTargets?.() ?? [];
       } catch (err) {
+        // Deregister the newly-created client so a subsequent call does not
+        // reuse a stale, never-successfully-used instance (e.g. when the
+        // proxy was briefly unreachable). Pre-existing registrations are
+        // intentionally left in place.
+        if (clientWasFreshlyRegistered) {
+          setWebKitClient(null, resolvedDeviceId);
+        }
         const message = err instanceof Error ? err.message : String(err);
         return {
           content: [{ type: 'text' as const, text: `Error: Failed to list targets: ${message}` }],
