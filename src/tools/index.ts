@@ -24,6 +24,7 @@ import { registerDismissKeyboardTool } from './dismiss-keyboard';
 import { registerSelectOptionTool } from './select-option';
 import { registerDeviceListTool } from './device-list';
 import { registerDeviceRotateTool } from './device-rotate';
+import { registerDeviceNetworkTools } from './device-network';
 import { registerAppearanceToggleTool } from './appearance-toggle';
 import { registerAppSwitchAppTool } from './app-switch-app';
 import { registerBatchNavigateTool } from './batch-navigate';
@@ -224,6 +225,9 @@ export function registerAllTools(server: MCPServer): void {
   // Tier 2: Network Interception
   registerNetworkInterceptTool(server);
   registerNetworkOfflineTool(server);
+
+  // Tier 2: Device-level network toggle for native (Flutter/UIKit) traffic — issue #640
+  registerDeviceNetworkTools(server);
 
   // Tier 3: Hybrid QA (Fast Scan + Deep Verify)
   registerHybridQATools(server);
