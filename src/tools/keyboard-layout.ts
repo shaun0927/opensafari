@@ -21,6 +21,12 @@
  * Per issue #39 addendum §2 the load-bearing assertion is that the `sw=`
  * (software layout) token equals `QWERTY`. Every other part of the key —
  * locale prefix, `hw=` token, whitespace — is ignored.
+ *
+ * Limitation (issue #639 Problem 1):
+ *   There is currently no documented way to programmatically switch the
+ *   simulator's active input source from the host. When a non-Latin layout
+ *   is detected and text diverges after HID typing, use
+ *   `backend: "pasteboard"` to bypass the software keyboard entirely.
  */
 
 /**
@@ -62,4 +68,52 @@ export function isLatinSoftwareLayout(key: string): boolean {
   const token = extractSoftwareLayout(key);
   if (!token) return false;
   return token.toLowerCase() === 'qwerty';
+}
+
+/**
+ * Structured hint returned by `mismatchHint()` when a non-Latin keyboard
+ * layout is detected and HID-typed text diverges from the expected value.
+ * Surface this as `isError: true` with this object as the error payload so
+ * callers can programmatically choose the recommended remediation.
+ */
+export interface LayoutMismatchHint {
+  code: 'TEXT_INPUT_LAYOUT_MISMATCH';
+  expected: string;
+  actual: string;
+  suggestedBackend: 'pasteboard';
+  detectedLayout?: string;
+}
+
+/**
+ * Build a `TEXT_INPUT_LAYOUT_MISMATCH` hint for use by `app_type_element`
+ * when post-typing readback diverges AND the detected keyboard layout is
+ * non-Latin (issue #639 Problem 1).
+ *
+ * Returns `null` when the layout is Latin (or unknown) — callers must NOT
+ * surface this error for Latin layouts, since divergence there indicates a
+ * different failure mode (e.g. `TEXT_INPUT_DROPPED` from PR A).
+ *
+ * @param expected  The text the caller intended to type.
+ * @param actual    The text observed in the AX readback.
+ * @param detectedLayout  Raw `AppleKeyboards` entry (from `detectKeyboardLayout`).
+ *                        May be `null` when the probe failed.
+ */
+export function mismatchHint(
+  expected: string,
+  actual: string,
+  detectedLayout: string | null,
+): LayoutMismatchHint | null {
+  // Only fire for confirmed non-Latin layouts. When the layout is unknown
+  // (detectedLayout === null) or is Latin-safe, return null — a different
+  // error code (TEXT_INPUT_DROPPED) applies to the Latin mismatch case.
+  if (!detectedLayout) return null;
+  if (isLatinSoftwareLayout(detectedLayout)) return null;
+  const hint: LayoutMismatchHint = {
+    code: 'TEXT_INPUT_LAYOUT_MISMATCH',
+    expected,
+    actual,
+    suggestedBackend: 'pasteboard',
+  };
+  hint.detectedLayout = detectedLayout;
+  return hint;
 }

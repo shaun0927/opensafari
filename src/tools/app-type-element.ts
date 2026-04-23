@@ -9,6 +9,29 @@
  * once focused).
  *
  * Works with any app including Flutter — no WebKit/DOM required.
+ *
+ * ## Keyboard-layout limitation (issue #639 Problem 1)
+ *
+ * When `backend: "auto"` (default), text is sent via raw HID keycodes
+ * that assume a US-ABC (QWERTY) software keyboard. If the simulator's
+ * active input source is non-Latin (Korean 2-Set, Japanese Kana, Chinese
+ * Pinyin, …) those keycodes are silently re-composed by the iOS IME into
+ * the corresponding script — producing garbage in the text field.
+ *
+ * There is currently no documented way to switch the simulator's input
+ * source programmatically from the host. Until a native switcher lands,
+ * use `backend: "pasteboard"` which round-trips via the simulator
+ * clipboard (Cmd+V) and is fully keyboard-layout-independent.
+ *
+ * When post-typing readback (`verifyAfterTyping: true`, or the legacy
+ * `verify: true` default) detects divergence AND the detected keyboard
+ * layout is non-Latin, the tool returns `isError: true` with:
+ *
+ *   { code: "TEXT_INPUT_LAYOUT_MISMATCH", expected, actual,
+ *     suggestedBackend: "pasteboard", detectedLayout }
+ *
+ * For Latin layouts where characters are dropped (different failure
+ * mode), see error code `TEXT_INPUT_DROPPED` (PR A / issue #639).
  */
 
 import { execFile } from 'child_process';
@@ -20,6 +43,7 @@ import type { AXNode, AXQuery } from '../native';
 import { resolveDeviceId, getInputBackend, runInputOp } from './native-input-utils';
 import { tryPress } from './app-tap-element';
 import { typeViaPasteboard } from './pasteboard-input';
+import { mismatchHint } from './keyboard-layout';
 
 const execFileAsync = promisify(execFile);
 
@@ -50,6 +74,13 @@ interface VerifyResult {
     | 'skipped-non-simhid'
     | 'readback-failed';
   verify_reason?: string;
+  /**
+   * Raw AX-value observed at readback. Populated only when the readback
+   * actually succeeded (`verify_method === 'ax-value-readback'`); used by the
+   * caller to attach structured error payloads (e.g. TEXT_INPUT_LAYOUT_MISMATCH
+   * — issue #639 Problem 1) without re-querying the AX bridge.
+   */
+  observed?: string;
 }
 
 export function registerAppTypeElementTool(server: MCPServer): void {
@@ -321,6 +352,19 @@ export function registerAppTypeElementTool(server: MCPServer): void {
         // surface `isError: true` so MCP clients / agents don't treat the
         // call as a trustworthy "typed" step and proceed to submit garbage.
         const mismatched = verify.verified === false;
+
+        // When verification observed a mismatch AND the simulator's keyboard
+        // layout is non-Latin, attach a structured TEXT_INPUT_LAYOUT_MISMATCH
+        // payload so callers can programmatically pick the recommended
+        // remediation (issue #639 Problem 1). Latin-layout mismatches use a
+        // different code (TEXT_INPUT_DROPPED — see PR A) and are intentionally
+        // skipped here.
+        if (mismatched && verify.observed !== undefined) {
+          const hint = mismatchHint(textToType, verify.observed, keyboardLayoutDetected);
+          if (hint) {
+            responseBody.error = hint;
+          }
+        }
         const result: {
           content: Array<{ type: 'text'; text: string }>;
           isError?: boolean;
@@ -400,7 +444,7 @@ async function verifyTypedText(
     };
   }
   if (observed.endsWith(expected) || observed.includes(expected)) {
-    return { verified: true, verify_method: 'ax-value-readback' };
+    return { verified: true, verify_method: 'ax-value-readback', observed };
   }
   return {
     verified: false,
@@ -408,6 +452,7 @@ async function verifyTypedText(
     verify_reason:
       `observed "${truncate(observed)}" does not contain requested "${truncate(expected)}" — ` +
       'likely caused by a non-Latin simulator keyboard transliterating the HID input (issue #39)',
+    observed,
   };
 }
 
