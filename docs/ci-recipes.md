@@ -473,7 +473,7 @@ artifacts:
 | `OPENSAFARI_ALLOW_FOCUS_INPUT` | `1` | Re-enable focus-stealing input (for non-headless local runs only — never set in CI). |
 | `OPENSAFARI_SAVE_FAILURE_SCREENSHOTS` | `1` | Local opt-in for the integration-suite screenshot-on-failure reporter. Auto-detects the booted simulator via `xcrun simctl list devices booted` when `OSF_DEVICE_ID` is unset, so devs can triage a red test locally without also exporting `CI=true`. |
 | `OSF_DEVICE_ID` | Simulator UDID | Explicit simulator target for the screenshot reporter and other integration helpers. Set by CI after booting; dev can use `OPENSAFARI_SAVE_FAILURE_SCREENSHOTS=1` instead to skip the export. |
-| `OSF_SCREENSHOT_DIR` | Directory path | Override base directory for failure screenshots (default `test-output/screenshots/`). |
+| `OSF_SCREENSHOT_DIR` | Directory path | Override base directory for failure screenshots (default `test-output/screenshots/`). Must resolve inside the repo root or `os.tmpdir()`; values outside these roots are ignored with a `[screenshot-on-failure]` warning and the default is used. |
 | `OPENSAFARI_INPUT_TELEMETRY_META` | `0` / `false` to disable | Controls whether input-tool responses carry `_meta._telemetry` (per-call `elapsed_ms`, `ok`, `operation`). **On by default since 0.5.0** (#595). Set to `0` only when payload size matters and you are not inspecting per-call timing. |
 
 ```bash
