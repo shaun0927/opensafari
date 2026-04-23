@@ -32,13 +32,59 @@ export function setDeviceNetworkState(deviceId: string, entry: DeviceNetworkStat
   stateByDevice.set(deviceId, entry);
 }
 
-async function resolveDeviceId(explicit: string | undefined): Promise<string | null> {
-  if (explicit) return explicit;
-  const sole = getSessionManager().getSoleDeviceId();
-  if (sole) return sole;
+export type ResolveDeviceIdResult =
+  | { ok: true; deviceId: string }
+  | {
+      ok: false;
+      error: 'udid_not_booted' | 'no_booted_device' | 'ambiguous_device';
+      requestedUdid?: string;
+      bootedUdids?: string[];
+    };
+
+/**
+ * Resolve a UDID for a device-network call.
+ *
+ * - Explicit `udid` must correspond to a currently booted simulator. Silently
+ *   accepting an arbitrary string caused device_network_set/get to persist
+ *   state under the wrong key on typos or already-shutdown devices.
+ * - With no explicit `udid`, prefer the session's sole-device binding; then
+ *   fall back to `simctl list` only when exactly one simulator is booted.
+ *   Silently picking `booted[0]` in a multi-device run would claim success
+ *   against an unintended target.
+ */
+async function resolveDeviceId(explicit: string | undefined): Promise<ResolveDeviceIdResult> {
   const manager = new SimulatorManager();
   const booted = await manager.listBooted();
-  return booted[0]?.udid ?? null;
+  const bootedUdids = booted.map((b) => b.udid);
+
+  if (explicit) {
+    if (bootedUdids.includes(explicit)) {
+      return { ok: true, deviceId: explicit };
+    }
+    return {
+      ok: false,
+      error: 'udid_not_booted',
+      requestedUdid: explicit,
+      bootedUdids,
+    };
+  }
+
+  const sole = getSessionManager().getSoleDeviceId();
+  if (sole) {
+    // Session-bound UDIDs are authoritative: the caller has an established
+    // MCP session tied to this device, so we don't second-guess against
+    // listBooted here (race with a just-shutdown device would otherwise lock
+    // the caller out mid-session).
+    return { ok: true, deviceId: sole };
+  }
+
+  if (bootedUdids.length === 0) {
+    return { ok: false, error: 'no_booted_device', bootedUdids };
+  }
+  if (bootedUdids.length === 1) {
+    return { ok: true, deviceId: bootedUdids[0] };
+  }
+  return { ok: false, error: 'ambiguous_device', bootedUdids };
 }
 
 function jsonResponse(body: unknown, isError = false) {
@@ -46,6 +92,39 @@ function jsonResponse(body: unknown, isError = false) {
     content: [{ type: 'text' as const, text: JSON.stringify(body) }],
     ...(isError ? { isError: true as const } : {}),
   };
+}
+
+function errorResponseForResolveFailure(
+  resolution: Extract<ResolveDeviceIdResult, { ok: false }>,
+) {
+  switch (resolution.error) {
+    case 'udid_not_booted':
+      return jsonResponse(
+        {
+          ok: false,
+          error: 'udid_not_booted',
+          requestedUdid: resolution.requestedUdid,
+          bootedUdids: resolution.bootedUdids,
+          message:
+            'The supplied udid is not currently booted. Pass the UDID of a booted simulator or omit udid to auto-resolve when exactly one is booted.',
+        },
+        true,
+      );
+    case 'ambiguous_device':
+      return jsonResponse(
+        {
+          ok: false,
+          error: 'ambiguous_device',
+          bootedUdids: resolution.bootedUdids,
+          message:
+            'Multiple simulators are booted; pass an explicit udid so the call cannot act on the wrong device.',
+        },
+        true,
+      );
+    case 'no_booted_device':
+    default:
+      return jsonResponse({ ok: false, error: 'no_booted_device' }, true);
+  }
 }
 
 export function registerDeviceNetworkSetTool(server: MCPServer): void {
@@ -90,10 +169,11 @@ export function registerDeviceNetworkSetTool(server: MCPServer): void {
         );
       }
 
-      const deviceId = await resolveDeviceId(params.udid as string | undefined);
-      if (!deviceId) {
-        return jsonResponse({ ok: false, error: 'no_booted_device' }, true);
+      const resolution = await resolveDeviceId(params.udid as string | undefined);
+      if (!resolution.ok) {
+        return errorResponseForResolveFailure(resolution);
       }
+      const deviceId = resolution.deviceId;
 
       const current = getDeviceNetworkState(deviceId);
 
@@ -149,10 +229,11 @@ export function registerDeviceNetworkGetTool(server: MCPServer): void {
       },
     },
     async (_sessionId: string, params: Record<string, unknown>) => {
-      const deviceId = await resolveDeviceId(params.udid as string | undefined);
-      if (!deviceId) {
-        return jsonResponse({ ok: false, error: 'no_booted_device' }, true);
+      const resolution = await resolveDeviceId(params.udid as string | undefined);
+      if (!resolution.ok) {
+        return errorResponseForResolveFailure(resolution);
       }
+      const deviceId = resolution.deviceId;
       const state = getDeviceNetworkState(deviceId);
       return jsonResponse({
         ok: true,

@@ -5,9 +5,13 @@
  * CI surfaces the missing backend; online + get must still behave correctly.
  */
 
+let bootedFixture: Array<{ udid: string; state: string }> = [
+  { udid: 'booted-device-id', state: 'Booted' },
+];
+
 jest.mock('../../src/simulator', () => ({
   SimulatorManager: jest.fn().mockImplementation(() => ({
-    listBooted: jest.fn().mockResolvedValue([{ udid: 'booted-device-id', state: 'Booted' }]),
+    listBooted: jest.fn().mockImplementation(() => Promise.resolve(bootedFixture)),
   })),
 }));
 
@@ -42,6 +46,7 @@ function extractHandler(server: { registerTool: jest.Mock }, name: string): Tool
 
 beforeEach(() => {
   __resetDeviceNetworkStateForTests();
+  bootedFixture = [{ udid: 'booted-device-id', state: 'Booted' }];
 });
 
 describe('device_network registration', () => {
@@ -138,10 +143,44 @@ describe('device_network_set handler (scaffold)', () => {
     expect(body.deviceId).toBe('booted-device-id');
   });
 
-  it('honors explicit udid over booted lookup', async () => {
+  it('honors explicit udid when the device is booted', async () => {
+    bootedFixture = [
+      { udid: 'booted-device-id', state: 'Booted' },
+      { udid: 'explicit-udid', state: 'Booted' },
+    ];
     const result = await setHandler('s', { mode: 'online', udid: 'explicit-udid' });
     const body = JSON.parse(result.content[0].text);
+    expect(body.ok).toBe(true);
     expect(body.deviceId).toBe('explicit-udid');
+  });
+
+  it('rejects explicit udid when it is not currently booted (typo / shutdown guard)', async () => {
+    const result = await setHandler('s', { mode: 'online', udid: 'not-booted' });
+    expect(result.isError).toBe(true);
+    const body = JSON.parse(result.content[0].text);
+    expect(body.error).toBe('udid_not_booted');
+    expect(body.requestedUdid).toBe('not-booted');
+    expect(body.bootedUdids).toEqual(['booted-device-id']);
+  });
+
+  it('rejects defaulting to an arbitrary simulator when multiple are booted (ambiguous_device)', async () => {
+    bootedFixture = [
+      { udid: 'booted-a', state: 'Booted' },
+      { udid: 'booted-b', state: 'Booted' },
+    ];
+    const result = await setHandler('s', { mode: 'online' });
+    expect(result.isError).toBe(true);
+    const body = JSON.parse(result.content[0].text);
+    expect(body.error).toBe('ambiguous_device');
+    expect(body.bootedUdids).toEqual(expect.arrayContaining(['booted-a', 'booted-b']));
+  });
+
+  it('reports no_booted_device when nothing is booted and no udid is passed', async () => {
+    bootedFixture = [];
+    const result = await setHandler('s', { mode: 'online' });
+    expect(result.isError).toBe(true);
+    const body = JSON.parse(result.content[0].text);
+    expect(body.error).toBe('no_booted_device');
   });
 
   it('device_network_get reports online by default', async () => {
@@ -154,10 +193,19 @@ describe('device_network_set handler (scaffold)', () => {
   });
 
   it('device_network_get reports state set by device_network_set(online)', async () => {
+    bootedFixture = [{ udid: 'device-a', state: 'Booted' }];
     await setHandler('s', { mode: 'online', udid: 'device-a' });
     const result = await getHandler('s', { udid: 'device-a' });
     const body = JSON.parse(result.content[0].text);
     expect(body.mode).toBe('online');
     expect(body.deviceId).toBe('device-a');
+  });
+
+  it('device_network_get rejects explicit udid that is not booted', async () => {
+    const result = await getHandler('s', { udid: 'ghost' });
+    expect(result.isError).toBe(true);
+    const body = JSON.parse(result.content[0].text);
+    expect(body.error).toBe('udid_not_booted');
+    expect(body.requestedUdid).toBe('ghost');
   });
 });
