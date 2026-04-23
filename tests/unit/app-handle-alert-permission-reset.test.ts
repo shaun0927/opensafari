@@ -103,7 +103,7 @@ describe('app_handle_alert — Tier 3 permission_reset fallback', () => {
       makeTreeWithStaticTexts(["'지도' 앱이 사용자의 위치를 사용하도록 허용하겠습니까?"]),
     );
 
-    const result = await handler!('s', { action: 'accept' });
+    const result = await handler!('s', { action: 'accept', keyboardFallback: false });
     const body = parseResult(result as { content: Array<{ type: string; text: string }> });
 
     expect(body.strategy_attempted).toEqual(['ax-scan', 'applescript-sheet']);
@@ -116,7 +116,11 @@ describe('app_handle_alert — Tier 3 permission_reset fallback', () => {
       makeTreeWithStaticTexts(["'지도' 앱이 사용자의 위치를 사용하도록 허용하겠습니까?"]),
     );
 
-    const result = await handler!('s', { action: 'accept', fallback: 'permission_reset' });
+    const result = await handler!('s', {
+      action: 'accept',
+      fallback: 'permission_reset',
+      keyboardFallback: false,
+    });
     const body = parseResult(result as { content: Array<{ type: string; text: string }> });
 
     expect(body.strategy).toBe('permission-reset');
