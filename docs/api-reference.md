@@ -85,11 +85,17 @@ Report the current mobile context for a booted simulator using accessibility-tre
 
 #### app_tap
 Tap at screen coordinates in the simulator.
-- **Input:** `{ x: number, y: number, duration?: number, deviceId?: string, expectedBundle?: string, verifyContext?: boolean, settleMs?: number }`
-- **Output:** `{ status: "tapped", x, y, duration, deviceId, backend, verified?, effect?, _meta, postInputContext?, warning? }`
+- **Input:** `{ x: number, y: number, duration?: number, deviceId?: string, expectedBundle?: string, verifyContext?: boolean, settleMs?: number, raw?: boolean, requireInApp?: boolean, autoReactivate?: boolean, snapRadiusPx?: number, homeIndicatorGuardPx?: number }`
+- **Output:** `{ status: "tapped", x, y, duration, deviceId, backend, verified?, effect?, sideEffect, foregroundBefore, foregroundAfter, snapped?, _meta, postInputContext?, warning? }`
 - **Notes:** When `verifyContext=true` or `expectedBundle` is supplied, the tool waits `settleMs` (default 1200 ms) and attaches a post-input context probe.
   - `verified: false` + `effect: "verification_unavailable"` means transport succeeded but OpenSafari could not prove a UI change.
   - `TAP_NO_EFFECT` means the tap was dispatched and the post-action AX tree stayed unchanged.
+- **Safety layer (issue [#644](https://github.com/shaun0927/opensafari/issues/644)):**
+  - `sideEffect` is always reported: `"none"`, `"out_of_bounds"`, `"ax_snapped"`, or `"app_backgrounded"`.
+  - Raw coordinates outside the device frame, or inside the bottom `homeIndicatorGuardPx` (default 10) guard band, are rejected with `TAP_OUT_OF_BOUNDS` (`sideEffect: "out_of_bounds"`, `dispatched: false`). This prevents raw taps near the bottom edge from being reinterpreted as home-gesture swipes.
+  - By default (`raw !== true`) the tool scans the pre-tap AX tree for modals (`AXSheet` / `AXDialog` / `AXAlert` / `AXSystemDialog`) and snaps the input coordinate onto the closest enabled `AXButton` centre within `snapRadiusPx` (default 24). The snapped target is invoked via the AX press path; `snapped = { from, to, elementPath, via }` is attached to the response. Pass `raw: true` to disable the snap.
+  - When `requireInApp` is `true` (default) and the pre-tap AX surface was the target app but the post-tap surface is SpringBoard or Simulator chrome, the response returns `APP_BACKGROUNDED` (`sideEffect: "app_backgrounded"`, `isError: true`). Set `requireInApp: false` to downgrade this to a warning while still reporting the side effect.
+  - Set `autoReactivate: true` to automatically call `simctl launch <deviceId> <expectedBundle>` on detected background transitions; the response records `recovered: true/false`. Requires `expectedBundle` to be supplied.
 
 #### app_swipe_native
 Perform a swipe gesture on the simulator.
