@@ -175,7 +175,7 @@ describe('app_type_element', () => {
     // Tap to focus
     expect(mockTap).toHaveBeenCalledWith('test-device-id', 195, 120);
     // Then type
-    expect(mockTypeText).toHaveBeenCalledWith('test-device-id', 'user@example.com');
+    expect(mockTypeText).toHaveBeenCalledWith('test-device-id', 'user@example.com', 0);
     // Tap must come before typeText
     const tapOrder = mockTap.mock.invocationCallOrder[0];
     const typeOrder = mockTypeText.mock.invocationCallOrder[0];
@@ -196,7 +196,7 @@ describe('app_type_element', () => {
 
     expect(body.status).toBe('typed');
     expect(body.coordinates).toEqual({ x: 110, y: 222 });
-    expect(mockTypeText).toHaveBeenCalledWith('test-device-id', 'alice');
+    expect(mockTypeText).toHaveBeenCalledWith('test-device-id', 'alice', 0);
   });
 
   it('uses index to disambiguate multiple fields', async () => {
@@ -215,7 +215,7 @@ describe('app_type_element', () => {
     });
 
     expect(mockTap).toHaveBeenCalledWith('test-device-id', 50, 220);
-    expect(mockTypeText).toHaveBeenCalledWith('test-device-id', 'hello');
+    expect(mockTypeText).toHaveBeenCalledWith('test-device-id', 'hello', 0);
   });
 
   it('returns error when text is missing or empty', async () => {
@@ -376,7 +376,7 @@ describe('app_type_element — Tier 1.5 AX press focus', () => {
     expect(mockPress).toHaveBeenCalledWith('0/3', 'test-device-id');
     // Coordinate tap MUST NOT fire when AX press focused the element.
     expect(mockTap).not.toHaveBeenCalled();
-    expect(mockTypeText).toHaveBeenCalledWith('test-device-id', 'user@example.com');
+    expect(mockTypeText).toHaveBeenCalledWith('test-device-id', 'user@example.com', 0);
   });
 
   it('falls back to coordinate tap when the text field is not AX-pressable', async () => {
