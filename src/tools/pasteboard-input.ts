@@ -79,6 +79,44 @@ export type PermissionDialogOutcome =
   | 'auto_accepted'
   | 'not_accepted';
 
+export interface PasteNotAppliedError {
+  code: 'PASTE_NOT_APPLIED';
+  expected: string;
+  actual: string | undefined;
+  permissionDialogObserved: boolean;
+}
+
+/**
+ * Compares the post-paste AX value against the expected payload and throws a
+ * structured `PASTE_NOT_APPLIED` error when the paste did not land. Pure
+ * function so the readback contract can be unit-tested without mocking the
+ * accessibility bridge or the simulator pasteboard.
+ *
+ * The "applied" predicate accepts either an exact suffix match or a substring
+ * match because some text fields prepend placeholder text to the value, and
+ * IME composition state can leave the cursor mid-string.
+ *
+ * `actual === undefined` (bridge readback failed) is treated as inconclusive
+ * and does NOT throw — we cannot distinguish "paste failed" from "bridge
+ * unavailable" in that case.
+ */
+export function assertPasteApplied(
+  actual: string | undefined,
+  expected: string,
+  permissionDialogObserved: boolean,
+): void {
+  if (actual === undefined || actual === null) return;
+  const applied = actual.endsWith(expected) || actual.includes(expected);
+  if (applied) return;
+  const err: PasteNotAppliedError = {
+    code: 'PASTE_NOT_APPLIED',
+    expected,
+    actual,
+    permissionDialogObserved,
+  };
+  throw Object.assign(new Error('PASTE_NOT_APPLIED'), err);
+}
+
 export interface PasteboardTypeResult {
   backend: 'pasteboard';
   length: number;
@@ -101,6 +139,18 @@ export interface PasteboardTypeOptions {
   permissionDialogPollMs?: number;
   /** Injected backend (for tests). Default: auto-resolve via `tryCreateSimulatorKitHIDBackend`. */
   backend?: SimulatorKitHIDInputBackend;
+  /**
+   * The text that was placed on the pasteboard. When provided, `typeViaPasteboard`
+   * reads back the focused element's AX value after `pasteSettleMs` and returns a
+   * structured `PasteNotAppliedError` if the field does not contain the expected
+   * text. Omit to skip verification (legacy behaviour).
+   */
+  expected?: string;
+  /**
+   * AX path of the focused element. Required for readback verification; ignored
+   * when `expected` is not set.
+   */
+  focusedElementPath?: string;
 }
 
 /**
@@ -143,6 +193,7 @@ export async function typeViaPasteboard(
 
   let permissionDialog: PermissionDialogOutcome = 'not_shown';
   let permissionDialogMatchedLabel: string | undefined;
+  let permissionDialogObserved = false;
   if (autoAcceptPermission) {
     const match = await pollForPermissionDialog(
       deviceId,
@@ -150,6 +201,7 @@ export async function typeViaPasteboard(
       permissionDialogPollMs,
     );
     if (match) {
+      permissionDialogObserved = true;
       const pressed = await tryPressPermissionButton(deviceId, match.path);
       permissionDialog = pressed ? 'auto_accepted' : 'not_accepted';
       permissionDialogMatchedLabel = match.label;
@@ -164,6 +216,22 @@ export async function typeViaPasteboard(
     } catch {
       pasteboardRestored = false;
     }
+  }
+
+  // Readback verification: if the caller supplied the expected payload and an
+  // element path, re-read the AX value and confirm the paste landed.
+  const { expected, focusedElementPath } = options;
+  if (expected !== undefined && focusedElementPath) {
+    const bridge = getAccessibilityBridge();
+    let actual: string | undefined;
+    try {
+      const node = await bridge.inspect(focusedElementPath, deviceId);
+      actual = node.value;
+    } catch {
+      // Bridge error — treat as unknown; do not surface PASTE_NOT_APPLIED
+      // because we cannot distinguish "paste failed" from "bridge unavailable".
+    }
+    assertPasteApplied(actual, expected, permissionDialogObserved);
   }
 
   return {

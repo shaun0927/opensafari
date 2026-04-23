@@ -19,7 +19,7 @@ import { getAccessibilityBridge, ensureSemanticsActive } from '../native';
 import type { AXNode, AXQuery } from '../native';
 import { resolveDeviceId, getInputBackend, runInputOp } from './native-input-utils';
 import { tryPress } from './app-tap-element';
-import { typeViaPasteboard } from './pasteboard-input';
+import { typeViaPasteboard, type PasteNotAppliedError } from './pasteboard-input';
 
 const execFileAsync = promisify(execFile);
 
@@ -242,10 +242,37 @@ export function registerAppTypeElementTool(server: MCPServer): void {
           const autoAcceptPastePermission =
             (params.autoAcceptPastePermission as boolean | undefined) ?? true;
 
-          const pasteResult = await typeViaPasteboard(deviceId, textToType, {
-            restorePasteboard,
-            autoAcceptPastePermission,
-          });
+          let pasteResult;
+          try {
+            pasteResult = await typeViaPasteboard(deviceId, textToType, {
+              restorePasteboard,
+              autoAcceptPastePermission,
+              expected: textToType,
+              focusedElementPath: match.path,
+            });
+          } catch (err) {
+            if (err instanceof Error && (err as unknown as PasteNotAppliedError).code === 'PASTE_NOT_APPLIED') {
+              const e = err as unknown as PasteNotAppliedError;
+              return {
+                content: [
+                  {
+                    type: 'text' as const,
+                    text: JSON.stringify({
+                      error: 'PASTE_NOT_APPLIED',
+                      code: e.code,
+                      expected: e.expected,
+                      actual: e.actual,
+                      permissionDialogObserved: e.permissionDialogObserved,
+                      element: elementDescriptor,
+                      deviceId,
+                    }),
+                  },
+                ],
+                isError: true,
+              };
+            }
+            throw err;
+          }
 
           return {
             content: [
