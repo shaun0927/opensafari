@@ -1,8 +1,9 @@
 /**
- * Unit tests for device_network_set / device_network_get (issue #640, PR 1 scaffold).
+ * Unit tests for device_network_set / device_network_get (issue #640).
  *
- * The scaffold intentionally returns `not_implemented` for offline/airplane so that
- * CI surfaces the missing backend; online + get must still behave correctly.
+ * PR 3 wires the tool layer to a real pfctl blocker via the bundle DI seam.
+ * All host side-effects are stubbed: tests inject a mock blocker bundle so
+ * the handler calls `apply`/`revert` on predictable mocks.
  */
 
 jest.mock('../../src/simulator', () => ({
@@ -18,14 +19,20 @@ jest.mock('../../src/session-manager', () => ({
 }));
 
 import { MCPServer } from '../../src/mcp-server';
+import { NetworkBlocker, NetworkBlockerStatus } from '../../src/simulator/network-blockers';
 import {
-  registerDeviceNetworkSetTool,
-  registerDeviceNetworkGetTool,
-  registerDeviceNetworkTools,
+  HostBlockerBundle,
   __resetDeviceNetworkStateForTests,
+  __setHostBlockerForTests,
+  registerDeviceNetworkGetTool,
+  registerDeviceNetworkSetTool,
+  registerDeviceNetworkTools,
 } from '../../src/tools/device-network';
 
-type ToolHandler = (s: string, p: Record<string, unknown>) => Promise<{
+type ToolHandler = (
+  s: string,
+  p: Record<string, unknown>,
+) => Promise<{
   content: Array<{ type: string; text: string }>;
   isError?: boolean;
 }>;
@@ -40,8 +47,45 @@ function extractHandler(server: { registerTool: jest.Mock }, name: string): Tool
   return call[1] as ToolHandler;
 }
 
+interface MockBlocker extends NetworkBlocker {
+  isAvailable: jest.Mock<Promise<boolean>, []>;
+  apply: jest.Mock<Promise<void>, [string]>;
+  revert: jest.Mock<Promise<void>, [string]>;
+  status: jest.Mock<Promise<NetworkBlockerStatus>, []>;
+}
+
+function makeMockBlocker(kind: 'pfctl' | 'nlc'): MockBlocker {
+  return {
+    kind,
+    isAvailable: jest.fn<Promise<boolean>, []>().mockResolvedValue(true),
+    apply: jest.fn<Promise<void>, [string]>().mockResolvedValue(undefined),
+    revert: jest.fn<Promise<void>, [string]>().mockResolvedValue(undefined),
+    status: jest
+      .fn<Promise<NetworkBlockerStatus>, []>()
+      .mockResolvedValue({ active: false, activeSince: null, detail: null }),
+  };
+}
+
+function makeMockBundle(): {
+  bundle: HostBlockerBundle;
+  pfctl: MockBlocker;
+  nlc: MockBlocker;
+  auto: MockBlocker;
+} {
+  const pfctl = makeMockBlocker('pfctl');
+  const nlc = makeMockBlocker('nlc');
+  // auto delegates to pfctl for test determinism; its kind is 'pfctl' so
+  // `resolvedMechanismFor` surfaces 'pfctl' for auto-routed callers too.
+  const auto = makeMockBlocker('pfctl');
+  return { bundle: { pfctl, nlc, auto }, pfctl, nlc, auto };
+}
+
 beforeEach(() => {
   __resetDeviceNetworkStateForTests();
+});
+
+afterEach(() => {
+  __setHostBlockerForTests(null);
 });
 
 describe('device_network registration', () => {
@@ -72,15 +116,15 @@ describe('device_network registration', () => {
   });
 });
 
-describe('device_network_set handler (scaffold)', () => {
+describe('device_network_set handler — validation', () => {
   let setHandler: ToolHandler;
-  let getHandler: ToolHandler;
 
   beforeEach(() => {
     const server = makeServer();
+    const { bundle } = makeMockBundle();
+    __setHostBlockerForTests(bundle);
     registerDeviceNetworkTools(server as unknown as MCPServer);
     setHandler = extractHandler(server, 'device_network_set');
-    getHandler = extractHandler(server, 'device_network_get');
   });
 
   it('rejects invalid mode', async () => {
@@ -97,38 +141,35 @@ describe('device_network_set handler (scaffold)', () => {
     const body = JSON.parse(result.content[0].text);
     expect(body.error).toBe('invalid_mechanism');
   });
+});
 
-  it('returns not_implemented for offline (scaffold build)', async () => {
-    const result = await setHandler('s', { mode: 'offline' });
-    expect(result.isError).toBe(true);
-    const body = JSON.parse(result.content[0].text);
-    expect(body.error).toBe('not_implemented');
-    expect(body.requestedMode).toBe('offline');
-    expect(body.requestedMechanism).toBe('auto');
-    expect(body.message).toMatch(/#640/);
+describe('device_network_set handler — online path', () => {
+  let setHandler: ToolHandler;
+  let getHandler: ToolHandler;
+  let pfctl: MockBlocker;
+
+  beforeEach(() => {
+    const server = makeServer();
+    const { bundle, pfctl: p } = makeMockBundle();
+    pfctl = p;
+    __setHostBlockerForTests(bundle);
+    registerDeviceNetworkTools(server as unknown as MCPServer);
+    setHandler = extractHandler(server, 'device_network_set');
+    getHandler = extractHandler(server, 'device_network_get');
   });
 
-  it('returns not_implemented for airplane (scaffold build)', async () => {
-    const result = await setHandler('s', { mode: 'airplane', mechanism: 'pfctl' });
-    expect(result.isError).toBe(true);
-    const body = JSON.parse(result.content[0].text);
-    expect(body.error).toBe('not_implemented');
-    expect(body.requestedMode).toBe('airplane');
-    expect(body.requestedMechanism).toBe('pfctl');
-  });
-
-  it('accepts online as an idempotent no-op and records state', async () => {
+  it('online when already online is an idempotent no-op (no blocker calls)', async () => {
     const first = await setHandler('s', { mode: 'online' });
     expect(first.isError).toBeUndefined();
     const firstBody = JSON.parse(first.content[0].text);
     expect(firstBody.ok).toBe(true);
     expect(firstBody.mode).toBe('online');
-    expect(firstBody.mechanism).toBeNull();
     expect(firstBody.previousMode).toBe('online');
+    expect(firstBody.note).toMatch(/already online/);
+    expect(pfctl.revert).not.toHaveBeenCalled();
 
     const second = await setHandler('s', { mode: 'online' });
     const secondBody = JSON.parse(second.content[0].text);
-    expect(secondBody.ok).toBe(true);
     expect(secondBody.note).toMatch(/already online/);
   });
 
@@ -152,12 +193,137 @@ describe('device_network_set handler (scaffold)', () => {
     expect(body.mechanism).toBeNull();
     expect(body.activeSince).toBeNull();
   });
+});
 
-  it('device_network_get reports state set by device_network_set(online)', async () => {
-    await setHandler('s', { mode: 'online', udid: 'device-a' });
-    const result = await getHandler('s', { udid: 'device-a' });
+describe('device_network_set handler — offline path (pfctl wired)', () => {
+  let setHandler: ToolHandler;
+  let getHandler: ToolHandler;
+  let pfctl: MockBlocker;
+  let nlc: MockBlocker;
+  let auto: MockBlocker;
+
+  beforeEach(() => {
+    const server = makeServer();
+    const bundle = makeMockBundle();
+    pfctl = bundle.pfctl;
+    nlc = bundle.nlc;
+    auto = bundle.auto;
+    __setHostBlockerForTests(bundle.bundle);
+    registerDeviceNetworkTools(server as unknown as MCPServer);
+    setHandler = extractHandler(server, 'device_network_set');
+    getHandler = extractHandler(server, 'device_network_get');
+  });
+
+  it('offline calls AutoBlocker.apply and records state with resolved mechanism', async () => {
+    const result = await setHandler('s', { mode: 'offline', udid: 'device-a' });
+    expect(result.isError).toBeUndefined();
     const body = JSON.parse(result.content[0].text);
-    expect(body.mode).toBe('online');
-    expect(body.deviceId).toBe('device-a');
+    expect(body.ok).toBe(true);
+    expect(body.mode).toBe('offline');
+    expect(body.mechanism).toBe('pfctl');
+    expect(body.appliedAt).toEqual(expect.any(String));
+    expect(auto.apply).toHaveBeenCalledWith('device-a');
+    expect(pfctl.apply).not.toHaveBeenCalled();
+    expect(nlc.apply).not.toHaveBeenCalled();
+
+    const getResult = await getHandler('s', { udid: 'device-a' });
+    const getBody = JSON.parse(getResult.content[0].text);
+    expect(getBody.mode).toBe('offline');
+    expect(getBody.mechanism).toBe('pfctl');
+  });
+
+  it('airplane routes through the same apply code path as offline', async () => {
+    const result = await setHandler('s', { mode: 'airplane', udid: 'device-b' });
+    expect(result.isError).toBeUndefined();
+    const body = JSON.parse(result.content[0].text);
+    expect(body.mode).toBe('airplane');
+    expect(body.mechanism).toBe('pfctl');
+    expect(auto.apply).toHaveBeenCalledWith('device-b');
+  });
+
+  it('mechanism: "pfctl" routes directly to the pfctl backend', async () => {
+    const result = await setHandler('s', {
+      mode: 'offline',
+      mechanism: 'pfctl',
+      udid: 'device-c',
+    });
+    expect(result.isError).toBeUndefined();
+    const body = JSON.parse(result.content[0].text);
+    expect(body.mechanism).toBe('pfctl');
+    expect(pfctl.apply).toHaveBeenCalledWith('device-c');
+    expect(auto.apply).not.toHaveBeenCalled();
+  });
+
+  it('propagates blocker apply() failure as an isError response', async () => {
+    const err = new Error('sudo pfctl failed');
+    err.name = 'PfctlCommandError';
+    auto.apply.mockRejectedValueOnce(err);
+
+    const result = await setHandler('s', { mode: 'offline', udid: 'device-d' });
+    expect(result.isError).toBe(true);
+    const body = JSON.parse(result.content[0].text);
+    expect(body.error).toBe('PfctlCommandError');
+    expect(body.message).toMatch(/sudo pfctl failed/);
+
+    // state must NOT be recorded when apply fails
+    const getResult = await getHandler('s', { udid: 'device-d' });
+    const getBody = JSON.parse(getResult.content[0].text);
+    expect(getBody.mode).toBe('online');
+  });
+
+  it('rejects a mechanism switch when another backend is already active (mechanism_conflict)', async () => {
+    await setHandler('s', { mode: 'offline', mechanism: 'pfctl', udid: 'device-a' });
+    const conflict = await setHandler('s', { mode: 'offline', mechanism: 'nlc', udid: 'device-b' });
+    expect(conflict.isError).toBe(true);
+    const body = JSON.parse(conflict.content[0].text);
+    expect(body.error).toBe('mechanism_conflict');
+    expect(body.activeMechanism).toBe('pfctl');
+    expect(body.requestedMechanism).toBe('nlc');
+    expect(nlc.apply).not.toHaveBeenCalled();
+  });
+});
+
+describe('device_network_set handler — reference-counting revert', () => {
+  let setHandler: ToolHandler;
+  let auto: MockBlocker;
+
+  beforeEach(() => {
+    const server = makeServer();
+    const bundle = makeMockBundle();
+    auto = bundle.auto;
+    __setHostBlockerForTests(bundle.bundle);
+    registerDeviceNetworkTools(server as unknown as MCPServer);
+    setHandler = extractHandler(server, 'device_network_set');
+  });
+
+  it('does not revert when one of several offline devices returns online', async () => {
+    await setHandler('s', { mode: 'offline', udid: 'device-a' });
+    await setHandler('s', { mode: 'offline', udid: 'device-b' });
+    expect(auto.apply).toHaveBeenCalledTimes(2);
+
+    await setHandler('s', { mode: 'online', udid: 'device-a' });
+    expect(auto.revert).not.toHaveBeenCalled();
+  });
+
+  it('reverts when the last offline device returns online', async () => {
+    await setHandler('s', { mode: 'offline', udid: 'device-a' });
+    await setHandler('s', { mode: 'offline', udid: 'device-b' });
+    await setHandler('s', { mode: 'online', udid: 'device-a' });
+    await setHandler('s', { mode: 'online', udid: 'device-b' });
+    expect(auto.revert).toHaveBeenCalledTimes(1);
+    expect(auto.revert).toHaveBeenCalledWith('device-b');
+  });
+
+  it('rolls back state and surfaces error when revert fails', async () => {
+    await setHandler('s', { mode: 'offline', udid: 'device-a' });
+
+    const err = new Error('pfctl revert failed');
+    err.name = 'PfctlCommandError';
+    auto.revert.mockRejectedValueOnce(err);
+
+    const result = await setHandler('s', { mode: 'online', udid: 'device-a' });
+    expect(result.isError).toBe(true);
+    const body = JSON.parse(result.content[0].text);
+    expect(body.error).toBe('PfctlCommandError');
   });
 });

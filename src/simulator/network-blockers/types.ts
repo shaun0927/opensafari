@@ -6,9 +6,9 @@
  * tools consume blockers through this interface only — they do not know
  * which mechanism is in use, so selection logic lives in `AutoBlocker`.
  *
- * This file is PR 2 (#640) and is intentionally side-effect-free:
- * concrete blockers accept an injectable {@link HostExec} so unit tests
- * can drive them with mocks. Real system calls land in PRs 3 / 4.
+ * Concrete blockers accept injectable {@link HostExec} and {@link TempFileWriter}
+ * surfaces so unit tests can drive them with mocks. PR 2 (#640) added the
+ * abstraction; PR 3 wires the real pfctl backend; PR 5 wires NLC.
  */
 
 export type NetworkBlockerKind = 'pfctl' | 'nlc';
@@ -70,6 +70,30 @@ export interface HostExecOptions {
   env?: Record<string, string>;
   /** If true, non-zero exit is returned as {stdout, code, stderr} instead of throwing. */
   allowNonZero?: boolean;
+}
+
+/**
+ * Injectable temp-file surface used by blockers that must materialise
+ * on-disk rules for system tools that read files (e.g. `pfctl -f <path>`).
+ *
+ * Production code wires this to a `fs.mkdtemp`-based writer under
+ * `os.tmpdir()`. Tests pass a mock that returns a fixed path so they
+ * can assert on the rule contents without touching the filesystem.
+ */
+export interface TempFileWriter {
+  /**
+   * Write the given contents to a fresh temp file and return its absolute
+   * path. The writer owns the parent directory; callers must call
+   * `remove()` (best-effort) after the file is consumed.
+   */
+  write(contents: string): Promise<string>;
+
+  /**
+   * Best-effort cleanup: remove the file and its parent directory if
+   * empty. Must never throw — stale temp files are a lower-priority
+   * concern than apply/revert correctness.
+   */
+  remove(path: string): Promise<void>;
 }
 
 export class NetworkBlockerUnavailableError extends Error {

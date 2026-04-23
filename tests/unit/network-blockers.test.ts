@@ -1,6 +1,8 @@
 /**
  * Unit tests for the simulator network-blocker abstraction layer
- * (issue #640, PR 2). No real system calls — all exec is mocked.
+ * (issue #640). No real system calls — all exec and temp-file I/O is
+ * mocked. PR 3 wires pfctl to real pfctl commands; NLC is still
+ * scaffold and raises NotImplemented until PR 5.
  */
 
 import {
@@ -11,96 +13,248 @@ import {
   NetworkBlockerUnavailableError,
   NlcBlocker,
   PFCTL_ANCHOR_NAME,
+  PFCTL_BLOCK_RULES,
   PfctlBlocker,
+  PfctlCommandError,
+  PfctlPfDisabledError,
+  TempFileWriter,
 } from '../../src/simulator/network-blockers';
 
 function makeMockExec(): jest.Mocked<HostExec> {
   return { run: jest.fn().mockResolvedValue('') };
 }
 
+function makeMockTempFile(
+  fixedPath = '/tmp/opensafari-pfctl-mock/rules.conf',
+): jest.Mocked<TempFileWriter> {
+  return {
+    write: jest.fn<Promise<string>, [string]>().mockResolvedValue(fixedPath),
+    remove: jest.fn<Promise<void>, [string]>().mockResolvedValue(undefined),
+  };
+}
+
 const DEVICE_ID = 'test-device-udid';
+const PF_INFO_ENABLED = 'Status: Enabled for 12 days 03:45:12                Debug: Urgent\n';
+const PF_INFO_DISABLED = 'Status: Disabled\n';
 
 describe('PfctlBlocker', () => {
   it('reports kind "pfctl"', () => {
-    const b = new PfctlBlocker({ exec: makeMockExec(), assumeAvailable: true });
+    const b = new PfctlBlocker({
+      exec: makeMockExec(),
+      tempFile: makeMockTempFile(),
+      assumeAvailable: true,
+    });
     expect(b.kind).toBe('pfctl');
   });
 
-  it('isAvailable returns true when sudo pfctl -sr succeeds', async () => {
-    const exec = makeMockExec();
-    exec.run.mockResolvedValueOnce('scrub in all');
-    const b = new PfctlBlocker({ exec });
-    await expect(b.isAvailable()).resolves.toBe(true);
-    expect(exec.run).toHaveBeenCalledWith(
-      '/usr/bin/sudo',
-      ['-n', '/sbin/pfctl', '-sr'],
-      expect.objectContaining({ timeoutMs: 2000 }),
-    );
-  });
+  describe('isAvailable', () => {
+    it('returns true when sudo pfctl -sr succeeds', async () => {
+      const exec = makeMockExec();
+      exec.run.mockResolvedValueOnce('scrub in all');
+      const b = new PfctlBlocker({ exec, tempFile: makeMockTempFile() });
+      await expect(b.isAvailable()).resolves.toBe(true);
+      expect(exec.run).toHaveBeenCalledWith(
+        '/usr/bin/sudo',
+        ['-n', '/sbin/pfctl', '-sr'],
+        expect.objectContaining({ timeoutMs: 2000 }),
+      );
+    });
 
-  it('isAvailable returns false when sudo pfctl fails', async () => {
-    const exec = makeMockExec();
-    exec.run.mockRejectedValueOnce(new Error('sudo: a password is required'));
-    const b = new PfctlBlocker({ exec });
-    await expect(b.isAvailable()).resolves.toBe(false);
-  });
+    it('returns false when sudo pfctl fails', async () => {
+      const exec = makeMockExec();
+      exec.run.mockRejectedValueOnce(new Error('sudo: a password is required'));
+      const b = new PfctlBlocker({ exec, tempFile: makeMockTempFile() });
+      await expect(b.isAvailable()).resolves.toBe(false);
+    });
 
-  it('assumeAvailable bypasses probing', async () => {
-    const exec = makeMockExec();
-    const b = new PfctlBlocker({ exec, assumeAvailable: true });
-    await expect(b.isAvailable()).resolves.toBe(true);
-    expect(exec.run).not.toHaveBeenCalled();
-  });
-
-  it('apply throws NetworkBlockerUnavailableError when mechanism is unavailable', async () => {
-    const exec = makeMockExec();
-    exec.run.mockRejectedValueOnce(new Error('sudo required'));
-    const b = new PfctlBlocker({ exec });
-    await expect(b.apply(DEVICE_ID)).rejects.toBeInstanceOf(NetworkBlockerUnavailableError);
-  });
-
-  it('apply throws NotImplemented in scaffold PR 2 even when available', async () => {
-    const b = new PfctlBlocker({ exec: makeMockExec(), assumeAvailable: true });
-    await expect(b.apply(DEVICE_ID)).rejects.toBeInstanceOf(NetworkBlockerNotImplementedError);
-  });
-
-  it('apply is idempotent when already active (no throw, no exec call)', async () => {
-    const exec = makeMockExec();
-    const b = new PfctlBlocker({ exec, assumeAvailable: true });
-    b.__setActiveForTests(true);
-    await expect(b.apply(DEVICE_ID)).resolves.toBeUndefined();
-    expect(exec.run).not.toHaveBeenCalled();
-  });
-
-  it('revert is a no-op when nothing is active', async () => {
-    const exec = makeMockExec();
-    const b = new PfctlBlocker({ exec, assumeAvailable: true });
-    await expect(b.revert(DEVICE_ID)).resolves.toBeUndefined();
-    expect(exec.run).not.toHaveBeenCalled();
-  });
-
-  it('revert throws NotImplemented when active (scaffold)', async () => {
-    const b = new PfctlBlocker({ exec: makeMockExec(), assumeAvailable: true });
-    b.__setActiveForTests(true);
-    await expect(b.revert(DEVICE_ID)).rejects.toBeInstanceOf(NetworkBlockerNotImplementedError);
-  });
-
-  it('status reports active+detail when active, inactive otherwise', async () => {
-    const b = new PfctlBlocker({ exec: makeMockExec(), assumeAvailable: true });
-    await expect(b.status()).resolves.toEqual({ active: false, activeSince: null, detail: null });
-    b.__setActiveForTests(true, '2026-04-23T00:00:00.000Z');
-    await expect(b.status()).resolves.toEqual({
-      active: true,
-      activeSince: '2026-04-23T00:00:00.000Z',
-      detail: `pf anchor ${PFCTL_ANCHOR_NAME}`,
+    it('assumeAvailable bypasses probing', async () => {
+      const exec = makeMockExec();
+      const b = new PfctlBlocker({ exec, tempFile: makeMockTempFile(), assumeAvailable: true });
+      await expect(b.isAvailable()).resolves.toBe(true);
+      expect(exec.run).not.toHaveBeenCalled();
     });
   });
 
-  it('anchorName option overrides the default anchor', async () => {
-    const b = new PfctlBlocker({ exec: makeMockExec(), assumeAvailable: true, anchorName: 'custom' });
-    b.__setActiveForTests(true);
-    const s = await b.status();
-    expect(s.detail).toBe('pf anchor custom');
+  describe('apply (PR 3 real backend)', () => {
+    it('throws NetworkBlockerUnavailableError when mechanism is unavailable', async () => {
+      const exec = makeMockExec();
+      exec.run.mockRejectedValueOnce(new Error('sudo required'));
+      const b = new PfctlBlocker({ exec, tempFile: makeMockTempFile() });
+      await expect(b.apply(DEVICE_ID)).rejects.toBeInstanceOf(NetworkBlockerUnavailableError);
+    });
+
+    it('throws PfctlPfDisabledError when pf is disabled', async () => {
+      const exec = makeMockExec();
+      exec.run.mockResolvedValueOnce(PF_INFO_DISABLED); // assertPfEnabled
+      const b = new PfctlBlocker({
+        exec,
+        tempFile: makeMockTempFile(),
+        assumeAvailable: true,
+      });
+      await expect(b.apply(DEVICE_ID)).rejects.toBeInstanceOf(PfctlPfDisabledError);
+    });
+
+    it('writes rules to a temp file and loads them into the anchor', async () => {
+      const exec = makeMockExec();
+      exec.run
+        .mockResolvedValueOnce(PF_INFO_ENABLED) // assertPfEnabled
+        .mockResolvedValueOnce(''); // pfctl -a ... -f ...
+      const tempFile = makeMockTempFile('/tmp/opensafari-pfctl-xyz/rules.conf');
+      const now = () => new Date('2026-04-23T18:00:00.000Z');
+      const b = new PfctlBlocker({ exec, tempFile, assumeAvailable: true, now });
+
+      await b.apply(DEVICE_ID);
+
+      expect(tempFile.write).toHaveBeenCalledWith(PFCTL_BLOCK_RULES);
+      expect(exec.run).toHaveBeenCalledTimes(2);
+      expect(exec.run).toHaveBeenNthCalledWith(
+        1,
+        '/usr/bin/sudo',
+        ['-n', '/sbin/pfctl', '-s', 'info'],
+        expect.objectContaining({ timeoutMs: 2000 }),
+      );
+      expect(exec.run).toHaveBeenNthCalledWith(
+        2,
+        '/usr/bin/sudo',
+        ['-n', '/sbin/pfctl', '-a', PFCTL_ANCHOR_NAME, '-f', '/tmp/opensafari-pfctl-xyz/rules.conf'],
+        expect.objectContaining({ timeoutMs: 5000 }),
+      );
+      expect(tempFile.remove).toHaveBeenCalledWith('/tmp/opensafari-pfctl-xyz/rules.conf');
+
+      const s = await b.status();
+      expect(s.active).toBe(true);
+      expect(s.activeSince).toBe('2026-04-23T18:00:00.000Z');
+      expect(s.detail).toBe(`pf anchor ${PFCTL_ANCHOR_NAME}`);
+    });
+
+    it('honors custom anchor name and rules body', async () => {
+      const exec = makeMockExec();
+      exec.run.mockResolvedValueOnce(PF_INFO_ENABLED).mockResolvedValueOnce('');
+      const tempFile = makeMockTempFile();
+      const b = new PfctlBlocker({
+        exec,
+        tempFile,
+        assumeAvailable: true,
+        anchorName: 'custom-anchor',
+        rules: 'block drop out all',
+      });
+      await b.apply(DEVICE_ID);
+      expect(tempFile.write).toHaveBeenCalledWith('block drop out all');
+      expect(exec.run).toHaveBeenNthCalledWith(
+        2,
+        '/usr/bin/sudo',
+        ['-n', '/sbin/pfctl', '-a', 'custom-anchor', '-f', expect.any(String)],
+        expect.anything(),
+      );
+    });
+
+    it('is idempotent when already active (no exec, no temp file)', async () => {
+      const exec = makeMockExec();
+      const tempFile = makeMockTempFile();
+      const b = new PfctlBlocker({ exec, tempFile, assumeAvailable: true });
+      b.__setActiveForTests(true);
+      await expect(b.apply(DEVICE_ID)).resolves.toBeUndefined();
+      expect(exec.run).not.toHaveBeenCalled();
+      expect(tempFile.write).not.toHaveBeenCalled();
+    });
+
+    it('wraps pfctl exec failures in PfctlCommandError and still cleans the temp file', async () => {
+      const exec = makeMockExec();
+      const pfctlErr = Object.assign(new Error('pfctl: No such file'), {
+        stderr: 'pfctl: No such file',
+        code: 1,
+      });
+      exec.run.mockResolvedValueOnce(PF_INFO_ENABLED).mockRejectedValueOnce(pfctlErr);
+      const tempFile = makeMockTempFile();
+      const b = new PfctlBlocker({ exec, tempFile, assumeAvailable: true });
+
+      await expect(b.apply(DEVICE_ID)).rejects.toBeInstanceOf(PfctlCommandError);
+      expect(tempFile.remove).toHaveBeenCalled(); // cleanup on error
+      const s = await b.status();
+      expect(s.active).toBe(false); // state rollback
+    });
+  });
+
+  describe('revert (PR 3 real backend)', () => {
+    it('is a no-op when nothing is active', async () => {
+      const exec = makeMockExec();
+      const b = new PfctlBlocker({ exec, tempFile: makeMockTempFile(), assumeAvailable: true });
+      await expect(b.revert(DEVICE_ID)).resolves.toBeUndefined();
+      expect(exec.run).not.toHaveBeenCalled();
+    });
+
+    it('flushes the anchor when active', async () => {
+      const exec = makeMockExec();
+      exec.run.mockResolvedValueOnce('');
+      const b = new PfctlBlocker({
+        exec,
+        tempFile: makeMockTempFile(),
+        assumeAvailable: true,
+        anchorName: 'test-anchor',
+      });
+      b.__setActiveForTests(true);
+      await b.revert(DEVICE_ID);
+      expect(exec.run).toHaveBeenCalledWith(
+        '/usr/bin/sudo',
+        ['-n', '/sbin/pfctl', '-a', 'test-anchor', '-F', 'all'],
+        expect.objectContaining({ timeoutMs: 5000 }),
+      );
+      const s = await b.status();
+      expect(s.active).toBe(false);
+      expect(s.activeSince).toBeNull();
+    });
+
+    it('wraps pfctl revert failures in PfctlCommandError and leaves state active', async () => {
+      const exec = makeMockExec();
+      exec.run.mockRejectedValueOnce(
+        Object.assign(new Error('pfctl: permission denied'), {
+          stderr: 'pfctl: permission denied',
+          code: 2,
+        }),
+      );
+      const b = new PfctlBlocker({ exec, tempFile: makeMockTempFile(), assumeAvailable: true });
+      b.__setActiveForTests(true);
+      await expect(b.revert(DEVICE_ID)).rejects.toBeInstanceOf(PfctlCommandError);
+      const s = await b.status();
+      expect(s.active).toBe(true); // did not clear; caller can retry
+    });
+  });
+
+  describe('status', () => {
+    it('reports inactive by default', async () => {
+      const b = new PfctlBlocker({
+        exec: makeMockExec(),
+        tempFile: makeMockTempFile(),
+        assumeAvailable: true,
+      });
+      await expect(b.status()).resolves.toEqual({ active: false, activeSince: null, detail: null });
+    });
+
+    it('reports active+detail after __setActiveForTests', async () => {
+      const b = new PfctlBlocker({
+        exec: makeMockExec(),
+        tempFile: makeMockTempFile(),
+        assumeAvailable: true,
+      });
+      b.__setActiveForTests(true, '2026-04-23T00:00:00.000Z');
+      await expect(b.status()).resolves.toEqual({
+        active: true,
+        activeSince: '2026-04-23T00:00:00.000Z',
+        detail: `pf anchor ${PFCTL_ANCHOR_NAME}`,
+      });
+    });
+
+    it('anchorName option overrides the default anchor in detail', async () => {
+      const b = new PfctlBlocker({
+        exec: makeMockExec(),
+        tempFile: makeMockTempFile(),
+        assumeAvailable: true,
+        anchorName: 'custom',
+      });
+      b.__setActiveForTests(true);
+      const s = await b.status();
+      expect(s.detail).toBe('pf anchor custom');
+    });
   });
 });
 
@@ -141,7 +295,7 @@ describe('NlcBlocker', () => {
     await expect(b.apply(DEVICE_ID)).rejects.toBeInstanceOf(NetworkBlockerUnavailableError);
   });
 
-  it('apply throws NotImplemented when NLC is available (scaffold)', async () => {
+  it('apply throws NotImplemented when NLC is available (scaffold; impl lands in PR 5)', async () => {
     const b = new NlcBlocker({ exec: makeMockExec(), assumeAvailable: true });
     await expect(b.apply(DEVICE_ID)).rejects.toBeInstanceOf(NetworkBlockerNotImplementedError);
   });
@@ -176,8 +330,7 @@ describe('AutoBlocker selection order', () => {
     const auto = new AutoBlocker({ candidates: [pfctl, nlc] });
     await auto.isAvailable();
     expect(auto.selectedKind()).toBe('pfctl');
-    // nlc was never probed once pfctl said yes
-    expect((nlc.isAvailable as jest.Mock)).not.toHaveBeenCalled();
+    expect(nlc.isAvailable as jest.Mock).not.toHaveBeenCalled();
   });
 
   it('falls back to NLC when pfctl is unavailable', async () => {
