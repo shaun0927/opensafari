@@ -25,9 +25,14 @@
  * bridge does not yet expose `swipe-ps`; swipe / typeText / keypress /
  * sendKey delegate to the underlying `SimulatorKitHIDInputBackend`, which
  * keeps non-tap input paths on their existing (keyboard-safe) Tier-1
- * route. Extending `sim-hid-bridge` with pointer-service-bracketed swipe
- * and promoting the backend to the default chain are tracked as Phase 2
- * follow-ups in #590.
+ * route. On Xcode 26+ that delegated SimHID swipe path is itself gated
+ * off and throws `HeadlessInputUnavailableError`; the PointerService
+ * backend is cached as the selected backend by `getInputBackend`, so the
+ * throw does NOT re-enter the tier chain. See the comment on `swipe()`
+ * below and issue #649 for the caller-visible contract. Extending
+ * `sim-hid-bridge` with pointer-service-bracketed swipe and promoting
+ * the backend to the default chain are tracked as Phase 2 follow-ups in
+ * #590.
  */
 
 import { existsSync } from 'fs';
@@ -84,11 +89,28 @@ export class PointerServiceInputBackend implements InputBackend {
     endY: number,
     duration?: number,
   ): Promise<void> {
-    // Phase 1: no swipe-ps subcommand exists yet. Delegate to the standard
-    // SimHID swipe path; on Xcode 26+ that path is itself gated off and will
-    // surface the existing HeadlessInputUnavailableError via the tier chain
-    // when we bubble back up. Callers setting the opt-in flag purely for
-    // tap recovery see no regression for swipe.
+    // Phase 1: no swipe-ps subcommand exists yet. Delegate straight to the
+    // underlying SimulatorKitHIDInputBackend. On Xcode 26+ the `sim-hid-bridge
+    // swipe` subcommand exits with `SIMULATORKIT_UNAVAILABLE` (or another
+    // non-zero SimulatorKit code), and the delegate surfaces that to the caller
+    // as an `InputBackendError` — not `HeadlessInputUnavailableError`, which is
+    // produced one layer up in `native-input-backend.getInputBackend` when
+    // selecting a backend, never from a backend's own swipe() method.
+    //
+    // That error does NOT re-enter the tier chain because
+    // PointerServiceInputBackend is cached as the selected backend in
+    // getInputBackend once OPENSAFARI_ENABLE_POINTERSERVICE=1 resolves it. For
+    // completeness, any other error type the delegate may raise in the future
+    // is also passed through unchanged; see the "swipe propagates … without
+    // wrapping" tests for the frozen contract.
+    //
+    // Callers that need swipe fallback on Xcode 26+ must either (a) leave
+    // OPENSAFARI_ENABLE_POINTERSERVICE unset so the standard Tier-1 SimHID /
+    // focus-input chain is selected for every call, or (b) invoke an
+    // element-targeted swipe so the AX-press tier handles the gesture.
+    // Promoting this to a real in-tool tier downgrade is tracked under #590
+    // Phase 2 alongside `sim-hid-bridge swipe-ps`. See #649 for the decision
+    // record.
     await this.delegate.swipe(deviceId, startX, startY, endX, endY, duration);
   }
 
