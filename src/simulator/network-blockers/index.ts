@@ -9,7 +9,7 @@ export { AutoBlocker } from './auto';
 export type { AutoBlockerOptions } from './auto';
 export { cleanupRegistry, NodeCleanupRegistry } from './cleanup';
 export type { CleanupFn, CleanupRegistry } from './cleanup';
-export { NlcBlocker } from './nlc';
+export { NLC_PREF_PANE, NlcBlocker, NlcUnsupportedError } from './nlc';
 export type { NlcBlockerOptions } from './nlc';
 export {
   PFCTL_ANCHOR_NAME,
