@@ -163,25 +163,23 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
     // ios-webkit-debug-proxy device-list mode: the top-level /json returns
     // redirect entries of the form { url: "host:PORT" } with no
     // webSocketDebuggerUrl. Follow each redirect to get real page targets.
+    // A single /json response may mix redirect stubs with inline page targets,
+    // so resolve per-entry rather than all-or-nothing.
     const isDeviceRedirect = (t: WebKitTarget) =>
       !t.webSocketDebuggerUrl && typeof t.url === 'string' && /^\S+:\d+$/.test(t.url);
 
-    let targets: WebKitTarget[];
-    if (parsed.length > 0 && parsed.every(isDeviceRedirect)) {
-      const followed = await Promise.all(
-        parsed.map(async (t) => {
-          try {
-            const redirectJson = await this.httpGet(`http://${t.url}/json`);
-            return JSON.parse(redirectJson) as WebKitTarget[];
-          } catch {
-            return [] as WebKitTarget[];
-          }
-        }),
-      );
-      targets = followed.flat();
-    } else {
-      targets = parsed;
-    }
+    const expanded = await Promise.all(
+      parsed.map(async (t) => {
+        if (!isDeviceRedirect(t)) return [t];
+        try {
+          const redirectJson = await this.httpGet(`http://${t.url}/json`);
+          return JSON.parse(redirectJson) as WebKitTarget[];
+        } catch {
+          return [] as WebKitTarget[];
+        }
+      }),
+    );
+    const targets = expanded.flat();
 
     // ios-webkit-debug-proxy doesn't include an `id` field — derive from webSocketDebuggerUrl
     for (const t of targets) {
