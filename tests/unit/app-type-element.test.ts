@@ -7,6 +7,15 @@
  * session manager) so these stay pure unit tests.
  */
 
+// CI hardening: macos-latest GitHub runners under full-suite load
+// occasionally miss Jest's default 5 s per-test deadline on the first
+// cases here (ts-jest cold-compile + accessibility-bridge mock wire-up
+// together push the first `await handler(...)` past 5 s). Locally these
+// tests resolve in <100 ms. Bump the per-test cap so a slow CI machine
+// no longer flags "Exceeded timeout of 5000 ms" as a PR-introduced
+// regression; real hangs still fail fast well under the new cap.
+jest.setTimeout(20000);
+
 jest.mock('../../src/mcp-server', () => {
   const actual = jest.requireActual('../../src/mcp-server');
   return { ...actual, getWebKitClient: jest.fn().mockReturnValue(null) };
