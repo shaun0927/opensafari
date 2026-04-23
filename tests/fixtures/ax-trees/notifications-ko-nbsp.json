@@ -1,0 +1,111 @@
+{
+  "role": "AXApplication",
+  "label": "SpringBoard",
+  "traits": [],
+  "frame": {
+    "x": 0,
+    "y": 0,
+    "width": 393,
+    "height": 852
+  },
+  "visible": true,
+  "enabled": true,
+  "focused": false,
+  "path": "0",
+  "children": [
+    {
+      "role": "AXWindow",
+      "traits": [],
+      "frame": {
+        "x": 0,
+        "y": 0,
+        "width": 393,
+        "height": 852
+      },
+      "visible": true,
+      "enabled": true,
+      "focused": false,
+      "path": "0/0",
+      "children": [
+        {
+          "role": "AXSheet",
+          "traits": [],
+          "frame": {
+            "x": 20,
+            "y": 280,
+            "width": 353,
+            "height": 240
+          },
+          "visible": true,
+          "enabled": true,
+          "focused": false,
+          "path": "0/0/0",
+          "children": [
+            {
+              "role": "AXStaticText",
+              "label": "'Omofictions App'에서 알림을 보내고자 합니다.",
+              "traits": [
+                "AXHeading"
+              ],
+              "frame": {
+                "x": 40,
+                "y": 300,
+                "width": 313,
+                "height": 60
+              },
+              "visible": true,
+              "enabled": true,
+              "focused": false,
+              "path": "0/0/0/0"
+            },
+            {
+              "role": "AXStaticText",
+              "label": "경고, 사운드 및 아이콘 배지가 알림에 포함될 수 있습니다.",
+              "traits": [],
+              "frame": {
+                "x": 40,
+                "y": 360,
+                "width": 313,
+                "height": 40
+              },
+              "visible": true,
+              "enabled": true,
+              "focused": false,
+              "path": "0/0/0/1"
+            },
+            {
+              "role": "AXButton",
+              "label": "허용 안 함",
+              "traits": [],
+              "frame": {
+                "x": 40,
+                "y": 420,
+                "width": 153,
+                "height": 44
+              },
+              "visible": true,
+              "enabled": true,
+              "focused": false,
+              "path": "0/0/0/2"
+            },
+            {
+              "role": "AXButton",
+              "label": "허용",
+              "traits": [],
+              "frame": {
+                "x": 200,
+                "y": 420,
+                "width": 153,
+                "height": 44
+              },
+              "visible": true,
+              "enabled": true,
+              "focused": false,
+              "path": "0/0/0/3"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

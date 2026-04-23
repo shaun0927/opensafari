@@ -1,5 +1,5 @@
 import { AXNode } from '../native/ax-types';
-import { AlertAction, AlertLocale, matchLabel } from './app-handle-alert-labels';
+import { AlertAction, AlertLocale, matchLabel, normalizeLabel } from './app-handle-alert-labels';
 
 export interface DialogDetectionContext {
   tree: AXNode;        // full AX tree root
@@ -121,13 +121,14 @@ function isGeometryBounded(
  * tree has the same label AND a non-empty identifier (in-app stable ID).
  */
 function hasNoIdentifierConflict(label: string, tree: AXNode): boolean {
+  const target = normalizeLabel(label);
   return !dfsFind(tree, (n) => {
     return (
       n.role === 'AXButton' &&
       typeof n.identifier === 'string' &&
       n.identifier.length > 0 &&
       typeof n.label === 'string' &&
-      n.label.trim().toLowerCase() === label.trim().toLowerCase()
+      normalizeLabel(n.label) === target
     );
   });
 }

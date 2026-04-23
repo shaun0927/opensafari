@@ -92,6 +92,28 @@ describe('findAlertCandidates — springboard-dialog (geometry_bounded)', () => 
   });
 });
 
+describe('findAlertCandidates — notifications-ko-nbsp (issue #642)', () => {
+  const tree = loadFixture('notifications-ko-nbsp.json');
+
+  test('dismiss: finds the NBSP-separated 허용 안 함 button', () => {
+    const candidates = findAlertCandidates('dismiss', ctx(tree));
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0].label).toBe('허용 안 함');
+  });
+
+  test('dismiss: candidate AX node label retains its NBSP separators', () => {
+    const candidates = findAlertCandidates('dismiss', ctx(tree));
+    const NBSP = ' ';
+    expect(candidates[0].node.label).toBe(`허용${NBSP}안${NBSP}함`);
+  });
+
+  test('accept: finds the 허용 button', () => {
+    const candidates = findAlertCandidates('accept', ctx(tree));
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0].label).toBe('허용');
+  });
+});
+
 describe('findAlertCandidates — spotlight-search (non-match)', () => {
   const tree = loadFixture('spotlight-search.json');
 
