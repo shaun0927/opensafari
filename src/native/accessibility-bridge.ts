@@ -18,8 +18,26 @@ const DEFAULT_MAX_DEPTH = 10;
 const DEFAULT_MAX_RESULTS = 50;
 const DEFAULT_TIMEOUT_MS = 15_000;
 
+export interface AccessibilityBridgeOptions {
+  /**
+   * Pre-resolve the bridge path, bypassing the filesystem search.
+   *
+   * Dependency-injection seam used by tests (issue #643 recovery fixture)
+   * so a fake ax-bridge stand-in can be exercised without touching the
+   * production binary layout or environment variables. Production callers
+   * should omit this and rely on `resolveBridgePath()`.
+   */
+  bridgePath?: string;
+}
+
 export class AccessibilityBridge {
   private bridgePath: string | null = null;
+
+  constructor(options?: AccessibilityBridgeOptions) {
+    if (options?.bridgePath) {
+      this.bridgePath = options.bridgePath;
+    }
+  }
 
   /**
    * Resolve the path to the ax-bridge-native binary or its Swift source.
