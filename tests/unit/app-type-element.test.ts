@@ -7,6 +7,11 @@
  * session manager) so these stay pure unit tests.
  */
 
+// CI runners occasionally exceed Jest's 5000 ms default for the heavier
+// composite flow tests in this file. Bump the file-scoped timeout so the
+// slow-runner flakes stop masking real regressions.
+jest.setTimeout(30000);
+
 jest.mock('../../src/mcp-server', () => {
   const actual = jest.requireActual('../../src/mcp-server');
   return { ...actual, getWebKitClient: jest.fn().mockReturnValue(null) };
