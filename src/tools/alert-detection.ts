@@ -278,8 +278,32 @@ export function findAlertCandidates(
 }
 
 /**
+ * Detect Unicode whitespace codepoints or NFC-decomposed characters that
+ * would otherwise be indistinguishable from ASCII whitespace in a plain
+ * `string[]` diagnostic field. Mirrors the set handled by `normalizeLabel`
+ * so the annotation is consistent with matching.
+ */
+const DIAGNOSTIC_FANCY_WHITESPACE = /[\u00A0\u202F\u2007\u2060\u2028\u2029]/;
+
+function annotateWhitespace(trimmed: string): string {
+  if (trimmed.length === 0) return trimmed;
+  const nfc = trimmed.normalize('NFC');
+  const hasFancy = DIAGNOSTIC_FANCY_WHITESPACE.test(trimmed);
+  if (!hasFancy && nfc === trimmed) {
+    return trimmed;
+  }
+  const normalized = normalizeLabel(trimmed);
+  return `${trimmed} (norm: ${normalized})`;
+}
+
+/**
  * DFS-collect label strings for all visible+enabled AXButton nodes.
- * Used by PR #3 for diagnostics.
+ * Used for diagnostics surfaced in the `visibleButtons` response field.
+ *
+ * When an original label contains non-ASCII whitespace (NBSP, Narrow NBSP,
+ * Figure Space, Word Joiner, line/paragraph separators) or NFC-divergent
+ * characters, the returned string is annotated as `"<original> (norm: <normalized>)"`.
+ * Pure-ASCII labels are returned unchanged. Return type remains `string[]`.
  */
 export function collectVisibleButtonLabels(tree: AXNode): string[] {
   const labels: string[] = [];
@@ -291,7 +315,7 @@ export function collectVisibleButtonLabels(tree: AXNode): string[] {
       node.label &&
       node.label.trim().length > 0
     ) {
-      labels.push(node.label.trim());
+      labels.push(annotateWhitespace(node.label.trim()));
     }
     for (const child of node.children ?? []) {
       walk(child);
@@ -303,7 +327,7 @@ export function collectVisibleButtonLabels(tree: AXNode): string[] {
 
 /**
  * DFS-collect label strings for all visible+enabled AXStaticText nodes.
- * Used by PR #3 for diagnostics.
+ * Applies the same whitespace annotation as `collectVisibleButtonLabels`.
  */
 export function collectVisibleStaticTexts(tree: AXNode): string[] {
   const texts: string[] = [];
@@ -314,7 +338,7 @@ export function collectVisibleStaticTexts(tree: AXNode): string[] {
       node.label &&
       node.label.trim().length > 0
     ) {
-      texts.push(node.label.trim());
+      texts.push(annotateWhitespace(node.label.trim()));
     }
     for (const child of node.children ?? []) {
       walk(child);
