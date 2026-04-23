@@ -117,7 +117,7 @@ describe('app_handle_alert tool', () => {
     mockDumpTree.mockResolvedValue(inAppOkTree());
 
     const handler = server.getToolHandler('app_handle_alert')!;
-    const result = await handler('s', { action: 'accept' });
+    const result = await handler('s', { action: 'accept', keyboardFallback: false });
 
     const body = parseResult(result as { content: Array<{ type: string; text: string }> });
     expect(body.dismissed).toBe(false);

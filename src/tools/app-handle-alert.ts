@@ -26,7 +26,12 @@ const DEFAULT_DEVICE_WIDTH = 393;
 const AX_POLL_TIMEOUT_MS = 3000;
 const AX_POLL_INTERVAL_MS = 250;
 
-type Strategy = 'ax-scan' | 'applescript-sheet' | 'permission-reset' | 'none';
+type Strategy =
+  | 'ax-scan'
+  | 'applescript-sheet'
+  | 'keyboard-fallback'
+  | 'permission-reset'
+  | 'none';
 type Surface = 'simulator_chrome' | 'system_dialog_unknown' | 'app_content';
 type FallbackMode = 'permission_reset' | 'none';
 
@@ -222,6 +227,47 @@ async function tryAppleScript(action: AlertAction): Promise<boolean> {
   }
 }
 
+/**
+ * Tier 2.5 — OS-level keyboard fallback.
+ *
+ * When AX enumeration (Tier 1) returns an empty tree (e.g. iOS 26.4
+ * UNUserNotificationCenter permission sheets on ko-KR simulators) AND the
+ * AppleScript `click button` matcher (Tier 2) can't match any localized
+ * label, we still know the *intent* — accept vs dismiss — so sending the
+ * default OS-dialog keystroke is a safe last-resort recovery path:
+ *
+ *   accept  → Return   (activates the default button)
+ *   dismiss → Escape   (dismisses the dialog)
+ *
+ * We route the keystroke through the Simulator's frontmost process so it
+ * reaches the iOS guest dialog. This never displaces focus from a user-
+ * focused app because `tell application "Simulator" to activate` runs
+ * only after both higher tiers have already tried and missed.
+ */
+export function buildKeyboardFallbackScript(action: AlertAction): string {
+  // key code 36 = Return, key code 53 = Escape
+  const keyAction = action === 'accept' ? 'key code 36' : 'key code 53';
+  return `
+tell application "Simulator" to activate
+delay 0.2
+tell application "System Events"
+  tell process "Simulator"
+    ${keyAction}
+  end tell
+end tell
+`;
+}
+
+async function tryKeyboardFallback(action: AlertAction): Promise<boolean> {
+  const script = buildKeyboardFallbackScript(action);
+  try {
+    await execFileAsync('osascript', ['-e', script], { timeout: 5_000 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function isoNow(): string {
   return new Date().toISOString();
 }
@@ -231,7 +277,7 @@ export function registerAppHandleAlertTool(server: MCPServer): void {
     {
       name: 'app_handle_alert',
       description:
-        'Handle system alert dialogs in the iOS Simulator (e.g. permission prompts). Accepts or dismisses the currently visible alert using an AX-scan detector (locale-aware for en/ko/ja/zh-Hans) with AppleScript fallback. Returns rich diagnostics (visibleButtons, visibleStaticTexts, suggestedLabelsToAdd) when no candidate is found.',
+        'Handle system alert dialogs in the iOS Simulator (e.g. permission prompts). Accepts or dismisses the currently visible alert using an AX-scan detector (locale-aware for en/ko/ja/zh-Hans), then an AppleScript label-match fallback, then an OS-level keyboard fallback (Return for accept, Escape for dismiss). Returns rich diagnostics (visibleButtons, visibleStaticTexts, suggestedLabelsToAdd) when no candidate is found.',
       inputSchema: {
         type: 'object' as const,
         properties: {
@@ -248,12 +294,17 @@ export function registerAppHandleAlertTool(server: MCPServer): void {
             type: 'string',
             enum: ['permission_reset', 'none'],
             description:
-              'When Tier 1 (AX-scan) and Tier 2 (AppleScript) both miss the dialog, optionally run `xcrun simctl privacy <udid> reset <service>` with a service inferred from visibleStaticTexts. Default "none".',
+              'When Tier 1 (AX-scan), Tier 2 (AppleScript) and Tier 2.5 (keyboard) all miss the dialog, optionally run `xcrun simctl privacy <udid> reset <service>` with a service inferred from visibleStaticTexts. Default "none".',
           },
           dryRun: {
             type: 'boolean',
             description:
               'When fallback="permission_reset", do not actually execute simctl — report the command that would run. Default false.',
+          },
+          keyboardFallback: {
+            type: 'boolean',
+            description:
+              'When Tier 1 (AX-scan) and Tier 2 (AppleScript label match) both miss the dialog, send an OS-level keystroke (Return for accept, Escape for dismiss) as a Tier 2.5 recovery. Safe for system dialogs where intent is unambiguous. Default true.',
           },
         },
         required: ['action'],
@@ -291,6 +342,7 @@ export function registerAppHandleAlertTool(server: MCPServer): void {
           ? (fallbackRaw as FallbackMode)
           : 'none';
       const dryRun = params.dryRun === true;
+      const keyboardFallback = params.keyboardFallback !== false;
 
       const strategyAttempted: Strategy[] = [];
       let finalTree: AXNode | null = null;
@@ -351,7 +403,37 @@ export function registerAppHandleAlertTool(server: MCPServer): void {
         return { content: [{ type: 'text' as const, text: JSON.stringify(body) }] };
       }
 
-      // Both detection tiers failed — gather diagnostics.
+      // Tier 2.5: OS-level keyboard fallback. Intent (accept/dismiss) is
+      // unambiguous, so when AX and AppleScript label matching both miss we
+      // send Return (accept) or Escape (dismiss) as a last-resort recovery.
+      // Disabled when the caller explicitly sets keyboardFallback: false.
+      if (keyboardFallback) {
+        strategyAttempted.push('keyboard-fallback');
+        const keyboardOk = await tryKeyboardFallback(action);
+        if (keyboardOk) {
+          const visibleButtons = finalTree ? collectVisibleButtonLabels(finalTree) : [];
+          const visibleStaticTexts = finalTree ? collectVisibleStaticTexts(finalTree) : [];
+          const suggestedLabelsToAdd = suggestLabels(visibleButtons, action);
+          const body: HandleAlertResponse = {
+            action,
+            deviceId,
+            dismissed: true,
+            strategy: 'keyboard-fallback',
+            strategy_attempted: strategyAttempted,
+            reason: 'ok',
+            surface: 'app_content',
+            visibleButtons,
+            visibleStaticTexts,
+            suggestedLabelsToAdd,
+            fallbackAvailable: [],
+            handledAt: isoNow(),
+            elapsedMs: Date.now() - started,
+          };
+          return { content: [{ type: 'text' as const, text: JSON.stringify(body) }] };
+        }
+      }
+
+      // All detection tiers failed — gather diagnostics.
       const visibleButtons = finalTree ? collectVisibleButtonLabels(finalTree) : [];
       const visibleStaticTexts = finalTree ? collectVisibleStaticTexts(finalTree) : [];
       const suggestedLabelsToAdd = suggestLabels(visibleButtons, action);
@@ -530,6 +612,7 @@ export function registerAppHandleAlertTool(server: MCPServer): void {
 /** @internal — exposed for tests only. */
 export const _internal = {
   buildAlertScript,
+  buildKeyboardFallbackScript,
   inferSurface,
   suggestLabels,
   ACCEPT_LABELS,
