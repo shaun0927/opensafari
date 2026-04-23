@@ -213,17 +213,21 @@ export async function dumpTreeWithRecovery(
       if (reactivateOnRetry && options.deviceId) {
         const reactStart = Date.now();
         try {
-          await reactivate(options.deviceId, {
+          const reactivated = await reactivate(options.deviceId, {
             forceRefresh: true,
             timeout: DEFAULT_REACTIVATE_TIMEOUT_MS,
             bundleId: options.bundleId,
           });
+          // `ensureSemanticsActive` resolves to `false` when activation times
+          // out or fails without throwing — surface that as an error stage so
+          // downstream telemetry does not mistake silent failure for success.
           stages.push({
             attempt,
             action: 'reactivate',
             startedAt: reactStart,
             durationMs: Date.now() - reactStart,
-            outcome: 'ok',
+            outcome: reactivated ? 'ok' : 'error',
+            ...(reactivated ? {} : { errorCode: 'REACTIVATE_RETURNED_FALSE' }),
           });
         } catch (reactErr) {
           stages.push({

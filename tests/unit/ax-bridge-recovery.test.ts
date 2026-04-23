@@ -202,6 +202,32 @@ describe('dumpTreeWithRecovery', () => {
     expect(actions).toEqual(['dump', 'sleep', 'dump']);
   });
 
+  // Codex P2 regression on #653: `ensureSemanticsActive` resolves to `false`
+  // when activation times out or silently fails. That outcome must reach the
+  // recovery report as an error stage so telemetry does not mistake a silent
+  // failure for a successful reactivation.
+  test('records outcome: error when reactivate resolves false', async () => {
+    const tree = makeTree('reactivate-false');
+    const { bridge } = makeBridge([
+      new AccessibilityBridgeError('empty', 'DEVICE_CONTENT_ROOT_EMPTY'),
+      tree,
+    ]);
+    const reactivate = jest.fn(async () => false);
+
+    const result = await dumpTreeWithRecovery(bridge, {
+      deviceId: 'SIM-1',
+      reactivate,
+      sleep: async () => {},
+    });
+
+    expect(result.recovery.recovered).toBe(true);
+    const reactStage = result.recovery.stages.find((s) => s.action === 'reactivate');
+    expect(reactStage).toMatchObject({
+      outcome: 'error',
+      errorCode: 'REACTIVATE_RETURNED_FALSE',
+    });
+  });
+
   test('reactivation failure does not abort the retry loop', async () => {
     const tree = makeTree('retry-anyway');
     const { bridge } = makeBridge([
