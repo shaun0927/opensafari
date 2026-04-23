@@ -1,17 +1,18 @@
 /**
  * Unit tests for the simulator network-blocker abstraction layer
  * (issue #640). No real system calls — all exec and temp-file I/O is
- * mocked. PR 3 wires pfctl to real pfctl commands; NLC is still
- * scaffold and raises NotImplemented until PR 5.
+ * mocked. PR 3 wires pfctl to real pfctl commands; PR 5 finalises the
+ * NLC surface — `apply()` raises `NlcUnsupportedError` with a pointer
+ * to the docs rather than pretending the backend is wired.
  */
 
 import {
   AutoBlocker,
   HostExec,
   NetworkBlocker,
-  NetworkBlockerNotImplementedError,
   NetworkBlockerUnavailableError,
   NlcBlocker,
+  NlcUnsupportedError,
   NodeCleanupRegistry,
   PFCTL_ANCHOR_NAME,
   PFCTL_BLOCK_RULES,
@@ -296,9 +297,21 @@ describe('NlcBlocker', () => {
     await expect(b.apply(DEVICE_ID)).rejects.toBeInstanceOf(NetworkBlockerUnavailableError);
   });
 
-  it('apply throws NotImplemented when NLC is available (scaffold; impl lands in PR 5)', async () => {
+  it('apply throws NlcUnsupportedError when NLC is installed (see docs/tools/device-network.md)', async () => {
     const b = new NlcBlocker({ exec: makeMockExec(), assumeAvailable: true });
-    await expect(b.apply(DEVICE_ID)).rejects.toBeInstanceOf(NetworkBlockerNotImplementedError);
+    await expect(b.apply(DEVICE_ID)).rejects.toBeInstanceOf(NlcUnsupportedError);
+  });
+
+  it('revert throws NlcUnsupportedError when state is active', async () => {
+    const b = new NlcBlocker({ exec: makeMockExec(), assumeAvailable: true });
+    b.__setActiveForTests(true);
+    await expect(b.revert(DEVICE_ID)).rejects.toBeInstanceOf(NlcUnsupportedError);
+  });
+
+  it('apply error message points to the pfctl mechanism and the docs', async () => {
+    const b = new NlcBlocker({ exec: makeMockExec(), assumeAvailable: true });
+    await expect(b.apply(DEVICE_ID)).rejects.toThrow(/mechanism: "pfctl"/);
+    await expect(b.apply(DEVICE_ID)).rejects.toThrow(/docs\/tools\/device-network\.md/);
   });
 
   it('status surfaces the NLC profile name when active', async () => {
