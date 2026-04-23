@@ -67,7 +67,17 @@ export interface InputBackend {
     endY: number,
     duration?: number,
   ): Promise<void>;
-  typeText(deviceId: string, text: string): Promise<void>;
+  /**
+   * Type `text` into whatever is currently focused on `deviceId`.
+   *
+   * `delayMs` is an optional inter-character pause between consecutive key
+   * sends, in milliseconds. Only the simhid backend honours it (other
+   * backends bypass the software keyboard and have no equivalent failure
+   * mode); they may safely ignore the argument. Required for segmented
+   * OTP-style fields that drop characters when keys arrive too fast (issue
+   * #639 Problem 2). Default 0 (no pause).
+   */
+  typeText(deviceId: string, text: string, delayMs?: number): Promise<void>;
   keypress(deviceId: string, keyCode: string): Promise<void>;
   sendKey(deviceId: string, keyName: string): Promise<void>;
 }

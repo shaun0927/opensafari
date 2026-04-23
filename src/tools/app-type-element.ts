@@ -118,6 +118,11 @@ export function registerAppTypeElementTool(server: MCPServer): void {
             description:
               'Opt out of post-typing readback verification (default: true). When false the tool reports `verified: "unknown"` without reading back the AX value.',
           },
+          perKeyDelayMs: {
+            type: 'number',
+            description:
+              'When backend resolves to simhid (HID keyboard): inserts an inter-character pause between consecutive key sends. Default 0 (no pause). Required for segmented OTP-style fields (e.g. 6-cell verify-code inputs in Flutter) that drop characters when keys arrive faster than the field can advance focus. Recommended: 80–150 ms for 6-digit OTP inputs.',
+          },
         },
         required: ['text'],
       },
@@ -150,6 +155,13 @@ export function registerAppTypeElementTool(server: MCPServer): void {
         const focusDelay = (params.focusDelay as number | undefined) ?? DEFAULT_FOCUS_DELAY_MS;
         const verifyOptIn =
           typeof params.verify === 'boolean' ? (params.verify as boolean) : true;
+        const perKeyDelayMsRaw = params.perKeyDelayMs;
+        const perKeyDelayMs =
+          typeof perKeyDelayMsRaw === 'number' &&
+          Number.isFinite(perKeyDelayMsRaw) &&
+          perKeyDelayMsRaw > 0
+            ? perKeyDelayMsRaw
+            : 0;
 
         await ensureSemanticsActive(deviceId);
 
@@ -277,7 +289,7 @@ export function registerAppTypeElementTool(server: MCPServer): void {
           if (focusDelay > 0) {
             await sleep(focusDelay);
           }
-          await backend.typeText(deviceId, textToType);
+          await backend.typeText(deviceId, textToType, perKeyDelayMs);
         });
 
         // Tier-3 readback verification (issue #39). We only run the readback
