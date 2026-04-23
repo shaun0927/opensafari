@@ -134,13 +134,29 @@ function inferSurface(tree: AXNode): Surface {
   return 'simulator_chrome';
 }
 
+/**
+ * `collectVisibleButtonLabels` annotates non-ASCII whitespace as
+ * `"<original> (norm: <normalized>)"` for diagnostics (slice 2 of #642).
+ * `suggestLabels` operates against the raw label corpus and must strip
+ * that display-only annotation before matching — otherwise the corpus
+ * membership test always misses and we emit synthetic "add me" entries
+ * like `"허용 안 함 (norm: 허용 안 함)"`, which are not real button labels
+ * and would never match at runtime.
+ */
+const DIAGNOSTIC_ANNOTATION_SUFFIX = / \(norm: [^)]*\)$/;
+
+function stripDiagnosticAnnotation(label: string): string {
+  return label.replace(DIAGNOSTIC_ANNOTATION_SUFFIX, '');
+}
+
 function suggestLabels(visibleButtons: string[], action: AlertAction): string[] {
   const corpus = new Set(flattenLabels(action).map((s) => s.trim().toLowerCase()));
   const out: string[] = [];
   for (const label of visibleButtons) {
-    const key = label.trim().toLowerCase();
-    if (key.length === 0) continue;
-    if (!corpus.has(key)) out.push(label.trim());
+    const raw = stripDiagnosticAnnotation(label).trim();
+    if (raw.length === 0) continue;
+    const key = raw.toLowerCase();
+    if (!corpus.has(key)) out.push(raw);
   }
   return Array.from(new Set(out));
 }

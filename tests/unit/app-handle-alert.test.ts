@@ -161,6 +161,21 @@ describe('app_handle_alert tool', () => {
     expect(body.suggestedLabelsToAdd).toContain('Novel Action');
   });
 
+  test('diagnostics: suggestLabels strips NBSP annotation + matches corpus without polluting suggestions', () => {
+    // Simulates `collectVisibleButtonLabels` output where the NBSP-bearing
+    // label has been annotated as `"<original> (norm: <normalized>)"` for
+    // the `visibleButtons` diagnostic. The corpus stores the ASCII form, so
+    // `suggestLabels` must (a) strip the annotation before matching (so the
+    // corpus membership test still succeeds), and (b) emit only real button
+    // text — never the synthetic `"X (norm: Y)"` string — into
+    // `suggestedLabelsToAdd`.
+    const NBSP = ' ';
+    const annotated = `허용${NBSP}안${NBSP}함 (norm: 허용 안 함)`;
+    const result = _internal.suggestLabels([annotated], 'dismiss');
+    expect(result).not.toContain(annotated);
+    expect(result.some((l) => l.includes('(norm:'))).toBe(false);
+  });
+
   test('surface: SpringBoard-only → simulator_chrome', async () => {
     const tree: AXNode = {
       role: 'AXApplication',
