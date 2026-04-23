@@ -183,6 +183,35 @@ describe('SimulatorKitHIDInputBackend', () => {
     );
   });
 
+  test('typeText with delayMs > 0 inserts pauses between characters (#639 Problem 2)', async () => {
+    execFileMock.mockResolvedValue({
+      stdout: '{"ok":true,"kind":"key","udid":"x","elapsed_ms":1}',
+      stderr: '',
+    });
+    // 4 characters with 30 ms between each → 3 gaps → at least ~75 ms wall
+    // clock (allow some slack for setTimeout drift). Without delay, this
+    // completes in well under 75 ms because execFile is mocked synchronously.
+    const start = Date.now();
+    await backend.typeText(DEVICE, 'abcd', 30);
+    const elapsed = Date.now() - start;
+    expect(execFileMock).toHaveBeenCalledTimes(4);
+    expect(elapsed).toBeGreaterThanOrEqual(75);
+  });
+
+  test('typeText with delayMs === 0 keeps existing fast-path (no pause)', async () => {
+    execFileMock.mockResolvedValue({
+      stdout: '{"ok":true,"kind":"key","udid":"x","elapsed_ms":1}',
+      stderr: '',
+    });
+    const start = Date.now();
+    await backend.typeText(DEVICE, 'abcd', 0);
+    const elapsed = Date.now() - start;
+    expect(execFileMock).toHaveBeenCalledTimes(4);
+    // No deliberate pause — should complete promptly. Allow generous headroom
+    // for CI noise but assert it's well below the delayed-path threshold.
+    expect(elapsed).toBeLessThan(60);
+  });
+
   // ── Printable-ASCII symbol coverage (issue #483 follow-up) ────────────────
   // The original PoC only mapped A-Z, a-z, 0-9, and space, so the tool could
   // not type an email address (no '@', '.', or '-'). typeText now covers every

@@ -211,7 +211,7 @@ export class SimulatorKitHIDInputBackend implements InputBackend {
     });
   }
 
-  async typeText(deviceId: string, text: string): Promise<void> {
+  async typeText(deviceId: string, text: string, delayMs = 0): Promise<void> {
     await timedInput(this.kind, 'typeText', deviceId, async () => {
       // Printable US-ASCII only. Each character is mapped to a US-keyboard
       // HID usage and sent as an independent event. Shifted characters
@@ -220,6 +220,12 @@ export class SimulatorKitHIDInputBackend implements InputBackend {
       // the key press. Tab, newline, DEL, and non-ASCII characters have no
       // mapping and are rejected; higher layers should compose those via
       // WebKit/Flutter/simctl backends instead.
+      //
+      // When delayMs > 0 an inter-character pause is inserted between
+      // consecutive key sends. This is required for segmented OTP-style
+      // inputs (e.g. 6-cell verify-code fields in Flutter) that drop
+      // characters when keys arrive in rapid succession (issue #639).
+      let first = true;
       for (const ch of text) {
         const key = asciiToHidKey(ch);
         if (key === null) {
@@ -231,6 +237,10 @@ export class SimulatorKitHIDInputBackend implements InputBackend {
             'BAD_ARGS',
           );
         }
+        if (!first && delayMs > 0) {
+          await sleep(delayMs);
+        }
+        first = false;
         if (key.shift) {
           await this.run([
             deviceId,
@@ -454,4 +464,8 @@ export async function tryCreateSimulatorKitHIDBackend(): Promise<
       'Run npm run build or set OPENSAFARI_ALLOW_SWIFT_INTERPRETER=1 for dev mode.',
     'HID_BRIDGE_MISSING',
   );
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
