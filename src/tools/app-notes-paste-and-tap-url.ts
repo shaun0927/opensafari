@@ -211,17 +211,30 @@ async function waitForDetectedLink(
         { role: 'AXLink' },
         { deviceId, maxResults: 20 },
       );
+      // Two-pass scan: prefer an exact URL-literal match over a host-only match.
+      // A user note may contain several links to the same host (for example
+      // `https://example.com` above the requested `https://example.com/detail/abc`);
+      // tapping the first host-containing label would route to the wrong path
+      // and still report success, which breaks deterministic deep-link
+      // verification.
       for (const match of res.matches) {
         const label = (match.label ?? '').toLowerCase();
-        if (label.includes(lowerUrl) || (host && label.includes(host))) {
+        if (label.includes(lowerUrl)) {
           return { path: match.path, label: match.label ?? url };
         }
       }
-      // Fallback: if exactly one AXLink is present, assume it's the one we pasted.
-      if (res.matches.length === 1) {
-        const sole = res.matches[0];
-        return { path: sole.path, label: sole.label ?? url };
+      if (host) {
+        for (const match of res.matches) {
+          const label = (match.label ?? '').toLowerCase();
+          if (label.includes(host)) {
+            return { path: match.path, label: match.label ?? url };
+          }
+        }
       }
+      // No single-link fallback: Notes is launched into prior state, so an
+      // unrelated pre-existing AXLink could satisfy a blanket `matches.length
+      // === 1` heuristic and yield a false-positive tap. Callers that need a
+      // looser match should widen the input URL (or host) themselves.
     } catch {
       /* tree may be mid-transition — retry */
     }

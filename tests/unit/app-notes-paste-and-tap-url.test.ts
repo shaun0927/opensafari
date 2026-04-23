@@ -124,8 +124,73 @@ describe('app_notes_paste_and_tap_url', () => {
     });
     expect(result.isError).toBeUndefined();
     const parsed = JSON.parse((result.content as unknown as Array<{ text: string }>)[0].text);
-    // The first AXLink whose label contains the host wins.
+    // No label contains the full URL literal, so the first AXLink whose
+    // label contains the host wins.
     expect(parsed.linkElement.path).toBe('link#0');
+  });
+
+  test('prefers exact URL match over a host-only match earlier in the list', async () => {
+    queryMock.mockImplementation((query: { role: string }) => {
+      if (query.role === 'AXTextArea') {
+        return Promise.resolve({ matches: [{ path: 'editor#0', role: 'AXTextArea', label: null }], total: 1 });
+      }
+      if (query.role === 'AXLink') {
+        return Promise.resolve({
+          matches: [
+            // Pre-existing host-only link on the same domain — would win under
+            // first-match semantics and tap the wrong route.
+            { path: 'link#stale', role: 'AXLink', label: 'https://example.com' },
+            // The link we actually pasted appears later in the tree.
+            { path: 'link#target', role: 'AXLink', label: 'https://example.com/detail/abc' },
+          ],
+          total: 2,
+        });
+      }
+      return Promise.resolve({ matches: [], total: 0 });
+    });
+
+    const handler = server.getToolHandler('app_notes_paste_and_tap_url')!;
+    const result = await handler('test-session', {
+      url: 'https://example.com/detail/abc',
+      settleMs: 0,
+      focusTimeoutMs: 500,
+      linkTapTimeoutMs: 500,
+    });
+    expect(result.isError).toBeUndefined();
+    const parsed = JSON.parse((result.content as unknown as Array<{ text: string }>)[0].text);
+    expect(parsed.linkElement.path).toBe('link#target');
+    expect(pressMock).toHaveBeenNthCalledWith(2, 'link#target', 'TEST-UDID-1234');
+  });
+
+  test('does not tap a sole unrelated AXLink as a fallback', async () => {
+    // Notes is launched into prior state: a pre-existing, completely unrelated
+    // AXLink is already on screen. The tool must treat this as "no match" and
+    // surface an error rather than tapping the wrong link.
+    queryMock.mockImplementation((query: { role: string }) => {
+      if (query.role === 'AXTextArea') {
+        return Promise.resolve({ matches: [{ path: 'editor#0', role: 'AXTextArea', label: null }], total: 1 });
+      }
+      if (query.role === 'AXLink') {
+        return Promise.resolve({
+          matches: [{ path: 'link#stale', role: 'AXLink', label: 'https://unrelated.test/stuff' }],
+          total: 1,
+        });
+      }
+      return Promise.resolve({ matches: [], total: 0 });
+    });
+
+    const handler = server.getToolHandler('app_notes_paste_and_tap_url')!;
+    const result = await handler('test-session', {
+      url: 'https://example.com/detail/abc',
+      settleMs: 0,
+      focusTimeoutMs: 500,
+      linkTapTimeoutMs: 200,
+    });
+    expect(result.isError).toBe(true);
+    const parsed = JSON.parse((result.content as unknown as Array<{ text: string }>)[0].text);
+    expect(parsed.error).toMatch(/Data Detector did not produce a link/);
+    // The press for the detected link must never fire on a fallback candidate.
+    expect(pressMock).not.toHaveBeenCalledWith('link#stale', 'TEST-UDID-1234');
   });
 
   test('returns isError when url is missing', async () => {
