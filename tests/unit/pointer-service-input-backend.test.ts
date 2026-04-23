@@ -149,10 +149,32 @@ describe('PointerServiceInputBackend', () => {
 
   // Issue #649: the Phase-1 swipe path is documented to hard-error on
   // Xcode 26+ without re-entering the tier chain. These assertions guard
-  // that contract so any future change that tries to silently retry or
-  // swallow HeadlessInputUnavailableError must update the comment and the
-  // test together.
-  test('swipe propagates HeadlessInputUnavailableError without wrapping (issue #649)', async () => {
+  // the contract that ANY error raised by the delegate propagates to the
+  // caller unchanged, so future refactors cannot silently retry or
+  // re-wrap the failure without updating the docs and these tests
+  // together.
+  test('swipe propagates InputBackendError without wrapping (actual Xcode 26+ path, issue #649)', async () => {
+    // `SimulatorKitHIDInputBackend.swipe()` — the production delegate —
+    // surfaces every sim-hid-bridge failure as `InputBackendError`
+    // (`SIMULATORKIT_UNAVAILABLE` on Xcode 26+ where the HID PoC path is
+    // gated off). Guard that the wrapper does not silently rewrap it.
+    const inputErr = new InputBackendError(
+      'sim-hid-bridge exited 78: SimulatorKit dlopen failed',
+      'SIMULATORKIT_UNAVAILABLE',
+      'SimulatorKit.framework missing',
+    );
+    const spy = jest.spyOn(delegate, 'swipe').mockRejectedValueOnce(inputErr);
+    await expect(backend.swipe(DEVICE, 10, 20, 30, 40)).rejects.toBe(inputErr);
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(execFileMock).not.toHaveBeenCalled();
+  });
+
+  test('swipe propagates HeadlessInputUnavailableError without wrapping (routing-layer path, issue #649)', async () => {
+    // `HeadlessInputUnavailableError` is not emitted by
+    // `SimulatorKitHIDInputBackend.swipe()` itself, but by the higher-level
+    // routing in `native-input-backend.getInputBackend`. If a future change
+    // composes a headless-aware delegate that does raise it, the wrapper
+    // must still propagate unchanged — this test freezes that invariant.
     const headlessErr = new HeadlessInputUnavailableError(DEVICE, 'headless-only');
     const spy = jest.spyOn(delegate, 'swipe').mockRejectedValueOnce(headlessErr);
     await expect(backend.swipe(DEVICE, 10, 20, 30, 40)).rejects.toBe(headlessErr);

@@ -89,11 +89,21 @@ export class PointerServiceInputBackend implements InputBackend {
     endY: number,
     duration?: number,
   ): Promise<void> {
-    // Phase 1: no swipe-ps subcommand exists yet. Delegate to the underlying
-    // SimHID swipe path; on Xcode 26+ SimHID is gated off, so swipe will
-    // hard-error via HeadlessInputUnavailableError and does NOT re-enter the
-    // tier chain (PointerServiceInputBackend is cached as the selected backend
-    // in getInputBackend once OPENSAFARI_ENABLE_POINTERSERVICE=1 resolves it).
+    // Phase 1: no swipe-ps subcommand exists yet. Delegate straight to the
+    // underlying SimulatorKitHIDInputBackend. On Xcode 26+ the `sim-hid-bridge
+    // swipe` subcommand exits with `SIMULATORKIT_UNAVAILABLE` (or another
+    // non-zero SimulatorKit code), and the delegate surfaces that to the caller
+    // as an `InputBackendError` — not `HeadlessInputUnavailableError`, which is
+    // produced one layer up in `native-input-backend.getInputBackend` when
+    // selecting a backend, never from a backend's own swipe() method.
+    //
+    // That error does NOT re-enter the tier chain because
+    // PointerServiceInputBackend is cached as the selected backend in
+    // getInputBackend once OPENSAFARI_ENABLE_POINTERSERVICE=1 resolves it. For
+    // completeness, any other error type the delegate may raise in the future
+    // is also passed through unchanged; see the "swipe propagates … without
+    // wrapping" tests for the frozen contract.
+    //
     // Callers that need swipe fallback on Xcode 26+ must either (a) leave
     // OPENSAFARI_ENABLE_POINTERSERVICE unset so the standard Tier-1 SimHID /
     // focus-input chain is selected for every call, or (b) invoke an
