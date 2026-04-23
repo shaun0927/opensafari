@@ -39,6 +39,7 @@ import {
   SimulatorKitHIDInputBackend,
   InputBackendError,
 } from '../../src/tools/sim-hid-input-backend';
+import { HeadlessInputUnavailableError } from '../../src/tools/native-input-backend';
 
 const existsSyncMock = existsSync as jest.MockedFunction<typeof existsSync>;
 
@@ -143,6 +144,19 @@ describe('PointerServiceInputBackend', () => {
     const spy = jest.spyOn(delegate, 'swipe').mockResolvedValueOnce();
     await backend.swipe(DEVICE, 10, 20, 30, 40, 0.5);
     expect(spy).toHaveBeenCalledWith(DEVICE, 10, 20, 30, 40, 0.5);
+    expect(execFileMock).not.toHaveBeenCalled();
+  });
+
+  // Issue #649: the Phase-1 swipe path is documented to hard-error on
+  // Xcode 26+ without re-entering the tier chain. These assertions guard
+  // that contract so any future change that tries to silently retry or
+  // swallow HeadlessInputUnavailableError must update the comment and the
+  // test together.
+  test('swipe propagates HeadlessInputUnavailableError without wrapping (issue #649)', async () => {
+    const headlessErr = new HeadlessInputUnavailableError(DEVICE, 'headless-only');
+    const spy = jest.spyOn(delegate, 'swipe').mockRejectedValueOnce(headlessErr);
+    await expect(backend.swipe(DEVICE, 10, 20, 30, 40)).rejects.toBe(headlessErr);
+    expect(spy).toHaveBeenCalledTimes(1);
     expect(execFileMock).not.toHaveBeenCalled();
   });
 
