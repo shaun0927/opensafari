@@ -1,6 +1,5 @@
-import { MCPServer, getWebKitClient } from '../mcp-server';
+import { MCPServer, getWebKitClient, setWebKitClient } from '../mcp-server';
 import { WebKitClient } from '../webkit/client';
-import { setWebKitClient } from '../mcp-server';
 import { getSessionManager } from '../session-manager';
 import { getSharedProxy } from '../simulator/proxy';
 
@@ -104,8 +103,12 @@ export function registerAppWebviewConnectTool(server: MCPServer): void {
       const resolvedDeviceId =
         deviceId ?? getSessionManager().getSoleDeviceId() ?? DEFAULT_PROXY_HOST;
 
-      // Get or create a WebKit client
+      // Get or create a WebKit client. Track whether we registered the
+      // client on *this* call so the error path below can deregister only
+      // what it created — a pre-existing client may be owned by a concurrent
+      // tool call and must not be evicted on our transient failure.
       let client = getWebKitClient(deviceId);
+      let clientWasFreshlyRegistered = false;
       if (!client) {
         const newClient = new WebKitClient({
           host: DEFAULT_PROXY_HOST,
@@ -113,6 +116,7 @@ export function registerAppWebviewConnectTool(server: MCPServer): void {
         });
         setWebKitClient(newClient, resolvedDeviceId);
         client = newClient;
+        clientWasFreshlyRegistered = true;
       }
 
       // List all targets from ios-webkit-debug-proxy
@@ -120,6 +124,19 @@ export function registerAppWebviewConnectTool(server: MCPServer): void {
       try {
         targets = await (client as any).listTargets?.() ?? [];
       } catch (err) {
+        // Deregister only the freshly-created WebKit client so a subsequent
+        // call does not reuse a stale, never-successfully-used instance (e.g.
+        // when the proxy was briefly unreachable). We deliberately avoid
+        // `setWebKitClient(null, …)` here because its clear branch also
+        // removes the simulator entry from the session map — a device that
+        // was already registered (via `device_boot` or another tool surface)
+        // would then disappear from `getSoleDeviceId()` on a transient proxy
+        // hiccup. `removeConnection` scopes the cleanup to the WebKit
+        // connection only; pre-existing registrations are intentionally left
+        // in place.
+        if (clientWasFreshlyRegistered) {
+          getSessionManager().removeConnection(resolvedDeviceId);
+        }
         const message = err instanceof Error ? err.message : String(err);
         return {
           content: [{ type: 'text' as const, text: `Error: Failed to list targets: ${message}` }],
