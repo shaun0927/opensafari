@@ -6,6 +6,49 @@ import {
   createContextMismatchError,
   ensureTargetAppContext,
 } from './native-app-context';
+import { AccessibilityBridgeError } from '../native/accessibility-bridge';
+import { DEVICE_CONTENT_ROOT_EMPTY } from '../native/ax-bridge-content-root';
+
+const APP_TREE_RETRY_COUNT = 3;
+const APP_TREE_RETRY_BACKOFF_MS = [250, 500, 1000] as const;
+
+/**
+ * Calls `bridge.dumpTree(options)` and retries with backoff on
+ * `DEVICE_CONTENT_ROOT_EMPTY`. The empty-root condition is observed
+ * transiently after a system alert is dismissed (issue #639 Problem 4a) —
+ * iOS takes a beat to repopulate the AX root for the foreground app, and
+ * before that beat the bridge sees zero app-semantics nodes and reports
+ * the structured empty-root error. Re-querying after a short backoff
+ * almost always succeeds; only persistent empty-root after `maxRetries`
+ * surfaces as an error.
+ *
+ * Other bridge errors are re-thrown immediately without retry.
+ *
+ * Exported so unit tests can assert the retry contract without driving
+ * a live simulator.
+ */
+export async function dumpTreeWithRetry(
+  bridge: { dumpTree: (opts: { deviceId?: string; maxDepth?: number }) => Promise<unknown> },
+  options: { deviceId?: string; maxDepth?: number },
+  maxRetries = APP_TREE_RETRY_COUNT,
+  sleep: (ms: number) => Promise<void> = (ms) =>
+    new Promise<void>((r) => setTimeout(r, ms)),
+): Promise<unknown> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await bridge.dumpTree(options);
+    } catch (err) {
+      lastError = err;
+      const isEmptyRoot =
+        err instanceof AccessibilityBridgeError &&
+        err.code === DEVICE_CONTENT_ROOT_EMPTY;
+      if (!isEmptyRoot || attempt >= maxRetries) throw err;
+      await sleep(APP_TREE_RETRY_BACKOFF_MS[attempt] ?? 1000);
+    }
+  }
+  throw lastError;
+}
 
 export function registerAppTreeTool(server: MCPServer): void {
   server.registerTool(
@@ -59,6 +102,7 @@ export function registerAppTreeTool(server: MCPServer): void {
             deviceId,
             maxDepth,
             bundleId,
+            backoffMs: [...APP_TREE_RETRY_BACKOFF_MS],
           });
           tree = dump.tree;
           meta = {
