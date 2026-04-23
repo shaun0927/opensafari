@@ -165,6 +165,41 @@ describe('captureLogsWindow', () => {
     expect(predicate).toContain('composedMessage CONTAINS "[UniversalLink]"');
   });
 
+  test('does not trip silence exit when simctl openurl took longer than silenceMs before capture began', async () => {
+    // preOpenAt is recorded *before* simctl openurl; the capture helper is
+    // invoked only after openurl returns. If openurl takes longer than
+    // silenceMs (1500ms default), a naive baseline anchored on preOpenAt
+    // would fire the silence exit on the very first poll and miss every
+    // post-open log. The baseline must therefore be anchored on capture
+    // start — this test freezes that invariant.
+    const openurlDelayMs = 3000;
+    const preOpenAt = 1_000_000;
+    const clock = controlledClock(preOpenAt + openurlDelayMs);
+    const entries = [logEntry('2026-04-23T00:00:00Z', '[UniversalLink] Resolved /x')];
+    const simctl = makeSimctl([
+      JSON.stringify(entries),
+      JSON.stringify(entries),
+      JSON.stringify(entries),
+      JSON.stringify(entries),
+    ]);
+
+    const result = await captureLogsWindow(
+      'TEST-UDID',
+      preOpenAt,
+      { prerollMs: 2000, silenceMs: 1500, maxDurationMs: 8000, pollIntervalMs: 400 },
+      { simctl: simctl as unknown as import('../../src/simulator/simctl').SimctlExecutor, now: clock.now, sleep: makeSleep(clock) },
+    );
+
+    if ('error' in result) {
+      throw new Error('unexpected error: ' + result.error);
+    }
+    // The capture must observe the entry at least once — if silence were
+    // anchored on preOpenAt, the first-poll delta (openurlDelayMs = 3000ms)
+    // would already exceed silenceMs (1500ms) and return an empty entries
+    // array with stopReason "silence" before any new-entry observation.
+    expect(result.entries.length).toBeGreaterThan(0);
+  });
+
   test('deduplicates entries across polls using traceID + composedMessage', async () => {
     const clock = controlledClock(0);
     const preOpenAt = clock.now();

@@ -92,10 +92,18 @@ export async function captureLogsWindow(
 
   const collected: Array<Record<string, unknown>> = [];
   const seen = new Set<string>();
-  let lastNewEntryAt = preOpenAt;
+  // Anchor silence and max-duration on capture start, NOT on preOpenAt.
+  // preOpenAt is recorded before `simctl openurl`, so seeding either timer
+  // with it would charge the caller for however long the URL took to open:
+  // if openurl exceeded `silenceMs` (1500ms default), the very first poll
+  // would trip the silence exit and return 0 entries before we had a chance
+  // to observe any post-open log. `windowStart` still uses `preOpenAt -
+  // prerollMs` so the log *query* range covers the tap itself.
+  const captureStart = now();
+  let lastNewEntryAt = captureStart;
   let stopReason: 'silence' | 'max_duration' = 'silence';
 
-  const deadline = preOpenAt + maxDurationMs;
+  const deadline = captureStart + maxDurationMs;
 
   while (true) {
     const startArg = formatStartTime(windowStartMs);
