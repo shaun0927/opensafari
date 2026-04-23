@@ -11,7 +11,6 @@
 // composite flow tests in this file. Bump the file-scoped timeout so the
 // slow-runner flakes stop masking real regressions.
 jest.setTimeout(30000);
-
 jest.mock('../../src/mcp-server', () => {
   const actual = jest.requireActual('../../src/mcp-server');
   return { ...actual, getWebKitClient: jest.fn().mockReturnValue(null) };
