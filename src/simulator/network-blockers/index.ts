@@ -7,6 +7,8 @@
 
 export { AutoBlocker } from './auto';
 export type { AutoBlockerOptions } from './auto';
+export { cleanupRegistry, NodeCleanupRegistry } from './cleanup';
+export type { CleanupFn, CleanupRegistry } from './cleanup';
 export { NlcBlocker } from './nlc';
 export type { NlcBlockerOptions } from './nlc';
 export {
@@ -16,7 +18,7 @@ export {
   PfctlCommandError,
   PfctlPfDisabledError,
 } from './pfctl';
-export type { PfctlBlockerOptions } from './pfctl';
+export type { PfctlBlockerOptions, PfctlReconcileResult } from './pfctl';
 export { RealHostExec } from './host-exec';
 export { RealTempFileWriter } from './temp-file';
 export type { RealTempFileWriterOptions } from './temp-file';

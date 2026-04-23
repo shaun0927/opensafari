@@ -6,6 +6,7 @@ import {
   NetworkBlocker,
   NlcBlocker,
   PfctlBlocker,
+  PfctlReconcileResult,
   RealHostExec,
   RealTempFileWriter,
 } from '../simulator/network-blockers';
@@ -46,6 +47,11 @@ export interface HostBlockerBundle {
 let hostBlocker: HostBlockerBundle | null = null;
 /** Reference-tracking: which blocker (if any) currently owns the active host rule. */
 let activeHostBlocker: NetworkBlocker | null = null;
+/**
+ * Set once after the first successful reconciliation attempt so we don't
+ * re-probe on every tool call. See {@link reconcileHostBlockers}.
+ */
+let reconciledOnce = false;
 
 function buildDefaultHostBlocker(): HostBlockerBundle {
   const exec = new RealHostExec();
@@ -99,6 +105,46 @@ export function __resetDeviceNetworkStateForTests(): void {
   stateByDevice.clear();
   hostBlocker = null;
   activeHostBlocker = null;
+  reconciledOnce = false;
+}
+
+/**
+ * Probe each supported mechanism for leftover state from a previous
+ * server run that died before reverting, and flush it. Best-effort:
+ * probe failures are logged to stderr and swallowed — reconciliation
+ * must never block the server from starting.
+ *
+ * Called lazily on the first `device_network_set` invocation so tests
+ * that never touch this tool don't pay the cost. The one-time gate is
+ * {@link reconciledOnce}.
+ *
+ * Returns the reconcile result so callers (tests, diagnostics) can
+ * inspect whether any stale rules were flushed.
+ */
+export async function reconcileHostBlockers(
+  bundle: HostBlockerBundle,
+): Promise<{ pfctl: PfctlReconcileResult | null }> {
+  let pfctl: PfctlReconcileResult | null = null;
+  if (bundle.pfctl instanceof PfctlBlocker) {
+    try {
+      pfctl = await bundle.pfctl.reconcileStaleAnchor();
+      if (pfctl.reconciled) {
+        console.error(
+          `[device-network] flushed ${pfctl.rulesFound} stale rules from previous run`,
+        );
+      }
+    } catch (err) {
+      console.error('[device-network] pfctl reconciliation failed:', err);
+    }
+  }
+  // NLC reconciliation lands in PR 5.
+  return { pfctl };
+}
+
+async function ensureReconciled(bundle: HostBlockerBundle): Promise<void> {
+  if (reconciledOnce) return;
+  reconciledOnce = true;
+  await reconcileHostBlockers(bundle);
 }
 
 export function getDeviceNetworkState(deviceId: string): DeviceNetworkStateEntry {
@@ -184,6 +230,10 @@ export function registerDeviceNetworkSetTool(server: MCPServer): void {
       }
 
       const bundle = getHostBlocker();
+      // Run startup reconciliation once per process — flushes a stale
+      // anchor from a previous server that died before reverting. Safe
+      // to call on every handler invocation because of the one-shot gate.
+      await ensureReconciled(bundle);
       const current = getDeviceNetworkState(deviceId);
 
       if (mode === 'online') {

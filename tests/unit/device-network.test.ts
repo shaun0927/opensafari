@@ -19,11 +19,21 @@ jest.mock('../../src/session-manager', () => ({
 }));
 
 import { MCPServer } from '../../src/mcp-server';
-import { NetworkBlocker, NetworkBlockerStatus } from '../../src/simulator/network-blockers';
+import {
+  AutoBlocker,
+  HostExec,
+  NetworkBlocker,
+  NetworkBlockerStatus,
+  NlcBlocker,
+  NodeCleanupRegistry,
+  PfctlBlocker,
+  TempFileWriter,
+} from '../../src/simulator/network-blockers';
 import {
   HostBlockerBundle,
   __resetDeviceNetworkStateForTests,
   __setHostBlockerForTests,
+  reconcileHostBlockers,
   registerDeviceNetworkGetTool,
   registerDeviceNetworkSetTool,
   registerDeviceNetworkTools,
@@ -325,5 +335,77 @@ describe('device_network_set handler — reference-counting revert', () => {
     expect(result.isError).toBe(true);
     const body = JSON.parse(result.content[0].text);
     expect(body.error).toBe('PfctlCommandError');
+  });
+});
+
+describe('device_network_set — startup reconciliation (PR 4)', () => {
+  function makeBundleWithRealPfctl(): {
+    bundle: HostBlockerBundle;
+    pfctlExec: jest.Mocked<HostExec>;
+    pfctl: PfctlBlocker;
+  } {
+    const pfctlExec: jest.Mocked<HostExec> = { run: jest.fn().mockResolvedValue('') };
+    const tempFile: TempFileWriter = {
+      write: jest.fn().mockResolvedValue('/tmp/opensafari-pfctl-x/rules.conf'),
+      remove: jest.fn().mockResolvedValue(undefined),
+    };
+    const cleanup = new NodeCleanupRegistry();
+    cleanup.disableForTests();
+    const pfctl = new PfctlBlocker({
+      exec: pfctlExec,
+      tempFile,
+      assumeAvailable: true,
+      cleanup,
+    });
+    const nlc = new NlcBlocker({ exec: pfctlExec, assumeAvailable: false });
+    const auto = new AutoBlocker({ candidates: [pfctl, nlc] });
+    return { bundle: { pfctl, nlc, auto }, pfctlExec, pfctl };
+  }
+
+  it('runs reconciliation exactly once across multiple tool calls', async () => {
+    const { bundle, pfctlExec } = makeBundleWithRealPfctl();
+    __setHostBlockerForTests(bundle);
+
+    const server = makeServer();
+    registerDeviceNetworkTools(server as unknown as MCPServer);
+    const setHandler = extractHandler(server, 'device_network_set');
+
+    // First call: reconciliation runs. The empty anchor probe returns '',
+    // so no flush is attempted — just a single `pfctl -a <anchor> -sr`
+    // sniffing call.
+    pfctlExec.run.mockResolvedValueOnce(''); // reconcile probe
+    pfctlExec.run.mockResolvedValueOnce(''); // online set: no blocker call
+    await setHandler('s', { mode: 'online', udid: 'device-a' });
+    const firstCallCount = pfctlExec.run.mock.calls.length;
+    expect(firstCallCount).toBeGreaterThanOrEqual(1);
+
+    // Second call: reconciliation must NOT run again.
+    await setHandler('s', { mode: 'online', udid: 'device-a' });
+    expect(pfctlExec.run.mock.calls.length).toBe(firstCallCount);
+  });
+
+  it('reconcileHostBlockers flushes a stale anchor found on startup', async () => {
+    const { bundle, pfctlExec } = makeBundleWithRealPfctl();
+    pfctlExec.run
+      .mockResolvedValueOnce('block drop out on ! lo0 all\n') // probe
+      .mockResolvedValueOnce(''); // flush
+    const result = await reconcileHostBlockers(bundle);
+    expect(result.pfctl).toMatchObject({ reconciled: true, rulesFound: 1 });
+    expect(pfctlExec.run).toHaveBeenCalledWith(
+      '/usr/bin/sudo',
+      expect.arrayContaining(['-F', 'all']),
+      expect.anything(),
+    );
+  });
+
+  it('reconcileHostBlockers swallows pfctl errors rather than blocking startup', async () => {
+    const { bundle, pfctlExec } = makeBundleWithRealPfctl();
+    pfctlExec.run
+      .mockResolvedValueOnce('block drop out on ! lo0 all\n')
+      .mockRejectedValueOnce(
+        Object.assign(new Error('pfctl: not root'), { stderr: 'err', code: 1 }),
+      );
+    // Should resolve (swallowed), not throw, even though the flush failed.
+    await expect(reconcileHostBlockers(bundle)).resolves.toBeDefined();
   });
 });

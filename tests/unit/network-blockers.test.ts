@@ -12,6 +12,7 @@ import {
   NetworkBlockerNotImplementedError,
   NetworkBlockerUnavailableError,
   NlcBlocker,
+  NodeCleanupRegistry,
   PFCTL_ANCHOR_NAME,
   PFCTL_BLOCK_RULES,
   PfctlBlocker,
@@ -393,5 +394,193 @@ describe('AutoBlocker selection order', () => {
       activeSince: null,
       detail: null,
     });
+  });
+});
+
+describe('PfctlBlocker.reconcileStaleAnchor (PR 4)', () => {
+  it('returns skippedReason="unavailable" when the mechanism cannot be probed', async () => {
+    const exec = makeMockExec();
+    exec.run.mockRejectedValueOnce(new Error('sudo required'));
+    const b = new PfctlBlocker({ exec, tempFile: makeMockTempFile() });
+    await expect(b.reconcileStaleAnchor()).resolves.toEqual({
+      reconciled: false,
+      rulesFound: 0,
+      skippedReason: 'unavailable',
+    });
+  });
+
+  it('returns skippedReason="anchor_empty" when no rules are present', async () => {
+    const exec = makeMockExec();
+    exec.run.mockResolvedValueOnce(''); // pfctl -a <anchor> -sr yields nothing
+    const b = new PfctlBlocker({
+      exec,
+      tempFile: makeMockTempFile(),
+      assumeAvailable: true,
+    });
+    const result = await b.reconcileStaleAnchor();
+    expect(result).toEqual({ reconciled: false, rulesFound: 0, skippedReason: 'anchor_empty' });
+    // only one exec call — no flush attempted
+    expect(exec.run).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores comment/blank lines when counting rules', async () => {
+    const exec = makeMockExec();
+    exec.run.mockResolvedValueOnce('# some header\n\n# another comment\n');
+    const b = new PfctlBlocker({
+      exec,
+      tempFile: makeMockTempFile(),
+      assumeAvailable: true,
+    });
+    const result = await b.reconcileStaleAnchor();
+    expect(result.skippedReason).toBe('anchor_empty');
+  });
+
+  it('flushes when leftover rules are detected and returns reconciled:true', async () => {
+    const exec = makeMockExec();
+    exec.run
+      .mockResolvedValueOnce('block drop out on ! lo0 all\n') // sr probe
+      .mockResolvedValueOnce(''); // flush
+    const b = new PfctlBlocker({
+      exec,
+      tempFile: makeMockTempFile(),
+      assumeAvailable: true,
+      anchorName: 'test-anchor',
+    });
+    const result = await b.reconcileStaleAnchor();
+    expect(result).toEqual({ reconciled: true, rulesFound: 1 });
+    expect(exec.run).toHaveBeenCalledTimes(2);
+    expect(exec.run).toHaveBeenNthCalledWith(
+      2,
+      '/usr/bin/sudo',
+      ['-n', '/sbin/pfctl', '-a', 'test-anchor', '-F', 'all'],
+      expect.objectContaining({ timeoutMs: 5000 }),
+    );
+  });
+
+  it('wraps flush failures in PfctlCommandError with op="reconcile"', async () => {
+    const exec = makeMockExec();
+    exec.run
+      .mockResolvedValueOnce('block drop out on ! lo0 all\n')
+      .mockRejectedValueOnce(
+        Object.assign(new Error('pfctl: not root'), {
+          stderr: 'pfctl: not root',
+          code: 1,
+        }),
+      );
+    const b = new PfctlBlocker({
+      exec,
+      tempFile: makeMockTempFile(),
+      assumeAvailable: true,
+    });
+    await expect(b.reconcileStaleAnchor()).rejects.toBeInstanceOf(PfctlCommandError);
+  });
+
+  it('returns skippedReason="probe_failed" when the probe itself throws', async () => {
+    const exec = makeMockExec();
+    exec.run.mockRejectedValueOnce(new Error('sudo timeout'));
+    const b = new PfctlBlocker({
+      exec,
+      tempFile: makeMockTempFile(),
+      assumeAvailable: true,
+    });
+    const result = await b.reconcileStaleAnchor();
+    expect(result).toEqual({
+      reconciled: false,
+      rulesFound: 0,
+      skippedReason: 'probe_failed',
+    });
+  });
+});
+
+describe('PfctlBlocker cleanup registration (PR 4)', () => {
+  it('registers a cleanup handler on successful apply', async () => {
+    const exec = makeMockExec();
+    exec.run
+      .mockResolvedValueOnce('Status: Enabled\n') // assertPfEnabled
+      .mockResolvedValueOnce(''); // pfctl load
+    const cleanup = new NodeCleanupRegistry();
+    cleanup.disableForTests();
+    const b = new PfctlBlocker({
+      exec,
+      tempFile: makeMockTempFile(),
+      assumeAvailable: true,
+      cleanup,
+    });
+
+    expect(cleanup.size()).toBe(0);
+    await b.apply(DEVICE_ID);
+    expect(cleanup.size()).toBe(1);
+    expect(b.__hasCleanupHandlerForTests()).toBe(true);
+  });
+
+  it('unregisters the cleanup handler on successful revert', async () => {
+    const exec = makeMockExec();
+    exec.run
+      .mockResolvedValueOnce('Status: Enabled\n')
+      .mockResolvedValueOnce('') // apply
+      .mockResolvedValueOnce(''); // revert
+    const cleanup = new NodeCleanupRegistry();
+    cleanup.disableForTests();
+    const b = new PfctlBlocker({
+      exec,
+      tempFile: makeMockTempFile(),
+      assumeAvailable: true,
+      cleanup,
+    });
+    await b.apply(DEVICE_ID);
+    expect(cleanup.size()).toBe(1);
+    await b.revert(DEVICE_ID);
+    expect(cleanup.size()).toBe(0);
+    expect(b.__hasCleanupHandlerForTests()).toBe(false);
+  });
+
+  it('keeps the cleanup handler registered when revert fails', async () => {
+    const exec = makeMockExec();
+    exec.run
+      .mockResolvedValueOnce('Status: Enabled\n')
+      .mockResolvedValueOnce('') // apply
+      .mockRejectedValueOnce(
+        Object.assign(new Error('pfctl revert failed'), {
+          stderr: 'err',
+          code: 1,
+        }),
+      );
+    const cleanup = new NodeCleanupRegistry();
+    cleanup.disableForTests();
+    const b = new PfctlBlocker({
+      exec,
+      tempFile: makeMockTempFile(),
+      assumeAvailable: true,
+      cleanup,
+    });
+    await b.apply(DEVICE_ID);
+    expect(cleanup.size()).toBe(1);
+    await expect(b.revert(DEVICE_ID)).rejects.toBeInstanceOf(PfctlCommandError);
+    // Still registered — caller can retry and cleanup will fire on shutdown.
+    expect(cleanup.size()).toBe(1);
+  });
+
+  it('fired cleanup handler issues a flush against the anchor', async () => {
+    const exec = makeMockExec();
+    exec.run
+      .mockResolvedValueOnce('Status: Enabled\n')
+      .mockResolvedValueOnce('') // apply
+      .mockResolvedValueOnce(''); // flush via cleanup
+    const cleanup = new NodeCleanupRegistry();
+    cleanup.disableForTests();
+    const b = new PfctlBlocker({
+      exec,
+      tempFile: makeMockTempFile(),
+      assumeAvailable: true,
+      anchorName: 'cleanup-test',
+      cleanup,
+    });
+    await b.apply(DEVICE_ID);
+    await cleanup.fireForTests();
+    expect(exec.run).toHaveBeenLastCalledWith(
+      '/usr/bin/sudo',
+      ['-n', '/sbin/pfctl', '-a', 'cleanup-test', '-F', 'all'],
+      expect.objectContaining({ timeoutMs: 5000 }),
+    );
   });
 });
