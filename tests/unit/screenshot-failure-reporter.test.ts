@@ -1,14 +1,15 @@
 /**
  * Unit coverage for the integration-suite screenshot-on-failure reporter.
  *
- * The reporter itself is a CommonJS module so we `require` it and treat its
- * default export as `any` — it carries no public TypeScript surface.
+ * The reporter itself is a CommonJS module with no TypeScript surface, so
+ * we `require` it here and treat the default export as `any`.
  */
 
-// eslint-disable-next-line @typescript-eslint/no-var-requires, @typescript-eslint/no-require-imports
+import os from 'os';
+import path from 'path';
+
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const ScreenshotOnFailureReporter = require('../integration/screenshot-failure-reporter.cjs');
-const os = require('os');
-const path = require('path');
 
 interface ReporterStatic {
   new (...args: unknown[]): {
