@@ -142,6 +142,25 @@ describe('collectVisibleStaticTexts', () => {
   });
 });
 
+describe('collectVisibleButtonLabels — NBSP annotation (issue #642)', () => {
+  test('notifications-ko-nbsp: NBSP label is annotated, ASCII label is not', () => {
+    const tree = loadFixture('notifications-ko-nbsp.json');
+    const labels = collectVisibleButtonLabels(tree);
+    const NBSP = ' ';
+    expect(labels).toContain(`허용${NBSP}안${NBSP}함 (norm: 허용 안 함)`);
+    expect(labels).toContain('허용');
+    expect(labels).toHaveLength(2);
+  });
+
+  test('maps-ko-location: pure-ASCII-space labels are returned unchanged', () => {
+    const tree = loadFixture('maps-ko-location.json');
+    const labels = collectVisibleButtonLabels(tree);
+    for (const label of labels) {
+      expect(label).not.toContain('(norm:');
+    }
+  });
+});
+
 describe('empty tree edge cases', () => {
   const emptyTree: AXNode = {
     role: 'AXApplication',
