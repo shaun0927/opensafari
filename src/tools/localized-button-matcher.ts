@@ -172,17 +172,35 @@ export function registerLabels(kind: LabelKind, labels: string[]): void {
  * Match `text` against the combined corpus using a case-insensitive,
  * NFC-normalised **substring** test.
  *
- * Returns the `LabelKind` of the first matching bucket (order: accept-once,
- * paste-allow, dismiss, accept) or `null` when no corpus entry is a substring
- * of `text`. More-specific kinds are checked before the broad `accept` bucket.
- * Within each bucket, longer entries are tested before shorter ones so that
- * specific phrases (e.g. "허용 안 함") win over short substrings (e.g. "허용").
+ * Returns the `LabelKind` of the first matching bucket (order:
+ * `accept-once`, `dismiss`, `paste-allow`, `accept`) or `null` when no
+ * corpus entry is a substring of `text`.
+ *
+ * Order rationale:
+ *
+ * - `dismiss` is checked **before** `paste-allow` so negated paste labels
+ *   like `Don't Allow Paste`, `붙여넣기 허용 안 함`, or `不允许粘贴`
+ *   classify as `dismiss` (the deny button) rather than `paste-allow`.
+ *   With substring matching the negated phrase contains the affirmative
+ *   substring, so without this ordering `pollForPermissionDialog` would
+ *   tap the deny button and leave paste blocked. Codex P1 review on
+ *   PR #684 caught this — the explicit dismiss guard that
+ *   `pasteboard-input.ts` previously enforced has to live here too.
+ * - `accept-once` runs first so phrases like `Allow Once` win over the
+ *   `Allow` substring in the broad `accept` bucket.
+ * - The broad `accept` bucket is checked last for the same reason.
+ *
+ * Within each bucket, longer entries are tested before shorter ones so
+ * specific phrases (e.g. `허용 안 함`) win over short substrings of the
+ * same bucket (e.g. `허용`).
  *
  * @param text - Raw AX button label from the running app.
  */
 export function matchLabel(text: string): LabelKind | null {
   const normalized = normalizeText(text);
-  const order: LabelKind[] = ['accept-once', 'paste-allow', 'dismiss', 'accept'];
+  // Order is load-bearing — see jsdoc above. `dismiss` MUST precede
+  // `paste-allow` so negated paste labels classify correctly.
+  const order: LabelKind[] = ['accept-once', 'dismiss', 'paste-allow', 'accept'];
   for (const kind of order) {
     const bucket = corpus.get(kind);
     if (!bucket) continue;

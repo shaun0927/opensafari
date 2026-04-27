@@ -3,7 +3,6 @@ import {
   registerLabels,
   getCorpusSnapshot,
   normalizeText,
-  type LabelKind,
 } from '../../src/tools/localized-button-matcher';
 
 describe('localized-button-matcher', () => {
@@ -188,6 +187,35 @@ describe('localized-button-matcher', () => {
       registerLabels('accept', ['SpecialGrant']);
       expect(matchLabel('specialgrant')).toBe('accept');
       expect(matchLabel('SPECIALGRANT')).toBe('accept');
+    });
+  });
+
+  // Codex P1 regression on PR #684 — substring matching means the negated
+  // paste label CONTAINS the affirmative paste-allow substring, so the
+  // bucket evaluation order has to put `dismiss` ahead of `paste-allow`
+  // or `pollForPermissionDialog` would tap the deny button.
+  describe('matchLabel -- negated paste labels classify as dismiss (codex P1 #684)', () => {
+    test("English 'Don't Allow Paste' is dismiss, not paste-allow", () => {
+      expect(matchLabel("Don't Allow Paste")).toBe('dismiss');
+    });
+
+    test('Korean 붙여넣기 허용 안 함 is dismiss, not paste-allow', () => {
+      expect(matchLabel('붙여넣기 허용 안 함')).toBe('dismiss');
+    });
+
+    test('Simplified Chinese 不允许粘贴 is dismiss, not paste-allow', () => {
+      expect(matchLabel('不允许粘贴')).toBe('dismiss');
+    });
+
+    test('Japanese 貼り付けを許可しない is dismiss, not paste-allow', () => {
+      expect(matchLabel('貼り付けを許可しない')).toBe('dismiss');
+    });
+
+    test('affirmative paste labels still classify as paste-allow', () => {
+      expect(matchLabel('Allow Paste')).toBe('paste-allow');
+      expect(matchLabel('붙여넣기 허용')).toBe('paste-allow');
+      expect(matchLabel('允许粘贴')).toBe('paste-allow');
+      expect(matchLabel('貼り付けを許可')).toBe('paste-allow');
     });
   });
 });
