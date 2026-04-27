@@ -404,16 +404,41 @@ export function registerAppTypeElementTool(server: MCPServer): void {
             responseBody.error = hint;
           } else {
             // Latin layout (or layout detection unavailable) with a readback
-            // mismatch: characters were silently dropped by the field or IME.
-            // Emit TEXT_INPUT_DROPPED so callers can identify exactly which
-            // positions are missing and decide on a remediation strategy
-            // (issue #639 Problem 2).
-            responseBody.error = {
-              code: 'TEXT_INPUT_DROPPED',
-              expected: textToType,
-              actual: verify.observed,
-              droppedIndices: computeDroppedIndices(textToType, verify.observed),
-            };
+            // mismatch. Two codex review issues on PR #680 are addressed
+            // here:
+            //
+            // P1 — `expected`/`actual` previously echoed the raw caller
+            // input. That regresses the file's PII protection (a typed
+            // password / token / email would surface in tool responses
+            // and downstream logs). The same `truncate()` helper that
+            // sanitises `verify_reason` and `TEXT_INPUT_LAYOUT_MISMATCH`
+            // is applied here so the payload caps at `VERIFY_ECHO_LEN`
+            // characters per side.
+            //
+            // P2 — every Latin/unknown-layout mismatch was being labelled
+            // `TEXT_INPUT_DROPPED`, even when the divergence was an
+            // insertion (e.g. an auto-format `123` → `123 456`) that
+            // produces an empty `droppedIndices` array. The
+            // `code = TEXT_INPUT_DROPPED` + empty-array combination is
+            // contradictory and would mislead callers that key
+            // remediation off this code. We now check
+            // `computeDroppedIndices(...).length > 0` first; non-empty
+            // → `TEXT_INPUT_DROPPED` (real drop); empty → the neutral
+            // `TEXT_INPUT_MISMATCH` code.
+            const droppedIndices = computeDroppedIndices(textToType, verify.observed);
+            const hasDrops = droppedIndices.length > 0;
+            responseBody.error = hasDrops
+              ? {
+                  code: 'TEXT_INPUT_DROPPED',
+                  expected: truncate(textToType),
+                  actual: truncate(verify.observed),
+                  droppedIndices,
+                }
+              : {
+                  code: 'TEXT_INPUT_MISMATCH',
+                  expected: truncate(textToType),
+                  actual: truncate(verify.observed),
+                };
           }
         }
         const result: {
