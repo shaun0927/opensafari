@@ -339,8 +339,19 @@ async function dismissStackedAlerts(
       return { extraDismissed, lastTree, remaining };
     }
 
+    // Codex P1 review on PR #682: only count the dismissal if
+    // `pollForDismissal` confirms the alert disappeared. If the press
+    // returned ok but the surface never settled (AX state unchanged
+    // until the poll deadline), counting it would over-report
+    // `dismissedCount` AND the next iteration would re-find and re-press
+    // the same candidate up to `maxIterations`. Bail out instead and
+    // keep the candidate in `remaining` so the diagnostics block
+    // surfaces it to the caller.
+    const dismissed = await pollForDismissal(action, deviceId, candidate.node.path);
+    if (!dismissed) {
+      return { extraDismissed, lastTree, remaining };
+    }
     extraDismissed += 1;
-    await pollForDismissal(action, deviceId, candidate.node.path);
   }
 
   // Final scan to report any candidates left after the cap.
@@ -358,20 +369,38 @@ async function dismissStackedAlerts(
 
 /**
  * Best-effort probe that the foreground app's AX root has re-populated
- * after a dismissal. Reuses `dumpTreeWithRetry`'s empty-root backoff
- * (issue #639 Problem 4a) and returns `true` when the resulting tree
- * has at least one child node within the budget.
+ * after a dismissal. Returns `true` when the resulting tree has at
+ * least one child node within `AX_RECOVER_TIMEOUT_MS`.
+ *
+ * Codex P2 review on PR #682: the helper previously called
+ * `dumpTreeWithRetry` with its **default** retry budget, which adds an
+ * internal `250 + 500 + 1000 = 1750 ms` backoff before re-throwing on
+ * persistent empty-root. That single call could exceed the
+ * `AX_RECOVER_TIMEOUT_MS` budget on its own, so a confirmed dismissal
+ * could block the caller longer than advertised.
+ *
+ * We now drive the retry loop ourselves: each attempt is a `maxRetries
+ * = 0` invocation of `dumpTreeWithRetry` (single shot, no internal
+ * backoff) and the empty-root error simply triggers our own sleep
+ * (`AX_POLL_INTERVAL_MS`) before the next attempt. The deadline check
+ * runs both before and after each `await sleep` so the total wall time
+ * is strictly bounded by `AX_RECOVER_TIMEOUT_MS` regardless of how
+ * many empty-root retries iOS forces.
  */
 async function probeAxRecovered(deviceId: string): Promise<boolean> {
   const bridge = getAccessibilityBridge();
   const deadline = Date.now() + AX_RECOVER_TIMEOUT_MS;
   while (Date.now() < deadline) {
     try {
-      const tree = (await dumpTreeWithRetry(bridge, { deviceId })) as AXNode;
+      // `maxRetries = 0` keeps the single-shot semantic — no
+      // dumpTreeWithRetry-internal backoff. The empty-root case is
+      // re-thrown immediately and caught below so our own loop drives
+      // the retry cadence within the declared budget.
+      const tree = (await dumpTreeWithRetry(bridge, { deviceId }, 0)) as AXNode;
       const childCount = Array.isArray(tree?.children) ? tree.children.length : 0;
       if (childCount > 0) return true;
     } catch {
-      // retry until budget exhausted
+      // empty-root or any other dump failure — retry until budget exhausted
     }
     if (Date.now() >= deadline) break;
     await sleep(AX_POLL_INTERVAL_MS);
