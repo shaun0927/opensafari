@@ -890,10 +890,21 @@ func parseArgs() -> [String: String] {
     }
     while i < argv.count {
         let arg = argv[i]
-        if arg.hasPrefix("--") && i + 1 < argv.count {
+        if arg.hasPrefix("--") {
             let key = String(arg.dropFirst(2))
-            args[key] = argv[i + 1]
-            i += 2
+            // Issue #660: support bare flags like `--debug`. A bare flag
+            // is one whose next argv entry is either absent or itself
+            // begins with `--`. The value of a bare flag is normalised to
+            // "true" so the caller can use `args["debug"] != nil` or
+            // `args["debug"] == "true"` interchangeably.
+            let isBareFlag = (i + 1 >= argv.count) || argv[i + 1].hasPrefix("--")
+            if isBareFlag {
+                args[key] = "true"
+                i += 1
+            } else {
+                args[key] = argv[i + 1]
+                i += 2
+            }
         } else {
             i += 1
         }
@@ -901,16 +912,75 @@ func parseArgs() -> [String: String] {
     return args
 }
 
+// MARK: - Debug Instrumentation (Issue #660)
+//
+// When the bridge is invoked with `--debug` (or `--verbose`), milestone
+// events are emitted on stderr as one JSON object per line. This makes the
+// stderr stream machine-readable so the TypeScript wrapper in
+// `src/native/accessibility-bridge.ts` can surface a structured failure
+// signal instead of the truncated tail it sees today (issue #651 → #660).
+//
+// The format is intentionally minimal: `{"event":"...","ts":"ISO8601",
+// ...fields}`. Times are wall-clock; durations are in milliseconds.
+// All keys are lower_snake_case for grep-ability.
+//
+// Stdout — the JSON dump / query / inspect / press payload — is NOT
+// touched. Existing parsers that read stdout continue to work unchanged.
+
+var debugEnabled: Bool = false
+
+private let debugIsoFormatter: ISO8601DateFormatter = {
+    let f = ISO8601DateFormatter()
+    f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return f
+}()
+
+func debugLog(_ event: String, _ fields: [String: Any] = [:]) {
+    guard debugEnabled else { return }
+    var dict: [String: Any] = [
+        "event": event,
+        "ts": debugIsoFormatter.string(from: Date()),
+    ]
+    for (k, v) in fields {
+        dict[k] = v
+    }
+    guard let data = try? JSONSerialization.data(
+        withJSONObject: dict,
+        options: [.sortedKeys]
+    ) else { return }
+    if var line = String(data: data, encoding: .utf8) {
+        line.append("\n")
+        if let bytes = line.data(using: .utf8) {
+            FileHandle.standardError.write(bytes)
+        }
+    }
+}
+
+func nowMs() -> Double {
+    return Date().timeIntervalSince1970 * 1000.0
+}
+
 func main() {
     let args = parseArgs()
     let command = args["command"] ?? "dump"
     let requestedDevice = args["device"] ?? "any"
     let maxDepth = Int(args["max-depth"] ?? "10") ?? 10
+    // Issue #660: --debug or --verbose enables JSON-line stderr events
+    // for every milestone in the dump pipeline. Stdout (the dump payload)
+    // is unchanged.
+    debugEnabled = (args["debug"] == "true") || (args["verbose"] == "true")
+    debugLog("invocation", [
+        "command": command,
+        "device": requestedDevice,
+        "maxDepth": maxDepth,
+    ])
 
     // Check accessibility permissions
+    debugLog("ax_permission_check_start")
     let trusted = AXIsProcessTrustedWithOptions(
         [kAXTrustedCheckOptionPrompt.takeRetainedValue(): true] as CFDictionary
     )
+    debugLog("ax_permission_check_done", ["trusted": trusted])
     if !trusted {
         outputError("Accessibility permission not granted. Enable in System Settings > Privacy & Security > Accessibility.", code: "AX_PERMISSION_DENIED")
         exit(1)
@@ -918,9 +988,11 @@ func main() {
 
     // Find Simulator.app
     guard let pid = findSimulatorPID() else {
+        debugLog("simulator_pid_not_found")
         outputError("Simulator.app is not running. Boot a device first.", code: "SIMULATOR_NOT_RUNNING")
         exit(1)
     }
+    debugLog("simulator_pid_resolved", ["pid": Int(pid)])
 
     let app = AXUIElementCreateApplication(pid)
     // Issue #660: bound every attribute read against the Simulator
@@ -928,6 +1000,7 @@ func main() {
     // bridge silently for the 6 s framework default. Every child
     // discovered through `getChildren()` inherits the same bound.
     setAxMessagingTimeoutSafe(app)
+    debugLog("ax_app_created")
 
     // Wake up the AX server on the target process.
     //
@@ -942,16 +1015,33 @@ func main() {
     // the side effect is applied and the following reads succeed. Public AX
     // API only, no private frameworks involved — same mechanism Electron /
     // other Chromium hosts use for the inverse direction (opt-in to AX).
-    _ = AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+    let manualAxStart = nowMs()
+    let manualAxStatus = AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+    debugLog("ax_manual_accessibility_set", [
+        "axErrorCode": manualAxStatus.rawValue,
+        "elapsedMs": nowMs() - manualAxStart,
+    ])
 
+    let resolveStart = nowMs()
     let resolution = resolveRequestedDevice(requestedDevice)
+    debugLog("device_resolve_done", [
+        "elapsedMs": nowMs() - resolveStart,
+        "matched": resolution.target?.udid ?? "<none>",
+        "hasError": resolution.error != nil,
+    ])
     if let error = resolution.error {
         outputJSON(error)
         exit(1)
     }
     let resolvedTarget = resolution.target
 
+    let windowStart = nowMs()
     let windowMatch = findMatchingWindow(app, requested: requestedDevice, target: resolvedTarget)
+    debugLog("window_match_done", [
+        "elapsedMs": nowMs() - windowStart,
+        "matched": windowMatch.window != nil,
+        "hasError": windowMatch.error != nil,
+    ])
     if let error = windowMatch.error {
         outputJSON(error)
         exit(1)
@@ -962,22 +1052,38 @@ func main() {
     }
 
     // Find the device content area inside the matched window.
+    let contentStart = nowMs()
     guard let (content, originX, originY) = findDeviceContentRecursively(matchedWindow) else {
+        debugLog("content_root_empty", [
+            "elapsedMs": nowMs() - contentStart,
+        ])
         outputError(
             "Matched simulator window for \(requestedDevice), but no descendant exposes app-level accessibility semantics. The simulator window is showing only chrome or an empty content group; ensure the target app is foreground and its AX tree is bootstrapped.",
             code: "DEVICE_CONTENT_ROOT_EMPTY"
         )
         exit(1)
     }
+    debugLog("content_root_resolved", [
+        "elapsedMs": nowMs() - contentStart,
+        "originX": originX,
+        "originY": originY,
+    ])
 
     switch command {
     case "dump":
+        let buildStart = nowMs()
         var tree = buildNode(content, path: "", maxDepth: maxDepth, currentDepth: 0,
                              originX: originX, originY: originY)
+        debugLog("tree_built", [
+            "elapsedMs": nowMs() - buildStart,
+            "rootRole": tree.role,
+            "rootChildren": tree.children?.count ?? 0,
+        ])
         // Issue #41: emit `chromeOnly` on the dump root so the wrapper can
         // promote chrome-only trees in a single snapshot — no second native
         // call required.
         tree.chromeOnly = isChromeOnlyContent(tree)
+        debugLog("dump_emit", ["chromeOnly": tree.chromeOnly ?? false])
         outputJSON(tree)
 
     case "query":
