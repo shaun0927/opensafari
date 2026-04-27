@@ -8,8 +8,9 @@ link and taps it" flow that Apple's docs describe.
 **tl;dr**: the iOS Simulator can reproduce the **Notes paste-and-tap** and
 **Safari URL-bar** flows deterministically. It cannot reproduce
 **iMessage** or **Mail** flows — those require a real device. The
-**Safari Smart App Banner** flow is under investigation (see [follow-up
-spike](#safari-smart-app-banner-follow-up-spike)).
+**Safari Smart App Banner** flow is **No-Go** for now (see
+[ADR-0002](../adr/ADR-0002-safari-smart-banner-automation.md)); fall
+back to Notes paste-and-tap.
 
 ## Channel matrix
 
@@ -18,7 +19,7 @@ spike](#safari-smart-app-banner-follow-up-spike)).
 | `xcrun simctl openurl`                  | indirect (does not count as a tap) | fully supported             | `mcp__opensafari__app_open_url`                                                                   |
 | Safari URL bar → type URL → Return      | equivalent to a reviewer tap       | supported                   | `mcp__opensafari__navigate` then `app_open_url`, or the underlying `simctl openurl` call          |
 | **Notes** — paste a URL, tap detected link | **equivalent to a reviewer tap**   | **supported via T1 helper** | **`mcp__opensafari__app_notes_paste_and_tap_url`**                                                |
-| Safari "Open in App" Smart App Banner   | equivalent to a reviewer tap       | investigation pending       | — (see [spike](#safari-smart-app-banner-follow-up-spike))                                         |
+| Safari "Open in App" Smart App Banner   | equivalent to a reviewer tap       | **No-Go** — see ADR-0002    | — (deferred; see [ADR-0002](../adr/ADR-0002-safari-smart-banner-automation.md))                   |
 | iMessage — tap a received link          | equivalent to a reviewer tap       | **not available**           | — (not implementable — see [limitation](#imessage--mail))                                         |
 | Mail.app — tap a link in a message body | equivalent to a reviewer tap       | **not available**           | — (not implementable — see [limitation](#imessage--mail))                                         |
 
@@ -87,17 +88,30 @@ requested, a real device is required. Options:
 
 This is a platform limitation, not an OpenSafari gap.
 
-## Safari Smart App Banner follow-up spike
+## Safari Smart App Banner — No-Go (deferred)
 
 The `<meta name="apple-itunes-app" …>` Smart App Banner that Safari
 injects when the associated app is installed is **Apple-rendered
-proprietary UI**. Before adding a `waitForSmartBanner: true` option to
-`app_open_url`, we need to characterise the banner's structure (WebKit
-DOM vs native AX tree, reliability across iOS versions). See the
-tracking issue referenced from #641.
+proprietary UI**. The spike (#667) investigated whether OpenSafari
+could deterministically wait for and tap it on iOS 26 Simulator and
+landed on **No-Go**:
 
-Until that spike resolves, the recommended close-gate path is the
-**Notes paste-and-tap** flow.
+- The banner is invisible to Safari's native AX tree
+  (`mcp__opensafari__app_tree` only exposes Safari chrome — page
+  content and any Safari-injected overlays are hosted by a CALayer
+  surface that does not bridge into the macOS AX hierarchy).
+- The WebKit Remote Debug Protocol attaches to inspected pages, not
+  Safari's chrome, so the banner is not a first-class DOM target via
+  `read_page` / `query_dom`.
+- Coordinate-only taps are non-deterministic across device classes
+  and across visit-order (Safari auto-hides the banner on subsequent
+  visits within a session).
+
+The full empirical findings, the alternatives we considered, and the
+revisit conditions are documented in
+[ADR-0002](../adr/ADR-0002-safari-smart-banner-automation.md). The
+recommended close-gate path remains **Notes paste-and-tap** via
+`app_notes_paste_and_tap_url`.
 
 ## References
 
