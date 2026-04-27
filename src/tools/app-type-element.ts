@@ -396,12 +396,24 @@ export function registerAppTypeElementTool(server: MCPServer): void {
         // layout is non-Latin, attach a structured TEXT_INPUT_LAYOUT_MISMATCH
         // payload so callers can programmatically pick the recommended
         // remediation (issue #639 Problem 1). Latin-layout mismatches use a
-        // different code (TEXT_INPUT_DROPPED — see PR A) and are intentionally
+        // different code (TEXT_INPUT_DROPPED — see below) and are intentionally
         // skipped here.
         if (mismatched && verify.observed !== undefined) {
           const hint = mismatchHint(textToType, verify.observed, keyboardLayoutDetected);
           if (hint) {
             responseBody.error = hint;
+          } else {
+            // Latin layout (or layout detection unavailable) with a readback
+            // mismatch: characters were silently dropped by the field or IME.
+            // Emit TEXT_INPUT_DROPPED so callers can identify exactly which
+            // positions are missing and decide on a remediation strategy
+            // (issue #639 Problem 2).
+            responseBody.error = {
+              code: 'TEXT_INPUT_DROPPED',
+              expected: textToType,
+              actual: verify.observed,
+              droppedIndices: computeDroppedIndices(textToType, verify.observed),
+            };
           }
         }
         const result: {
@@ -533,4 +545,43 @@ function jsonError(error: string, extra: Record<string, unknown> = {}) {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Compute the 0-based indices of characters in `expected` that are absent
+ * (dropped) relative to `actual`.
+ *
+ * Algorithm: greedy forward scan. For each character at position `i` in
+ * `expected`, advance through `actual` from the current cursor looking up to
+ * `LOOKAHEAD` positions ahead. If the character is found within the window,
+ * consume it and move the cursor past it. If not found, the position `i` is
+ * recorded as dropped.
+ *
+ * This is a pragmatic heuristic — not a full Levenshtein alignment — but it
+ * gives correct results for the common case of a field silently skipping one
+ * or more characters while preserving the relative order of the rest
+ * (issue #639 Problem 2).
+ */
+const DROP_LOOKAHEAD = 2;
+
+function computeDroppedIndices(expected: string, actual: string): number[] {
+  const dropped: number[] = [];
+  let cursor = 0; // current position in `actual`
+
+  for (let i = 0; i < expected.length; i++) {
+    const ch = expected[i];
+    let found = false;
+    for (let w = 0; w <= DROP_LOOKAHEAD && cursor + w < actual.length; w++) {
+      if (actual[cursor + w] === ch) {
+        cursor = cursor + w + 1;
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      dropped.push(i);
+    }
+  }
+
+  return dropped;
 }

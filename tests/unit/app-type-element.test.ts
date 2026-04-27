@@ -625,4 +625,39 @@ describe('app_type_element — Tier 3 readback verification (issue #39)', () => 
     expect(body.verify_reason).toContain('…');
     expect(body.verify_reason).not.toContain(longObserved);
   });
+
+  it('emits TEXT_INPUT_DROPPED with droppedIndices when readback mismatches on a Latin layout', async () => {
+    // Issue #639 Problem 2: when the keyboard layout is Latin (or unknown)
+    // and readback diverges, the tool must return a structured
+    // TEXT_INPUT_DROPPED error with code, expected, actual, and droppedIndices.
+    mockBackendKind = 'simhid';
+    const node = mkNode({ path: '0/6' });
+    mockQuery.mockResolvedValue(makeQueryResult([node]));
+    // Simulate a field that silently dropped characters at indices 1 and 3:
+    // expected "123456" → actual "1356" (chars '2' at idx 1 and '4' at idx 3 dropped).
+    mockInspect.mockResolvedValueOnce({
+      ...node,
+      value: '1356',
+    });
+    // detectKeyboardLayout calls execFile(xcrun simctl ...) — mock it to
+    // return null (layout detection unavailable), which is the Latin/unknown
+    // branch that should trigger TEXT_INPUT_DROPPED instead of
+    // TEXT_INPUT_LAYOUT_MISMATCH.
+
+    const result = await handler('session', {
+      identifier: 'otp-field',
+      text: '123456',
+      timeout: 0,
+      focusDelay: 0,
+    });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(result.isError).toBe(true);
+    expect(body.verified).toBe(false);
+    expect(body.error).toBeDefined();
+    expect(body.error.code).toBe('TEXT_INPUT_DROPPED');
+    expect(body.error.expected).toBe('123456');
+    expect(body.error.actual).toBe('1356');
+    expect(body.error.droppedIndices).toEqual([1, 3]);
+  });
 });
