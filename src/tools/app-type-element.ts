@@ -396,12 +396,49 @@ export function registerAppTypeElementTool(server: MCPServer): void {
         // layout is non-Latin, attach a structured TEXT_INPUT_LAYOUT_MISMATCH
         // payload so callers can programmatically pick the recommended
         // remediation (issue #639 Problem 1). Latin-layout mismatches use a
-        // different code (TEXT_INPUT_DROPPED — see PR A) and are intentionally
+        // different code (TEXT_INPUT_DROPPED — see below) and are intentionally
         // skipped here.
         if (mismatched && verify.observed !== undefined) {
           const hint = mismatchHint(textToType, verify.observed, keyboardLayoutDetected);
           if (hint) {
             responseBody.error = hint;
+          } else {
+            // Latin layout (or layout detection unavailable) with a readback
+            // mismatch. Two codex review issues on PR #680 are addressed
+            // here:
+            //
+            // P1 — `expected`/`actual` previously echoed the raw caller
+            // input. That regresses the file's PII protection (a typed
+            // password / token / email would surface in tool responses
+            // and downstream logs). The same `truncate()` helper that
+            // sanitises `verify_reason` and `TEXT_INPUT_LAYOUT_MISMATCH`
+            // is applied here so the payload caps at `VERIFY_ECHO_LEN`
+            // characters per side.
+            //
+            // P2 — every Latin/unknown-layout mismatch was being labelled
+            // `TEXT_INPUT_DROPPED`, even when the divergence was an
+            // insertion (e.g. an auto-format `123` → `123 456`) that
+            // produces an empty `droppedIndices` array. The
+            // `code = TEXT_INPUT_DROPPED` + empty-array combination is
+            // contradictory and would mislead callers that key
+            // remediation off this code. We now check
+            // `computeDroppedIndices(...).length > 0` first; non-empty
+            // → `TEXT_INPUT_DROPPED` (real drop); empty → the neutral
+            // `TEXT_INPUT_MISMATCH` code.
+            const droppedIndices = computeDroppedIndices(textToType, verify.observed);
+            const hasDrops = droppedIndices.length > 0;
+            responseBody.error = hasDrops
+              ? {
+                  code: 'TEXT_INPUT_DROPPED',
+                  expected: truncate(textToType),
+                  actual: truncate(verify.observed),
+                  droppedIndices,
+                }
+              : {
+                  code: 'TEXT_INPUT_MISMATCH',
+                  expected: truncate(textToType),
+                  actual: truncate(verify.observed),
+                };
           }
         }
         const result: {
@@ -533,4 +570,43 @@ function jsonError(error: string, extra: Record<string, unknown> = {}) {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Compute the 0-based indices of characters in `expected` that are absent
+ * (dropped) relative to `actual`.
+ *
+ * Algorithm: greedy forward scan. For each character at position `i` in
+ * `expected`, advance through `actual` from the current cursor looking up to
+ * `LOOKAHEAD` positions ahead. If the character is found within the window,
+ * consume it and move the cursor past it. If not found, the position `i` is
+ * recorded as dropped.
+ *
+ * This is a pragmatic heuristic — not a full Levenshtein alignment — but it
+ * gives correct results for the common case of a field silently skipping one
+ * or more characters while preserving the relative order of the rest
+ * (issue #639 Problem 2).
+ */
+const DROP_LOOKAHEAD = 2;
+
+function computeDroppedIndices(expected: string, actual: string): number[] {
+  const dropped: number[] = [];
+  let cursor = 0; // current position in `actual`
+
+  for (let i = 0; i < expected.length; i++) {
+    const ch = expected[i];
+    let found = false;
+    for (let w = 0; w <= DROP_LOOKAHEAD && cursor + w < actual.length; w++) {
+      if (actual[cursor + w] === ch) {
+        cursor = cursor + w + 1;
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      dropped.push(i);
+    }
+  }
+
+  return dropped;
 }

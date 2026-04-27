@@ -625,4 +625,113 @@ describe('app_type_element — Tier 3 readback verification (issue #39)', () => 
     expect(body.verify_reason).toContain('…');
     expect(body.verify_reason).not.toContain(longObserved);
   });
+
+  it('emits TEXT_INPUT_DROPPED with droppedIndices when readback mismatches on a Latin layout', async () => {
+    // Issue #639 Problem 2: when the keyboard layout is Latin (or unknown)
+    // and readback diverges, the tool must return a structured
+    // TEXT_INPUT_DROPPED error with code, expected, actual, and droppedIndices.
+    mockBackendKind = 'simhid';
+    const node = mkNode({ path: '0/6' });
+    mockQuery.mockResolvedValue(makeQueryResult([node]));
+    // Simulate a field that silently dropped characters at indices 1 and 3:
+    // expected "123456" → actual "1356" (chars '2' at idx 1 and '4' at idx 3 dropped).
+    mockInspect.mockResolvedValueOnce({
+      ...node,
+      value: '1356',
+    });
+    // detectKeyboardLayout calls execFile(xcrun simctl ...) — mock it to
+    // return null (layout detection unavailable), which is the Latin/unknown
+    // branch that should trigger TEXT_INPUT_DROPPED instead of
+    // TEXT_INPUT_LAYOUT_MISMATCH.
+
+    const result = await handler('session', {
+      identifier: 'otp-field',
+      text: '123456',
+      timeout: 0,
+      focusDelay: 0,
+    });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(result.isError).toBe(true);
+    expect(body.verified).toBe(false);
+    expect(body.error).toBeDefined();
+    expect(body.error.code).toBe('TEXT_INPUT_DROPPED');
+    expect(body.error.expected).toBe('123456');
+    expect(body.error.actual).toBe('1356');
+    expect(body.error.droppedIndices).toEqual([1, 3]);
+  });
+
+  // Codex P1 review on PR #680 — the readback mismatch payload was
+  // echoing the raw caller input, exposing PII (passwords, tokens,
+  // emails) in tool responses and downstream telemetry. The same
+  // VERIFY_ECHO_LEN truncation that protects `verify_reason` now
+  // protects the structured error payload.
+  it('truncates expected/actual in TEXT_INPUT_DROPPED to avoid PII leakage (codex P1 #680)', async () => {
+    mockBackendKind = 'simhid';
+    const node = mkNode({ path: '0/6' });
+    mockQuery.mockResolvedValue(makeQueryResult([node]));
+    // Long sensitive-looking input ( > VERIFY_ECHO_LEN = 24 chars ) so we
+    // can assert truncation. The trailing characters are dropped, so
+    // droppedIndices is non-empty and the error code stays
+    // TEXT_INPUT_DROPPED. Pattern is intentionally generic to avoid
+    // tripping the host's secret scanners on a test fixture.
+    const long = 'CorrectHorseBatteryStapleSentinel';
+    const dropped = 'CorrectHorseBatteryStaple';
+    mockInspect.mockResolvedValueOnce({ ...node, value: dropped });
+
+    const result = await handler('session', {
+      identifier: 'token-field',
+      text: long,
+      timeout: 0,
+      focusDelay: 0,
+    });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(result.isError).toBe(true);
+    expect(body.error.code).toBe('TEXT_INPUT_DROPPED');
+    expect(body.error.expected).toMatch(/…$/);
+    expect(body.error.expected.length).toBeLessThanOrEqual(25); // 24 + ellipsis
+    expect(body.error.expected).not.toContain('Sentinel');
+    expect(body.error.actual.length).toBeLessThanOrEqual(25);
+    // The full caller input must NOT leak through to the response.
+    expect(body.error.expected).not.toBe(long);
+  });
+
+  // Codex P2 review on PR #680 — when the divergence is an insertion
+  // (e.g. auto-format inserts a space) rather than a drop, the payload
+  // would have carried `code: TEXT_INPUT_DROPPED` with empty
+  // droppedIndices, which is contradictory and misleads remediation
+  // logic. The branch now returns the neutral TEXT_INPUT_MISMATCH code
+  // when no drops are detected.
+  it('emits TEXT_INPUT_MISMATCH (not TEXT_INPUT_DROPPED) on insertion-only divergence (codex P2 #680)', async () => {
+    mockBackendKind = 'simhid';
+    const node = mkNode({ path: '0/6' });
+    mockQuery.mockResolvedValue(makeQueryResult([node]));
+    // Insertion-only: input "123456" → readback "123 456" (auto-format
+    // added a space). Every expected char is still present in actual,
+    // so computeDroppedIndices returns []; the code must NOT claim a
+    // drop occurred.
+    mockInspect.mockResolvedValueOnce({
+      ...node,
+      value: '123 456',
+    });
+
+    const result = await handler('session', {
+      identifier: 'card-field',
+      text: '123456',
+      timeout: 0,
+      focusDelay: 0,
+    });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(result.isError).toBe(true);
+    expect(body.verified).toBe(false);
+    expect(body.error).toBeDefined();
+    expect(body.error.code).toBe('TEXT_INPUT_MISMATCH');
+    expect(body.error.code).not.toBe('TEXT_INPUT_DROPPED');
+    expect(body.error.expected).toBe('123456');
+    expect(body.error.actual).toBe('123 456');
+    // Drop-specific field MUST be absent on the neutral code.
+    expect(body.error.droppedIndices).toBeUndefined();
+  });
 });
