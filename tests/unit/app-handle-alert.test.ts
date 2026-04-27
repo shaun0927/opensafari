@@ -79,6 +79,102 @@ describe('app_handle_alert tool', () => {
     expect(result.isError).toBe(true);
   });
 
+  test('axRecovered: true when AX root has children after dismissal', async () => {
+    const before = mapsKoTree();
+    const after = mapsKoTree();
+    if (after.children) after.children = [];
+    // First dump = before-press, second = pollForDismissal cleared,
+    // third onward = probeAxRecovered seeing repopulated root.
+    mockDumpTree
+      .mockResolvedValueOnce(before)
+      .mockResolvedValueOnce(after)
+      .mockResolvedValue(mapsKoTree());
+
+    const handler = server.getToolHandler('app_handle_alert')!;
+    const result = await handler('s', { action: 'accept' });
+    const body = parseResult(result as { content: Array<{ type: string; text: string }> });
+
+    expect(body.dismissed).toBe(true);
+    expect(body.dismissedCount).toBe(1);
+    expect(body.remainingCandidates).toEqual([]);
+    expect(body.axRecovered).toBe(true);
+  });
+
+  test('axRecovered: false when AX dump always errors after dismissal', async () => {
+    const before = mapsKoTree();
+    const after = mapsKoTree();
+    if (after.children) after.children = [];
+    mockDumpTree
+      .mockResolvedValueOnce(before)
+      .mockResolvedValueOnce(after)
+      .mockRejectedValue(new Error('ax timeout'));
+
+    const handler = server.getToolHandler('app_handle_alert')!;
+    const result = await handler('s', { action: 'accept' });
+    const body = parseResult(result as { content: Array<{ type: string; text: string }> });
+
+    expect(body.dismissed).toBe(true);
+    expect(body.dismissedCount).toBe(1);
+    expect(body.axRecovered).toBe(false);
+  });
+
+  test('dismissAllVisible: false (default) → single dismissal, dismissedCount=1', async () => {
+    const before = mapsKoTree();
+    const after = mapsKoTree();
+    if (after.children) after.children = [];
+    mockDumpTree
+      .mockResolvedValueOnce(before)
+      .mockResolvedValueOnce(after)
+      .mockResolvedValue(mapsKoTree());
+
+    const handler = server.getToolHandler('app_handle_alert')!;
+    const result = await handler('s', { action: 'accept' });
+    const body = parseResult(result as { content: Array<{ type: string; text: string }> });
+
+    expect(body.dismissed).toBe(true);
+    expect(body.dismissedCount).toBe(1);
+    expect(mockPress).toHaveBeenCalledTimes(1);
+  });
+
+  test('dismissAllVisible: true → loops through stacked alerts', async () => {
+    const before1 = mapsKoTree();
+    const after1 = mapsKoTree();
+    if (after1.children) after1.children = [];
+    // Stack: second dismissal pass sees a fresh candidate (mapsKoTree
+    // again), pollForDismissal clears it, then probe sees repopulated
+    // tree. dismissStackedAlerts loop scans → press → poll, then a
+    // final scan with empty tree → loop terminates.
+    const stackedCandidate = mapsKoTree();
+    const cleared = mapsKoTree();
+    if (cleared.children) cleared.children = [];
+
+    mockDumpTree
+      // Tier 1 first scan
+      .mockResolvedValueOnce(before1)
+      // pollForDismissal sees cleared
+      .mockResolvedValueOnce(after1)
+      // dismissStackedAlerts iter-1 scan (within stackedAlertWindowMs) sees stacked candidate
+      .mockResolvedValueOnce(stackedCandidate)
+      // pollForDismissal after the stacked press
+      .mockResolvedValueOnce(cleared)
+      // dismissStackedAlerts iter-2 scan: nothing within window
+      .mockResolvedValue(cleared);
+
+    const handler = server.getToolHandler('app_handle_alert')!;
+    const result = await handler('s', {
+      action: 'accept',
+      dismissAllVisible: true,
+      stackedAlertWindowMs: 100,
+      maxStackedAlerts: 3,
+    });
+    const body = parseResult(result as { content: Array<{ type: string; text: string }> });
+
+    expect(body.dismissed).toBe(true);
+    expect(body.dismissedCount).toBe(2);
+    expect(body.remainingCandidates).toEqual([]);
+    expect(mockPress).toHaveBeenCalledTimes(2);
+  });
+
   test('Tier 1: Maps ko_KR accept finds localized button and records strategy=ax-scan', async () => {
     const before = mapsKoTree();
     const after = mapsKoTree();
