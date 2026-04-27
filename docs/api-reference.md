@@ -199,6 +199,133 @@ Accept or dismiss the currently visible simulator alert using a locale-aware det
 - **Additional output when Tier 3 runs:** `permissionReset: { service, servicesConsidered, executed, dryRun, command?, error? }`.
 - **Use when:** a system permission prompt (location, photos, ATT, etc.) blocks automation and you do not know the exact locale-specific label. Opt in to `fallback: 'permission_reset'` as a recovery option when the dialog itself cannot be detected. Use `app_alert_handle` instead when you want to press a specific in-app button by label.
 
+#### app_open_url
+
+Open a URL or deep link on an iOS Simulator via `xcrun simctl openurl`. Routes to the appropriate app handler (e.g. Safari for `https://`, or a custom scheme like `myapp://`).
+
+- **Input:**
+  - `url: string` — URL or deep link to open (required).
+  - `deviceId?: string` — Simulator UDID. Uses active device if omitted.
+  - `captureLogs?: object` — If provided, synchronously captures `os_log` entries around the URL-open event and returns them in `result.logs`. See [`captureLogs` parameters](#capturelogs-parameters) below.
+- **Output:** `{ url, deviceId, openedAt, logs? }`
+  - `logs` is present only when `captureLogs` is supplied; shape is the [`captureLogs` response](#capturelogs-response).
+
+#### app_deeplink
+
+Open deep links or Universal Links in the iOS Simulator. Supports custom URL schemes (`myapp://path`) and Universal Links (`https://…`).
+
+- **Input:**
+  - `url: string` — Deep link URL (required). Must include a scheme (`://`).
+  - `deviceId?: string` — Simulator UDID. Uses active device if omitted.
+  - `captureLogs?: object` — If provided, synchronously captures `os_log` entries around the deep-link open. See [`captureLogs` parameters](#capturelogs-parameters) below.
+- **Output:** `{ url, deviceId, openedAt, logs? }`
+  - `logs` is present only when `captureLogs` is supplied; shape is the [`captureLogs` response](#capturelogs-response).
+
+#### `captureLogs` parameters
+
+Both `app_open_url` and `app_deeplink` accept an optional `captureLogs` object. All fields are optional.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `bundleId` | `string` | — | `os_log` process filter (`process == <bundleId>`). |
+| `level` | `'default' \| 'info' \| 'debug' \| 'error' \| 'fault'` | — | Minimum message severity. |
+| `search` | `string` | — | Substring filter applied to the composed message. |
+| `prerollMs` | `number` | `2000` | How far back to pull logs relative to the URL-open timestamp. |
+| `silenceMs` | `number` | `1500` | Stop collecting once this many ms elapse with no new matching entry. |
+| `maxDurationMs` | `number` | `8000` | Hard upper bound on the collection window. |
+
+#### `captureLogs` response
+
+When `captureLogs` is supplied the tool appends a `logs` field to its response:
+
+```jsonc
+{
+  "entries": [ /* unified-log JSON objects from `log show --style json` */ ],
+  "windowStart": "2026-04-27T10:00:00.000Z",  // ISO-8601 start of log query window
+  "windowEnd":   "2026-04-27T10:00:08.000Z",  // ISO-8601 end of collection
+  "truncated": false,                           // always false (reserved)
+  "stopReason": "silence"                       // "silence" | "max_duration"
+}
+```
+
+On error the `logs` field is instead:
+
+```jsonc
+{
+  "error": "<message>",
+  "stopReason": "error",
+  "windowStart": "...",
+  "windowEnd": "..."
+}
+```
+
+See [docs/recipes/universal-link-channels.md](recipes/universal-link-channels.md) for end-to-end usage examples.
+
+#### app_notes_paste_and_tap_url
+
+Reviewer-equivalent Universal Link tap via Notes.app. Launches Notes (`com.apple.mobilenotes`), paste-injects the URL into the note body, waits for iOS Data Detector to produce an `AXLink`, and taps it. Use this instead of `app_open_url` when Apple-review parity matters.
+
+- **Input:**
+  - `url: string` — Universal Link or HTTPS URL to paste (required). Must include `://`.
+  - `deviceId?: string` — Simulator UDID. Uses active device if omitted.
+  - `settleMs?: number` — Ms to wait after paste before scanning for the detected link. Default: `500`.
+  - `focusTimeoutMs?: number` — Max ms to wait for the Notes editor to be AX-queryable. Default: `4000`.
+  - `linkTapTimeoutMs?: number` — Max ms to wait for iOS Data Detector to expose an `AXLink`. Default: `4000`.
+  - `restorePasteboard?: boolean` — Restore the simulator pasteboard after paste. Default: `true`.
+- **Output:**
+  ```jsonc
+  {
+    "url": "https://example.com/detail/abc",
+    "deviceId": "...",
+    "notesLaunchedAt": "2026-04-27T10:00:00.000Z",
+    "linkTappedAt":    "2026-04-27T10:00:02.500Z",
+    "linkElement": { "path": "0/1/3", "label": "example.com/detail/abc" },
+    "durationMs": 2500
+  }
+  ```
+- **Errors:** Thrown as `{ error: string }` with `isError: true` when Notes editor never becomes queryable, Data Detector produces no link within `linkTapTimeoutMs`, or the `AXPress` on the link fails.
+- **Notes:** See [docs/recipes/universal-link-channels.md](recipes/universal-link-channels.md) for the full channel comparison and recommended close-gate flow.
+
+#### device_network_set
+
+Toggle the iOS Simulator host-level network state so native apps (Flutter, UIKit) see real `SocketException` / `NSURLErrorNotConnectedToInternet`. Unlike `network_offline` (WebKit-only), this targets `URLSession` and `dart:io HttpClient` traffic.
+
+Requires one-time host setup (passwordless sudoers + `/etc/pf.conf` anchor). See [docs/tools/device-network.md](tools/device-network.md).
+
+- **Input:**
+  - `mode: 'online' | 'offline' | 'airplane'` — Target network state (required). `"offline"` and `"airplane"` share a code path; `"online"` restores connectivity and is idempotent.
+  - `udid?: string` — Device UDID. Defaults to the sole booted simulator.
+  - `mechanism?: 'pfctl' | 'nlc' | 'auto'` — Blocking mechanism. `"auto"` selects `pfctl` when elevated privileges are configured, otherwise falls back to Network Link Conditioner. Default: `"auto"`.
+- **Output (success):**
+  ```jsonc
+  {
+    "ok": true,
+    "deviceId": "...",
+    "mode": "offline",
+    "mechanism": "pfctl",   // resolved mechanism, or null when going online
+    "appliedAt": "2026-04-27T10:00:00.000Z",
+    "previousMode": "online"
+  }
+  ```
+- **Errors:** `{ ok: false, error: string, ... }` with `isError: true` for `invalid_mode`, `invalid_mechanism`, `udid_not_booted`, `no_booted_device`, `ambiguous_device`, `mechanism_conflict`, and blocker failures.
+
+#### device_network_get
+
+Read the current simulated network state set by `device_network_set`. Returns the last-applied mode and mechanism for a given device.
+
+- **Input:**
+  - `udid?: string` — Device UDID. Defaults to the sole booted simulator.
+- **Output:**
+  ```jsonc
+  {
+    "ok": true,
+    "deviceId": "...",
+    "mode": "offline",       // "online" | "offline" | "airplane"
+    "mechanism": "pfctl",    // "pfctl" | "nlc" | null
+    "activeSince": "2026-04-27T10:00:00.000Z"  // null when mode is "online"
+  }
+  ```
+
 ### Advanced Tools (Tier 2)
 
 inspect, wait_for, long_press, swipe, press, dismiss_keyboard, select_option, device_list, device_rotate, appearance_toggle

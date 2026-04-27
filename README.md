@@ -36,7 +36,7 @@
 
 ## Headless Capabilities
 
-OpenSafari runs fully headless on CI — no display server, no mouse focus, no `Simulator.app` window required. See [docs/headless-architecture.md](docs/headless-architecture.md) for the full technical design.
+OpenSafari runs fully headless on CI — no display server, no mouse focus, no `Simulator.app` window required. See [docs/headless-architecture.md](docs/headless-architecture.md) for the full technical design. For Universal Link channel recipes (Notes paste-and-tap, `captureLogs`, channel matrix), see [docs/recipes/universal-link-channels.md](docs/recipes/universal-link-channels.md).
 
 | Scenario | Query (AX Tree) | Input (Tap/Type) | Headless | Backend |
 |---|---|---|---|---|
@@ -263,6 +263,8 @@ OpenSafari shares battle-tested infrastructure with [OpenChrome](https://github.
 | `device_shutdown` | Shutdown simulator |
 | `device_rotate` | Toggle portrait/landscape |
 | `appearance_toggle` | Switch light/dark mode via `simctl ui` |
+| `device_network_set` | Toggle host-level network state (`online` / `offline` / `airplane`) so native apps see real `SocketException` / `NSURLErrorNotConnectedToInternet` — see [docs/tools/device-network.md](docs/tools/device-network.md) |
+| `device_network_get` | Read the current simulated network state set by `device_network_set` |
 
 ### App Lifecycle (Tier 2)
 
@@ -274,6 +276,7 @@ OpenSafari shares battle-tested infrastructure with [OpenChrome](https://github.
 | `app_list_running` | List running foreground apps with PIDs |
 | `app_context` | Report the current mobile context and optionally guard on an expected bundle |
 | `app_reset` | Reset app state: terminate, clear permissions, uninstall |
+| `app_notes_paste_and_tap_url` | Reviewer-equivalent Universal Link tap: launches Notes.app, paste-injects the URL, waits for iOS Data Detector to produce an `AXLink`, and taps it — see [docs/recipes/universal-link-channels.md](docs/recipes/universal-link-channels.md) |
 
 ### Auth Tools (Tier 3)
 
