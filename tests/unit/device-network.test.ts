@@ -334,6 +334,7 @@ describe('device_network_set handler — offline path (pfctl wired)', () => {
 
 describe('device_network_set handler — reference-counting revert', () => {
   let setHandler: ToolHandler;
+  let getHandler: ToolHandler;
   let auto: MockBlocker;
 
   beforeEach(() => {
@@ -343,6 +344,7 @@ describe('device_network_set handler — reference-counting revert', () => {
     __setHostBlockerForTests(bundle.bundle);
     registerDeviceNetworkTools(server as unknown as MCPServer);
     setHandler = extractHandler(server, 'device_network_set');
+    getHandler = extractHandler(server, 'device_network_get');
   });
 
   it('does not revert when one of several offline devices returns online', async () => {
