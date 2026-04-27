@@ -252,6 +252,12 @@ describe('device_network_set handler — offline path (pfctl wired)', () => {
   let auto: MockBlocker;
 
   beforeEach(() => {
+    bootedFixture = [
+      { udid: 'device-a', state: 'Booted' },
+      { udid: 'device-b', state: 'Booted' },
+      { udid: 'device-c', state: 'Booted' },
+      { udid: 'device-d', state: 'Booted' },
+    ];
     const server = makeServer();
     const bundle = makeMockBundle();
     pfctl = bundle.pfctl;
@@ -338,6 +344,10 @@ describe('device_network_set handler — reference-counting revert', () => {
   let auto: MockBlocker;
 
   beforeEach(() => {
+    bootedFixture = [
+      { udid: 'device-a', state: 'Booted' },
+      { udid: 'device-b', state: 'Booted' },
+    ];
     const server = makeServer();
     const bundle = makeMockBundle();
     auto = bundle.auto;
@@ -387,6 +397,10 @@ describe('device_network_set handler — reference-counting revert', () => {
 });
 
 describe('device_network_set — startup reconciliation (PR 4)', () => {
+  beforeEach(() => {
+    bootedFixture = [{ udid: 'device-a', state: 'Booted' }];
+  });
+
   function makeBundleWithRealPfctl(): {
     bundle: HostBlockerBundle;
     pfctlExec: jest.Mocked<HostExec>;
