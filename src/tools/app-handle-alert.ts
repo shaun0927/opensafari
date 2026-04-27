@@ -18,6 +18,7 @@ import {
 } from './app-handle-alert-labels';
 import type { AlertReason } from '../errors/alert-reasons';
 import { inferServices, type PermissionService } from './alert-service-hints';
+import { dumpTreeWithRetry } from './app-tree';
 
 const execFileAsync = promisify(execFile);
 
@@ -25,6 +26,20 @@ const VALID_ACTIONS = ['accept', 'dismiss'] as const;
 const DEFAULT_DEVICE_WIDTH = 393;
 const AX_POLL_TIMEOUT_MS = 3000;
 const AX_POLL_INTERVAL_MS = 250;
+const DEFAULT_STACKED_WINDOW_MS = 1500;
+const DEFAULT_MAX_STACKED_ALERTS = 5;
+const AX_RECOVER_TIMEOUT_MS = 1500;
+
+/**
+ * Lightweight projection of an `AlertCandidate` returned in
+ * `remainingCandidates` so callers can see what alert(s) remain after the
+ * dismissal loop without exposing the full AXNode shape.
+ */
+interface AlertSummary {
+  label?: string;
+  role?: string;
+  axPath?: string;
+}
 
 type Strategy =
   | 'ax-scan'
@@ -80,6 +95,32 @@ interface HandleAlertResponse {
   permissionReset?: PermissionResetResult;
   handledAt: string;
   elapsedMs: number;
+  /**
+   * Number of alert candidates dismissed during this call. Always >= 0.
+   * When `dismissAllVisible: false` (default) this is 0 or 1.
+   * Optional in the internal builder; the `finalize()` helper guarantees
+   * it is always serialized into the JSON response.
+   */
+  dismissedCount?: number;
+  /**
+   * Alert candidates still visible after the dismissal loop. Empty when
+   * the surface is fully clear or when no candidate was ever detected.
+   */
+  remainingCandidates?: AlertSummary[];
+  /**
+   * `true` when the foreground app's AX root re-populated within
+   * `AX_RECOVER_TIMEOUT_MS` after the dismissal attempt; `false`
+   * otherwise. Always present in the JSON response.
+   */
+  axRecovered?: boolean;
+}
+
+function summarizeCandidate(c: AlertCandidate): AlertSummary {
+  const summary: AlertSummary = {};
+  if (typeof c.label === 'string' && c.label.length > 0) summary.label = c.label;
+  if (typeof c.node.role === 'string' && c.node.role.length > 0) summary.role = c.node.role;
+  if (typeof c.node.path === 'string' && c.node.path.length > 0) summary.axPath = c.node.path;
+  return summary;
 }
 
 /**
@@ -246,6 +287,127 @@ async function pollForDismissal(
   return false;
 }
 
+/**
+ * After a successful dismissal, re-scan the AX tree once and dismiss any
+ * additional alert candidate of the same `action` that appears within
+ * `windowMs`. Returns the number of *additional* dismissals beyond the
+ * caller's first one, plus the most recent tree observed (so the parent
+ * handler can populate diagnostics) and any candidates still visible.
+ *
+ * Caps iteration at `maxIterations` to bound worst-case latency on
+ * misbehaving stacks. Each successful press is followed by `pollForDismissal`
+ * to let the surface settle before re-scanning.
+ */
+async function dismissStackedAlerts(
+  action: AlertAction,
+  deviceId: string,
+  windowMs: number,
+  maxIterations: number,
+): Promise<{ extraDismissed: number; lastTree: AXNode | null; remaining: AlertCandidate[] }> {
+  const bridge = getAccessibilityBridge();
+  let extraDismissed = 0;
+  let lastTree: AXNode | null = null;
+  let remaining: AlertCandidate[] = [];
+
+  for (let i = 0; i < maxIterations; i++) {
+    const deadline = Date.now() + windowMs;
+    let candidate: AlertCandidate | null = null;
+    while (Date.now() < deadline) {
+      try {
+        const tree = await bridge.dumpTree({ deviceId });
+        lastTree = tree;
+        const deviceWidth =
+          tree.frame && tree.frame.width > 0 ? tree.frame.width : DEFAULT_DEVICE_WIDTH;
+        const next = findAlertCandidates(action, { tree, deviceWidth });
+        if (next.length > 0) {
+          candidate = next[0];
+          remaining = next;
+          break;
+        }
+        remaining = [];
+      } catch {
+        // swallow; retry until deadline
+      }
+      await sleep(AX_POLL_INTERVAL_MS);
+    }
+    if (!candidate) return { extraDismissed, lastTree, remaining: [] };
+
+    try {
+      const press = await bridge.press(candidate.node.path, deviceId);
+      if (!press.ok) return { extraDismissed, lastTree, remaining };
+    } catch {
+      return { extraDismissed, lastTree, remaining };
+    }
+
+    // Codex P1 review on PR #682: only count the dismissal if
+    // `pollForDismissal` confirms the alert disappeared. If the press
+    // returned ok but the surface never settled (AX state unchanged
+    // until the poll deadline), counting it would over-report
+    // `dismissedCount` AND the next iteration would re-find and re-press
+    // the same candidate up to `maxIterations`. Bail out instead and
+    // keep the candidate in `remaining` so the diagnostics block
+    // surfaces it to the caller.
+    const dismissed = await pollForDismissal(action, deviceId, candidate.node.path);
+    if (!dismissed) {
+      return { extraDismissed, lastTree, remaining };
+    }
+    extraDismissed += 1;
+  }
+
+  // Final scan to report any candidates left after the cap.
+  try {
+    const tree = await bridge.dumpTree({ deviceId });
+    lastTree = tree;
+    const deviceWidth =
+      tree.frame && tree.frame.width > 0 ? tree.frame.width : DEFAULT_DEVICE_WIDTH;
+    remaining = findAlertCandidates(action, { tree, deviceWidth });
+  } catch {
+    // best-effort; keep last known `remaining`
+  }
+  return { extraDismissed, lastTree, remaining };
+}
+
+/**
+ * Best-effort probe that the foreground app's AX root has re-populated
+ * after a dismissal. Returns `true` when the resulting tree has at
+ * least one child node within `AX_RECOVER_TIMEOUT_MS`.
+ *
+ * Codex P2 review on PR #682: the helper previously called
+ * `dumpTreeWithRetry` with its **default** retry budget, which adds an
+ * internal `250 + 500 + 1000 = 1750 ms` backoff before re-throwing on
+ * persistent empty-root. That single call could exceed the
+ * `AX_RECOVER_TIMEOUT_MS` budget on its own, so a confirmed dismissal
+ * could block the caller longer than advertised.
+ *
+ * We now drive the retry loop ourselves: each attempt is a `maxRetries
+ * = 0` invocation of `dumpTreeWithRetry` (single shot, no internal
+ * backoff) and the empty-root error simply triggers our own sleep
+ * (`AX_POLL_INTERVAL_MS`) before the next attempt. The deadline check
+ * runs both before and after each `await sleep` so the total wall time
+ * is strictly bounded by `AX_RECOVER_TIMEOUT_MS` regardless of how
+ * many empty-root retries iOS forces.
+ */
+async function probeAxRecovered(deviceId: string): Promise<boolean> {
+  const bridge = getAccessibilityBridge();
+  const deadline = Date.now() + AX_RECOVER_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    try {
+      // `maxRetries = 0` keeps the single-shot semantic — no
+      // dumpTreeWithRetry-internal backoff. The empty-root case is
+      // re-thrown immediately and caught below so our own loop drives
+      // the retry cadence within the declared budget.
+      const tree = (await dumpTreeWithRetry(bridge, { deviceId }, 0)) as AXNode;
+      const childCount = Array.isArray(tree?.children) ? tree.children.length : 0;
+      if (childCount > 0) return true;
+    } catch {
+      // empty-root or any other dump failure — retry until budget exhausted
+    }
+    if (Date.now() >= deadline) break;
+    await sleep(AX_POLL_INTERVAL_MS);
+  }
+  return false;
+}
+
 async function tryAppleScript(action: AlertAction): Promise<boolean> {
   const script = buildAlertScript(action);
   try {
@@ -335,6 +497,19 @@ export function registerAppHandleAlertTool(server: MCPServer): void {
             description:
               'When Tier 1 (AX-scan) and Tier 2 (AppleScript label match) both miss the dialog, send an OS-level keystroke (Return for accept, Escape for dismiss) as a Tier 2.5 recovery. Safe for system dialogs where intent is unambiguous. Default true.',
           },
+          dismissAllVisible: {
+            type: 'boolean',
+            description:
+              'After the first successful dismissal, keep re-scanning for stacked alerts of the same `action` and dismiss them until no candidate appears within `stackedAlertWindowMs` or `maxStackedAlerts` is reached. Default false (single-dismissal behavior).',
+          },
+          stackedAlertWindowMs: {
+            type: 'number',
+            description: `Per-iteration window (ms) the stacked-dismissal loop waits for the next candidate to appear. Default ${DEFAULT_STACKED_WINDOW_MS}.`,
+          },
+          maxStackedAlerts: {
+            type: 'number',
+            description: `Hard cap on stacked dismissals after the first one. Default ${DEFAULT_MAX_STACKED_ALERTS}.`,
+          },
         },
         required: ['action'],
       },
@@ -372,9 +547,33 @@ export function registerAppHandleAlertTool(server: MCPServer): void {
           : 'none';
       const dryRun = params.dryRun === true;
       const keyboardFallback = params.keyboardFallback !== false;
+      const dismissAllVisible = params.dismissAllVisible === true;
+      const stackedAlertWindowMs =
+        typeof params.stackedAlertWindowMs === 'number' && params.stackedAlertWindowMs > 0
+          ? params.stackedAlertWindowMs
+          : DEFAULT_STACKED_WINDOW_MS;
+      const maxStackedAlerts =
+        typeof params.maxStackedAlerts === 'number' && params.maxStackedAlerts > 0
+          ? Math.floor(params.maxStackedAlerts)
+          : DEFAULT_MAX_STACKED_ALERTS;
 
       const strategyAttempted: Strategy[] = [];
       let finalTree: AXNode | null = null;
+      let dismissedCount = 0;
+      let remainingCandidates: AlertSummary[] = [];
+
+      const finalize = async (
+        body: HandleAlertResponse,
+        opts: { didDismiss: boolean },
+      ) => {
+        body.dismissedCount = dismissedCount;
+        body.remainingCandidates = remainingCandidates;
+        // Only probe AX recovery when we actually dismissed something.
+        // A diagnostics-only response (no dismissal attempted) leaves
+        // `axRecovered: false` since there is nothing to recover from.
+        body.axRecovered = opts.didDismiss ? await probeAxRecovered(deviceId) : false;
+        return { content: [{ type: 'text' as const, text: JSON.stringify(body) }] };
+      };
 
       // Tier 1: AX-scan
       strategyAttempted.push('ax-scan');
@@ -383,8 +582,23 @@ export function registerAppHandleAlertTool(server: MCPServer): void {
       if ('candidate' in axResult) {
         finalTree = axResult.tree;
         const dismissed = await pollForDismissal(action, deviceId, axResult.candidate.node.path);
-        const visibleButtons = collectVisibleButtonLabels(axResult.tree);
-        const visibleStaticTexts = collectVisibleStaticTexts(axResult.tree);
+        if (dismissed) dismissedCount = 1;
+
+        if (dismissed && dismissAllVisible) {
+          const stack = await dismissStackedAlerts(
+            action,
+            deviceId,
+            stackedAlertWindowMs,
+            maxStackedAlerts,
+          );
+          dismissedCount += stack.extraDismissed;
+          if (stack.lastTree) finalTree = stack.lastTree;
+          remainingCandidates = stack.remaining.map(summarizeCandidate);
+        }
+
+        const treeForDiagnostics = finalTree ?? axResult.tree;
+        const visibleButtons = collectVisibleButtonLabels(treeForDiagnostics);
+        const visibleStaticTexts = collectVisibleStaticTexts(treeForDiagnostics);
 
         const body: HandleAlertResponse = {
           action,
@@ -402,7 +616,7 @@ export function registerAppHandleAlertTool(server: MCPServer): void {
           handledAt: isoNow(),
           elapsedMs: Date.now() - started,
         };
-        return { content: [{ type: 'text' as const, text: JSON.stringify(body) }] };
+        return finalize(body, { didDismiss: dismissed });
       }
 
       if (axResult.tree) finalTree = axResult.tree;
@@ -412,6 +626,18 @@ export function registerAppHandleAlertTool(server: MCPServer): void {
       const applescriptOk = await tryAppleScript(action);
 
       if (applescriptOk) {
+        dismissedCount = 1;
+        if (dismissAllVisible) {
+          const stack = await dismissStackedAlerts(
+            action,
+            deviceId,
+            stackedAlertWindowMs,
+            maxStackedAlerts,
+          );
+          dismissedCount += stack.extraDismissed;
+          if (stack.lastTree) finalTree = stack.lastTree;
+          remainingCandidates = stack.remaining.map(summarizeCandidate);
+        }
         const visibleButtons = finalTree ? collectVisibleButtonLabels(finalTree) : [];
         const visibleStaticTexts = finalTree ? collectVisibleStaticTexts(finalTree) : [];
         const body: HandleAlertResponse = {
@@ -429,7 +655,7 @@ export function registerAppHandleAlertTool(server: MCPServer): void {
           handledAt: isoNow(),
           elapsedMs: Date.now() - started,
         };
-        return { content: [{ type: 'text' as const, text: JSON.stringify(body) }] };
+        return finalize(body, { didDismiss: true });
       }
 
       // Tier 2.5: OS-level keyboard fallback. Intent (accept/dismiss) is
@@ -440,6 +666,18 @@ export function registerAppHandleAlertTool(server: MCPServer): void {
         strategyAttempted.push('keyboard-fallback');
         const keyboardOk = await tryKeyboardFallback(action);
         if (keyboardOk) {
+          dismissedCount = 1;
+          if (dismissAllVisible) {
+            const stack = await dismissStackedAlerts(
+              action,
+              deviceId,
+              stackedAlertWindowMs,
+              maxStackedAlerts,
+            );
+            dismissedCount += stack.extraDismissed;
+            if (stack.lastTree) finalTree = stack.lastTree;
+            remainingCandidates = stack.remaining.map(summarizeCandidate);
+          }
           const visibleButtons = finalTree ? collectVisibleButtonLabels(finalTree) : [];
           const visibleStaticTexts = finalTree ? collectVisibleStaticTexts(finalTree) : [];
           const suggestedLabelsToAdd = suggestLabels(visibleButtons, action);
@@ -458,7 +696,7 @@ export function registerAppHandleAlertTool(server: MCPServer): void {
             handledAt: isoNow(),
             elapsedMs: Date.now() - started,
           };
-          return { content: [{ type: 'text' as const, text: JSON.stringify(body) }] };
+          return finalize(body, { didDismiss: true });
         }
       }
 
@@ -495,7 +733,7 @@ export function registerAppHandleAlertTool(server: MCPServer): void {
             handledAt: isoNow(),
             elapsedMs: Date.now() - started,
           };
-          return { content: [{ type: 'text' as const, text: JSON.stringify(body) }] };
+          return finalize(body, { didDismiss: false });
         }
 
         if (services.length >= 2) {
@@ -520,7 +758,7 @@ export function registerAppHandleAlertTool(server: MCPServer): void {
             handledAt: isoNow(),
             elapsedMs: Date.now() - started,
           };
-          return { content: [{ type: 'text' as const, text: JSON.stringify(body) }] };
+          return finalize(body, { didDismiss: false });
         }
 
         const service = services[0];
@@ -550,7 +788,7 @@ export function registerAppHandleAlertTool(server: MCPServer): void {
             handledAt: isoNow(),
             elapsedMs: Date.now() - started,
           };
-          return { content: [{ type: 'text' as const, text: JSON.stringify(body) }] };
+          return finalize(body, { didDismiss: false });
         }
 
         try {
@@ -583,7 +821,7 @@ export function registerAppHandleAlertTool(server: MCPServer): void {
             handledAt: isoNow(),
             elapsedMs: Date.now() - started,
           };
-          return { content: [{ type: 'text' as const, text: JSON.stringify(body) }] };
+          return finalize(body, { didDismiss: false });
         }
 
         const body: HandleAlertResponse = {
@@ -608,7 +846,10 @@ export function registerAppHandleAlertTool(server: MCPServer): void {
           handledAt: isoNow(),
           elapsedMs: Date.now() - started,
         };
-        return { content: [{ type: 'text' as const, text: JSON.stringify(body) }] };
+        // permission-reset cleared the prompt, count it as a dismissal so
+        // we attempt AX recovery before returning.
+        dismissedCount = Math.max(dismissedCount, 1);
+        return finalize(body, { didDismiss: true });
       }
 
       // Fallback disabled — emit diagnostics-only response.
@@ -633,7 +874,7 @@ export function registerAppHandleAlertTool(server: MCPServer): void {
         elapsedMs: Date.now() - started,
       };
 
-      return { content: [{ type: 'text' as const, text: JSON.stringify(body) }] };
+      return finalize(body, { didDismiss: false });
     },
   );
 }
