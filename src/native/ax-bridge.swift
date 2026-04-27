@@ -888,22 +888,33 @@ func parseArgs() -> [String: String] {
         args["command"] = argv[1]
         i = 2
     }
+    // Issue #660: only these flags accept the bare form (`--debug` instead
+    // of `--debug true`). Every other `--key` is still parsed as
+    // `--key value`, which preserves the existing missing-required-value
+    // contract for `--path`, `--device`, `--id`, etc. — the wrapper
+    // depends on those producing `MISSING_PARAM` instead of silently
+    // proceeding with `value="true"`.
+    let bareFlags: Set<String> = ["debug", "verbose"]
     while i < argv.count {
         let arg = argv[i]
         if arg.hasPrefix("--") {
             let key = String(arg.dropFirst(2))
-            // Issue #660: support bare flags like `--debug`. A bare flag
-            // is one whose next argv entry is either absent or itself
-            // begins with `--`. The value of a bare flag is normalised to
-            // "true" so the caller can use `args["debug"] != nil` or
-            // `args["debug"] == "true"` interchangeably.
-            let isBareFlag = (i + 1 >= argv.count) || argv[i + 1].hasPrefix("--")
-            if isBareFlag {
+            // Bare-flag form is allowed only for the whitelisted set above
+            // AND only when the next argv entry is absent or itself begins
+            // with `--`. Required-value flags retain `--key value` semantics
+            // and the existing missing-value error path.
+            let nextIsValue = (i + 1 < argv.count) && !argv[i + 1].hasPrefix("--")
+            if bareFlags.contains(key) && !nextIsValue {
                 args[key] = "true"
                 i += 1
-            } else {
+            } else if i + 1 < argv.count {
                 args[key] = argv[i + 1]
                 i += 2
+            } else {
+                // Trailing `--key` with no value and not a known bare flag.
+                // Leave the key absent so the existing `--path is required`
+                // / `--device is required` error paths fire as before.
+                i += 1
             }
         } else {
             i += 1
