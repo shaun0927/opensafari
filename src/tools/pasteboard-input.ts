@@ -32,47 +32,13 @@ import {
   InputBackendError,
 } from './sim-hid-input-backend';
 import { getAccessibilityBridge } from '../native';
+import { matchLabel as matchButtonLabel } from './localized-button-matcher';
 
 const execFileAsync = promisify(execFile);
 
 /** HID usages for the Cmd+V chord (Keyboard/Keypad page 0x07). */
 const HID_USAGE_V = 0x19;
 const HID_USAGE_LEFT_GUI = 0xe3;
-
-/**
- * Label corpus for the iOS paste-permission dialog. Matched case-insensitively
- * via substring against `AXButton.label`. Extend per-locale as needed; keep the
- * list small to avoid collisions with legitimate in-app buttons.
- */
-const ACCEPT_PASTE_LABELS = [
-  'allow paste',
-  'paste',
-  '붙여넣기 허용',
-  '허용',
-  '允许粘贴',
-  '允许',
-  '貼り付けを許可',
-  '許可',
-] as const;
-
-/**
- * Negative exclusions — substrings that flip an otherwise-accept-looking label
- * into a dismiss action. Evaluated case-insensitively; if any match, the
- * candidate is rejected even if it also matches an accept hint (e.g.
- * "붙여넣기 허용 안 함" matches "허용" but "안 함" disqualifies it).
- */
-const DISMISS_SUBSTRINGS = [
-  "don't",
-  'do not',
-  '안 함',
-  '안함',
-  '취소',
-  'cancel',
-  'キャンセル',
-  '不允许',
-  '取消',
-  '拒绝',
-] as const;
 
 export type PermissionDialogOutcome =
   | 'not_shown'
@@ -293,15 +259,12 @@ async function pollForPermissionDialog(
     try {
       const result = await bridge.query({ role: 'AXButton' }, { deviceId });
       for (const match of result.matches) {
-        const label = (match.label ?? '').toLowerCase();
+        const label = match.label ?? '';
         if (!label) continue;
-        if (DISMISS_SUBSTRINGS.some((s) => label.includes(s.toLowerCase()))) {
-          continue;
-        }
-        for (const hint of ACCEPT_PASTE_LABELS) {
-          if (label.includes(hint.toLowerCase())) {
-            return { path: match.path, label: match.label ?? hint };
-          }
+        // Delegate paste-allow matching to localized-button-matcher so the
+        // corpus is maintained in one place and can be extended via registerLabels().
+        if (matchButtonLabel(label) === 'paste-allow') {
+          return { path: match.path, label };
         }
       }
     } catch {

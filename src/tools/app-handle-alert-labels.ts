@@ -78,3 +78,25 @@ export function matchLabel(
   }
   return null;
 }
+
+/**
+ * Extension seam for downstream apps that surface custom localized labels
+ * (e.g. Apple Intelligence onboarding banners or app-specific permission
+ * sheets that this corpus does not yet classify).
+ *
+ * Added labels participate in `matchLabel()` and `flattenLabels()` immediately;
+ * existing entries are deduplicated by exact string match. See
+ * `docs/recipes/localized-buttons.md` for usage patterns.
+ */
+export function registerExtraLabels(
+  action: AlertAction,
+  locale: AlertLocale,
+  labels: readonly string[],
+): void {
+  const bucket = ALL_LABELS[action][locale];
+  for (const label of labels) {
+    if (!bucket.includes(label)) {
+      bucket.push(label);
+    }
+  }
+}

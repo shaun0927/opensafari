@@ -5,6 +5,7 @@ import {
   flattenLabels,
   matchLabel,
   normalizeLabel,
+  registerExtraLabels,
   type AlertLocale,
 } from '../../src/tools/app-handle-alert-labels';
 
@@ -138,6 +139,30 @@ describe('app-handle-alert-labels corpus', () => {
       const decomposed = '한';
       expect(decomposed.normalize('NFC')).toBe('한');
       expect(normalizeLabel(decomposed)).toBe('한');
+    });
+  });
+
+  describe('registerExtraLabels (#639 Problem 4c extension seam)', () => {
+    test('extends the corpus and participates in matchLabel', () => {
+      const customLabel = '\uB3D9\uC758\uD558\uACE0 \uACC4\uC18D\uD558\uAE30';
+      expect(matchLabel(customLabel, 'accept')).toBeNull();
+      registerExtraLabels('accept', 'ko', [customLabel]);
+      expect(matchLabel(customLabel, 'accept')).toEqual({
+        locale: 'ko',
+        label: customLabel,
+      });
+    });
+
+    test('is idempotent — duplicate registrations are silent no-ops', () => {
+      const before = ALL_LABELS.dismiss.ko.length;
+      registerExtraLabels('dismiss', 'ko', ['\uCDE8\uC18C']); // 취소
+      expect(ALL_LABELS.dismiss.ko.length).toBe(before);
+    });
+
+    test('flattenLabels surfaces the extension', () => {
+      const probe = 'CustomBannerAcceptEN_v2';
+      registerExtraLabels('accept', 'en', [probe]);
+      expect(flattenLabels('accept')).toContain(probe);
     });
   });
 });
