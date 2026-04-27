@@ -127,6 +127,34 @@ struct PressResponseJSON: Codable {
 
 // MARK: - AXUIElement Helpers
 
+// Issue #660: Per-element messaging timeout for every AXUIElement the
+// bridge touches. Without this, `AXUIElementCopyAttributeValue` against
+// an unresponsive system process (SpringBoard hosting a permission
+// sheet, a Simulator window whose AX server has degraded) blocks for
+// the AX framework's 6 s default — long enough that the wrapper's own
+// timeout fires first and the bridge looks like it has hung silently.
+//
+// Setting a 1.5 s timeout makes those blocks return
+// `kAXErrorCannotComplete` (-25204) which the call sites already treat
+// as "attribute unavailable", so the dump returns a partial tree
+// quickly instead of dragging the whole pipeline. The TS wrapper then
+// surfaces the partial result and the caller can fall back to its
+// keyboard-fallback path (#659) or its retry policy.
+//
+// `AXUIElementSetMessagingTimeout` is per-element: it does NOT
+// propagate from a parent to children, so we apply it everywhere a new
+// element enters the bridge — at the application root in `main()` and
+// at every child returned by `getChildren()`. The matched-window and
+// content-root paths are covered transitively because both arrive via
+// `getChildren()` walks.
+let AX_MESSAGING_TIMEOUT_SECONDS: Float = 1.5
+
+@discardableResult
+func setAxMessagingTimeoutSafe(_ element: AXUIElement,
+                               _ seconds: Float = AX_MESSAGING_TIMEOUT_SECONDS) -> AXError {
+    return AXUIElementSetMessagingTimeout(element, seconds)
+}
+
 func getStringAttr(_ element: AXUIElement, _ attr: String) -> String? {
     var value: CFTypeRef?
     guard AXUIElementCopyAttributeValue(element, attr as CFString, &value) == .success else { return nil }
@@ -164,7 +192,15 @@ func getChildren(_ element: AXUIElement) -> [AXUIElement] {
     guard AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as String as CFString, &value) == .success else {
         return []
     }
-    return (value as? [AXUIElement]) ?? []
+    let children = (value as? [AXUIElement]) ?? []
+    // Issue #660: every child entering the bridge gets the messaging
+    // timeout applied so subsequent attribute reads on it can't hang
+    // for the framework's 6 s default. See `setAxMessagingTimeoutSafe`
+    // for rationale.
+    for child in children {
+        setAxMessagingTimeoutSafe(child)
+    }
+    return children
 }
 
 // MARK: - Tree Building
@@ -887,6 +923,11 @@ func main() {
     }
 
     let app = AXUIElementCreateApplication(pid)
+    // Issue #660: bound every attribute read against the Simulator
+    // application root at 1.5 s so a degraded AX server can't hang the
+    // bridge silently for the 6 s framework default. Every child
+    // discovered through `getChildren()` inherits the same bound.
+    setAxMessagingTimeoutSafe(app)
 
     // Wake up the AX server on the target process.
     //
