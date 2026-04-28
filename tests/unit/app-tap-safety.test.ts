@@ -181,7 +181,10 @@ function appWithAlert(): AXNode {
 
 // ── Test Setup ───────────────────────────────────────────────────────────────
 
-let handler: (sessionId: string, params: Record<string, unknown>) => Promise<{
+let handler: (
+  sessionId: string,
+  params: Record<string, unknown>,
+) => Promise<{
   content: Array<{ type: string; text: string }>;
   isError?: boolean;
 }>;
@@ -356,6 +359,69 @@ describe('app_tap — AX snap for modals (#644 WU4)', () => {
     jest.useRealTimers();
   });
 
+  it('presses a non-modal AXButton when the coordinate falls inside its frame', async () => {
+    jest.useFakeTimers();
+    const before = appNode();
+    const after = appNode({ label: 'Demo App After Press' });
+    mockDumpTree.mockResolvedValueOnce(before).mockResolvedValue(after);
+
+    const promise = handler('session', { x: 150, y: 220 });
+    await jest.runAllTimersAsync();
+    const result = await promise;
+    const body = JSON.parse(result.content[0].text);
+
+    expect(result.isError).toBeUndefined();
+    expect(body.sideEffect).toBe('ax_snapped');
+    expect(body.snapped.elementPath).toBe('0/0');
+    expect(body.backend).toBe('ax-press');
+    expect(mockPress).toHaveBeenCalledWith('0/0', 'test-device-id');
+    expect(mockTap).not.toHaveBeenCalled();
+    jest.useRealTimers();
+  });
+
+  it('prefers the smallest containing non-modal AXButton for nested controls', async () => {
+    jest.useFakeTimers();
+    const before = appNode({
+      children: [
+        {
+          role: 'AXButton',
+          label: 'Card',
+          traits: [],
+          frame: { x: 20, y: 180, width: 320, height: 180 },
+          visible: true,
+          enabled: true,
+          focused: false,
+          path: '0/card',
+          children: [
+            {
+              role: 'AXButton',
+              label: 'Buy',
+              traits: [],
+              frame: { x: 250, y: 300, width: 70, height: 44 },
+              visible: true,
+              enabled: true,
+              focused: false,
+              path: '0/card/buy',
+            },
+          ],
+        },
+      ],
+    });
+    const after = appNode({ label: 'Nested Button Pressed' });
+    mockDumpTree.mockResolvedValueOnce(before).mockResolvedValue(after);
+
+    const promise = handler('session', { x: 275, y: 320 });
+    await jest.runAllTimersAsync();
+    const result = await promise;
+    const body = JSON.parse(result.content[0].text);
+
+    expect(result.isError).toBeUndefined();
+    expect(body.snapped.elementPath).toBe('0/card/buy');
+    expect(mockPress).toHaveBeenCalledWith('0/card/buy', 'test-device-id');
+    expect(mockTap).not.toHaveBeenCalled();
+    jest.useRealTimers();
+  });
+
   it('does not snap when raw=true is explicit', async () => {
     jest.useFakeTimers();
     const before = appWithAlert();
@@ -437,10 +503,7 @@ describe('app_tap — autoReactivate (#644 WU5)', () => {
     expect(result.isError).toBe(true);
     expect(body.error).toBe('APP_BACKGROUNDED');
     expect(body.recovered).toBe(true);
-    expect(mockActivateApp).toHaveBeenCalledWith(
-      'test-device-id',
-      'com.example.target',
-    );
+    expect(mockActivateApp).toHaveBeenCalledWith('test-device-id', 'com.example.target');
     jest.useRealTimers();
   });
 

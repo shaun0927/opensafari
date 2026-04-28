@@ -14,7 +14,10 @@
  *   * When a modal (AXSheet / AXDialog / AXAlert) is in the pre-tap AX
  *     tree, `app_tap` snaps the coordinate to the nearest enabled button
  *     frame and calls the AX press path instead of forwarding the raw
- *     coordinate. Callers can opt out with `raw: true`.
+ *     coordinate. For non-modal screens, coordinates that fall inside an
+ *     enabled AXButton frame use the same AX press path so headless Flutter
+ *     GestureDetector/semantics buttons are still actionable when OS-level
+ *     coordinate injection is unavailable. Callers can opt out with `raw: true`.
  *   * After the tap, `app_tap` classifies the pre/post AX trees. If the
  *     app left the foreground (SpringBoard / simulator chrome visible),
  *     the response carries `sideEffect: "app_backgrounded"` and, when
@@ -30,12 +33,7 @@ import { resolveDeviceId, getInputBackend, runInputOp } from './native-input-uti
 import { probeMobileContext } from './app-context';
 import { SimulatorManager } from '../simulator';
 import { classifyNativeContext } from './native-app-context';
-import {
-  DEFAULT_HOME_INDICATOR_GUARD_PX,
-  frameFromAXRoot,
-  validateRawTapBounds,
-  type DeviceFrame,
-} from './tap-bounds';
+import { DEFAULT_HOME_INDICATOR_GUARD_PX, frameFromAXRoot, validateRawTapBounds, type DeviceFrame } from './tap-bounds';
 
 type CoordinateTapVerification = {
   verified: boolean;
@@ -43,19 +41,9 @@ type CoordinateTapVerification = {
   afterTree: AXNode | null;
 };
 
-type TapSideEffect =
-  | 'none'
-  | 'app_backgrounded'
-  | 'coordinate_clamped'
-  | 'ax_snapped'
-  | 'out_of_bounds';
+type TapSideEffect = 'none' | 'app_backgrounded' | 'coordinate_clamped' | 'ax_snapped' | 'out_of_bounds';
 
-const MODAL_ROLES = new Set([
-  'AXSheet',
-  'AXDialog',
-  'AXAlert',
-  'AXSystemDialog',
-]);
+const MODAL_ROLES = new Set(['AXSheet', 'AXDialog', 'AXAlert', 'AXSystemDialog']);
 
 const DEFAULT_SNAP_RADIUS_PX = 24;
 
@@ -63,8 +51,7 @@ export function registerAppTapTool(server: MCPServer): void {
   server.registerTool(
     {
       name: 'app_tap',
-      description:
-        'Tap at screen coordinates in the iOS Simulator (works with any app, not just Safari)',
+      description: 'Tap at screen coordinates in the iOS Simulator (works with any app, not just Safari)',
       inputSchema: {
         type: 'object' as const,
         properties: {
@@ -72,18 +59,15 @@ export function registerAppTapTool(server: MCPServer): void {
           y: { type: 'number', description: 'Y coordinate to tap' },
           expectedBundle: {
             type: 'string',
-            description:
-              'Optional bundle identifier expected to remain foreground after the tap settles.',
+            description: 'Optional bundle identifier expected to remain foreground after the tap settles.',
           },
           verifyContext: {
             type: 'boolean',
-            description:
-              'When true, run a post-tap context probe and include it in the response.',
+            description: 'When true, run a post-tap context probe and include it in the response.',
           },
           settleMs: {
             type: 'number',
-            description:
-              'Milliseconds to wait before probing the post-tap context (default: 1200).',
+            description: 'Milliseconds to wait before probing the post-tap context (default: 1200).',
           },
           deviceId: {
             type: 'string',
@@ -91,8 +75,7 @@ export function registerAppTapTool(server: MCPServer): void {
           },
           duration: {
             type: 'number',
-            description:
-              'Tap duration in seconds for long press (default: 0 for normal tap)',
+            description: 'Tap duration in seconds for long press (default: 0 for normal tap)',
           },
           raw: {
             type: 'boolean',
@@ -120,7 +103,7 @@ export function registerAppTapTool(server: MCPServer): void {
             type: 'number',
             description:
               'Maximum distance (px) between the input coordinate and a candidate ' +
-              'AXButton centre for the AX snap path. Default 24.',
+              'AXButton centre for modal AX snap path. Default 24. Non-modal buttons snap when the coordinate is inside their frame.',
           },
           homeIndicatorGuardPx: {
             type: 'number',
@@ -139,17 +122,14 @@ export function registerAppTapTool(server: MCPServer): void {
         const y = params.y as number;
         const duration = (params.duration as number | undefined) ?? 0;
         const expectedBundle = params.expectedBundle as string | undefined;
-        const verifyContext =
-          params.verifyContext === true || typeof expectedBundle === 'string';
+        const verifyContext = params.verifyContext === true || typeof expectedBundle === 'string';
         const settleMs = (params.settleMs as number | undefined) ?? 1200;
         const raw = params.raw === true;
         const requireInApp = params.requireInApp !== false; // default true
         const autoReactivate = params.autoReactivate === true;
-        const snapRadiusPx =
-          (params.snapRadiusPx as number | undefined) ?? DEFAULT_SNAP_RADIUS_PX;
+        const snapRadiusPx = (params.snapRadiusPx as number | undefined) ?? DEFAULT_SNAP_RADIUS_PX;
         const homeIndicatorGuardPx =
-          (params.homeIndicatorGuardPx as number | undefined) ??
-          DEFAULT_HOME_INDICATOR_GUARD_PX;
+          (params.homeIndicatorGuardPx as number | undefined) ?? DEFAULT_HOME_INDICATOR_GUARD_PX;
 
         if (!Number.isFinite(x) || !Number.isFinite(y)) {
           return {
@@ -181,9 +161,7 @@ export function registerAppTapTool(server: MCPServer): void {
           beforeTree = null;
         }
 
-        const foregroundBefore = beforeTree
-          ? classifyNativeContext(beforeTree).sourceKind
-          : 'unknown';
+        const foregroundBefore = beforeTree ? classifyNativeContext(beforeTree).sourceKind : 'unknown';
 
         // Device-frame guard (#644 WU2) — only applied to raw coordinate
         // dispatches. AX snap (WU4) overrides the raw coordinate with a
@@ -202,8 +180,12 @@ export function registerAppTapTool(server: MCPServer): void {
           }
         }
 
-        // AX snap (#644 WU4) — when a modal is showing and the caller did
-        // not opt out with raw=true, snap to the closest enabled AXButton.
+        // AX snap (#644 WU4, #OpenSafari-Omofictions-20260428) — when a
+        // modal is showing, snap to the closest enabled AXButton. On normal
+        // screens, press the enabled AXButton that contains the coordinate.
+        // This gives coordinate app_tap a headless AXPress rescue path for
+        // Flutter semantics buttons when OS-level SimHID/PointerService taps
+        // report success but do not deliver input to the app.
         let snap: AXSnapResult | null = null;
         if (!raw && beforeTree) {
           snap = tryAXSnap(beforeTree, x, y, snapRadiusPx);
@@ -267,11 +249,7 @@ export function registerAppTapTool(server: MCPServer): void {
           meta = { ...(op.meta as unknown as Record<string, unknown>) };
         }
 
-        const verification = await verifyCoordinateTapEffect(
-          bridge,
-          deviceId,
-          beforeTree,
-        );
+        const verification = await verifyCoordinateTapEffect(bridge, deviceId, beforeTree);
 
         const foregroundAfter = verification.afterTree
           ? classifyNativeContext(verification.afterTree).sourceKind
@@ -284,8 +262,7 @@ export function registerAppTapTool(server: MCPServer): void {
         // caused the transition.
         const appBackgrounded =
           foregroundBefore === 'target-app' &&
-          (foregroundAfter === 'springboard' ||
-            foregroundAfter === 'simulator-window');
+          (foregroundAfter === 'springboard' || foregroundAfter === 'simulator-window');
         if (appBackgrounded) sideEffect = 'app_backgrounded';
 
         // autoReactivate (WU5).
@@ -299,14 +276,10 @@ export function registerAppTapTool(server: MCPServer): void {
               recovered = true;
             } catch (err) {
               const reason = err instanceof Error ? err.message : String(err);
-              console.error(
-                `[app_tap] autoReactivate failed for ${bundleToRecover}: ${reason}`,
-              );
+              console.error(`[app_tap] autoReactivate failed for ${bundleToRecover}: ${reason}`);
             }
           } else {
-            console.error(
-              '[app_tap] autoReactivate requested but expectedBundle was not provided; skipping recovery.',
-            );
+            console.error('[app_tap] autoReactivate requested but expectedBundle was not provided; skipping recovery.');
           }
         }
 
@@ -388,9 +361,7 @@ export function registerAppTapTool(server: MCPServer): void {
         // Branch on verification + side effects.
         if (verification.effect === 'verification_unavailable') {
           base.verified = false;
-          base.warning =
-            warning ??
-            'The tap was dispatched but post-action AX verification was unavailable.';
+          base.warning = warning ?? 'The tap was dispatched but post-action AX verification was unavailable.';
           if (appBackgrounded && requireInApp) {
             return buildBackgroundedResponse(base, { recovered, expectedBundle });
           }
@@ -502,41 +473,67 @@ interface AXSnapResult {
   y: number;
   elementPath: string;
   distance: number;
+  width: number;
+  height: number;
 }
 
 /**
- * When a modal (AXSheet / AXDialog / AXAlert) is present in the AX tree,
- * pick the enabled AXButton whose centre is closest to the input
- * coordinate within `snapRadiusPx`.
+ * If a modal (AXSheet / AXDialog / AXAlert) is present in the AX tree, pick
+ * the enabled AXButton whose centre is closest to the input coordinate within
+ * `snapRadiusPx`. Otherwise, pick the smallest enabled AXButton whose frame
+ * contains the coordinate. The non-modal path preserves coordinate intent
+ * while rescuing headless Flutter/SwiftUI/UIKit buttons from broken OS-level
+ * coordinate injection on current simulator stacks.
  */
-function tryAXSnap(
-  tree: AXNode,
-  x: number,
-  y: number,
-  snapRadiusPx: number,
-): AXSnapResult | null {
+function tryAXSnap(tree: AXNode, x: number, y: number, snapRadiusPx: number): AXSnapResult | null {
   const modals: AXNode[] = [];
   collectNodes(tree, (node) => {
     if (MODAL_ROLES.has(node.role) && node.visible) modals.push(node);
   });
-  if (modals.length === 0) return null;
 
   let best: AXSnapResult | null = null;
-  for (const modal of modals) {
-    collectNodes(modal, (node) => {
+  const roots = modals.length > 0 ? modals : [tree];
+  for (const root of roots) {
+    collectNodes(root, (node) => {
       if (!node.visible || !node.enabled) return;
       if (node.role !== 'AXButton') return;
       if (node.frame.width <= 0 || node.frame.height <= 0) return;
       const cx = node.frame.x + node.frame.width / 2;
       const cy = node.frame.y + node.frame.height / 2;
       const distance = Math.hypot(cx - x, cy - y);
-      if (distance > snapRadiusPx) return;
-      if (!best || distance < best.distance) {
-        best = { x: cx, y: cy, elementPath: node.path, distance };
+
+      if (modals.length > 0) {
+        if (distance > snapRadiusPx) return;
+      } else if (!containsPoint(node.frame, x, y)) {
+        return;
+      }
+
+      if (isBetterAXSnapCandidate({ node, distance, best, modalMode: modals.length > 0 })) {
+        best = { x: cx, y: cy, elementPath: node.path, distance, width: node.frame.width, height: node.frame.height };
       }
     });
   }
   return best;
+}
+
+function isBetterAXSnapCandidate(args: {
+  node: AXNode;
+  distance: number;
+  best: AXSnapResult | null;
+  modalMode: boolean;
+}): boolean {
+  const { node, distance, best, modalMode } = args;
+  if (!best) return true;
+  if (modalMode) return distance < best.distance;
+
+  const nodeArea = node.frame.width * node.frame.height;
+  const bestArea = best.width * best.height;
+  if (nodeArea !== bestArea) return nodeArea < bestArea;
+  return distance < best.distance;
+}
+
+function containsPoint(frame: { x: number; y: number; width: number; height: number }, x: number, y: number): boolean {
+  return x >= frame.x && x <= frame.x + frame.width && y >= frame.y && y <= frame.y + frame.height;
 }
 
 function collectNodes(root: AXNode, visit: (node: AXNode) => void): void {
