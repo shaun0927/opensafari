@@ -71,13 +71,18 @@ function stripDiagnosticAnnotation(label: string): string {
 }
 
 /**
- * Normalize Unicode whitespace (NBSP, fullwidth space, etc.) to ASCII space
- * so a label captured from a SpringBoard sheet that uses U+00A0 between
- * syllables still equality-matches the constant `허용 안 함` written here as
- * a plain ASCII-spaced string.
+ * Unicode whitespace codepoints embedded in Apple's localized SpringBoard
+ * strings to prevent line-wrapping. Mirrors `FANCY_WHITESPACE` in
+ * `src/tools/app-handle-alert-labels.ts` exactly. Crucial: U+2060 WORD
+ * JOINER is NOT matched by JavaScript's `\s` regex class — relying on
+ * `\s` alone would silently miss any label that uses WORD JOINER between
+ * syllables and produce a false-regression report when the correct
+ * button is in fact present.
  */
+const FANCY_WHITESPACE = /[\u00A0\u202F\u2007\u2060\u2028\u2029]/g;
+
 function normalizeWhitespace(label: string): string {
-  return label.replace(/\s+/gu, ' ').trim();
+  return label.replace(FANCY_WHITESPACE, ' ').replace(/\s+/g, ' ').trim();
 }
 
 function canonicalLabel(label: string): string {
