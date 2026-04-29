@@ -24,6 +24,12 @@
  * That keeps CI green on hosts that lack the FDA grant while preserving a
  * one-line opt-in for any focused session that does have the grant.
  *
+ * Once opt-in is set, environmental failures (TCC reset failure, missing
+ * sheet, empty tool body) throw rather than soft-skipping. The operator
+ * who flipped the opt-in env var has committed to having a working
+ * environment, so a degraded environment is a setup error that must be
+ * surfaced rather than masked.
+ *
  * Run:
  *   OPENSAFARI_KOKR_PUSH_DIALOG=1 \
  *   OSF_DEVICE_ID=<UDID-of-ko-KR-iOS-26.4-sim> \
@@ -50,6 +56,33 @@ const DISMISS_LABEL = '허용 안 함';
 const SHEET_WAIT_MS = 12_000;
 /** Path to the bundled native bridge binary (built by `npm run build`). */
 const AX_BRIDGE_BIN = path.resolve(__dirname, '../../dist/ax-bridge-native');
+
+/**
+ * `app_handle_alert#collectVisibleButtonLabels` annotates non-ASCII whitespace
+ * as `"<original> (norm: <normalized>)"` (slice 2 of #642). Strict equality
+ * against `허용 안 함` would falsely miss when the diagnostic suffix is
+ * present. Mirror the regex from `src/tools/app-handle-alert.ts` so the
+ * assertion compares against the raw label.
+ */
+const DIAGNOSTIC_ANNOTATION_SUFFIX = / \(norm: [^)]*\)$/;
+
+function stripDiagnosticAnnotation(label: string): string {
+  return label.replace(DIAGNOSTIC_ANNOTATION_SUFFIX, '');
+}
+
+/**
+ * Normalize Unicode whitespace (NBSP, fullwidth space, etc.) to ASCII space
+ * so a label captured from a SpringBoard sheet that uses U+00A0 between
+ * syllables still equality-matches the constant `허용 안 함` written here as
+ * a plain ASCII-spaced string.
+ */
+function normalizeWhitespace(label: string): string {
+  return label.replace(/\s+/gu, ' ').trim();
+}
+
+function canonicalLabel(label: string): string {
+  return normalizeWhitespace(stripDiagnosticAnnotation(label));
+}
 
 jest.setTimeout(180_000);
 
@@ -196,11 +229,14 @@ describe('issue #660 — ko-KR UNUserNotificationCenter permission sheet', () =>
   });
 
   test('reset → cold-launch → app_handle_alert dismiss returns ax-scan with 허용 / 허용 안 함', async () => {
+    // Once the operator has flipped the opt-in env var, environmental
+    // failures are setup errors that the operator alone can resolve and
+    // must surface as test failures — silently passing on a degraded
+    // environment hides regressions in the verification itself.
     terminateApp();
     const reset = resetNotifications();
     if (!reset.ok) {
-      console.warn(`[issue-660] ${reset.reason}`);
-      return;
+      throw new Error(`[issue-660] ${reset.reason}`);
     }
 
     launchApp();
@@ -218,7 +254,7 @@ describe('issue #660 — ko-KR UNUserNotificationCenter permission sheet', () =>
       });
       const body = JSON.parse(result.content[0].text) as Record<string, unknown>;
       lastBody = body;
-      const visibleButtons = (body.visibleButtons as string[]) ?? [];
+      const visibleButtons = ((body.visibleButtons as string[]) ?? []).map(canonicalLabel);
       const sawSheet = visibleButtons.some(
         (label) => label === ACCEPT_LABEL || label === DISMISS_LABEL,
       );
@@ -227,21 +263,23 @@ describe('issue #660 — ko-KR UNUserNotificationCenter permission sheet', () =>
     }
 
     if (!lastBody) {
-      console.warn('[issue-660] tool handler returned no body — skipping');
-      return;
+      throw new Error('[issue-660] tool handler returned no body');
     }
 
-    const visibleButtons = (lastBody.visibleButtons as string[]) ?? [];
+    // Compare against canonicalized labels — `app_handle_alert` may surface
+    // `"허용 안 함 (norm: 허용 안 함)"` when SpringBoard uses NBSP between
+    // syllables, and a strict equality assertion against the raw constant
+    // would falsely fail even though the correct button is present.
+    const rawVisibleButtons = (lastBody.visibleButtons as string[]) ?? [];
+    const visibleButtons = rawVisibleButtons.map(canonicalLabel);
     if (
       !visibleButtons.includes(ACCEPT_LABEL) &&
       !visibleButtons.includes(DISMISS_LABEL)
     ) {
-      console.warn(
+      throw new Error(
         `[issue-660] permission sheet did not appear within ${SHEET_WAIT_MS} ms; ` +
-          `visibleButtons=${JSON.stringify(visibleButtons)}. ` +
-          'Skipping — likely a build flag or app behavior change.',
+          `visibleButtons=${JSON.stringify(rawVisibleButtons)}.`,
       );
-      return;
     }
 
     // Exit criterion 1: dismissed=true via ax-scan
