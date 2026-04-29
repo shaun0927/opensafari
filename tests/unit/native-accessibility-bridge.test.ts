@@ -104,6 +104,59 @@ describe('AccessibilityBridge', () => {
 
       await expect(bridge.dumpTree()).rejects.toThrow('timed out');
     });
+
+    /**
+     * Issue #693 WU3-prep: the dump root carries the device-content-root
+     * size in macOS-points. The wrapper passes the field through verbatim
+     * so the coordinate-tap code path can convert AX frames to iOS-points
+     * before forwarding to `sim-hid-bridge`.
+     */
+    it('passes through deviceContentMacOSPt on the dump root (#693)', async () => {
+      mockExecSuccess(JSON.stringify({
+        role: 'AXGroup',
+        label: null,
+        value: null,
+        identifier: null,
+        traits: [],
+        frame: { x: 0, y: 0, width: 697, height: 1515 },
+        visible: true,
+        enabled: true,
+        focused: false,
+        children: null,
+        path: '',
+        deviceContentMacOSPt: { width: 697, height: 1515 },
+      }));
+
+      const result = await bridge.dumpTree({ deviceId: 'test-udid' });
+
+      expect(result.deviceContentMacOSPt).toEqual({ width: 697, height: 1515 });
+    });
+
+    /**
+     * Issue #693 WU3-prep: the field is optional. Older bridge binaries
+     * that pre-date this PR (or running against `swift` interpreter source
+     * pinned to develop) MUST keep the wrapper surface usable without it.
+     */
+    it('treats deviceContentMacOSPt as optional on legacy bridge output', async () => {
+      mockExecSuccess(JSON.stringify({
+        role: 'AXGroup',
+        label: null,
+        value: null,
+        identifier: null,
+        traits: [],
+        frame: { x: 0, y: 0, width: 393, height: 852 },
+        visible: true,
+        enabled: true,
+        focused: false,
+        children: null,
+        path: '',
+        // no deviceContentMacOSPt
+      }));
+
+      const result = await bridge.dumpTree();
+
+      expect(result.deviceContentMacOSPt).toBeUndefined();
+    });
   });
 
   describe('query', () => {

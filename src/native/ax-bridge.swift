@@ -34,11 +34,22 @@ struct AXNodeJSON: Codable {
     // do not carry the noise — the wrapper only ever inspects the top-level
     // value to decide whether to promote a result to APP_CONTENT_NOT_EXPOSED.
     var chromeOnly: Bool?
+    // Issue #693 WU3-prep: size of the device-content-root in macOS-screen-
+    // points (the same coordinate space `frame.x/y` is reported in after the
+    // origin subtraction at `buildNode`). Emitted only on the dump root so
+    // the TypeScript caller can convert AX-frame coordinates to iOS-points
+    // before dispatching coordinate taps via `sim-hid-bridge` (which
+    // consumes iOS-points — see `getScreenSize` in `sim-hid-bridge.swift`).
+    // Without this, every coordinate tap on a Simulator window scaled so
+    // 1 iOS-pt ≠ 1 macOS-pt (observed at 1.733× on iPhone 17 Pro / iOS 26.4)
+    // misses its visible target.
+    var deviceContentMacOSPt: SizeJSON?
 
     init(role: String, label: String?, value: String?, identifier: String?,
          traits: [String], frame: FrameJSON, visible: Bool, enabled: Bool,
          focused: Bool, children: [AXNodeJSON]?, path: String,
-         chromeOnly: Bool? = nil) {
+         chromeOnly: Bool? = nil,
+         deviceContentMacOSPt: SizeJSON? = nil) {
         self.role = role
         self.label = label
         self.value = value
@@ -51,12 +62,18 @@ struct AXNodeJSON: Codable {
         self.children = children
         self.path = path
         self.chromeOnly = chromeOnly
+        self.deviceContentMacOSPt = deviceContentMacOSPt
     }
 }
 
 struct FrameJSON: Codable {
     let x: Double
     let y: Double
+    let width: Double
+    let height: Double
+}
+
+struct SizeJSON: Codable {
     let width: Double
     let height: Double
 }
@@ -1080,6 +1097,23 @@ func main() {
         "originY": originY,
     ])
 
+    // Issue #693 WU3-prep: capture the device-content-root size in macOS-pt
+    // up-front so it can be emitted on the dump root. The size is read from
+    // the live `AXUIElement` once and reused — every other measurement in the
+    // dump is in the same coordinate space (post-origin-subtraction at
+    // `buildNode`), so the TS-side coordinate-tap conversion needs only one
+    // pair of numbers per dump.
+    let contentSize = getSize(content)
+    let deviceContentSizeJSON: SizeJSON? = contentSize.map { SizeJSON(width: $0.0, height: $0.1) }
+    if let size = deviceContentSizeJSON {
+        debugLog("device_content_macos_pt", [
+            "width": size.width,
+            "height": size.height,
+        ])
+    } else {
+        debugLog("device_content_macos_pt_unavailable")
+    }
+
     switch command {
     case "dump":
         let buildStart = nowMs()
@@ -1094,6 +1128,9 @@ func main() {
         // promote chrome-only trees in a single snapshot — no second native
         // call required.
         tree.chromeOnly = isChromeOnlyContent(tree)
+        // Issue #693 WU3-prep: emit the macOS-pt content-root size on the
+        // dump root only. Optional so per-child nodes do not carry the noise.
+        tree.deviceContentMacOSPt = deviceContentSizeJSON
         debugLog("dump_emit", ["chromeOnly": tree.chromeOnly ?? false])
         outputJSON(tree)
 
