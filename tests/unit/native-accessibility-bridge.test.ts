@@ -310,6 +310,47 @@ describe('AccessibilityBridge', () => {
       }
     });
 
+    it('surfaces captured stdout in error message when JSON.parse throws SyntaxError on successful exit', async () => {
+      // Bridge exits 0 but stdout is not valid JSON (e.g. `swiftc` produced
+      // a binary that printed a partial dump before crashing). The previous
+      // implementation discarded the captured streams in this branch
+      // because Node's `SyntaxError` does not carry stdout/stderr.
+      mockExecSuccess('this is not json', 'some warning on stderr');
+
+      const promise = bridge.dumpTree();
+      try {
+        await promise;
+        throw new Error('expected throw');
+      } catch (err) {
+        const e = err as AccessibilityBridgeError;
+        expect(e.code).toBe('BRIDGE_EXEC_FAILED');
+        expect(e.message).toContain('stdout: this is not json');
+        expect(e.message).toContain('stderr: some warning on stderr');
+      }
+    });
+
+    it('truncates oversized single-line stdout in error tails', async () => {
+      const longLine = 'x'.repeat(2000);
+      mockExecFailure({
+        stdout: longLine,
+        stderr: '',
+        message: 'Command failed',
+      });
+
+      const promise = bridge.dumpTree();
+      try {
+        await promise;
+        throw new Error('expected throw');
+      } catch (err) {
+        const e = err as AccessibilityBridgeError;
+        expect(e.code).toBe('BRIDGE_EXEC_FAILED');
+        // Truncated form: 512 chars + ellipsis + `[+1488 chars]` marker.
+        expect(e.message).toContain('…[+1488 chars]');
+        // The full 2000-char line must not survive verbatim.
+        expect(e.message).not.toContain(longLine);
+      }
+    });
+
     it('still surfaces a typed AX_TIMEOUT for killed processes', async () => {
       mockExecFile.mockImplementation(
         (_cmd: string, _args: string[], _opts: unknown, cb?: ExecCallback) => {
