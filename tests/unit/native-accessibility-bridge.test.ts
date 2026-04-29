@@ -226,4 +226,112 @@ describe('AccessibilityBridge', () => {
       await expect(bridge.inspect('99/99')).rejects.toThrow('Element not found');
     });
   });
+
+  /**
+   * Issue #693 WU1: the Swift bridge writes its structured ErrorJSON
+   * (`{ error, code }`) to STDOUT on the typed-error path and then
+   * `exit(1)`. Before this fix, the wrapper only inspected `error.stderr`
+   * on a non-zero exit and every typed bridge error collapsed to the
+   * generic `BRIDGE_EXEC_FAILED` / `Command failed: <cmd>` shape so the
+   * caller could not branch on `code`. These tests prove the structured
+   * error now passes through verbatim from either stream.
+   */
+  describe('non-zero exit error parsing (#693 WU1)', () => {
+    function mockExecFailure(opts: { stdout?: string; stderr?: string; message?: string }) {
+      mockExecFile.mockImplementation(
+        (_cmd: string, _args: string[], _opts: unknown, cb?: ExecCallback) => {
+          const err = Object.assign(new Error(opts.message ?? 'Command failed'), {
+            stdout: opts.stdout ?? '',
+            stderr: opts.stderr ?? '',
+          });
+          if (cb) cb(err, { stdout: opts.stdout ?? '', stderr: opts.stderr ?? '' });
+          return { stdout: opts.stdout ?? '', stderr: opts.stderr ?? '' };
+        },
+      );
+    }
+
+    it('parses structured ErrorJSON from STDOUT on non-zero exit (DEVICE_CONTENT_ROOT_EMPTY)', async () => {
+      mockExecFailure({
+        stdout: JSON.stringify({
+          error:
+            'Matched simulator window, but no descendant exposes app-level accessibility semantics.',
+          code: 'DEVICE_CONTENT_ROOT_EMPTY',
+        }),
+        message: 'Command failed',
+      });
+
+      const promise = bridge.dumpTree();
+      await expect(promise).rejects.toBeInstanceOf(AccessibilityBridgeError);
+      try {
+        await promise;
+      } catch (err) {
+        const e = err as AccessibilityBridgeError;
+        expect(e.code).toBe('DEVICE_CONTENT_ROOT_EMPTY');
+        expect(e.message).toContain('no descendant exposes app-level accessibility semantics');
+        expect(e.message).not.toMatch(/^ax-bridge failed/);
+      }
+    });
+
+    it('falls back to STDERR-encoded ErrorJSON when STDOUT is empty', async () => {
+      mockExecFailure({
+        stderr: JSON.stringify({
+          error: 'Simulator.app is not running.',
+          code: 'SIMULATOR_NOT_RUNNING',
+        }),
+      });
+
+      const promise = bridge.dumpTree();
+      await expect(promise).rejects.toBeInstanceOf(AccessibilityBridgeError);
+      try {
+        await promise;
+      } catch (err) {
+        const e = err as AccessibilityBridgeError;
+        expect(e.code).toBe('SIMULATOR_NOT_RUNNING');
+        expect(e.message).toContain('Simulator.app is not running');
+      }
+    });
+
+    it('surfaces both stdout and stderr tails when neither stream parses as ErrorJSON', async () => {
+      mockExecFailure({
+        stdout: 'partial output before crash',
+        stderr: 'swift: dyld: Library not loaded',
+        message: 'Command failed: ax-bridge-native dump',
+      });
+
+      const promise = bridge.dumpTree();
+      await expect(promise).rejects.toBeInstanceOf(AccessibilityBridgeError);
+      try {
+        await promise;
+      } catch (err) {
+        const e = err as AccessibilityBridgeError;
+        expect(e.code).toBe('BRIDGE_EXEC_FAILED');
+        expect(e.message).toContain('stdout: partial output before crash');
+        expect(e.message).toContain('stderr: swift: dyld: Library not loaded');
+      }
+    });
+
+    it('still surfaces a typed AX_TIMEOUT for killed processes', async () => {
+      mockExecFile.mockImplementation(
+        (_cmd: string, _args: string[], _opts: unknown, cb?: ExecCallback) => {
+          const err = Object.assign(new Error('killed'), {
+            killed: true,
+            stdout: '',
+            stderr: '',
+          });
+          if (cb) cb(err, { stdout: '', stderr: '' });
+          return { stdout: '', stderr: '' };
+        },
+      );
+
+      const promise = bridge.dumpTree();
+      try {
+        await promise;
+        throw new Error('expected throw');
+      } catch (err) {
+        const e = err as AccessibilityBridgeError;
+        expect(e.code).toBe('AX_TIMEOUT');
+        expect(e.message).toContain('timed out');
+      }
+    });
+  });
 });

@@ -133,7 +133,12 @@ export class AccessibilityBridge {
     } catch (err) {
       if (err instanceof AccessibilityBridgeError) throw err;
 
-      const error = err as Error & { stderr?: string; code?: string; killed?: boolean };
+      const error = err as Error & {
+        stdout?: string;
+        stderr?: string;
+        code?: string;
+        killed?: boolean;
+      };
 
       if (error.killed) {
         throw new AccessibilityBridgeError(
@@ -142,28 +147,49 @@ export class AccessibilityBridge {
         );
       }
 
-      // Try to parse error JSON from stderr
-      if (error.stderr) {
+      // Issue #693 WU1: the bridge writes its structured ErrorJSON
+      // (`{ error, code }`) to STDOUT and then `exit(1)`, NOT to stderr —
+      // see `outputError()` in `src/native/ax-bridge.swift`. The previous
+      // implementation only inspected `error.stderr` here, so every typed
+      // bridge error (DEVICE_CONTENT_ROOT_EMPTY, DEVICE_RESOLUTION_FAILED,
+      // SIMULATOR_NOT_RUNNING, etc.) collapsed to the generic
+      // `Command failed: <cmd>` tail and the caller could not branch on
+      // `code`. Try stdout first; keep stderr as a fallback so legacy
+      // callers that emit JSON on stderr (or `swift` interpreter compile
+      // errors) still surface cleanly.
+      const structuredCandidates = [error.stdout, error.stderr];
+      for (const candidate of structuredCandidates) {
+        if (!candidate) continue;
         try {
-          const errJson = JSON.parse(error.stderr);
-          if (errJson.error) {
-            throw new AccessibilityBridgeError(errJson.error, errJson.code ?? 'AX_ERROR');
+          const errJson = JSON.parse(candidate);
+          if (errJson && typeof errJson === 'object' && typeof errJson.error === 'string') {
+            throw new AccessibilityBridgeError(
+              errJson.error,
+              typeof errJson.code === 'string' ? errJson.code : 'AX_ERROR',
+            );
           }
         } catch (parseErr) {
           if (parseErr instanceof AccessibilityBridgeError) throw parseErr;
-          // Not JSON, fall through to surface raw stderr below.
+          // Not JSON — fall through and try the next stream.
         }
       }
 
-      // Include the bridge's stderr tail in the thrown message. Without this
-      // the caller only sees `Command failed: <cmd>` and every CI failure
-      // looks identical regardless of root cause (unsigned binary, missing
-      // TCC, simulator not booted, swift interpreter compile error, etc.).
-      const stderrTail = error.stderr
-        ? ` | stderr: ${error.stderr.trim().split('\n').slice(-5).join(' / ')}`
-        : '';
+      // Include both stdout and stderr tails in the thrown message so the
+      // caller sees the same diagnostic shape regardless of which stream
+      // the bridge wrote to. Without this the message degrades to
+      // `Command failed: <cmd>` and every CI failure looks identical
+      // regardless of root cause (unsigned binary, missing TCC, simulator
+      // not booted, swift interpreter compile error, etc.).
+      const tail = (label: string, value: string | undefined): string => {
+        if (!value) return '';
+        const trimmed = value.trim();
+        if (trimmed.length === 0) return '';
+        return ` | ${label}: ${trimmed.split('\n').slice(-5).join(' / ')}`;
+      };
       throw new AccessibilityBridgeError(
-        `ax-bridge failed (${cmd}): ${error.message}${stderrTail}`,
+        `ax-bridge failed (${cmd}): ${error.message}` +
+          tail('stdout', error.stdout) +
+          tail('stderr', error.stderr),
         'BRIDGE_EXEC_FAILED',
       );
     }
