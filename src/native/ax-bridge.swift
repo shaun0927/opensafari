@@ -34,11 +34,22 @@ struct AXNodeJSON: Codable {
     // do not carry the noise — the wrapper only ever inspects the top-level
     // value to decide whether to promote a result to APP_CONTENT_NOT_EXPOSED.
     var chromeOnly: Bool?
+    // Issue #693 WU3-prep: size of the device-content-root in macOS-screen-
+    // points (the same coordinate space `frame.x/y` is reported in after the
+    // origin subtraction at `buildNode`). Emitted only on the dump root so
+    // the TypeScript caller can convert AX-frame coordinates to iOS-points
+    // before dispatching coordinate taps via `sim-hid-bridge` (which
+    // consumes iOS-points — see `getScreenSize` in `sim-hid-bridge.swift`).
+    // Without this, every coordinate tap on a Simulator window scaled so
+    // 1 iOS-pt ≠ 1 macOS-pt (observed at 1.733× on iPhone 17 Pro / iOS 26.4)
+    // misses its visible target.
+    var deviceContentMacOSPt: SizeJSON?
 
     init(role: String, label: String?, value: String?, identifier: String?,
          traits: [String], frame: FrameJSON, visible: Bool, enabled: Bool,
          focused: Bool, children: [AXNodeJSON]?, path: String,
-         chromeOnly: Bool? = nil) {
+         chromeOnly: Bool? = nil,
+         deviceContentMacOSPt: SizeJSON? = nil) {
         self.role = role
         self.label = label
         self.value = value
@@ -51,12 +62,18 @@ struct AXNodeJSON: Codable {
         self.children = children
         self.path = path
         self.chromeOnly = chromeOnly
+        self.deviceContentMacOSPt = deviceContentMacOSPt
     }
 }
 
 struct FrameJSON: Codable {
     let x: Double
     let y: Double
+    let width: Double
+    let height: Double
+}
+
+struct SizeJSON: Codable {
     let width: Double
     let height: Double
 }
@@ -71,6 +88,13 @@ struct QueryResultJSON: Codable {
     // results into typed APP_CONTENT_NOT_EXPOSED instead of issuing a
     // second native dump call.
     let chromeOnly: Bool
+    // Issue #693 WU3-prep (gemini PR #695 follow-up): emit the device-
+    // content-root size in macOS-pt on query results too, so a caller that
+    // uses `query` to find an element and then performs a coordinate-based
+    // tap does not need to issue a separate `dump` just to retrieve the
+    // conversion factor. Optional for forward compatibility with older
+    // wrappers.
+    let deviceContentMacOSPt: SizeJSON?
 }
 
 struct QueryJSON: Codable {
@@ -90,12 +114,18 @@ struct ErrorJSON: Codable {
 /// `chromeOnly` flag the wrapper relies on for query/dump promotion. The
 /// wrapper inspects this field to decide whether to upgrade the response
 /// to APP_CONTENT_NOT_EXPOSED.
+///
+/// Issue #693 WU3-prep (gemini PR #695 follow-up): also carries
+/// `deviceContentMacOSPt` so a caller that wants to retry the operation
+/// at coordinate level (after a chrome-only or transient miss) has the
+/// conversion factor without issuing a separate dump.
 struct InspectNotFoundJSON: Codable {
     let error: String
     let code: String
     let path: String
     let found: Bool
     let chromeOnly: Bool
+    let deviceContentMacOSPt: SizeJSON?
 }
 
 /// Uniform response for `ax-bridge press`.
@@ -1208,6 +1238,23 @@ func main() {
         "originY": originY,
     ])
 
+    // Issue #693 WU3-prep: capture the device-content-root size in macOS-pt
+    // up-front so it can be emitted on the dump root. The size is read from
+    // the live `AXUIElement` once and reused — every other measurement in the
+    // dump is in the same coordinate space (post-origin-subtraction at
+    // `buildNode`), so the TS-side coordinate-tap conversion needs only one
+    // pair of numbers per dump.
+    let contentSize = getSize(content)
+    let deviceContentSizeJSON: SizeJSON? = contentSize.map { SizeJSON(width: $0.0, height: $0.1) }
+    if let size = deviceContentSizeJSON {
+        debugLog("device_content_macos_pt", [
+            "width": size.width,
+            "height": size.height,
+        ])
+    } else {
+        debugLog("device_content_macos_pt_unavailable")
+    }
+
     switch command {
     case "dump":
         let buildStart = nowMs()
@@ -1222,6 +1269,9 @@ func main() {
         // promote chrome-only trees in a single snapshot — no second native
         // call required.
         tree.chromeOnly = isChromeOnlyContent(tree)
+        // Issue #693 WU3-prep: emit the macOS-pt content-root size on the
+        // dump root only. Optional so per-child nodes do not carry the noise.
+        tree.deviceContentMacOSPt = deviceContentSizeJSON
         debugLog("dump_emit", ["chromeOnly": tree.chromeOnly ?? false])
         outputJSON(tree)
 
@@ -1247,12 +1297,18 @@ func main() {
         // Issue #41: compute chromeOnly against the same content tree the
         // query was evaluated against, eliminating the depth-mismatch and
         // race-window failure modes of the previous double-dump probe.
+        // Issue #693 WU3-prep (gemini PR #695 follow-up): also emit the
+        // device-content-root size in macOS-pt so a caller that uses
+        // `query` to find an element and then performs a coordinate-based
+        // tap does not need to issue a separate `dump` for the conversion
+        // factor.
         let result = QueryResultJSON(
             matches: matches,
             total: matches.count,
             query: queryInfo,
             ambiguous: matches.count > 1 && args["id"] != nil,
-            chromeOnly: isChromeOnlyContent(tree)
+            chromeOnly: isChromeOnlyContent(tree),
+            deviceContentMacOSPt: deviceContentSizeJSON
         )
         outputJSON(result)
 
@@ -1274,12 +1330,18 @@ func main() {
                 code: "ELEMENT_NOT_FOUND",
                 path: path,
                 found: false,
-                chromeOnly: isChromeOnlyContent(tree)
+                chromeOnly: isChromeOnlyContent(tree),
+                deviceContentMacOSPt: deviceContentSizeJSON
             ))
             exit(1)
         }
         // Re-dump with full children for this node
         node.chromeOnly = isChromeOnlyContent(tree)
+        // Issue #693 WU3-prep (gemini PR #695 follow-up): also emit the
+        // device-content-root size in macOS-pt on `inspect` so a caller
+        // that uses inspect to navigate to an element and then performs a
+        // coordinate tap does not need a separate dump.
+        node.deviceContentMacOSPt = deviceContentSizeJSON
         outputJSON(node)
 
     case "press":

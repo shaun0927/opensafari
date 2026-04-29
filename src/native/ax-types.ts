@@ -29,6 +29,15 @@ export interface AXNode {
   children?: AXNode[];
   /** Index path for unique element identification (e.g. "0/2/1") */
   path: string;
+  /**
+   * Issue #693 WU3-prep: size of the device-content-root in macOS-screen-
+   * points. Emitted only on the dump root; absent on every child node and
+   * on `query` / `inspect` results. Pair with the iOS-points size of the
+   * device under test (e.g. `402x874` for iPhone 17 Pro) to derive the
+   * conversion factor that maps AX-frame coordinates to the iOS-points
+   * input space `sim-hid-bridge` consumes.
+   */
+  deviceContentMacOSPt?: { width: number; height: number };
 }
 
 /** Bounding frame in simulator coordinates */
@@ -63,6 +72,14 @@ export interface AXQueryResult {
   query: AXQuery;
   /** Whether the query was ambiguous (multiple matches when one expected) */
   ambiguous: boolean;
+  /**
+   * Issue #693 WU3-prep: device-content-root size in macOS-screen-points,
+   * mirrored from the dump root. Lets a caller that uses `query` to find
+   * an element and then performs a coordinate-based tap derive the
+   * macOS-pt → iOS-pt conversion factor without issuing a separate
+   * `dump`.
+   */
+  deviceContentMacOSPt?: { width: number; height: number };
 }
 
 /** Options for tree dump */

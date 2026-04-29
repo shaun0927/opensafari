@@ -104,6 +104,59 @@ describe('AccessibilityBridge', () => {
 
       await expect(bridge.dumpTree()).rejects.toThrow('timed out');
     });
+
+    /**
+     * Issue #693 WU3-prep: the dump root carries the device-content-root
+     * size in macOS-points. The wrapper passes the field through verbatim
+     * so the coordinate-tap code path can convert AX frames to iOS-points
+     * before forwarding to `sim-hid-bridge`.
+     */
+    it('passes through deviceContentMacOSPt on the dump root (#693)', async () => {
+      mockExecSuccess(JSON.stringify({
+        role: 'AXGroup',
+        label: null,
+        value: null,
+        identifier: null,
+        traits: [],
+        frame: { x: 0, y: 0, width: 697, height: 1515 },
+        visible: true,
+        enabled: true,
+        focused: false,
+        children: null,
+        path: '',
+        deviceContentMacOSPt: { width: 697, height: 1515 },
+      }));
+
+      const result = await bridge.dumpTree({ deviceId: 'test-udid' });
+
+      expect(result.deviceContentMacOSPt).toEqual({ width: 697, height: 1515 });
+    });
+
+    /**
+     * Issue #693 WU3-prep: the field is optional. Older bridge binaries
+     * that pre-date this PR (or running against `swift` interpreter source
+     * pinned to develop) MUST keep the wrapper surface usable without it.
+     */
+    it('treats deviceContentMacOSPt as optional on legacy bridge output', async () => {
+      mockExecSuccess(JSON.stringify({
+        role: 'AXGroup',
+        label: null,
+        value: null,
+        identifier: null,
+        traits: [],
+        frame: { x: 0, y: 0, width: 393, height: 852 },
+        visible: true,
+        enabled: true,
+        focused: false,
+        children: null,
+        path: '',
+        // no deviceContentMacOSPt
+      }));
+
+      const result = await bridge.dumpTree();
+
+      expect(result.deviceContentMacOSPt).toBeUndefined();
+    });
   });
 
   describe('query', () => {
@@ -189,6 +242,22 @@ describe('AccessibilityBridge', () => {
       expect(args).toContain('--max-results');
       expect(args).toContain('10');
     });
+
+    /**
+     * Issue #693 WU3-prep (gemini PR #695 follow-up): query results carry
+     * `deviceContentMacOSPt` so a caller that found an element via `query`
+     * and then performs a coordinate tap doesn't need a separate `dump`.
+     */
+    it('passes through deviceContentMacOSPt on query results (#693)', async () => {
+      mockExecSuccess(JSON.stringify({
+        ...mockQueryResult,
+        deviceContentMacOSPt: { width: 697, height: 1515 },
+      }));
+
+      const result = await bridge.query({ identifier: 'login-btn' });
+
+      expect(result.deviceContentMacOSPt).toEqual({ width: 697, height: 1515 });
+    });
   });
 
   describe('inspect', () => {
@@ -224,6 +293,35 @@ describe('AccessibilityBridge', () => {
       }));
 
       await expect(bridge.inspect('99/99')).rejects.toThrow('Element not found');
+    });
+
+    /**
+     * Issue #693 WU3-prep (gemini PR #695 follow-up): inspect results carry
+     * `deviceContentMacOSPt` so a caller that navigated to an element via
+     * `inspect` and then performs a coordinate tap doesn't need a separate
+     * `dump` for the conversion factor.
+     */
+    it('passes through deviceContentMacOSPt on inspect results (#693)', async () => {
+      const mockNode = {
+        role: 'AXTextField',
+        label: 'Email',
+        value: 'user@example.com',
+        identifier: 'email-field',
+        traits: [],
+        frame: { x: 20, y: 150, width: 350, height: 44 },
+        visible: true,
+        enabled: true,
+        focused: true,
+        children: null,
+        path: '0/2',
+        deviceContentMacOSPt: { width: 697, height: 1515 },
+      };
+
+      mockExecSuccess(JSON.stringify(mockNode));
+
+      const result = await bridge.inspect('0/2', 'test-udid');
+
+      expect(result.deviceContentMacOSPt).toEqual({ width: 697, height: 1515 });
     });
   });
 
