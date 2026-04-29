@@ -424,6 +424,25 @@ func scoreWindow(_ window: AXUIElement, requested: String, target: SimulatorDevi
 
 func findMatchingWindow(_ app: AXUIElement, requested: String, target: SimulatorDeviceRecord?) -> (window: AXUIElement?, error: ErrorJSON?) {
     let windows = getChildren(app)
+    // Issue #660 PR C: enumerate every AXWindow Simulator.app exposes so a
+    // `--debug` capture can prove whether a system overlay (SpringBoard
+    // permission sheet, etc.) is hosted in a sibling window the walker
+    // never visits. Without this evidence the SpringBoard-explicit walker
+    // change in the issue plan stays speculative.
+    if debugEnabled {
+        let summaries = windows.map { w -> [String: Any] in
+            [
+                "title": getStringAttr(w, kAXTitleAttribute as String) ?? "",
+                "identifier": getStringAttr(w, kAXIdentifierAttribute as String) ?? "",
+                "role": getStringAttr(w, kAXRoleAttribute as String) ?? "",
+                "subrole": getStringAttr(w, kAXSubroleAttribute as String) ?? "",
+            ]
+        }
+        debugLog("walker_app_windows_enumerated", [
+            "count": windows.count,
+            "windows": summaries,
+        ])
+    }
     guard !windows.isEmpty else {
         return (nil, ErrorJSON(
             error: "Simulator.app is running but no accessibility windows were found.",
@@ -606,7 +625,30 @@ struct ContentCandidate {
     let element: AXUIElement
     let score: Int
     let appSemanticsCount: Int
+    // Issue #660 PR C: cached metadata so we can emit candidate-level
+    // diagnostics after the walk completes without re-reading attributes
+    // on possibly-stale element handles.
+    let role: String
+    let label: String?
+    let depth: Int
 }
+
+/// Issue #660 PR C: roles that suggest a SpringBoard-hosted overlay
+/// (UNUserNotificationCenter permission sheet, system alert, paste dialog,
+/// etc.). The walker records every node it encounters with one of these
+/// roles even when the node loses the score race, so a `--debug` capture
+/// can prove whether the overlay subtree was reachable from the matched
+/// Simulator window in the first place. This is the data point shaun0927's
+/// 2026-04-27 status comment identified as the prerequisite to safely
+/// landing a SpringBoard-explicit walker change.
+let OverlaySuspectRoles: Set<String> = [
+    "AXSheet",
+    "AXAlert",
+    "AXSystemDialog",
+    "AXSystemFloatingWindow",
+    "AXDialog",
+    "AXSystemAlert",
+]
 
 /// Recursive, scored content-root search.
 ///
@@ -621,10 +663,22 @@ struct ContentCandidate {
 /// `DEVICE_CONTENT_ROOT_EMPTY` rather than falling back to the bare
 /// `AXWindow` (the pre-refactor behavior responsible for the silent-empty
 /// content bug).
+///
+/// Issue #660 PR C: When `--debug` is enabled the walker emits two
+/// supplementary stderr events after the recursion completes:
+/// `walker_top_candidates` (top-5 candidates by score with role/label/
+/// depth/score/descendantCount) and `walker_overlay_roles_seen` (every
+/// overlay-suspect role encountered during the walk regardless of whether
+/// it won). Stdout (the JSON dump payload) is unchanged.
 func findDeviceContentRecursively(_ window: AXUIElement, maxDepth: Int = 8) -> (element: AXUIElement, originX: Double, originY: Double)? {
     let expected = expectedContentRect(window: window)
     var best: ContentCandidate? = nil
     var earlyExit = false
+    // Issue #660 PR C: track all scored candidates so the top-N can be
+    // emitted on `--debug`. Bounded by `WALKER_DEBUG_CANDIDATE_CAP` to
+    // keep the recursion's memory footprint flat in the worst case.
+    var allCandidates: [ContentCandidate] = []
+    var overlaySuspects: [[String: Any]] = []
 
     func visit(_ element: AXUIElement, depth: Int) {
         if earlyExit { return }
@@ -632,6 +686,21 @@ func findDeviceContentRecursively(_ window: AXUIElement, maxDepth: Int = 8) -> (
         let role = getStringAttr(element, kAXRoleAttribute as String) ?? ""
         let label = getStringAttr(element, kAXTitleAttribute as String)
             ?? getStringAttr(element, kAXDescriptionAttribute as String)
+
+        // Issue #660 PR C: record overlay-suspect roles before any reject /
+        // recurse logic so we capture them even when the walk later
+        // skips the node (e.g. the chrome reject branch). Capped to
+        // bound stderr volume on degenerate trees.
+        if debugEnabled
+            && OverlaySuspectRoles.contains(role)
+            && overlaySuspects.count < WALKER_DEBUG_OVERLAY_CAP
+        {
+            overlaySuspects.append([
+                "depth": depth,
+                "role": role,
+                "label": label ?? NSNull(),
+            ])
+        }
 
         if depth > 0 {
             if role == "AXMenuBar" || role == "AXWindow" { return }
@@ -643,8 +712,14 @@ func findDeviceContentRecursively(_ window: AXUIElement, maxDepth: Int = 8) -> (
             let candidate = ContentCandidate(
                 element: element,
                 score: scored.score,
-                appSemanticsCount: scored.appSemanticsCount
+                appSemanticsCount: scored.appSemanticsCount,
+                role: role,
+                label: label,
+                depth: depth
             )
+            if debugEnabled && allCandidates.count < WALKER_DEBUG_CANDIDATE_CAP {
+                allCandidates.append(candidate)
+            }
             if best == nil || candidate.score > best!.score {
                 best = candidate
             }
@@ -664,6 +739,15 @@ func findDeviceContentRecursively(_ window: AXUIElement, maxDepth: Int = 8) -> (
 
     visit(window, depth: 0)
 
+    if debugEnabled {
+        emitWalkerDiagnostics(
+            candidates: allCandidates,
+            overlaySuspects: overlaySuspects,
+            winner: best,
+            earlyExit: earlyExit
+        )
+    }
+
     guard let winner = best else { return nil }
     if winner.appSemanticsCount == 0 {
         return nil
@@ -671,6 +755,50 @@ func findDeviceContentRecursively(_ window: AXUIElement, maxDepth: Int = 8) -> (
 
     let pos = getPosition(winner.element) ?? (0, 0)
     return (winner.element, pos.0, pos.1)
+}
+
+/// Issue #660 PR C: bounds for `--debug`-only walker diagnostics. Picked
+/// so a degenerate tree cannot blow stderr volume past a few KB.
+let WALKER_DEBUG_CANDIDATE_CAP = 256
+let WALKER_DEBUG_TOP_CANDIDATES = 5
+let WALKER_DEBUG_OVERLAY_CAP = 32
+
+private func emitWalkerDiagnostics(
+    candidates: [ContentCandidate],
+    overlaySuspects: [[String: Any]],
+    winner: ContentCandidate?,
+    earlyExit: Bool
+) {
+    let sorted = candidates.sorted { $0.score > $1.score }
+    let top = sorted.prefix(WALKER_DEBUG_TOP_CANDIDATES).map { c -> [String: Any] in
+        return [
+            "depth": c.depth,
+            "role": c.role,
+            "label": c.label ?? NSNull(),
+            "score": c.score,
+            "appSemanticsCount": c.appSemanticsCount,
+        ]
+    }
+    debugLog("walker_top_candidates", [
+        "totalCandidates": candidates.count,
+        "earlyExit": earlyExit,
+        "top": top,
+    ])
+    debugLog("walker_overlay_roles_seen", [
+        "count": overlaySuspects.count,
+        "samples": overlaySuspects,
+    ])
+    if let w = winner {
+        debugLog("walker_winner", [
+            "depth": w.depth,
+            "role": w.role,
+            "label": w.label ?? NSNull(),
+            "score": w.score,
+            "appSemanticsCount": w.appSemanticsCount,
+        ])
+    } else {
+        debugLog("walker_winner_none")
+    }
 }
 
 // MARK: - Query Matching
