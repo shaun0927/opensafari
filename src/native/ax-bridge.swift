@@ -88,6 +88,13 @@ struct QueryResultJSON: Codable {
     // results into typed APP_CONTENT_NOT_EXPOSED instead of issuing a
     // second native dump call.
     let chromeOnly: Bool
+    // Issue #693 WU3-prep (gemini PR #695 follow-up): emit the device-
+    // content-root size in macOS-pt on query results too, so a caller that
+    // uses `query` to find an element and then performs a coordinate-based
+    // tap does not need to issue a separate `dump` just to retrieve the
+    // conversion factor. Optional for forward compatibility with older
+    // wrappers.
+    let deviceContentMacOSPt: SizeJSON?
 }
 
 struct QueryJSON: Codable {
@@ -107,12 +114,18 @@ struct ErrorJSON: Codable {
 /// `chromeOnly` flag the wrapper relies on for query/dump promotion. The
 /// wrapper inspects this field to decide whether to upgrade the response
 /// to APP_CONTENT_NOT_EXPOSED.
+///
+/// Issue #693 WU3-prep (gemini PR #695 follow-up): also carries
+/// `deviceContentMacOSPt` so a caller that wants to retry the operation
+/// at coordinate level (after a chrome-only or transient miss) has the
+/// conversion factor without issuing a separate dump.
 struct InspectNotFoundJSON: Codable {
     let error: String
     let code: String
     let path: String
     let found: Bool
     let chromeOnly: Bool
+    let deviceContentMacOSPt: SizeJSON?
 }
 
 /// Uniform response for `ax-bridge press`.
@@ -1156,12 +1169,18 @@ func main() {
         // Issue #41: compute chromeOnly against the same content tree the
         // query was evaluated against, eliminating the depth-mismatch and
         // race-window failure modes of the previous double-dump probe.
+        // Issue #693 WU3-prep (gemini PR #695 follow-up): also emit the
+        // device-content-root size in macOS-pt so a caller that uses
+        // `query` to find an element and then performs a coordinate-based
+        // tap does not need to issue a separate `dump` for the conversion
+        // factor.
         let result = QueryResultJSON(
             matches: matches,
             total: matches.count,
             query: queryInfo,
             ambiguous: matches.count > 1 && args["id"] != nil,
-            chromeOnly: isChromeOnlyContent(tree)
+            chromeOnly: isChromeOnlyContent(tree),
+            deviceContentMacOSPt: deviceContentSizeJSON
         )
         outputJSON(result)
 
@@ -1183,12 +1202,18 @@ func main() {
                 code: "ELEMENT_NOT_FOUND",
                 path: path,
                 found: false,
-                chromeOnly: isChromeOnlyContent(tree)
+                chromeOnly: isChromeOnlyContent(tree),
+                deviceContentMacOSPt: deviceContentSizeJSON
             ))
             exit(1)
         }
         // Re-dump with full children for this node
         node.chromeOnly = isChromeOnlyContent(tree)
+        // Issue #693 WU3-prep (gemini PR #695 follow-up): also emit the
+        // device-content-root size in macOS-pt on `inspect` so a caller
+        // that uses inspect to navigate to an element and then performs a
+        // coordinate tap does not need a separate dump.
+        node.deviceContentMacOSPt = deviceContentSizeJSON
         outputJSON(node)
 
     case "press":

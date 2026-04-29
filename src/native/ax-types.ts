@@ -72,6 +72,14 @@ export interface AXQueryResult {
   query: AXQuery;
   /** Whether the query was ambiguous (multiple matches when one expected) */
   ambiguous: boolean;
+  /**
+   * Issue #693 WU3-prep: device-content-root size in macOS-screen-points,
+   * mirrored from the dump root. Lets a caller that uses `query` to find
+   * an element and then performs a coordinate-based tap derive the
+   * macOS-pt → iOS-pt conversion factor without issuing a separate
+   * `dump`.
+   */
+  deviceContentMacOSPt?: { width: number; height: number };
 }
 
 /** Options for tree dump */
