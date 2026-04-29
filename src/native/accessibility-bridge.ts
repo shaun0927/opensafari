@@ -18,6 +18,35 @@ const DEFAULT_MAX_DEPTH = 10;
 const DEFAULT_MAX_RESULTS = 50;
 const DEFAULT_TIMEOUT_MS = 15_000;
 
+/**
+ * Maximum characters retained per line in the diagnostic tails on the
+ * `BRIDGE_EXEC_FAILED` path. The bridge runs with `maxBuffer: 10 MB` so a
+ * degenerate single-line output could otherwise produce a multi-megabyte
+ * error message. 512 chars is roughly one terminal screen and enough to
+ * carry a stack frame, a `swiftc` diagnostic, or a JSON fragment without
+ * blowing log volume.
+ */
+const STREAM_TAIL_MAX_LINES = 5;
+const STREAM_TAIL_MAX_LINE_LENGTH = 512;
+
+function formatStreamTail(label: string, value: string | undefined): string {
+  if (!value) return '';
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return '';
+  const truncated = trimmed
+    .split('\n')
+    .slice(-STREAM_TAIL_MAX_LINES)
+    .map((line) =>
+      line.length > STREAM_TAIL_MAX_LINE_LENGTH
+        ? `${line.slice(0, STREAM_TAIL_MAX_LINE_LENGTH)}…[+${
+            line.length - STREAM_TAIL_MAX_LINE_LENGTH
+          } chars]`
+        : line,
+    )
+    .join(' / ');
+  return ` | ${label}: ${truncated}`;
+}
+
 export interface AccessibilityBridgeOptions {
   /**
    * Pre-resolve the bridge path, bypassing the filesystem search.
@@ -112,11 +141,21 @@ export class AccessibilityBridge {
       cmdArgs = args;
     }
 
+    // Captured outside the inner `try` so the SyntaxError path on
+    // `JSON.parse(stdout)` can still surface diagnostic tails — Node's
+    // `SyntaxError` does not carry stdout/stderr, so without this the
+    // catch block would degrade to `BRIDGE_EXEC_FAILED: SyntaxError …`
+    // with no clue what the bridge actually printed.
+    let capturedStdout: string | undefined;
+    let capturedStderr: string | undefined;
+
     try {
       const { stdout, stderr } = await execFileAsync(cmd, cmdArgs, {
         timeout: DEFAULT_TIMEOUT_MS,
         maxBuffer: 10 * 1024 * 1024, // 10MB for large trees
       });
+      capturedStdout = stdout;
+      capturedStderr = stderr;
 
       if (stderr) {
         console.error(`[ax-bridge] ${stderr.trim()}`);
@@ -133,7 +172,12 @@ export class AccessibilityBridge {
     } catch (err) {
       if (err instanceof AccessibilityBridgeError) throw err;
 
-      const error = err as Error & { stderr?: string; code?: string; killed?: boolean };
+      const error = err as Error & {
+        stdout?: string;
+        stderr?: string;
+        code?: string;
+        killed?: boolean;
+      };
 
       if (error.killed) {
         throw new AccessibilityBridgeError(
@@ -142,28 +186,54 @@ export class AccessibilityBridge {
         );
       }
 
-      // Try to parse error JSON from stderr
-      if (error.stderr) {
+      // Prefer the captured streams (populated only on the resolve path
+      // before `JSON.parse` throws) over `error.stdout/stderr` (populated
+      // by Node when `execFile` rejects with non-zero exit). Either source
+      // gives us actual bridge output; both are undefined for unrelated
+      // errors (e.g. spawn failure, ENOENT).
+      const stdoutForDiag = error.stdout ?? capturedStdout;
+      const stderrForDiag = error.stderr ?? capturedStderr;
+
+      // Issue #693 WU1: the bridge writes its structured ErrorJSON
+      // (`{ error, code }`) to STDOUT and then `exit(1)`, NOT to stderr —
+      // see `outputError()` in `src/native/ax-bridge.swift`. The previous
+      // implementation only inspected `error.stderr` here, so every typed
+      // bridge error (DEVICE_CONTENT_ROOT_EMPTY, DEVICE_RESOLUTION_FAILED,
+      // SIMULATOR_NOT_RUNNING, etc.) collapsed to the generic
+      // `Command failed: <cmd>` tail and the caller could not branch on
+      // `code`. Try stdout first; keep stderr as a fallback so legacy
+      // callers that emit JSON on stderr (or `swift` interpreter compile
+      // errors) still surface cleanly.
+      const structuredCandidates = [stdoutForDiag, stderrForDiag];
+      for (const candidate of structuredCandidates) {
+        if (!candidate) continue;
         try {
-          const errJson = JSON.parse(error.stderr);
-          if (errJson.error) {
-            throw new AccessibilityBridgeError(errJson.error, errJson.code ?? 'AX_ERROR');
+          const errJson = JSON.parse(candidate);
+          if (errJson && typeof errJson === 'object' && typeof errJson.error === 'string') {
+            throw new AccessibilityBridgeError(
+              errJson.error,
+              typeof errJson.code === 'string' ? errJson.code : 'AX_ERROR',
+            );
           }
         } catch (parseErr) {
           if (parseErr instanceof AccessibilityBridgeError) throw parseErr;
-          // Not JSON, fall through to surface raw stderr below.
+          // Not JSON — fall through and try the next stream.
         }
       }
 
-      // Include the bridge's stderr tail in the thrown message. Without this
-      // the caller only sees `Command failed: <cmd>` and every CI failure
-      // looks identical regardless of root cause (unsigned binary, missing
-      // TCC, simulator not booted, swift interpreter compile error, etc.).
-      const stderrTail = error.stderr
-        ? ` | stderr: ${error.stderr.trim().split('\n').slice(-5).join(' / ')}`
-        : '';
+      // Include both stdout and stderr tails in the thrown message so the
+      // caller sees the same diagnostic shape regardless of which stream
+      // the bridge wrote to. Without this the message degrades to
+      // `Command failed: <cmd>` and every CI failure looks identical
+      // regardless of root cause (unsigned binary, missing TCC, simulator
+      // not booted, swift interpreter compile error, etc.). Per-line
+      // truncation prevents a single mega-line from exploding the error
+      // message — `maxBuffer` is 10 MB and a degenerate dump on a deep
+      // tree could fill it.
       throw new AccessibilityBridgeError(
-        `ax-bridge failed (${cmd}): ${error.message}${stderrTail}`,
+        `ax-bridge failed (${cmd}): ${error.message}` +
+          formatStreamTail('stdout', stdoutForDiag) +
+          formatStreamTail('stderr', stderrForDiag),
         'BRIDGE_EXEC_FAILED',
       );
     }
