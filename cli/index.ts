@@ -234,7 +234,7 @@ program
   .command('audit')
   .description('Run QA audit and export results in CI-friendly formats')
   .requiredOption('--url <url>', 'URL to audit')
-  .option('--port <port>', 'WebKit debug proxy device port (default: 9322 or $OPENSAFARI_WEBKIT_DEBUG_PORT)', (v) => parseInt(v, 10))
+  .option('--port <port>', 'WebKit debug proxy device port (default: 9322 or $OPENSAFARI_PROXY_PORT)', (v) => parseInt(v, 10))
   .option('--host <host>', 'WebKit debug proxy host', 'localhost')
   .option('--no-spawn-proxy', 'Do not auto-spawn ios_webkit_debug_proxy; assume one is already running')
   .option('--format <format>', 'Output format: markdown, junit, json', 'markdown')
@@ -250,10 +250,16 @@ program
     const { WebKitClient } = await import('../src/webkit/client');
     const { WebInspectorProxy } = await import('../src/simulator/proxy');
 
-    const envPort = process.env.OPENSAFARI_WEBKIT_DEBUG_PORT
-      ? parseInt(process.env.OPENSAFARI_WEBKIT_DEBUG_PORT, 10)
-      : undefined;
-    const port: number = options.port ?? (envPort && !Number.isNaN(envPort) ? envPort : 9322);
+    // Prefer the existing OPENSAFARI_PROXY_PORT env var (also honored by
+    // WebInspectorProxy) so audit picks up the same value as `serve` in
+    // CI / port-conflict setups.
+    const envPortRaw = process.env.OPENSAFARI_PROXY_PORT;
+    const envPort = envPortRaw ? parseInt(envPortRaw, 10) : undefined;
+    const port: number = options.port ?? (envPort !== undefined && !Number.isNaN(envPort) ? envPort : 9322);
+    if (Number.isNaN(port)) {
+      console.error(`Error: Invalid port value: ${options.port ?? envPortRaw}`);
+      process.exit(1);
+    }
     const host: string = options.host;
 
     // Auto-spawn proxy when targeting localhost unless --no-spawn-proxy is set.

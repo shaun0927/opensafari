@@ -4,7 +4,8 @@ import * as http from 'http';
 import { findSocketPath } from './socket-finder';
 
 const execFileAsync = promisify(execFile);
-// Device-list ports serve the "iOS Devices" HTML listing.
+// Device-list ports serve the JSON device list (and an HTML listing under the
+// default frontend). We probe via /json so the check works under -F mode too.
 // 9321 = opensafari default, 9221 = traditional ios_webkit_debug_proxy default.
 const PROXY_DEVICE_LIST_PORTS = [9321, 9221];
 // Device ports serve JSON target lists when a simulator device is connected.
@@ -149,8 +150,10 @@ async function findWebInspectorSocket(): Promise<string | undefined> {
  */
 async function checkProxyReachable(): Promise<{ reachable: boolean; port?: number }> {
   for (const port of PROXY_DEVICE_LIST_PORTS) {
-    // Device-list /json contains an array of {"deviceId": ...} entries.
-    const ok = await httpProbe(port, '/json', '"deviceId"');
+    // /json always returns a JSON array (possibly empty when no simulator is
+    // connected). Match the leading `[` so an alive-but-empty proxy still
+    // reports reachable, matching the previous HTML probe's semantics.
+    const ok = await httpProbe(port, '/json', '[');
     if (ok) return { reachable: true, port };
   }
   return { reachable: false };
