@@ -22,6 +22,7 @@ import { setBlockedDomains } from '../src/security/domain-guard';
 import { EventLoopMonitor, setGlobalEventLoopMonitor } from '../src/watchdog/event-loop-monitor';
 import { SimulatorMonitor } from '../src/watchdog/simulator-monitor';
 import { AuthManager } from '../src/auth';
+import { parseAuditProxyPort, resolveAuditProxyPort } from '../src/cli/audit-port';
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const pkg = require('../package.json');
@@ -234,7 +235,7 @@ program
   .command('audit')
   .description('Run QA audit and export results in CI-friendly formats')
   .requiredOption('--url <url>', 'URL to audit')
-  .option('--port <port>', 'WebKit debug proxy device port (default: 9322 or $OPENSAFARI_PROXY_PORT)', (v) => parseInt(v, 10))
+  .option('--port <port>', 'WebKit debug proxy device port (default: 9322 or $OPENSAFARI_PROXY_PORT)', parseAuditProxyPort)
   .option('--host <host>', 'WebKit debug proxy host', 'localhost')
   .option('--no-spawn-proxy', 'Do not auto-spawn ios_webkit_debug_proxy; assume one is already running')
   .option('--format <format>', 'Output format: markdown, junit, json', 'markdown')
@@ -253,13 +254,7 @@ program
     // Prefer the existing OPENSAFARI_PROXY_PORT env var (also honored by
     // WebInspectorProxy) so audit picks up the same value as `serve` in
     // CI / port-conflict setups.
-    const envPortRaw = process.env.OPENSAFARI_PROXY_PORT;
-    const envPort = envPortRaw ? parseInt(envPortRaw, 10) : undefined;
-    const port: number = options.port ?? (envPort !== undefined && !Number.isNaN(envPort) ? envPort : 9322);
-    if (Number.isNaN(port)) {
-      console.error(`Error: Invalid port value: ${options.port ?? envPortRaw}`);
-      process.exit(1);
-    }
+    const port: number = resolveAuditProxyPort(options.port, process.env.OPENSAFARI_PROXY_PORT);
     const host: string = options.host;
 
     // Auto-spawn proxy when targeting localhost unless --no-spawn-proxy is set.
@@ -267,13 +262,40 @@ program
     const shouldSpawn = options.spawnProxy !== false && host === 'localhost';
 
     let proxy: InstanceType<typeof WebInspectorProxy> | undefined;
+    let client: InstanceType<typeof WebKitClient> | undefined;
+    let preSpawnError: unknown;
+
     if (shouldSpawn) {
+      // Preserve compatibility with the documented device-port-only setup:
+      //   ios_webkit_debug_proxy -c "$UDID":9322
+      // In that mode the derived device-list port (9321) is closed, so
+      // WebInspectorProxy.start() cannot detect reuse and would fail with
+      // "port in use". Try the normal audit connection first; only spawn if
+      // nothing is listening/useful on the configured device port.
+      client = new WebKitClient({ host, port });
+      try {
+        await client.connect();
+      } catch (err) {
+        preSpawnError = err;
+        await client.disconnect().catch(() => { /* ignore */ });
+        client = undefined;
+      }
+    }
+
+    const existingProxyWithoutTargets = preSpawnError instanceof Error
+      && preSpawnError.message.includes('No Safari targets found');
+
+    if (shouldSpawn && !client && !existingProxyWithoutTargets) {
       proxy = new WebInspectorProxy({ port });
       try {
         await proxy.start();
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
+        const previous = preSpawnError instanceof Error ? preSpawnError.message : undefined;
         console.error(`Error: Could not start ios_webkit_debug_proxy on port ${port}. ${msg}`);
+        if (previous) {
+          console.error(`Previous connection attempt at ${host}:${port} also failed: ${previous}`);
+        }
         console.error('Hint: ensure a simulator is booted (xcrun simctl boot <device>) and ios-webkit-debug-proxy is installed (brew install ios-webkit-debug-proxy).');
         // start() may have spawned the child and registered a ref before
         // throwing (e.g. waitForReady timeout). Tear it down so we don't
@@ -283,10 +305,11 @@ program
       }
     }
 
-    let client: InstanceType<typeof WebKitClient> | undefined;
     try {
-      client = new WebKitClient({ host, port });
-      await client.connect();
+      client ??= new WebKitClient({ host, port });
+      if (!client.isConnected()) {
+        await client.connect();
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error(`Error: Could not connect to Safari at ${host}:${port}. ${msg}`);
