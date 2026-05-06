@@ -275,6 +275,10 @@ program
         const msg = err instanceof Error ? err.message : String(err);
         console.error(`Error: Could not start ios_webkit_debug_proxy on port ${port}. ${msg}`);
         console.error('Hint: ensure a simulator is booted (xcrun simctl boot <device>) and ios-webkit-debug-proxy is installed (brew install ios-webkit-debug-proxy).');
+        // start() may have spawned the child and registered a ref before
+        // throwing (e.g. waitForReady timeout). Tear it down so we don't
+        // leak the proxy process or the ref file into the next run.
+        await proxy.stop().catch(() => { /* ignore */ });
         process.exit(1);
       }
     }
