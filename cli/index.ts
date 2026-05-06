@@ -234,6 +234,9 @@ program
   .command('audit')
   .description('Run QA audit and export results in CI-friendly formats')
   .requiredOption('--url <url>', 'URL to audit')
+  .option('--port <port>', 'WebKit debug proxy device port (default: 9322 or $OPENSAFARI_WEBKIT_DEBUG_PORT)', (v) => parseInt(v, 10))
+  .option('--host <host>', 'WebKit debug proxy host', 'localhost')
+  .option('--no-spawn-proxy', 'Do not auto-spawn ios_webkit_debug_proxy; assume one is already running')
   .option('--format <format>', 'Output format: markdown, junit, json', 'markdown')
   .option('--output <path>', 'Write report to file instead of stdout')
   .option('--fail-on-high', 'Exit with code 1 if high-severity issues found')
@@ -245,49 +248,85 @@ program
     const { generateAuditJUnit } = await import('../src/qa/report-junit');
     const { generateAuditJSON } = await import('../src/qa/report-json');
     const { WebKitClient } = await import('../src/webkit/client');
+    const { WebInspectorProxy } = await import('../src/simulator/proxy');
+
+    const envPort = process.env.OPENSAFARI_WEBKIT_DEBUG_PORT
+      ? parseInt(process.env.OPENSAFARI_WEBKIT_DEBUG_PORT, 10)
+      : undefined;
+    const port: number = options.port ?? (envPort && !Number.isNaN(envPort) ? envPort : 9322);
+    const host: string = options.host;
+
+    // Auto-spawn proxy when targeting localhost unless --no-spawn-proxy is set.
+    // For non-localhost hosts the user is bringing their own proxy, so we never spawn.
+    const shouldSpawn = options.spawnProxy !== false && host === 'localhost';
+
+    let proxy: InstanceType<typeof WebInspectorProxy> | undefined;
+    if (shouldSpawn) {
+      proxy = new WebInspectorProxy({ port });
+      try {
+        await proxy.start();
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`Error: Could not start ios_webkit_debug_proxy on port ${port}. ${msg}`);
+        console.error('Hint: ensure a simulator is booted (xcrun simctl boot <device>) and ios-webkit-debug-proxy is installed (brew install ios-webkit-debug-proxy).');
+        process.exit(1);
+      }
+    }
 
     let client: InstanceType<typeof WebKitClient> | undefined;
     try {
-      client = new WebKitClient({ host: 'localhost', port: 9322 });
+      client = new WebKitClient({ host, port });
       await client.connect();
-    } catch {
-      console.error('Error: Could not connect to Safari. Ensure a simulator is booted and ios-webkit-debug-proxy is running.');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`Error: Could not connect to Safari at ${host}:${port}. ${msg}`);
+      if (!shouldSpawn) {
+        console.error('Hint: ensure ios_webkit_debug_proxy is running on the configured port, or omit --no-spawn-proxy to auto-spawn it.');
+      }
+      if (proxy) await proxy.stop().catch(() => { /* ignore */ });
       process.exit(1);
     }
 
-    const audit = new QAAudit(client);
-    const report = await audit.runFullAudit(options.url);
-    const history = new QAHistory();
-    await history.save(report);
+    try {
+      const audit = new QAAudit(client);
+      const report = await audit.runFullAudit(options.url);
+      const history = new QAHistory();
+      await history.save(report);
 
-    let output: string;
-    switch (options.format) {
-      case 'junit':
-        output = generateAuditJUnit(report);
-        break;
-      case 'json':
-        output = JSON.stringify(generateAuditJSON(report), null, 2);
-        break;
-      default:
-        output = generateAuditMarkdown(report);
+      let output: string;
+      switch (options.format) {
+        case 'junit':
+          output = generateAuditJUnit(report);
+          break;
+        case 'json':
+          output = JSON.stringify(generateAuditJSON(report), null, 2);
+          break;
+        default:
+          output = generateAuditMarkdown(report);
+      }
+
+      if (options.output) {
+        const fs = await import('fs/promises');
+        await fs.writeFile(options.output, output, 'utf-8');
+        console.error(`Report written to ${options.output}`);
+      } else {
+        console.log(output);
+      }
+
+      const exitCode = history.getExitCode(report, {
+        failOnCritical: true,
+        failOnHigh: !!options.failOnHigh,
+        minScore: options.minScore,
+      });
+
+      await client.disconnect();
+      if (proxy) await proxy.stop();
+      process.exit(exitCode);
+    } catch (err) {
+      if (client) await client.disconnect().catch(() => { /* ignore */ });
+      if (proxy) await proxy.stop().catch(() => { /* ignore */ });
+      throw err;
     }
-
-    if (options.output) {
-      const fs = await import('fs/promises');
-      await fs.writeFile(options.output, output, 'utf-8');
-      console.error(`Report written to ${options.output}`);
-    } else {
-      console.log(output);
-    }
-
-    const exitCode = history.getExitCode(report, {
-      failOnCritical: true,
-      failOnHigh: !!options.failOnHigh,
-      minScore: options.minScore,
-    });
-
-    await client.disconnect();
-    process.exit(exitCode);
   });
 
 program.parse();

@@ -142,12 +142,15 @@ async function findWebInspectorSocket(): Promise<string | undefined> {
 
 /**
  * Try to reach ios_webkit_debug_proxy on known device-list and device ports.
- * Device-list ports serve an HTML page containing "iOS Devices".
- * Device ports serve JSON target lists when a device is connected.
+ *
+ * The probes hit `/json` rather than `/` so they work in both default and
+ * `-F` (no-frontend) modes — `/` serves the HTML DevTools UI which is omitted
+ * under `-F`, but `/json` always returns the JSON device/target list.
  */
 async function checkProxyReachable(): Promise<{ reachable: boolean; port?: number }> {
   for (const port of PROXY_DEVICE_LIST_PORTS) {
-    const ok = await httpProbe(port, 'iOS Devices');
+    // Device-list /json contains an array of {"deviceId": ...} entries.
+    const ok = await httpProbe(port, '/json', '"deviceId"');
     if (ok) return { reachable: true, port };
   }
   return { reachable: false };
@@ -159,15 +162,15 @@ async function checkProxyReachable(): Promise<{ reachable: boolean; port?: numbe
  */
 async function checkDevicePortReachable(): Promise<{ reachable: boolean; port?: number }> {
   for (const port of PROXY_DEVICE_PORTS) {
-    const ok = await httpProbe(port, '[');
+    const ok = await httpProbe(port, '/json', '[');
     if (ok) return { reachable: true, port };
   }
   return { reachable: false };
 }
 
-function httpProbe(port: number, expectedBody: string): Promise<boolean> {
+function httpProbe(port: number, path: string, expectedBody: string): Promise<boolean> {
   return new Promise((resolve) => {
-    const req = http.get(`http://localhost:${port}`, { timeout: 2000 }, (res) => {
+    const req = http.get(`http://localhost:${port}${path}`, { timeout: 2000 }, (res) => {
       let body = '';
       res.on('data', (chunk: Buffer) => { body += chunk.toString(); });
       res.on('end', () => { resolve(body.includes(expectedBody)); });
