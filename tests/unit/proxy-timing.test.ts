@@ -32,6 +32,7 @@ import { WebKitClient } from '../../src/webkit/client';
 type ProxyPrivate = {
   waitForForwarding(timeout?: number): Promise<void>;
   waitForReady(timeout?: number): Promise<void>;
+  isProxyHealthy(): Promise<boolean>;
   httpGet(url: string): Promise<string>;
 };
 
@@ -140,6 +141,22 @@ describe('WebInspectorProxy initialization timing', () => {
       );
     });
 
+    it('does not treat an empty target list as forwarding-ready but resolves with warning after timeout', async () => {
+      httpGetSpy = jest
+        .spyOn(privateProxy(proxy) as unknown as { httpGet: (url: string) => Promise<string> }, 'httpGet')
+        .mockResolvedValue('[]');
+
+      jest.useFakeTimers();
+      const forwardingPromise = privateProxy(proxy).waitForForwarding(2000);
+      await jest.advanceTimersByTimeAsync(3000);
+
+      await expect(forwardingPromise).resolves.toBeUndefined();
+      expect(httpGetSpy).toHaveBeenCalledWith(`http://localhost:${proxy.port}/json`);
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Forwarding port not ready within timeout'),
+      );
+    });
+
     it('polls the correct forwarding port URL', async () => {
       const capturedUrls: string[] = [];
       httpGetSpy = jest
@@ -156,16 +173,16 @@ describe('WebInspectorProxy initialization timing', () => {
   });
 
   describe('waitForReady', () => {
-    it('resolves when device-list port returns "iOS Devices"', async () => {
+    it('resolves when device-list /json returns a JSON array', async () => {
       httpGetSpy = jest
         .spyOn(privateProxy(proxy) as unknown as { httpGet: (url: string) => Promise<string> }, 'httpGet')
-        .mockResolvedValue('<html>iOS Devices</html>');
+        .mockResolvedValue('[]');
 
       await expect(privateProxy(proxy).waitForReady(5000)).resolves.toBeUndefined();
       expect(httpGetSpy).toHaveBeenCalledTimes(1);
     });
 
-    it('throws when timeout expires without "iOS Devices" response', async () => {
+    it('throws when timeout expires without a JSON-array response', async () => {
       jest.useFakeTimers();
 
       httpGetSpy = jest
@@ -182,18 +199,37 @@ describe('WebInspectorProxy initialization timing', () => {
       await assertion;
     });
 
-    it('polls the device-list port URL', async () => {
+    it('polls the device-list /json URL', async () => {
       const capturedUrls: string[] = [];
       httpGetSpy = jest
         .spyOn(privateProxy(proxy) as unknown as { httpGet: (url: string) => Promise<string> }, 'httpGet')
         .mockImplementation(async (url: string) => {
           capturedUrls.push(url);
-          return 'iOS Devices';
+          return '[]';
         });
 
       await privateProxy(proxy).waitForReady(5000);
 
-      expect(capturedUrls[0]).toBe(`http://localhost:${proxy.deviceListPort}`);
+      expect(capturedUrls[0]).toBe(`http://localhost:${proxy.deviceListPort}/json`);
+    });
+  });
+
+  describe('isProxyHealthy', () => {
+    it('probes device-list /json and accepts an empty JSON array under -F mode', async () => {
+      httpGetSpy = jest
+        .spyOn(privateProxy(proxy) as unknown as { httpGet: (url: string) => Promise<string> }, 'httpGet')
+        .mockResolvedValue('[]');
+
+      await expect(privateProxy(proxy).isProxyHealthy()).resolves.toBe(true);
+      expect(httpGetSpy).toHaveBeenCalledWith(`http://localhost:${proxy.deviceListPort}/json`);
+    });
+
+    it('rejects non-array device-list responses', async () => {
+      jest
+        .spyOn(privateProxy(proxy) as unknown as { httpGet: (url: string) => Promise<string> }, 'httpGet')
+        .mockResolvedValue('<html>iOS Devices</html>');
+
+      await expect(privateProxy(proxy).isProxyHealthy()).resolves.toBe(false);
     });
   });
 });

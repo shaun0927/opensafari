@@ -4,7 +4,8 @@ import * as http from 'http';
 import { findSocketPath } from './socket-finder';
 
 const execFileAsync = promisify(execFile);
-// Device-list ports serve the "iOS Devices" HTML listing.
+// Device-list ports serve the JSON device list (and an HTML listing under the
+// default frontend). We probe via /json so the check works under -F mode too.
 // 9321 = opensafari default, 9221 = traditional ios_webkit_debug_proxy default.
 const PROXY_DEVICE_LIST_PORTS = [9321, 9221];
 // Device ports serve JSON target lists when a simulator device is connected.
@@ -142,12 +143,17 @@ async function findWebInspectorSocket(): Promise<string | undefined> {
 
 /**
  * Try to reach ios_webkit_debug_proxy on known device-list and device ports.
- * Device-list ports serve an HTML page containing "iOS Devices".
- * Device ports serve JSON target lists when a device is connected.
+ *
+ * The probes hit `/json` rather than `/` so they work in both default and
+ * `-F` (no-frontend) modes — `/` serves the HTML DevTools UI which is omitted
+ * under `-F`, but `/json` always returns the JSON device/target list.
  */
 async function checkProxyReachable(): Promise<{ reachable: boolean; port?: number }> {
   for (const port of PROXY_DEVICE_LIST_PORTS) {
-    const ok = await httpProbe(port, 'iOS Devices');
+    // /json always returns a JSON array (possibly empty when no simulator is
+    // connected). Match the leading `[` so an alive-but-empty proxy still
+    // reports reachable, matching the previous HTML probe's semantics.
+    const ok = await httpProbe(port, '/json', '[');
     if (ok) return { reachable: true, port };
   }
   return { reachable: false };
@@ -159,15 +165,15 @@ async function checkProxyReachable(): Promise<{ reachable: boolean; port?: numbe
  */
 async function checkDevicePortReachable(): Promise<{ reachable: boolean; port?: number }> {
   for (const port of PROXY_DEVICE_PORTS) {
-    const ok = await httpProbe(port, '[');
+    const ok = await httpProbe(port, '/json', '[');
     if (ok) return { reachable: true, port };
   }
   return { reachable: false };
 }
 
-function httpProbe(port: number, expectedBody: string): Promise<boolean> {
+function httpProbe(port: number, path: string, expectedBody: string): Promise<boolean> {
   return new Promise((resolve) => {
-    const req = http.get(`http://localhost:${port}`, { timeout: 2000 }, (res) => {
+    const req = http.get(`http://localhost:${port}${path}`, { timeout: 2000 }, (res) => {
       let body = '';
       res.on('data', (chunk: Buffer) => { body += chunk.toString(); });
       res.on('end', () => { resolve(body.includes(expectedBody)); });
