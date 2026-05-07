@@ -137,12 +137,10 @@ export class BrowserCommands {
   async screenshot(options?: ScreenshotOptions): Promise<Buffer> {
     try {
       // Try WebKit Protocol: Page.snapshotRect (NEVER Page.captureScreenshot)
-      // Get viewport dimensions first
-      const viewport = await this.evaluate<{ w: number; h: number }>(
-        '({w: window.innerWidth, h: window.innerHeight})',
+      // Only fetch viewport dimensions when no clip is provided to avoid an extra roundtrip.
+      const clip = options?.clip ?? await this.evaluate<{ x: number; y: number; width: number; height: number }>(
+        '({x: 0, y: 0, width: window.innerWidth, height: window.innerHeight})',
       );
-
-      const clip = options?.clip ?? { x: 0, y: 0, width: viewport.w, height: viewport.h };
 
       const result = await this.sender.send<{ dataURL: string }>('Page.snapshotRect', {
         x: clip.x,
@@ -158,9 +156,9 @@ export class BrowserCommands {
         throw new Error('Invalid dataURL from Page.snapshotRect');
       }
       return Buffer.from(base64Data, 'base64');
-    } catch {
-      // Fallback: return empty buffer (simctl screenshot handled at higher level)
-      throw new Error('Screenshot failed — use SimulatorManager.screenshot() as fallback');
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      throw new Error(`Screenshot failed: ${reason} — use SimulatorManager.screenshot() as fallback`);
     }
   }
 
@@ -259,7 +257,12 @@ export class BrowserCommands {
       'Space': { key: ' ', code: 'Space', keyCode: 32 },
     };
 
-    const mapped = keyMap[key] ?? { key, code: 'Key' + key.toUpperCase(), keyCode: key.charCodeAt(0) };
+    const fallbackCode = /^[0-9]$/.test(key)
+      ? `Digit${key}`
+      : /^[a-zA-Z]$/.test(key)
+        ? `Key${key.toUpperCase()}`
+        : '';
+    const mapped = keyMap[key] ?? { key, code: fallbackCode, keyCode: key.charCodeAt(0) };
     const keyJson = JSON.stringify(mapped.key);
     const codeJson = JSON.stringify(mapped.code);
 
@@ -319,8 +322,9 @@ export class BrowserCommands {
     try {
       const result = await this.sender.send<{ cookies: Array<Record<string, unknown>> }>('Page.getCookies');
       if (result?.cookies) {
+        const wanted = domain?.replace(/^\./, '');
         return result.cookies
-          .filter(c => !domain || (c.domain as string || '').includes(domain))
+          .filter(c => !wanted || ((c.domain as string) || '').replace(/^\./, '') === wanted)
           .map(c => ({
             name: (c.name as string) || '',
             value: (c.value as string) || '',
@@ -386,9 +390,13 @@ export class BrowserCommands {
     try {
       const cookies = await this.getCookies();
       for (const cookie of cookies) {
+        // Strip leading dot from cookie domain — `.example.com` is a valid cookie
+        // domain but `https://.example.com/` is not a valid URL and Page.deleteCookie
+        // rejects it.
+        const host = cookie.domain.startsWith('.') ? cookie.domain.slice(1) : cookie.domain;
         await this.sender.send('Page.deleteCookie', {
           cookieName: cookie.name,
-          url: `https://${cookie.domain}${cookie.path}`,
+          url: `https://${host}${cookie.path}`,
         });
       }
       return;
