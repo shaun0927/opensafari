@@ -205,11 +205,11 @@ export function buildAppendCharScript(opts: AppendCharScriptOptions): string {
 (function() {
   var el = document.querySelector(${selectorJson});
   if (!el) return;
+  ${PROTO_VALUE_DESC_WALK}
+  if (!desc && !('value' in el)) return;
   var ev = new KeyboardEvent('keydown', { key: ${charJson}, bubbles: true });
   el.dispatchEvent(ev);
   el.dispatchEvent(new KeyboardEvent('keypress', { key: ${charJson}, bubbles: true }));
-  ${PROTO_VALUE_DESC_WALK}
-  if (!desc && !('value' in el)) return;
   var val = (desc && desc.get) ? desc.get.call(el) : (el.value || '');
   if (desc && desc.set) {
     desc.set.call(el, val + ${charJson});

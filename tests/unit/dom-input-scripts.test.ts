@@ -259,6 +259,15 @@ describe('buildAppendCharScript', () => {
     expect(script).toContain("if (!desc && !('value' in el)) return");
   });
 
+  it('skips ALL keyboard events on non-value elements (guard before first dispatchEvent)', () => {
+    const script = buildAppendCharScript({ selector: '#name', char: 'a' });
+    const guardIdx = script.indexOf("if (!desc && !('value' in el)) return");
+    const firstDispatchIdx = script.indexOf('dispatchEvent');
+    expect(guardIdx).toBeGreaterThanOrEqual(0);
+    expect(firstDispatchIdx).toBeGreaterThanOrEqual(0);
+    expect(guardIdx).toBeLessThan(firstDispatchIdx);
+  });
+
   it('stable snapshot for fixed input', () => {
     const script = buildAppendCharScript({ selector: '#name', char: 'a' });
     expect(script).toMatchSnapshot();
