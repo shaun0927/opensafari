@@ -530,28 +530,36 @@ function sleep(ms: number): Promise<void> {
 const iosPtSizeCache = new Map<string, Size2D | null>();
 
 async function getIosPtSizeForDevice(deviceId: string): Promise<Size2D | null> {
-  const cached = iosPtSizeCache.get(deviceId);
-  if (cached !== undefined) {
-    return cached;
+  if (iosPtSizeCache.has(deviceId)) {
+    return iosPtSizeCache.get(deviceId) ?? null;
   }
-  let result: Size2D | null = null;
   try {
     const manager = new SimulatorManager();
     const device = await manager.getDevice(deviceId);
-    if (device) {
-      const deviceNameLower = device.name.toLowerCase();
-      const preset = Object.values(DEVICE_PRESETS).find(
-        (p) => p.name.toLowerCase() === deviceNameLower,
-      );
-      if (preset) {
-        result = { width: preset.w, height: preset.h };
-      }
+    if (!device) {
+      // Transient: simctl could not see the device on this call. A later
+      // dispatch after simctl recovers should retry, so do NOT memoize
+      // this failure (otherwise one transient error permanently disables
+      // coordinate conversion for the UDID until process restart).
+      return null;
     }
+    const deviceNameLower = device.name.toLowerCase();
+    const preset = Object.values(DEVICE_PRESETS).find(
+      (p) => p.name.toLowerCase() === deviceNameLower,
+    );
+    const result: Size2D | null = preset
+      ? { width: preset.w, height: preset.h }
+      : null;
+    // simctl returned a stable device descriptor — caching the preset
+    // hit-or-miss is safe (the device's name and the preset table are
+    // both static for this process). Transient simctl failures handled
+    // by the early return above remain un-cached.
+    iosPtSizeCache.set(deviceId, result);
+    return result;
   } catch {
-    result = null;
+    // Same rationale as the !device branch — never cache a thrown error.
+    return null;
   }
-  iosPtSizeCache.set(deviceId, result);
-  return result;
 }
 
 /** @internal — test-only hook to reset the per-process iOS-pt size cache. */
