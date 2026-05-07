@@ -257,12 +257,17 @@ export class BrowserCommands {
       'Space': { key: ' ', code: 'Space', keyCode: 32 },
     };
 
+    const isAlpha = /^[a-zA-Z]$/.test(key);
     const fallbackCode = /^[0-9]$/.test(key)
       ? `Digit${key}`
-      : /^[a-zA-Z]$/.test(key)
+      : isAlpha
         ? `Key${key.toUpperCase()}`
         : '';
-    const mapped = keyMap[key] ?? { key, code: fallbackCode, keyCode: key.charCodeAt(0) };
+    // For alphabetic keys, `KeyboardEvent.keyCode` on keydown/keyup is the
+    // uppercase ASCII value (65-90), independent of shift state. Symbols and
+    // digits use the character code directly.
+    const fallbackKeyCode = isAlpha ? key.toUpperCase().charCodeAt(0) : key.charCodeAt(0);
+    const mapped = keyMap[key] ?? { key, code: fallbackCode, keyCode: fallbackKeyCode };
     const keyJson = JSON.stringify(mapped.key);
     const codeJson = JSON.stringify(mapped.code);
 
@@ -322,17 +327,17 @@ export class BrowserCommands {
     try {
       const result = await this.sender.send<{ cookies: Array<Record<string, unknown>> }>('Page.getCookies');
       if (result?.cookies) {
-        // Domain match per RFC 6265: a `domain` filter of `example.com` should match
-        // - `example.com` and `.example.com` (exact, with optional leading dot)
-        // - `www.example.com` (cookie scoped to a subdomain of the requested host)
-        // - cookies whose own scope is a parent of the requested host
-        // …but NOT `another-example.com`. Plain substring `.includes()` (the prior
-        // implementation) gave the false-positive flagged in review.
+        // RFC 6265 cookie-host matching: return only cookies that would be sent
+        // on a request to `domain`. That is, the cookie's normalized scope
+        // either equals `domain` or is a parent of it. Cookies scoped to a
+        // subdomain of `domain` are NOT sent to `domain` and are excluded.
+        // `another-example.com` is correctly excluded for filter `example.com`.
         const wanted = domain?.replace(/^\./, '');
         const matchesDomain = (cookieDomain: string): boolean => {
           if (!wanted) return true;
           const cd = cookieDomain.replace(/^\./, '');
-          return cd === wanted || cd.endsWith(`.${wanted}`) || wanted.endsWith(`.${cd}`);
+          if (!cd) return false;
+          return cd === wanted || wanted.endsWith(`.${cd}`);
         };
         return result.cookies
           .filter(c => matchesDomain(((c.domain as string) || '')))
@@ -403,8 +408,10 @@ export class BrowserCommands {
       for (const cookie of cookies) {
         // Strip leading dot from cookie domain — `.example.com` is a valid cookie
         // domain but `https://.example.com/` is not a valid URL and Page.deleteCookie
-        // rejects it.
+        // rejects it. Skip empty domains entirely; they can occur on the
+        // document.cookie fallback path and would produce `https:///path`.
         const host = cookie.domain.startsWith('.') ? cookie.domain.slice(1) : cookie.domain;
+        if (!host) continue;
         await this.sender.send('Page.deleteCookie', {
           cookieName: cookie.name,
           url: `https://${host}${cookie.path}`,
