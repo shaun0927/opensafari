@@ -410,14 +410,28 @@ jobs:
             echo "::error::No VM Service URL exported — cannot warm up DDS"
             exit 1
           fi
+          VM_SERVICE_PROBE_URL="$OPENSAFARI_VM_SERVICE_URL"
+          case "$VM_SERVICE_PROBE_URL" in
+            ws://*) VM_SERVICE_PROBE_URL="http://${VM_SERVICE_PROBE_URL#ws://}" ;;
+            wss://*) VM_SERVICE_PROBE_URL="https://${VM_SERVICE_PROBE_URL#wss://}" ;;
+          esac
+          case "$VM_SERVICE_PROBE_URL" in
+            */ws/) VM_SERVICE_PROBE_URL="${VM_SERVICE_PROBE_URL%/ws/}/" ;;
+            */ws) VM_SERVICE_PROBE_URL="${VM_SERVICE_PROBE_URL%/ws}/" ;;
+          esac
+          case "$VM_SERVICE_PROBE_URL" in
+            */) ;;
+            *) VM_SERVICE_PROBE_URL="${VM_SERVICE_PROBE_URL}/" ;;
+          esac
           echo "Probing VM Service at $OPENSAFARI_VM_SERVICE_URL ..."
+          echo "DDS frontend compiler warmup probe URL: $VM_SERVICE_PROBE_URL"
           # The DDS HTTP endpoint becomes responsive a few seconds after the
           # URL is written. Wait for *any* 200 response before letting jest
           # connect — `compileExpression` (the call probeEvaluateCompile
           # uses) requires the frontend compiler to have completed its
           # initial compile pass, which the warmup sleep covers.
           for i in $(seq 1 30); do
-            if curl --silent --max-time 2 --output /dev/null --write-out '%{http_code}' "${OPENSAFARI_VM_SERVICE_URL}" | grep -q '^200$'; then
+            if curl --silent --max-time 2 --output /dev/null --write-out '%{http_code}' "$VM_SERVICE_PROBE_URL" | grep -q '^200$'; then
               echo "DDS HTTP endpoint responsive (attempt $i)"
               sleep 8
               exit 0
