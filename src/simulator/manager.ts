@@ -4,14 +4,10 @@ import * as path from 'path';
 import { randomUUID } from 'crypto';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import { SimctlExecutor, SimctlError } from './simctl';
+import { SimctlExecutor } from './simctl';
 import { SimulatorDevice, SimulatorRuntime } from './types';
 import { DEFAULT_SCREENSHOT_TIMEOUT_MS } from '../config/defaults';
-import {
-  DeviceNotBootedError,
-  AppNotInstalledError,
-  AppLaunchError,
-} from './errors';
+import { DeviceNotBootedError } from './errors';
 import {
   listDevices as catalogListDevices,
   listRuntimes as catalogListRuntimes,
@@ -24,6 +20,13 @@ import {
   deleteDevice as lifecycleDeleteDevice,
   cloneDevice as lifecycleCloneDevice,
 } from './lifecycle';
+import {
+  launchApp as appManagerLaunchApp,
+  terminateApp as appManagerTerminateApp,
+  activateApp as appManagerActivateApp,
+  listRunningApps as appManagerListRunningApps,
+  resetApp as appManagerResetApp,
+} from './app-manager';
 
 // Re-export error classes for backward compatibility — callers should migrate to ./errors
 export {
@@ -157,107 +160,31 @@ export class SimulatorManager {
     bundleId: string,
     options?: { args?: string[]; env?: Record<string, string> },
   ): Promise<{ pid: number; bundleId: string; deviceId: string }> {
-    const device = await this.getDevice(deviceId);
-    if (!device || device.state !== 'Booted') {
-      throw new DeviceNotBootedError(deviceId);
-    }
-
-    const cmdArgs = ['launch', deviceId, bundleId];
-    if (options?.args) {
-      cmdArgs.push(...options.args);
-    }
-
-    // simctl passes SIMCTL_CHILD_* env vars to the launched app
-    const childEnv: Record<string, string> = {};
-    if (options?.env) {
-      for (const [key, value] of Object.entries(options.env)) {
-        childEnv[`SIMCTL_CHILD_${key}`] = value;
-      }
-    }
-
-    try {
-      const output = await this.simctl.exec(cmdArgs, { env: childEnv });
-      const pidMatch = output.match(/:\s*(\d+)/);
-      const pid = pidMatch ? parseInt(pidMatch[1], 10) : -1;
-      return { pid, bundleId, deviceId };
-    } catch (err) {
-      if (err instanceof SimctlError) {
-        if (err.message.includes('domain not found') || err.message.includes('not installed')) {
-          throw new AppNotInstalledError(bundleId, deviceId);
-        }
-      }
-      throw new AppLaunchError(bundleId, deviceId, err instanceof Error ? err.message : String(err));
-    }
+    return appManagerLaunchApp(deviceId, bundleId, options, {
+      simctl: this.simctl,
+      lookup: this,
+    });
   }
 
   async terminateApp(deviceId: string, bundleId: string): Promise<{ terminated: boolean; bundleId: string; deviceId: string }> {
-    const device = await this.getDevice(deviceId);
-    if (!device || device.state !== 'Booted') {
-      throw new DeviceNotBootedError(deviceId);
-    }
-
-    try {
-      await this.simctl.exec(['terminate', deviceId, bundleId]);
-      return { terminated: true, bundleId, deviceId };
-    } catch (err) {
-      if (err instanceof SimctlError) {
-        if (err.message.includes('not running') || err.message.includes('Failed to terminate')) {
-          return { terminated: false, bundleId, deviceId };
-        }
-        if (err.message.includes('domain not found') || err.message.includes('not installed')) {
-          throw new AppNotInstalledError(bundleId, deviceId);
-        }
-      }
-      throw err;
-    }
+    return appManagerTerminateApp(deviceId, bundleId, {
+      simctl: this.simctl,
+      lookup: this,
+    });
   }
 
   async activateApp(deviceId: string, bundleId: string): Promise<{ activated: boolean; bundleId: string; deviceId: string; pid: number }> {
-    const device = await this.getDevice(deviceId);
-    if (!device || device.state !== 'Booted') {
-      throw new DeviceNotBootedError(deviceId);
-    }
-
-    // simctl launch brings an already-running app to the foreground;
-    // if the app is not running it starts it.
-    try {
-      const output = await this.simctl.exec(['launch', deviceId, bundleId]);
-      const pidMatch = output.match(/:\s*(\d+)/);
-      const pid = pidMatch ? parseInt(pidMatch[1], 10) : -1;
-      return { activated: true, bundleId, deviceId, pid };
-    } catch (err) {
-      if (err instanceof SimctlError) {
-        if (err.message.includes('domain not found') || err.message.includes('not installed')) {
-          throw new AppNotInstalledError(bundleId, deviceId);
-        }
-      }
-      throw err;
-    }
+    return appManagerActivateApp(deviceId, bundleId, {
+      simctl: this.simctl,
+      lookup: this,
+    });
   }
 
   async listRunningApps(deviceId: string): Promise<Array<{ label: string; pid: number }>> {
-    const device = await this.getDevice(deviceId);
-    if (!device || device.state !== 'Booted') {
-      throw new DeviceNotBootedError(deviceId);
-    }
-
-    const output = await this.simctl.exec(['spawn', deviceId, 'launchctl', 'list']);
-    const lines = output.split('\n');
-    const apps: Array<{ label: string; pid: number }> = [];
-
-    for (const line of lines) {
-      const parts = line.split('\t');
-      if (parts.length < 3) continue;
-      const pid = parseInt(parts[0], 10);
-      const label = parts[2];
-      // Filter for UIKitApplication entries (running foreground apps)
-      if (!isNaN(pid) && pid > 0 && label.startsWith('UIKitApplication:')) {
-        const bundleId = label.replace('UIKitApplication:', '').replace(/\[.*\]$/, '');
-        apps.push({ label: bundleId, pid });
-      }
-    }
-
-    return apps;
+    return appManagerListRunningApps(deviceId, {
+      simctl: this.simctl,
+      lookup: this,
+    });
   }
 
   /**
@@ -265,45 +192,10 @@ export class SimulatorManager {
    * Strategy: terminate app, reset privacy permissions, clear app data container.
    */
   async resetApp(deviceId: string, bundleId: string): Promise<{ reset: boolean; bundleId: string; deviceId: string; steps: string[] }> {
-    const device = await this.getDevice(deviceId);
-    if (!device || device.state !== 'Booted') {
-      throw new DeviceNotBootedError(deviceId);
-    }
-
-    const steps: string[] = [];
-
-    // Step 1: Terminate the app if running
-    try {
-      await this.simctl.exec(['terminate', deviceId, bundleId]);
-      steps.push('terminated');
-    } catch {
-      steps.push('terminate_skipped');
-    }
-
-    // Step 2: Reset privacy permissions
-    try {
-      await this.simctl.exec(['privacy', deviceId, 'reset', 'all', bundleId]);
-      steps.push('privacy_reset');
-    } catch {
-      steps.push('privacy_reset_skipped');
-    }
-
-    // Step 3: Uninstall and note (cannot clear data container directly)
-    // simctl has no "clear data" command; the documented strategy is
-    // uninstall + reinstall. We uninstall here; the caller can reinstall.
-    try {
-      await this.simctl.exec(['uninstall', deviceId, bundleId]);
-      steps.push('uninstalled');
-    } catch (err) {
-      if (err instanceof SimctlError) {
-        if (err.message.includes('domain not found') || err.message.includes('not installed')) {
-          throw new AppNotInstalledError(bundleId, deviceId);
-        }
-      }
-      steps.push('uninstall_failed');
-    }
-
-    return { reset: true, bundleId, deviceId, steps };
+    return appManagerResetApp(deviceId, bundleId, {
+      simctl: this.simctl,
+      lookup: this,
+    });
   }
 
   // Expose simctl for direct use by other methods
