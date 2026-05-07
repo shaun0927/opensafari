@@ -167,7 +167,18 @@ jobs:
       - name: Open Safari on smoke target URL
         run: |
           set -euo pipefail
-          xcrun simctl openurl "$SIMULATOR_UDID" https://example.com
+          for attempt in $(seq 1 3); do
+            if xcrun simctl openurl "$SIMULATOR_UDID" https://example.com; then
+              break
+            fi
+            if [ "$attempt" = "3" ]; then
+              echo "::error::simctl openurl failed after ${attempt} attempts"
+              exit 1
+            fi
+            echo "::warning::simctl openurl attempt ${attempt} failed; retrying after simulator settles"
+            xcrun simctl bootstatus "$SIMULATOR_UDID" -b 2>/dev/null || true
+            sleep 10
+          done
           for i in $(seq 1 30); do
             COUNT=$(curl --silent "http://localhost:$OPENSAFARI_PROXY_PORT/json" 2>/dev/null \
               | node -e 'const t = JSON.parse(require("fs").readFileSync(0,"utf8")); process.stdout.write(String(Array.isArray(t) ? t.length : 0));' 2>/dev/null || echo "0")
@@ -360,7 +371,7 @@ jobs:
           # Wait for `flutter run` to write the resolved VM service URI.
           # `--vmservice-out-file` only appears once the engine has actually
           # bound the port and DDS is ready to accept clients.
-          for i in $(seq 1 120); do
+          for i in $(seq 1 180); do
             if [ -s "$VM_SERVICE_FILE" ]; then
               echo "VM service file written after ${i}s: $(cat "$VM_SERVICE_FILE")"
               break

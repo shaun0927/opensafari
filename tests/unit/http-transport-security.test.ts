@@ -114,7 +114,13 @@ describe('HTTP transport security defaults', () => {
       expect(res.json).toHaveProperty('error');
     });
 
-    test('rejects invalid bearer token', async () => {
+    test('rejects invalid bearer token with same length as configured token', async () => {
+      const res = await mcpRequest('POST', { Authorization: 'Bearer nope-token-697' }, { jsonrpc: '2.0', id: 1, method: 'initialize', params: {} });
+
+      expect(res.status).toBe(401);
+    });
+
+    test('rejects invalid bearer token with different length than configured token', async () => {
       const res = await mcpRequest('POST', { Authorization: 'Bearer wrong-token' }, { jsonrpc: '2.0', id: 1, method: 'initialize', params: {} });
 
       expect(res.status).toBe(401);

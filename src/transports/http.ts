@@ -258,7 +258,17 @@ export class HTTPTransport implements MCPTransport {
     }
 
     const auth = req.headers.authorization;
-    return typeof auth === 'string' && auth === `Bearer ${this.authToken}`;
+    if (typeof auth !== 'string' || !auth.startsWith('Bearer ')) {
+      return false;
+    }
+
+    const suppliedToken = Buffer.from(auth.slice('Bearer '.length), 'utf8');
+    const expectedToken = Buffer.from(this.authToken, 'utf8');
+    if (suppliedToken.length !== expectedToken.length) {
+      return false;
+    }
+
+    return crypto.timingSafeEqual(suppliedToken, expectedToken);
   }
 
   private writeUnauthorized(res: http.ServerResponse): void {
