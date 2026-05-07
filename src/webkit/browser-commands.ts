@@ -405,19 +405,24 @@ export class BrowserCommands {
     // Falls back to document.cookie clearing if not supported.
     try {
       const cookies = await this.getCookies();
+      let processed = 0;
       for (const cookie of cookies) {
         // Strip leading dot from cookie domain — `.example.com` is a valid cookie
         // domain but `https://.example.com/` is not a valid URL and Page.deleteCookie
-        // rejects it. Skip empty domains entirely; they can occur on the
-        // document.cookie fallback path and would produce `https:///path`.
+        // rejects it. Skip empty domains; they can occur on the document.cookie
+        // fallback path and would produce `https:///path`.
         const host = cookie.domain.startsWith('.') ? cookie.domain.slice(1) : cookie.domain;
         if (!host) continue;
         await this.sender.send('Page.deleteCookie', {
           cookieName: cookie.name,
           url: `https://${host}${cookie.path}`,
         });
+        processed += 1;
       }
-      return;
+      // If there were cookies to delete but none had a usable domain (the
+      // document.cookie fallback path), fall through to JS-based clearing
+      // instead of returning silently with nothing deleted.
+      if (cookies.length === 0 || processed > 0) return;
     } catch {
       // Page.deleteCookie not supported — fall back
     }
