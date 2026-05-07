@@ -222,7 +222,7 @@ export class MCPServer {
         return this.handleInitialize(request);
 
       case 'tools/list':
-        return this.handleToolsList(request);
+        return this.handleToolsList(request, context);
 
       case 'tools/call':
         return this.handleToolsCall(request, context);
@@ -260,9 +260,10 @@ export class MCPServer {
     };
   }
 
-  private handleToolsList(request: MCPRequest): MCPResponse {
+  private handleToolsList(request: MCPRequest, context: MCPMessageContext): MCPResponse {
     const visibleTools = Array.from(this.tools.values())
       .filter((t) => t.tier <= this.currentTier)
+      .filter((t) => this.shouldAdvertiseTool(t.definition.name, context))
       .map((t) => t.definition);
 
     return {
@@ -270,6 +271,12 @@ export class MCPServer {
       id: request.id,
       result: { tools: visibleTools },
     };
+  }
+
+  private shouldAdvertiseTool(name: string, context: MCPMessageContext): boolean {
+    if (context.transport !== 'http') return true;
+    if (this.httpHighRiskToolsEnabled) return true;
+    return getHighRiskToolMetadata(name) === undefined;
   }
 
   private async handleToolsCall(request: MCPRequest, context: MCPMessageContext): Promise<MCPResponse> {
