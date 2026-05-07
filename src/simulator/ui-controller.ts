@@ -25,6 +25,8 @@ import { DeviceNotBootedError } from './errors';
 import { SimulatorDevice } from './types';
 import { DEFAULT_SCREENSHOT_TIMEOUT_MS } from '../config/defaults';
 
+const execFileAsync = promisify(execFile);
+
 /** Minimal simctl interface the UI-controller functions depend on. */
 export interface UiControllerSimctl {
   exec(args: string[], options?: { timeout?: number; env?: Record<string, string> }): Promise<string>;
@@ -152,8 +154,7 @@ export async function rotate(
 
   // Try simctl first (works in headless/CI)
   try {
-    const execFileAsync = promisify(execFile);
-    await execFileAsync('xcrun', ['simctl', 'io', deviceId, 'setorientation', orientation], { timeout: 10000 });
+    await deps.simctl.exec(['io', deviceId, 'setorientation', orientation], { timeout: 10000 });
     return { success: true, method: 'simctl', orientation };
   } catch {
     console.error('[UiController] simctl setorientation not available, trying AppleScript');
@@ -161,7 +162,6 @@ export async function rotate(
 
   // Fallback to AppleScript (requires GUI)
   try {
-    const execFileAsync = promisify(execFile);
     const menuItem = direction === 'left' ? 'Rotate Left' : 'Rotate Right';
     await execFileAsync('osascript', [
       '-e', 'tell application "Simulator" to activate',

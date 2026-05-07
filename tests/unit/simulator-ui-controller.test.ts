@@ -270,7 +270,7 @@ describe('ui-controller.toggleAppearance', () => {
 describe('ui-controller.rotate', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    // Default: execFile calls the callback with success
+    // Default: execFile (used by AppleScript path) calls the callback with success
     execFileMock.mockImplementation(
       (_cmd: unknown, _args: unknown, _opts: unknown, callback: (err: null, result: { stdout: string; stderr: string }) => void) => {
         callback(null, { stdout: '', stderr: '' });
@@ -279,6 +279,7 @@ describe('ui-controller.rotate', () => {
   });
 
   it('returns simctl method on success', async () => {
+    // simctl.exec succeeds by default (makeSimctl returns '')
     const simctl = makeSimctl();
     const lookup = makeLookup(makeDevice());
 
@@ -287,6 +288,10 @@ describe('ui-controller.rotate', () => {
     expect(result.success).toBe(true);
     expect(result.method).toBe('simctl');
     expect(result.orientation).toBe('landscapeLeft');
+    expect(simctl.exec).toHaveBeenCalledWith(
+      ['io', DEVICE_ID, 'setorientation', 'landscapeLeft'],
+      { timeout: 10000 },
+    );
   });
 
   it('uses landscapeRight for direction=right', async () => {
@@ -297,21 +302,39 @@ describe('ui-controller.rotate', () => {
 
     expect(result.success).toBe(true);
     expect(result.orientation).toBe('landscapeRight');
+    expect(simctl.exec).toHaveBeenCalledWith(
+      ['io', DEVICE_ID, 'setorientation', 'landscapeRight'],
+      { timeout: 10000 },
+    );
   });
 
   it('returns none when both simctl and AppleScript fail', async () => {
+    // simctl path fails via deps.simctl.exec throwing
+    const simctl = makeSimctl(async () => { throw new Error('command not found'); });
+    // AppleScript path fails via execFile callback
     execFileMock.mockImplementation(
       (_cmd: unknown, _args: unknown, _opts: unknown, callback: (err: Error) => void) => {
         callback(new Error('command not found'));
       },
     );
-    const simctl = makeSimctl();
     const lookup = makeLookup(makeDevice());
 
     const result = await rotate(DEVICE_ID, 'left', { simctl, lookup });
 
     expect(result.success).toBe(false);
     expect(result.method).toBe('none');
+  });
+
+  it('falls back to AppleScript when simctl fails', async () => {
+    // simctl path fails, AppleScript succeeds
+    const simctl = makeSimctl(async () => { throw new Error('simctl setorientation not supported'); });
+    const lookup = makeLookup(makeDevice());
+
+    const result = await rotate(DEVICE_ID, 'left', { simctl, lookup });
+
+    expect(result.success).toBe(true);
+    expect(result.method).toBe('applescript');
+    expect(result.orientation).toBe('landscapeLeft');
   });
 
   it('throws DeviceNotBootedError for shutdown device', async () => {
