@@ -55,38 +55,53 @@ export class SimctlError extends Error {
 let bootstatusCapable: boolean | undefined;
 
 /**
+ * In-flight probe Promise — memoised so that concurrent callers at startup
+ * all await the same single probe instead of firing N redundant exec calls.
+ */
+let bootstatusProbePromise: Promise<boolean> | undefined;
+
+/**
  * Return true when `xcrun simctl bootstatus <udid> -b` is available on this
  * host's Xcode/simctl version. The result is memoised for the process lifetime.
  *
  * `bootstatus` was introduced in Xcode 13 / simctl 830.1; older versions exit
  * with a non-zero code and print "Unknown command: bootstatus" to stderr.
+ *
+ * Concurrent callers that arrive before the first probe completes all share
+ * the same in-flight Promise, preventing redundant probes.
  */
-export async function hasBootstatus(simctl: SimctlExecutor): Promise<boolean> {
-  if (bootstatusCapable !== undefined) return bootstatusCapable;
+export function hasBootstatus(simctl: SimctlExecutor): Promise<boolean> {
+  if (bootstatusCapable !== undefined) return Promise.resolve(bootstatusCapable);
+  if (bootstatusProbePromise) return bootstatusProbePromise;
 
-  try {
-    // Probe with a clearly invalid UDID so we don't accidentally wait on a
-    // real device. simctl will reject the UDID with a device-not-found error
-    // (exit 1), but it will NOT print "Unknown command" — that distinguishes
-    // "command exists but UDID bad" from "command does not exist".
-    await simctl.exec(['bootstatus', '00000000-0000-0000-0000-000000000000', '-b'], { timeout: 5000 });
-    bootstatusCapable = true;
-  } catch (err) {
-    const msg = err instanceof SimctlError ? err.message : String(err);
-    // "Unknown command" means the subcommand does not exist on this simctl build.
-    bootstatusCapable = !msg.includes('Unknown command') && !msg.includes('unknown command');
-  }
+  bootstatusProbePromise = (async () => {
+    try {
+      // Probe with a clearly invalid UDID so we don't accidentally wait on a
+      // real device. simctl will reject the UDID with a device-not-found error
+      // (exit 1), but it will NOT print "Unknown command" — that distinguishes
+      // "command exists but UDID bad" from "command does not exist".
+      await simctl.exec(['bootstatus', '00000000-0000-0000-0000-000000000000', '-b'], { timeout: 5000 });
+      bootstatusCapable = true;
+    } catch (err) {
+      const msg = err instanceof SimctlError ? err.message : String(err);
+      // "Unknown command" means the subcommand does not exist on this simctl build.
+      bootstatusCapable = !msg.includes('Unknown command') && !msg.includes('unknown command');
+    }
 
-  if (process.env.DEBUG) {
-    console.error(`[simctl] bootstatus capability: ${bootstatusCapable ? 'available' : 'unavailable (fallback to list)'}`);
-  }
+    if (process.env.DEBUG) {
+      console.error(`[simctl] bootstatus capability: ${bootstatusCapable ? 'available' : 'unavailable (fallback to list)'}`);
+    }
 
-  return bootstatusCapable;
+    return bootstatusCapable as boolean;
+  })();
+
+  return bootstatusProbePromise;
 }
 
 /** Reset the capability cache — for unit tests only. */
 export function resetBootstatusCapabilityForTests(): void {
   bootstatusCapable = undefined;
+  bootstatusProbePromise = undefined;
 }
 
 // ── SimulatorStateCache ───────────────────────────────────────────────────────

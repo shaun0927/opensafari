@@ -97,20 +97,31 @@ export class SimulatorManager {
    * Strategy (in order of preference):
    *   1. Short-lived cache hit — free, shared across concurrent callers.
    *   2. `simctl bootstatus <udid> -b` — narrow command, fast on Xcode 13+.
+   *      Skipped when `opts.allowBootstatus` is false (e.g. during shutdown
+   *      polling where we need to detect the transient `ShuttingDown` state,
+   *      which bootstatus cannot report).
    *   3. Full `simctl list devices` parse — legacy fallback.
    *
    * The result is placed into the cache so that sibling callers in the same
    * polling tick benefit from the shared read.
    */
-  async getDeviceState(deviceId: string): Promise<SimulatorDevice['state'] | null> {
-    // 1. Cache hit
-    const cached = this.stateCache.get(deviceId);
-    if (cached) {
-      return cached.state;
+  async getDeviceState(
+    deviceId: string,
+    opts?: { allowBootstatus?: boolean },
+  ): Promise<SimulatorDevice['state'] | null> {
+    const allowBootstatus = opts?.allowBootstatus !== false;
+
+    // 1. Cache hit (only when bootstatus is permitted — shutdown polling must
+    //    see live data so it can observe ShuttingDown).
+    if (allowBootstatus) {
+      const cached = this.stateCache.get(deviceId);
+      if (cached) {
+        return cached.state;
+      }
     }
 
-    // 2. bootstatus narrow command (Xcode 13+)
-    if (await hasBootstatus(this.simctl)) {
+    // 2. bootstatus narrow command (Xcode 13+) — skipped for shutdown polling
+    if (allowBootstatus && await hasBootstatus(this.simctl)) {
       const state = await this.queryBootstatus(deviceId);
       if (state !== null) {
         this.stateCache.set(deviceId, state);
@@ -118,7 +129,7 @@ export class SimulatorManager {
       }
     }
 
-    // 3. Full list fallback
+    // 3. Full list fallback (always used when allowBootstatus is false)
     const device = await this.getDevice(deviceId);
     return device?.state ?? null;
   }
@@ -234,7 +245,9 @@ export class SimulatorManager {
   }
 
   async shutdown(deviceId: string, options?: { timeout?: number }): Promise<void> {
-    const state = await this.getDeviceState(deviceId);
+    // Use allowBootstatus: false so we get the full list parse, which can
+    // report the transient ShuttingDown state that bootstatus cannot detect.
+    const state = await this.getDeviceState(deviceId, { allowBootstatus: false });
     if (!state || state === 'Shutdown') {
       return; // Already shut down or device not found
     }
@@ -248,12 +261,12 @@ export class SimulatorManager {
     this.stateCache.invalidate(deviceId);
 
     // Poll until shutdown or timeout.
-    // Uses getDeviceState() to avoid parsing the full device list on every tick.
+    // Always uses full list (allowBootstatus: false) so ShuttingDown is visible.
     const timeout = options?.timeout ?? DEFAULT_SIMULATOR_SHUTDOWN_TIMEOUT_MS;
     const start = Date.now();
 
     while (Date.now() - start < timeout) {
-      const current = await this.getDeviceState(deviceId);
+      const current = await this.getDeviceState(deviceId, { allowBootstatus: false });
       if (!current || current === 'Shutdown') {
         return;
       }
@@ -265,7 +278,7 @@ export class SimulatorManager {
       await this.simctl.exec(['shutdown', deviceId]);
       this.stateCache.invalidate(deviceId);
       await new Promise(r => setTimeout(r, 5000));
-      const current = await this.getDeviceState(deviceId);
+      const current = await this.getDeviceState(deviceId, { allowBootstatus: false });
       if (!current || current === 'Shutdown') return;
     } catch {
       // Fall through to erase

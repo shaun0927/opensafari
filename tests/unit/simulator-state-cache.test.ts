@@ -279,6 +279,43 @@ describe('SimulatorManager.shutdown() timeout behavior', () => {
     expect(eraseArgs.length).toBeGreaterThanOrEqual(1);
     expect(eraseArgs[0][1]).toBe(UDID);
   }, 15000 /* ms — covers the 5 s retry-sleep inside shutdown() */);
+
+  test('shutdown() observes ShuttingDown state via full list (not bootstatus)', async () => {
+    // Regression test for Gemini CRITICAL: bootstatus is binary and cannot
+    // report ShuttingDown. shutdown() must always use the full list parse so
+    // that a device in ShuttingDown is treated as still in progress, not done.
+    const { manager, fakeExec, fakeExecJson } = makeManager();
+
+    // bootstatus is available on this host
+    fakeExec.mockImplementation(async (args: string[]) => {
+      if (args[0] === 'bootstatus') {
+        if (args[1] === PROBE_UDID) {
+          // Capability probe: non-"Unknown command" error = capability present
+          throw new SimctlError('Unable to lookup sim', args, 1);
+        }
+        // If shutdown() were to use bootstatus it would see "Shutdown" immediately
+        // (non-zero exit = not booted), causing a premature return.
+        throw new SimctlError('DeviceNotBootedError', args, 1);
+      }
+      return '';
+    });
+
+    let listCallCount = 0;
+    fakeExecJson.mockImplementation(async () => {
+      listCallCount++;
+      // First call (pre-check): Booted; second (first poll tick): ShuttingDown;
+      // third onwards: Shutdown — simulates normal graceful shutdown sequence.
+      if (listCallCount === 1) return makeDeviceJson(UDID, 'Booted');
+      if (listCallCount === 2) return makeDeviceJson(UDID, 'ShuttingDown');
+      return makeDeviceJson(UDID, 'Shutdown');
+    });
+
+    await manager.shutdown(UDID, { timeout: 5000 });
+
+    // shutdown() must have used the full list (execJson) so that ShuttingDown
+    // was visible. At minimum: pre-check + one poll tick + one final tick.
+    expect(listCallCount).toBeGreaterThanOrEqual(3);
+  });
 });
 
 // ── boot() uses bootstatus ─────────────────────────────────────────────────
