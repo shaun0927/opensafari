@@ -41,7 +41,7 @@
     "lint": "eslint 'src/**/*.ts' 'cli/**/*.ts' 'tests/**/*.ts'",
     "lint:fix": "eslint --fix 'src/**/*.ts' 'cli/**/*.ts' 'tests/**/*.ts'",
     "prepare": "npm run build",
-    "prepublishOnly": "npm run build && npm test"
+    "prepublishOnly": "npm run audit:prod && npm run build && npm test"
   },
   "repository": {
     "type": "git",
