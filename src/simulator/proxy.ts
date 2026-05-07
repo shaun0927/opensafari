@@ -217,6 +217,10 @@ export class WebInspectorProxy {
       pollInterval = Math.min(pollInterval * 2, DEFAULT_PROXY_POLL_MAX_MS);
     }
 
+    // If the proxy died right at the timeout boundary, surface it as a hard error
+    if (!this._running) {
+      throw new Error('WebInspectorProxy process exited while waiting for target');
+    }
     // Don't throw — callers that require a target should check listTargets() afterward
     console.error('[WebInspectorProxy] No Safari target appeared within timeout — Safari may not be open', timeout);
   }

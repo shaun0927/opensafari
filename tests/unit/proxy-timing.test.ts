@@ -546,6 +546,36 @@ describe('WebInspectorProxy _running guards and cleanup-on-timeout', () => {
     // Should have polled exactly once before aborting
     expect(callCount).toBe(1);
   });
+
+  it('waitForTarget() rejects (not resolves) if proxy dies right before timeout', async () => {
+    // Manually set _running to true to simulate a started proxy
+    (proxy as unknown as { _running: boolean })._running = true;
+
+    let callCount = 0;
+    jest.spyOn(
+      proxy as unknown as { httpGet: (url: string) => Promise<string> },
+      'httpGet',
+    ).mockImplementation(async () => {
+      callCount++;
+      // On the second poll, simulate the proxy dying right before the timeout fires
+      if (callCount === 2) {
+        (proxy as unknown as { _running: boolean })._running = false;
+      }
+      return '[]'; // never target-ready
+    });
+
+    jest.useFakeTimers();
+
+    // Short timeout so only a couple of polls fire: 200ms first interval, 400ms second
+    const waitPromise = privateProxy(proxy).waitForTarget({ timeout: 500 });
+    // Attach rejection handler immediately to avoid unhandled-rejection warnings
+    const assertion = expect(waitPromise).rejects.toThrow(/process exited/);
+
+    // Advance past the full timeout window so the loop exits, triggering the post-loop check
+    await jest.advanceTimersByTimeAsync(700);
+
+    await assertion;
+  });
 });
 
 describe('WebKitClient connect() retry logic', () => {
