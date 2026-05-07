@@ -254,18 +254,36 @@ describe('buildAppendCharScript', () => {
     expect(script).toContain("'keyup'");
   });
 
-  it('contains guard against non-input-like elements (no value descriptor and no value property)', () => {
+  it('value mutation is conditional on desc or value property', () => {
     const script = buildAppendCharScript({ selector: '#name', char: 'a' });
-    expect(script).toContain("if (!desc && !('value' in el)) return");
+    expect(script).toContain("if (desc || ('value' in el))");
   });
 
-  it('skips ALL keyboard events on non-value elements (guard before first dispatchEvent)', () => {
+  it('keyboard events always fire — keydown before value block and keyup after', () => {
     const script = buildAppendCharScript({ selector: '#name', char: 'a' });
-    const guardIdx = script.indexOf("if (!desc && !('value' in el)) return");
-    const firstDispatchIdx = script.indexOf('dispatchEvent');
-    expect(guardIdx).toBeGreaterThanOrEqual(0);
-    expect(firstDispatchIdx).toBeGreaterThanOrEqual(0);
-    expect(guardIdx).toBeLessThan(firstDispatchIdx);
+    const keydownIdx = script.indexOf("dispatchEvent(new KeyboardEvent('keydown'");
+    const valueMutationIdx = script.indexOf("if (desc || ('value' in el))");
+    const keyupIdx = script.indexOf("dispatchEvent(new KeyboardEvent('keyup'");
+    expect(keydownIdx).toBeGreaterThanOrEqual(0);
+    expect(valueMutationIdx).toBeGreaterThanOrEqual(0);
+    expect(keyupIdx).toBeGreaterThanOrEqual(0);
+    expect(keydownIdx).toBeLessThan(valueMutationIdx);
+    expect(valueMutationIdx).toBeLessThan(keyupIdx);
+  });
+
+  it('dispatches all keyboard events AND skips value mutation on non-value elements (contenteditable safe)', () => {
+    const script = buildAppendCharScript({ selector: '#name', char: 'a' });
+    // All three keyboard events must be present unconditionally
+    expect(script).toContain("dispatchEvent(new KeyboardEvent('keydown'");
+    expect(script).toContain("dispatchEvent(new KeyboardEvent('keypress'");
+    expect(script).toContain("dispatchEvent(new KeyboardEvent('keyup'");
+    // Value mutation must be inside the conditional wrapper
+    expect(script).toContain("if (desc || ('value' in el))");
+    // No early return between keydown and keyup
+    const keydownIdx = script.indexOf("dispatchEvent(new KeyboardEvent('keydown'");
+    const keyupIdx = script.indexOf("dispatchEvent(new KeyboardEvent('keyup'");
+    const between = script.slice(keydownIdx, keyupIdx);
+    expect(between).not.toContain('return;');
   });
 
   it('stable snapshot for fixed input', () => {
