@@ -267,14 +267,16 @@ export class AppleScriptInputBackend implements InputBackend {
    * avoids re-activating on each call if we reasonably believe Simulator is
    * still in the foreground.
    *
-   * TTL is deliberately short (2 s): long enough to benefit a tight loop of
-   * input calls, short enough that a user who switches away to another app and
-   * returns within a few seconds still gets a real activation on the next call.
+   * TTL is kept short (500 ms) because a cheap frontmost-app check now guards
+   * the skip path: if Simulator is no longer frontmost we always re-activate
+   * regardless of the TTL. The TTL only short-circuits the frontmost check
+   * itself for back-to-back operations in a tight loop where focus cannot have
+   * changed.
    *
    * This cache is scoped to the AppleScript backend instance and does NOT
    * affect any headless tier. It is NOT shared with `getInputBackend()`.
    */
-  private static readonly ACTIVATION_CACHE_TTL_MS = 2_000;
+  private static readonly ACTIVATION_CACHE_TTL_MS = 500;
   private lastActivationAt = 0;
 
   private async runAppleScript(lines: string[]): Promise<string> {
@@ -284,9 +286,14 @@ export class AppleScriptInputBackend implements InputBackend {
   }
 
   /**
-   * Activate Simulator.app via AppleScript if the cached activation has
-   * expired. Skips the IPC call and 150 ms settle delay when we believe
-   * Simulator is still frontmost (within `ACTIVATION_CACHE_TTL_MS`).
+   * Activate Simulator.app via AppleScript when it is not already frontmost.
+   *
+   * The TTL (500 ms) is used as a fast-path skip: within a tight burst of
+   * back-to-back input calls the frontmost app cannot have changed, so we
+   * skip even the cheap frontmost check. Outside the TTL we query System
+   * Events for the current frontmost process name and only activate when
+   * Simulator is not already in the foreground — preventing input from landing
+   * in the wrong app if the user switched focus within the TTL window.
    *
    * This optimisation applies ONLY to the opt-in focus-stealing path —
    * all headless backends skip this method entirely.
@@ -294,10 +301,20 @@ export class AppleScriptInputBackend implements InputBackend {
   private async activateSimulator(): Promise<void> {
     const now = Date.now();
     if (now - this.lastActivationAt < AppleScriptInputBackend.ACTIVATION_CACHE_TTL_MS) {
+      // Within TTL — safe to skip both the frontmost check and the activate call.
       return;
     }
-    await this.runAppleScript(['tell application "Simulator" to activate']);
-    await delay(150);
+    // Outside TTL: check whether Simulator is already frontmost before paying
+    // the full activate cost. This prevents delivering input to the wrong app
+    // when the user switched focus after the last activation.
+    const frontApp = await this.runAppleScript([
+      'tell application "System Events" to set frontApp to name of first application process whose frontmost is true',
+      'return frontApp',
+    ]);
+    if (frontApp !== 'Simulator') {
+      await this.runAppleScript(['tell application "Simulator" to activate']);
+      await delay(150);
+    }
     this.lastActivationAt = Date.now();
   }
 

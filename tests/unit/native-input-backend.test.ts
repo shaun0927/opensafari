@@ -166,20 +166,22 @@ describe('AppleScriptInputBackend', () => {
   });
 
   test('tap activates Simulator and calls osascript click', async () => {
-    // First call: activate Simulator
-    // Second call: get window + child UI element positions
-    // Third call: click at coordinates
+    // First call: frontmost-app query (returns non-Simulator → triggers activation)
+    // Second call: activate Simulator
+    // Third call: get window + child UI element positions
+    // Fourth call: click at coordinates
     execFileMock
+      .mockResolvedValueOnce({ stdout: 'Other App', stderr: '' })           // frontmost query
       .mockResolvedValueOnce({ stdout: '', stderr: '' })                    // activate
       .mockResolvedValueOnce({ stdout: '100,200|100,230', stderr: '' })    // AX origin query
       .mockResolvedValueOnce({ stdout: '', stderr: '' });                   // click
 
     await backend.tap(DEVICE, 50, 100);
 
-    // Third call should be the click at translated coordinates
+    // Fourth call should be the click at translated coordinates
     // Child UI element (content origin) at (100, 230)
     // iOS (50, 100) → screen (150, 330)
-    const clickCall = execFileMock.mock.calls[2];
+    const clickCall = execFileMock.mock.calls[3];
     expect(clickCall[0]).toBe('osascript');
     expect(clickCall[1]).toContain(
       'tell application "System Events" to click at {150, 330}',
@@ -188,13 +190,14 @@ describe('AppleScriptInputBackend', () => {
 
   test('tap with duration uses Swift CGEvent for long press', async () => {
     execFileMock
+      .mockResolvedValueOnce({ stdout: 'Other App', stderr: '' })        // frontmost query
       .mockResolvedValueOnce({ stdout: '', stderr: '' })                  // activate
       .mockResolvedValueOnce({ stdout: '0,0|0,28', stderr: '' })         // AX origin query
       .mockResolvedValueOnce({ stdout: '', stderr: '' });                 // swift CGEvent
 
     await backend.tap(DEVICE, 200, 400, 1.5);
 
-    const swiftCall = execFileMock.mock.calls[2];
+    const swiftCall = execFileMock.mock.calls[3];
     expect(swiftCall[0]).toBe('swift');
     expect(swiftCall[1][1]).toContain('leftMouseDown');
     expect(swiftCall[1][1]).toContain('1.5');
@@ -202,12 +205,13 @@ describe('AppleScriptInputBackend', () => {
 
   test('typeText activates Simulator and sends keystroke', async () => {
     execFileMock
-      .mockResolvedValueOnce({ stdout: '', stderr: '' })  // activate
-      .mockResolvedValueOnce({ stdout: '', stderr: '' }); // keystroke
+      .mockResolvedValueOnce({ stdout: 'Other App', stderr: '' }) // frontmost query
+      .mockResolvedValueOnce({ stdout: '', stderr: '' })           // activate
+      .mockResolvedValueOnce({ stdout: '', stderr: '' });          // keystroke
 
     await backend.typeText(DEVICE, 'hello');
 
-    const keystrokeCall = execFileMock.mock.calls[1];
+    const keystrokeCall = execFileMock.mock.calls[2];
     expect(keystrokeCall[0]).toBe('osascript');
     expect(keystrokeCall[1]).toContain(
       'tell application "System Events" to keystroke "hello"',
@@ -216,12 +220,13 @@ describe('AppleScriptInputBackend', () => {
 
   test('typeText escapes special characters', async () => {
     execFileMock
-      .mockResolvedValueOnce({ stdout: '', stderr: '' })
-      .mockResolvedValueOnce({ stdout: '', stderr: '' });
+      .mockResolvedValueOnce({ stdout: 'Other App', stderr: '' }) // frontmost query
+      .mockResolvedValueOnce({ stdout: '', stderr: '' })           // activate
+      .mockResolvedValueOnce({ stdout: '', stderr: '' });          // keystroke
 
     await backend.typeText(DEVICE, 'say "hi" \\ there');
 
-    const keystrokeCall = execFileMock.mock.calls[1];
+    const keystrokeCall = execFileMock.mock.calls[2];
     expect(keystrokeCall[1]).toContain(
       'tell application "System Events" to keystroke "say \\"hi\\" \\\\ there"',
     );
@@ -229,12 +234,13 @@ describe('AppleScriptInputBackend', () => {
 
   test('keypress maps HID code to AppleScript key code', async () => {
     execFileMock
-      .mockResolvedValueOnce({ stdout: '', stderr: '' })  // activate
-      .mockResolvedValueOnce({ stdout: '', stderr: '' }); // key code
+      .mockResolvedValueOnce({ stdout: 'Other App', stderr: '' }) // frontmost query
+      .mockResolvedValueOnce({ stdout: '', stderr: '' })           // activate
+      .mockResolvedValueOnce({ stdout: '', stderr: '' });          // key code
 
     await backend.keypress(DEVICE, '40'); // Return = HID 40 → AS 36
 
-    const keyCall = execFileMock.mock.calls[1];
+    const keyCall = execFileMock.mock.calls[2];
     expect(keyCall[0]).toBe('osascript');
     expect(keyCall[1]).toContain(
       'tell application "System Events" to key code 36',
@@ -242,7 +248,9 @@ describe('AppleScriptInputBackend', () => {
   });
 
   test('keypress throws for unknown HID code', async () => {
-    execFileMock.mockResolvedValueOnce({ stdout: '', stderr: '' }); // activate
+    execFileMock
+      .mockResolvedValueOnce({ stdout: 'Other App', stderr: '' }) // frontmost query
+      .mockResolvedValueOnce({ stdout: '', stderr: '' });          // activate
     await expect(backend.keypress(DEVICE, '999')).rejects.toThrow(
       'Unknown HID key code "999"',
     );
@@ -250,19 +258,22 @@ describe('AppleScriptInputBackend', () => {
 
   test('sendKey maps key name to AppleScript key code', async () => {
     execFileMock
-      .mockResolvedValueOnce({ stdout: '', stderr: '' })
-      .mockResolvedValueOnce({ stdout: '', stderr: '' });
+      .mockResolvedValueOnce({ stdout: 'Other App', stderr: '' }) // frontmost query
+      .mockResolvedValueOnce({ stdout: '', stderr: '' })           // activate
+      .mockResolvedValueOnce({ stdout: '', stderr: '' });          // key code
 
     await backend.sendKey(DEVICE, 'Escape');
 
-    const keyCall = execFileMock.mock.calls[1];
+    const keyCall = execFileMock.mock.calls[2];
     expect(keyCall[1]).toContain(
       'tell application "System Events" to key code 53',
     );
   });
 
   test('sendKey throws for unknown key name', async () => {
-    execFileMock.mockResolvedValueOnce({ stdout: '', stderr: '' });
+    execFileMock
+      .mockResolvedValueOnce({ stdout: 'Other App', stderr: '' }) // frontmost query
+      .mockResolvedValueOnce({ stdout: '', stderr: '' });          // activate
     await expect(backend.sendKey(DEVICE, 'Unknown')).rejects.toThrow(
       'Unknown key name "Unknown"',
     );
@@ -270,13 +281,14 @@ describe('AppleScriptInputBackend', () => {
 
   test('swipe activates Simulator and uses Swift CGEvent drag', async () => {
     execFileMock
-      .mockResolvedValueOnce({ stdout: '', stderr: '' })                   // activate
-      .mockResolvedValueOnce({ stdout: '50,100|50,128', stderr: '' })     // AX origin query
-      .mockResolvedValueOnce({ stdout: '', stderr: '' });                  // swift
+      .mockResolvedValueOnce({ stdout: 'Other App', stderr: '' })          // frontmost query
+      .mockResolvedValueOnce({ stdout: '', stderr: '' })                    // activate
+      .mockResolvedValueOnce({ stdout: '50,100|50,128', stderr: '' })      // AX origin query
+      .mockResolvedValueOnce({ stdout: '', stderr: '' });                   // swift
 
     await backend.swipe(DEVICE, 200, 600, 200, 200, 0.5);
 
-    const swiftCall = execFileMock.mock.calls[2];
+    const swiftCall = execFileMock.mock.calls[3];
     expect(swiftCall[0]).toBe('swift');
     const script = swiftCall[1][1];
     expect(script).toContain('leftMouseDown');
@@ -385,6 +397,7 @@ describe('AppleScriptInputBackend', () => {
   test('tap translates iOS-point coordinates to absolute screen using dynamic origin', async () => {
     // Simulate AX returning window at (200,300) and child (content) at (200,330)
     execFileMock
+      .mockResolvedValueOnce({ stdout: 'Other App', stderr: '' })           // frontmost query
       .mockResolvedValueOnce({ stdout: '', stderr: '' })                    // activate
       .mockResolvedValueOnce({ stdout: '200,300|200,330', stderr: '' })    // AX origin
       .mockResolvedValueOnce({ stdout: '', stderr: '' });                   // click
@@ -392,7 +405,7 @@ describe('AppleScriptInputBackend', () => {
     await backend.tap(DEVICE, 75, 150);
 
     // content origin (200, 330) + iOS (75, 150) = screen (275, 480)
-    const clickCall = execFileMock.mock.calls[2];
+    const clickCall = execFileMock.mock.calls[3];
     expect(clickCall[0]).toBe('osascript');
     expect(clickCall[1]).toContain(
       'tell application "System Events" to click at {275, 480}',
@@ -1267,19 +1280,20 @@ describe('AppleScriptInputBackend activation caching (#705)', () => {
   });
 
   test('consecutive typeText calls within TTL skip re-activation', async () => {
-    // First call: activate (1 execFile for osascript activate) + keystroke
-    // Second call within TTL: no activate, just keystroke
+    // First call: frontmost query (not Simulator) + activate + keystroke 'a'
+    // Second call within TTL: skips both frontmost check and activate → just keystroke 'b'
     execFileMock
-      .mockResolvedValueOnce({ stdout: '', stderr: '' }) // activate
-      .mockResolvedValueOnce({ stdout: '', stderr: '' }) // keystroke 1
-      .mockResolvedValueOnce({ stdout: '', stderr: '' }); // keystroke 2 (no activation before it)
+      .mockResolvedValueOnce({ stdout: 'Other App', stderr: '' }) // frontmost query
+      .mockResolvedValueOnce({ stdout: '', stderr: '' })           // activate
+      .mockResolvedValueOnce({ stdout: '', stderr: '' })           // keystroke 'a'
+      .mockResolvedValueOnce({ stdout: '', stderr: '' });          // keystroke 'b' (no activation)
 
     await backend.typeText(DEVICE, 'a');
     await backend.typeText(DEVICE, 'b');
 
-    // 3 calls total: activate + keystroke 'a' + keystroke 'b'
-    // (no second activate because we are within the TTL)
-    expect(execFileMock).toHaveBeenCalledTimes(3);
+    // 4 calls total: frontmost + activate + keystroke 'a' + keystroke 'b'
+    // (no second frontmost/activate because we are within the TTL)
+    expect(execFileMock).toHaveBeenCalledTimes(4);
     const activateCalls = execFileMock.mock.calls.filter((args) =>
       (args[1] as string[]).some((a) => String(a).includes('to activate')),
     );
@@ -1288,8 +1302,9 @@ describe('AppleScriptInputBackend activation caching (#705)', () => {
 
   test('first call always activates Simulator', async () => {
     execFileMock
-      .mockResolvedValueOnce({ stdout: '', stderr: '' }) // activate
-      .mockResolvedValueOnce({ stdout: '', stderr: '' }); // keystroke
+      .mockResolvedValueOnce({ stdout: 'Other App', stderr: '' }) // frontmost query
+      .mockResolvedValueOnce({ stdout: '', stderr: '' })           // activate
+      .mockResolvedValueOnce({ stdout: '', stderr: '' });          // keystroke
 
     await backend.typeText(DEVICE, 'x');
 
@@ -1297,5 +1312,54 @@ describe('AppleScriptInputBackend activation caching (#705)', () => {
       (args[1] as string[]).some((a) => String(a).includes('to activate')),
     );
     expect(activateCalls).toHaveLength(1);
+  });
+
+  test('re-activates when frontmost app changed within TTL window', async () => {
+    // Simulate: first call activates Simulator (lastActivationAt is set).
+    // Then, before TTL expires (500 ms), frontmost app changes to something
+    // else. The NEXT call outside TTL must detect the change and re-activate.
+
+    // First call: frontmost check returns "Other App" → activates, TTL starts.
+    execFileMock
+      .mockResolvedValueOnce({ stdout: 'Other App', stderr: '' }) // frontmost query
+      .mockResolvedValueOnce({ stdout: '', stderr: '' })           // activate
+      .mockResolvedValueOnce({ stdout: '', stderr: '' });          // keystroke 1
+
+    await backend.typeText(DEVICE, 'a');
+
+    // Expire the TTL by rewinding lastActivationAt.
+    // Access via bracket notation to reach private field in the test only.
+    (backend as unknown as { lastActivationAt: number }).lastActivationAt = 0;
+
+    // Second call: frontmost app is now "Notes" (not Simulator) → must re-activate.
+    execFileMock
+      .mockResolvedValueOnce({ stdout: 'Notes', stderr: '' }) // frontmost query
+      .mockResolvedValueOnce({ stdout: '', stderr: '' })       // re-activate
+      .mockResolvedValueOnce({ stdout: '', stderr: '' });      // keystroke 2
+
+    await backend.typeText(DEVICE, 'b');
+
+    const activateCalls = execFileMock.mock.calls.filter((args) =>
+      (args[1] as string[]).some((a) => String(a).includes('to activate')),
+    );
+    // Both calls triggered activation because Simulator was not frontmost.
+    expect(activateCalls).toHaveLength(2);
+  });
+
+  test('skips activation when Simulator is already frontmost (outside TTL)', async () => {
+    // Expire the TTL immediately so the frontmost check runs.
+    (backend as unknown as { lastActivationAt: number }).lastActivationAt = 0;
+
+    // Frontmost check returns "Simulator" → no activate needed.
+    execFileMock
+      .mockResolvedValueOnce({ stdout: 'Simulator', stderr: '' }) // frontmost query
+      .mockResolvedValueOnce({ stdout: '', stderr: '' });          // keystroke
+
+    await backend.typeText(DEVICE, 'z');
+
+    const activateCalls = execFileMock.mock.calls.filter((args) =>
+      (args[1] as string[]).some((a) => String(a).includes('to activate')),
+    );
+    expect(activateCalls).toHaveLength(0);
   });
 });
