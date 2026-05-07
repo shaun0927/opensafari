@@ -60,9 +60,12 @@ function makeConnectedTransport(opts: { sendTimeout?: number } = {}): {
     (transport as any).handleMessage(data);
   });
 
-  // Wire close event
+  // Wire close event — mirrors the production handler installed inside
+  // `WebSocketProtocolTransport.connect`: flip the connected flag, reject
+  // every pending request, then emit the lifecycle event.
   ws.on('close', () => {
     (transport as any)._connected = false;
+    (transport as any).clearPendingRequests();
     transport.emit('transport:close');
   });
 
@@ -276,5 +279,63 @@ describe('WebSocketProtocolTransport', () => {
 
     await transport.disconnect();
     expect(transport.isConnected()).toBe(false);
+  });
+
+  // ── ws close auto-clears pending requests ─────────────────────────────────
+
+  it('rejects pending requests when the underlying socket closes', async () => {
+    const { transport, ws } = makeConnectedTransport({ sendTimeout: 10_000 });
+
+    const p1 = transport.sendToTarget('Runtime.evaluate', {}, 'target-1', 60, 701, 10_000);
+    const p2 = transport.sendToTarget('Page.navigate', {}, 'target-1', 61, 702, 10_000);
+
+    // Trip ws close without going through transport.disconnect() —
+    // pending awaiters should reject immediately rather than wait
+    // for their per-request timers to expire.
+    ws.close();
+
+    await expect(p1).rejects.toBeInstanceOf(ConnectionError);
+    await expect(p2).rejects.toBeInstanceOf(ConnectionError);
+  });
+
+  // ── onProtocolEvent subscription ──────────────────────────────────────────
+
+  it('relays raw RDP events via onProtocolEvent without leaking lifecycle events', () => {
+    const { transport, ws } = makeConnectedTransport();
+
+    const received: Array<{ event: string; args: unknown[] }> = [];
+    const unsubscribe = transport.onProtocolEvent((event, ...args) => {
+      received.push({ event, args });
+    });
+
+    // Non-multiplexed event
+    ws.receive({
+      method: 'Target.targetCreated',
+      params: { targetInfo: { targetId: 't-1', type: 'page', url: 'about:blank' } },
+    });
+
+    // Inner (dispatchMessageFromTarget) event
+    ws.receive({
+      method: 'Target.dispatchMessageFromTarget',
+      params: {
+        targetId: 't-1',
+        message: JSON.stringify({ method: 'Page.loadEventFired', params: { timestamp: 1 } }),
+      },
+    });
+
+    // Lifecycle event — must NOT be relayed by onProtocolEvent
+    transport.emit('transport:close');
+
+    const events = received.map(r => r.event);
+    expect(events).toEqual(['Target.targetCreated', 'Page.loadEventFired']);
+    expect(received[1].args[1]).toEqual({ targetId: 't-1' });
+
+    // Unsubscribe stops further deliveries
+    unsubscribe();
+    ws.receive({
+      method: 'Target.targetDestroyed',
+      params: { targetId: 't-1' },
+    });
+    expect(received).toHaveLength(2);
   });
 });

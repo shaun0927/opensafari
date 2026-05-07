@@ -3,7 +3,7 @@ import { EventEmitter } from 'events';
 import { ConnectionError, TimeoutError, ProtocolError, EvaluationError } from './errors';
 export { ConnectionError, TimeoutError, ProtocolError, EvaluationError } from './errors';
 import { ProtocolTransport, WebSocketProtocolTransport } from './protocol-transport';
-export type { ProtocolTransport } from './protocol-transport';
+export type { ProtocolTransport, ProtocolEventHandler } from './protocol-transport';
 import {
   BrowserBackend,
   NavigateOptions,
@@ -71,20 +71,20 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
   // ========== Transport Event Binding ==========
 
   /**
-   * Forward all transport-emitted events (domain events, target lifecycle events) to this
-   * EventEmitter so that callers using `client.on('Page.loadEventFired', ...)` continue to work.
+   * Forward all transport-emitted protocol events (domain events, target
+   * lifecycle events) to this EventEmitter so that callers using
+   * `client.on('Page.loadEventFired', ...)` continue to work.
+   *
+   * Subscribes via the formal `onProtocolEvent` channel rather than monkey-
+   * patching the transport's `emit` — the channel only relays raw RDP
+   * events, so transport lifecycle (`transport:close`, `transport:error`)
+   * and EventEmitter housekeeping (`newListener`, `removeListener`) never
+   * leak through and stay scoped to this client.
    */
   private bindTransportEvents(): void {
-    // Wildcard forwarding is not natively available on EventEmitter, so we intercept emit.
-    // We replace the transport's emit to also forward to client's emit.
-    const originalEmit = this.transport.emit.bind(this.transport);
-    (this.transport as any).emit = (event: string, ...args: any[]): boolean => {
-      const result = originalEmit(event, ...args);
-      if (event !== 'transport:close' && event !== 'transport:error' && event !== 'newListener' && event !== 'removeListener') {
-        (EventEmitter.prototype.emit as any).call(this, event, ...args);
-      }
-      return result;
-    };
+    this.transport.onProtocolEvent((event, ...args) => {
+      this.emit(event, ...args);
+    });
 
     this.transport.on('transport:close', () => {
       if (this.connected && !this.reconnecting) {
@@ -361,8 +361,11 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
     this.reconnecting = true;
     this.connected = false;
 
-    // Clear stale pending requests before reconnect
-    (this.transport as WebSocketProtocolTransport).clearPendingRequests();
+    // Tear down the transport so any stale pending requests are rejected
+    // before reconnecting. `disconnect()` is the documented public path —
+    // it clears pending state and releases the socket without leaning on
+    // any concrete transport implementation.
+    await this.transport.disconnect();
     this.activeTargetId = null;
     this.knownTargets.clear();
 

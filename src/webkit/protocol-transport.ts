@@ -20,6 +20,12 @@ import { DEFAULT_WEBKIT_CONNECT_TIMEOUT_MS } from '../config/defaults';
 
 // ========== Interface ==========
 
+/** Handler signature for raw RDP protocol events relayed by the transport. */
+export type ProtocolEventHandler = (
+  event: string,
+  ...args: unknown[]
+) => void;
+
 /**
  * Adapter interface used by WebKitClient to interact with the transport layer.
  * Using an interface avoids circular dependencies and allows test doubles.
@@ -28,11 +34,26 @@ export interface ProtocolTransport extends NodeJS.EventEmitter {
   /** Connect to a specific WebSocket URL. Resolves when the socket is open. */
   connect(wsUrl: string): Promise<void>;
 
-  /** Close the WebSocket and reject all pending requests. */
+  /**
+   * Close the WebSocket and reject all pending requests. The transport also
+   * rejects pending requests automatically when the underlying socket emits
+   * `close`, so callers do not need to clear pending state out-of-band.
+   */
   disconnect(): Promise<void>;
 
   /** True when the WebSocket is in OPEN state. */
   isConnected(): boolean;
+
+  /**
+   * Subscribe to RDP protocol events relayed by the transport (e.g.
+   * `Page.loadEventFired`, `Target.targetCreated`). Lifecycle events
+   * (`transport:close`, `transport:error`) and EventEmitter housekeeping
+   * events (`newListener`, `removeListener`) are NOT delivered here —
+   * subscribe to those via the `EventEmitter` surface directly.
+   *
+   * Returns an unsubscribe function for symmetry with other reactive APIs.
+   */
+  onProtocolEvent(handler: ProtocolEventHandler): () => void;
 
   /**
    * Send a protocol command wrapped in Target.sendMessageToTarget.
@@ -82,8 +103,38 @@ export class WebSocketProtocolTransport extends EventEmitter implements Protocol
   /** Inner pending requests: actual domain-command response tracking */
   private readonly innerPending: Map<number, PendingSlot> = new Map();
 
+  /** Subscribers registered via onProtocolEvent (raw RDP event relay). */
+  private readonly protocolEventHandlers: Set<ProtocolEventHandler> = new Set();
+
   constructor(private readonly options: WebSocketProtocolTransportOptions = {}) {
     super();
+  }
+
+  // ========== Protocol Event Subscription ==========
+
+  onProtocolEvent(handler: ProtocolEventHandler): () => void {
+    this.protocolEventHandlers.add(handler);
+    return () => {
+      this.protocolEventHandlers.delete(handler);
+    };
+  }
+
+  /**
+   * Emit an RDP protocol event on the EventEmitter surface AND notify every
+   * subscriber registered via `onProtocolEvent`. Used in place of the bare
+   * `this.emit(event, ...)` calls inside `handleMessage`.
+   */
+  private emitProtocolEvent(event: string, ...args: unknown[]): void {
+    this.emit(event, ...args);
+    for (const handler of this.protocolEventHandlers) {
+      try {
+        handler(event, ...args);
+      } catch (err) {
+        // Surface listener errors via the standard 'error' channel so a
+        // misbehaving subscriber cannot break the message-routing loop.
+        this.emit('error', err as Error);
+      }
+    }
   }
 
   // ========== Lifecycle ==========
@@ -112,6 +163,9 @@ export class WebSocketProtocolTransport extends EventEmitter implements Protocol
 
       ws.on('close', () => {
         this._connected = false;
+        // Reject any awaiters immediately rather than letting them hang
+        // until their per-request timers expire.
+        this.clearPendingRequests();
         this.emit('transport:close');
       });
 
@@ -233,7 +287,7 @@ export class WebSocketProtocolTransport extends EventEmitter implements Protocol
       } else if (innerMsg.method) {
         // Inner event (e.g., Page.loadEventFired) — include targetId for multi-tab filtering
         const sourceTargetId = msg.params.targetId;
-        this.emit(innerMsg.method, innerMsg.params, { targetId: sourceTargetId });
+        this.emitProtocolEvent(innerMsg.method, innerMsg.params, { targetId: sourceTargetId });
       }
       return;
     }
@@ -259,7 +313,7 @@ export class WebSocketProtocolTransport extends EventEmitter implements Protocol
 
     // Non-multiplexed event (Target.targetCreated, Target.targetDestroyed, etc.)
     if (msg.method) {
-      this.emit(msg.method, msg.params);
+      this.emitProtocolEvent(msg.method, msg.params);
     }
   }
 
