@@ -164,7 +164,7 @@ When debugging a tap that misses its visible target:
 1. **Check the conversion log**: if `app-tap-element` prints `[app_tap_element] macOS-pt→iOS-pt conversion applied: ...`, the conversion ran.
 2. **Verify device in DEVICE_PRESETS**: run `xcrun simctl list devices` (or `device_list` MCP tool) to see the booted simulator's display name, then check whether that name appears as a `name` field on any entry in `src/simulator/presets.ts`. The match is case-insensitive (per PR #720), so casing differences are not a problem — but missing entries (e.g. a brand-new device) will silently disable the conversion and require adding a preset.
 3. **Check Simulator window scale**: if you manually resized the window, re-run the element query immediately before tapping.
-4. **For Flutter apps**: ensure the app is built with `--dart-define` or `Semantics(label: '...')` wrapping, and consider adding `SemanticsBinding.instance.ensureSemantics()` to `main()` for release builds.
+4. **For Flutter apps with empty AX trees**: do not look for a build flag — there is none. The effective remediations are (a) restart the app after `tryActivateViaSimctl()` writes the TCC flag (the flag only affects new accessibility sessions, so a running release build will not pick it up), and (b) call `SemanticsBinding.instance.ensureSemantics()` from `main()` so the framework materialises the semantics tree without depending on the OS-level toggle.
 
 ## References
 
