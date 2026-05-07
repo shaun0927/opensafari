@@ -100,6 +100,65 @@ describe('audit logger', () => {
     expect(readAuditEntries(tmpHome)).toHaveLength(1);
   });
 
+  it('redacts camelCase secret keys (apiKey, accessToken, refreshToken)', () => {
+    logAuditEntry('http_request', 'session-camel', {
+      headers: {
+        apiKey: 'fake-api-key-camel',
+        accessToken: 'fake-access-token-camel',
+        refreshToken: 'fake-refresh-token-camel',
+      },
+      // Non-credential look-alike keys must NOT be redacted
+      monkey: 'visible-monkey',
+      keyboard: 'visible-keyboard',
+      context: 'visible-context',
+    });
+
+    const [entry] = readAuditEntries(tmpHome);
+    const summary = parseArgsSummary(entry);
+
+    const serialized = JSON.stringify(summary);
+    expect(serialized).not.toContain('fake-api-key-camel');
+    expect(serialized).not.toContain('fake-access-token-camel');
+    expect(serialized).not.toContain('fake-refresh-token-camel');
+    expect(serialized).toContain('visible-monkey');
+    expect(serialized).toContain('visible-keyboard');
+    expect(serialized).toContain('visible-context');
+    expect(summary).toMatchObject({
+      headers: {
+        apiKey: '[REDACTED]',
+        accessToken: '[REDACTED]',
+        refreshToken: '[REDACTED]',
+      },
+    });
+  });
+
+  it('does not chmod a pre-existing parent log directory', () => {
+    // Pre-create the log directory with a permissive mode (e.g. shared
+    // /var/log) and verify the audit logger does NOT tighten it.
+    const sharedDir = fs.mkdtempSync(path.join(os.tmpdir(), 'audit-logger-shared-'));
+    const sharedLogPath = path.join(sharedDir, 'audit.log');
+    fs.chmodSync(sharedDir, 0o755);
+    const beforeMode = fs.statSync(sharedDir).mode & 0o777;
+
+    const previous = process.env.OPENSAFARI_AUDIT_LOG_PATH;
+    process.env.OPENSAFARI_AUDIT_LOG_PATH = sharedLogPath;
+    try {
+      logAuditEntry('navigate', 'session-shared', { url: 'https://example.test/' });
+
+      const afterMode = fs.statSync(sharedDir).mode & 0o777;
+      expect(afterMode).toBe(beforeMode);
+      // The audit file itself must still be created with private mode
+      expect(fs.statSync(sharedLogPath).mode & 0o777).toBe(0o600);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENSAFARI_AUDIT_LOG_PATH;
+      } else {
+        process.env.OPENSAFARI_AUDIT_LOG_PATH = previous;
+      }
+      fs.rmSync(sharedDir, { recursive: true, force: true });
+    }
+  });
+
   it('redacts fake high-risk HTTP secrets emitted through MCP tool-call auditing', async () => {
     const server = new MCPServer();
     server.enableAuditLog();

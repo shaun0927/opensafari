@@ -75,17 +75,24 @@ const SENSITIVE_QUERY_PARAMS = [
   'token',
 ];
 
-// Match either the full lowercased key, or any `_`/`-` separated segment
-// of it (with simple plural `s` stripped), against the provided list.
-// Substring matching is too loose — `monkey` would match `key` and
-// `context` would match `text`.
+// Match either the full lowercased key, or any segment of it against
+// the provided list. Segments are split on `_` / `-` and on camelCase
+// boundaries so `apiKey`, `accessToken`, and `refreshToken` are caught
+// while `monkey` / `keyboard` / `context` are not. Trailing plural `s`
+// on a segment is stripped before comparison.
 function matchesSensitiveTerm(key: string, terms: readonly string[]): boolean {
   const lower = key.toLowerCase();
   if (matchSegment(lower, terms)) return true;
-  for (const segment of lower.split(/[_-]/)) {
-    if (segment && matchSegment(segment, terms)) return true;
+  for (const segment of splitIntoSegments(key)) {
+    if (segment && matchSegment(segment.toLowerCase(), terms)) return true;
   }
   return false;
+}
+
+// Split on `_` / `-` and camelCase boundaries (`apiKey` → `api`, `Key`;
+// `XMLHttp` → `XML`, `Http`).
+function splitIntoSegments(key: string): string[] {
+  return key.split(/[_-]+|(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])/);
 }
 
 function matchSegment(segment: string, terms: readonly string[]): boolean {
@@ -173,8 +180,15 @@ function ensurePrivateLogTarget(logPath: string): boolean {
 
   const logDir = path.dirname(logPath);
   try {
+    // Only tighten directory permissions on directories we own (i.e. that
+    // we just created). When OPENSAFARI_AUDIT_LOG_PATH points at a shared
+    // location (e.g. /var/log), unconditionally chmod-ing the parent
+    // could break other services that rely on its existing mode.
+    const dirExisted = fs.existsSync(logDir);
     fs.mkdirSync(logDir, { recursive: true, mode: AUDIT_DIR_MODE });
-    fs.chmodSync(logDir, AUDIT_DIR_MODE);
+    if (!dirExisted) {
+      fs.chmodSync(logDir, AUDIT_DIR_MODE);
+    }
     if (fs.existsSync(logPath)) {
       fs.chmodSync(logPath, AUDIT_FILE_MODE);
     }
