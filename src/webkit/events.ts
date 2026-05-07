@@ -117,7 +117,7 @@ export class EventBridge {
         event !== 'newListener' &&
         event !== 'removeListener'
       ) {
-        (EventEmitter.prototype.emit as any).call(this.host, event, ...args);
+        this.host.emit(event, ...args);
       }
       return result;
     };
