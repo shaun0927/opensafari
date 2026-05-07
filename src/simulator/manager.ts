@@ -153,14 +153,21 @@ export class SimulatorManager {
     } catch (err) {
       const msg = err instanceof SimctlError ? err.message : String(err);
       if (process.env.DEBUG) {
-        console.error(`[SimulatorManager] bootstatus ${deviceId}: not booted (${msg.slice(0, 80)})`);
+        console.error(`[SimulatorManager] bootstatus ${deviceId}: error (${msg.slice(0, 80)})`);
       }
-      // "Unable to look up" / "domain not found" means the UDID does not exist
+      // "Unable to look up" / "domain not found" means the UDID does not exist in the registry.
       if (msg.includes('Unable to lookup') || msg.includes('domain not found') || msg.includes('Invalid device')) {
         return null;
       }
-      // Any other error means device exists but is not booted
-      return 'Shutdown';
+      // The command ran and reported that the device is not booted (DeviceNotBootedError
+      // or similar). This is an explicit "Shutdown" signal from simctl itself.
+      if (err instanceof SimctlError && (msg.includes('DeviceNotBootedError') || msg.includes('not booted'))) {
+        return 'Shutdown';
+      }
+      // Any other failure (timeout, xcrun crash, CoreSimulator issue, etc.) is an
+      // ambiguous error — we cannot distinguish from actual device state. Return null
+      // so that getDeviceState() falls back to the full `simctl list` parse.
+      return null;
     }
   }
 

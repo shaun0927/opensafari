@@ -186,6 +186,99 @@ describe('SimulatorManager.getDeviceState()', () => {
   });
 });
 
+// ── queryBootstatus: ambiguous errors fall back to list ───────────────────
+
+describe('SimulatorManager.queryBootstatus() error handling', () => {
+  beforeEach(() => resetBootstatusCapabilityForTests());
+
+  test('probe error (timeout) does NOT cause getDeviceState() to return Shutdown', async () => {
+    const { manager, fakeExec, fakeExecJson } = makeManager();
+
+    // Capability probe: returns non-"Unknown command" error so bootstatus is considered available
+    // Real UDID call: simulates a timeout / CoreSimulator crash (not a DeviceNotBootedError)
+    fakeExec.mockImplementation(async (args: string[]) => {
+      if (args[0] === 'bootstatus') {
+        if (args[1] === PROBE_UDID) {
+          throw new SimctlError('Unable to lookup sim by UDID', args, 1);
+        }
+        // Ambiguous failure — timeout or xcrun issue, NOT a DeviceNotBootedError
+        throw new SimctlError('simctl bootstatus failed: timed out', args, 1);
+      }
+      return '';
+    });
+    // Full-list fallback shows the device is actually Booted
+    fakeExecJson.mockResolvedValue(makeDeviceJson(UDID, 'Booted'));
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const state = await (manager as any).getDeviceState(UDID);
+
+    // Must NOT report Shutdown — should have fallen back to full list and returned Booted
+    expect(state).not.toBe('Shutdown');
+    expect(state).toBe('Booted');
+  });
+
+  test('explicit DeviceNotBootedError from simctl returns Shutdown without list fallback', async () => {
+    const { manager, fakeExec, fakeExecJson } = makeManager();
+
+    fakeExec.mockImplementation(async (args: string[]) => {
+      if (args[0] === 'bootstatus') {
+        if (args[1] === PROBE_UDID) {
+          throw new SimctlError('Unable to lookup sim by UDID', args, 1);
+        }
+        // Explicit simctl signal that device is not booted
+        throw new SimctlError('DeviceNotBootedError: device is not booted', args, 1);
+      }
+      return '';
+    });
+    fakeExecJson.mockResolvedValue(makeDeviceJson(UDID, 'Booted'));
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const state = await (manager as any).getDeviceState(UDID);
+
+    // Explicit not-booted signal → Shutdown; full list must NOT have been called
+    expect(state).toBe('Shutdown');
+    expect((fakeExecJson as jest.Mock).mock.calls.length).toBe(0);
+  });
+});
+
+// ── hasBootstatus: concurrent callers share one probe ─────────────────────
+
+describe('hasBootstatus() concurrent-probe deduplication', () => {
+  beforeEach(() => resetBootstatusCapabilityForTests());
+
+  test('N concurrent hasBootstatus() calls fire only ONE underlying simctl exec', async () => {
+    // Import hasBootstatus — it is a module-level export
+    const { hasBootstatus } = await import('../../src/simulator/simctl');
+
+    let probeCount = 0;
+    const fakeSimctl = {
+      exec: jest.fn(async (_args: string[]) => {
+        probeCount++;
+        // Simulate the probe taking a tick so concurrent callers can pile up
+        await new Promise(r => setTimeout(r, 10));
+        // Non-"Unknown command" error → capability present
+        throw new SimctlError('Unable to lookup sim by UDID', _args, 1);
+      }),
+    };
+
+    // Fire 5 concurrent callers before the first probe completes
+    const results = await Promise.all([
+      hasBootstatus(fakeSimctl as any), // eslint-disable-line @typescript-eslint/no-explicit-any
+      hasBootstatus(fakeSimctl as any), // eslint-disable-line @typescript-eslint/no-explicit-any
+      hasBootstatus(fakeSimctl as any), // eslint-disable-line @typescript-eslint/no-explicit-any
+      hasBootstatus(fakeSimctl as any), // eslint-disable-line @typescript-eslint/no-explicit-any
+      hasBootstatus(fakeSimctl as any), // eslint-disable-line @typescript-eslint/no-explicit-any
+    ]);
+
+    // All callers must agree the capability is present
+    expect(results.every(r => r === true)).toBe(true);
+
+    // Only ONE underlying exec call must have been made despite 5 concurrent callers
+    expect(probeCount).toBe(1);
+    expect(fakeSimctl.exec).toHaveBeenCalledTimes(1);
+  });
+});
+
 // ── Cache invalidation ─────────────────────────────────────────────────────
 
 describe('SimulatorManager: cache invalidation after lifecycle mutations', () => {
