@@ -394,14 +394,30 @@ jobs:
           fi
           # Trim trailing newline / whitespace; --vmservice-out-file writes
           # the URL with a trailing newline.
-          VM_SERVICE_URL=$(cat "$VM_SERVICE_FILE" | tr -d '\n\r ' )
-          # Ensure trailing slash so downstream HTTP probes resolve correctly.
+          VM_SERVICE_RAW_URL=$(cat "$VM_SERVICE_FILE" | tr -d '\n\r ' )
+          # `flutter run --vmservice-out-file` writes a websocket URL on recent
+          # Flutter releases. Runtime code expects OPENSAFARI_VM_SERVICE_URL to
+          # be the HTTP observatory URL and converts it back to /ws internally.
+          VM_SERVICE_WS_URL="$VM_SERVICE_RAW_URL"
+          case "$VM_SERVICE_WS_URL" in
+            */ws/) ;;
+            */ws) VM_SERVICE_WS_URL="${VM_SERVICE_WS_URL}/" ;;
+            */) VM_SERVICE_WS_URL="${VM_SERVICE_WS_URL}ws/" ;;
+            *) VM_SERVICE_WS_URL="${VM_SERVICE_WS_URL}/ws/" ;;
+          esac
+          VM_SERVICE_URL="$VM_SERVICE_WS_URL"
           case "$VM_SERVICE_URL" in
-            */) ;;
-            *) VM_SERVICE_URL="${VM_SERVICE_URL}/" ;;
+            ws://*) VM_SERVICE_URL="http://${VM_SERVICE_URL#ws://}" ;;
+            wss://*) VM_SERVICE_URL="https://${VM_SERVICE_URL#wss://}" ;;
+          esac
+          case "$VM_SERVICE_URL" in
+            */ws/) VM_SERVICE_URL="${VM_SERVICE_URL%/ws/}/" ;;
+            */ws) VM_SERVICE_URL="${VM_SERVICE_URL%/ws}/" ;;
           esac
           echo "OPENSAFARI_VM_SERVICE_URL=$VM_SERVICE_URL" >> "$GITHUB_ENV"
-          echo "Discovered VM Service URL: $VM_SERVICE_URL"
+          echo "OPENSAFARI_VM_SERVICE_WS_URL=$VM_SERVICE_WS_URL" >> "$GITHUB_ENV"
+          echo "Discovered VM Service HTTP URL: $VM_SERVICE_URL"
+          echo "Discovered VM Service websocket URL: $VM_SERVICE_WS_URL"
 
       - name: Wait for DDS frontend compiler warmup
         run: |
@@ -410,7 +426,8 @@ jobs:
             echo "::error::No VM Service URL exported — cannot warm up DDS"
             exit 1
           fi
-          echo "Probing VM Service at $OPENSAFARI_VM_SERVICE_URL ..."
+          VM_SERVICE_PROBE_URL="${OPENSAFARI_VM_SERVICE_WS_URL:-$OPENSAFARI_VM_SERVICE_URL}"
+          echo "Probing VM Service at $VM_SERVICE_PROBE_URL ..."
           # Dart VM service JSON-RPC traffic is served over the VM service
           # websocket path. Some CI runners reject HTTP JSON-RPC probes with
           # 405 even after the service is ready, so validate the downstream
@@ -419,7 +436,7 @@ jobs:
             if node <<'NODE'
           const WebSocket = require('ws');
 
-          const rawUrl = process.env.OPENSAFARI_VM_SERVICE_URL;
+          const rawUrl = process.env.OPENSAFARI_VM_SERVICE_WS_URL || process.env.OPENSAFARI_VM_SERVICE_URL;
           if (!rawUrl) {
             console.error('OPENSAFARI_VM_SERVICE_URL is empty');
             process.exit(1);
