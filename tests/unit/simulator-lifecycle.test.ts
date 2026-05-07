@@ -7,7 +7,8 @@
  *   - boot timeout surfaces BootTimeoutError
  *   - shutdown happy path
  *   - shutdown already-shutdown no-op
- *   - shutdown bounded by timeout (ShutdownTimeoutError surfaces after nuclear erase)
+ *   - shutdown best-effort cleanup: nuclear erase, then return on success
+ *   - shutdown propagates SimctlError if the nuclear erase itself fails
  *   - delete is explicit (must be called deliberately — never runs on accident)
  *   - clone returns UDID from simctl output
  *   - erase delegates to simctl erase
@@ -20,7 +21,8 @@ import {
   deleteDevice,
   cloneDevice,
 } from '../../src/simulator/lifecycle';
-import { BootTimeoutError, ShutdownTimeoutError } from '../../src/simulator/errors';
+import { BootTimeoutError } from '../../src/simulator/errors';
+import { SimctlError } from '../../src/simulator/simctl';
 import { SimulatorDevice } from '../../src/simulator/types';
 
 // ── helpers ─────────────────────────────────────────────────────────────────
@@ -190,12 +192,15 @@ describe('lifecycle.shutdown', () => {
     expect(simctl.exec).toHaveBeenCalledWith(['shutdown', 'TEST-UDID-0001']);
   });
 
-  it('surfaces ShutdownTimeoutError (does not hide it) after nuclear erase', async () => {
+  it('completes successfully after nuclear erase (best-effort cleanup)', async () => {
+    // Pre-refactor SimulatorManager.shutdown returned on a successful
+    // erase; preserving that contract is what keeps the device_shutdown
+    // MCP tool from reporting hard failures on otherwise-clean teardowns.
     const bootedDevice = makeDevice({ state: 'Booted' });
     const simctl = makeSimctl();
     const lookup = {
       resolveDevice: jest.fn(),
-      // Always returns Booted — never shuts down
+      // Always returns Booted — never shuts down, forcing the nuclear path
       getDevice: jest.fn(async () => bootedDevice),
     };
 
@@ -206,30 +211,35 @@ describe('lifecycle.shutdown', () => {
         sleep: noopSleep,
         shutdownTimeoutMs: 0,
       }),
-    ).rejects.toThrow(ShutdownTimeoutError);
+    ).resolves.toBeUndefined();
   });
 
-  it('ShutdownTimeoutError carries deviceId and timeoutMs', async () => {
-    const bootedDevice = makeDevice({ udid: 'UDID-Y', state: 'Booted' });
-    const simctl = makeSimctl();
+  it('propagates SimctlError when the nuclear erase itself fails', async () => {
+    const bootedDevice = makeDevice({ state: 'Booted' });
+    // Let `shutdown` calls succeed; only `erase` fails. This isolates the
+    // erase-failure branch from incidental shutdown errors.
+    const simctl = makeSimctl(async (args: string[]) => {
+      if (args[0] === 'erase') {
+        throw new SimctlError('simctl erase failed', ['erase', 'TEST-UDID-0001'], 1);
+      }
+      return '';
+    });
     const lookup = {
       resolveDevice: jest.fn(),
       getDevice: jest.fn(async () => bootedDevice),
     };
 
-    let caught: ShutdownTimeoutError | undefined;
-    try {
-      await shutdown('UDID-Y', { simctl, lookup, sleep: noopSleep, shutdownTimeoutMs: 0 });
-    } catch (e) {
-      caught = e as ShutdownTimeoutError;
-    }
-
-    expect(caught).toBeInstanceOf(ShutdownTimeoutError);
-    expect(caught?.deviceId).toBe('UDID-Y');
-    expect(caught?.timeoutMs).toBe(0);
+    await expect(
+      shutdown('TEST-UDID-0001', {
+        simctl,
+        lookup,
+        sleep: noopSleep,
+        shutdownTimeoutMs: 0,
+      }),
+    ).rejects.toBeInstanceOf(SimctlError);
   });
 
-  it('issues simctl erase before throwing ShutdownTimeoutError', async () => {
+  it('issues simctl erase as the last-resort cleanup step', async () => {
     const bootedDevice = makeDevice({ state: 'Booted' });
     const simctl = makeSimctl();
     const lookup = {
@@ -237,16 +247,12 @@ describe('lifecycle.shutdown', () => {
       getDevice: jest.fn(async () => bootedDevice),
     };
 
-    try {
-      await shutdown('TEST-UDID-0001', {
-        simctl,
-        lookup,
-        sleep: noopSleep,
-        shutdownTimeoutMs: 0,
-      });
-    } catch {
-      // expected
-    }
+    await shutdown('TEST-UDID-0001', {
+      simctl,
+      lookup,
+      sleep: noopSleep,
+      shutdownTimeoutMs: 0,
+    });
 
     const eraseCalls = simctl.calls.filter(a => a[0] === 'erase');
     expect(eraseCalls.length).toBeGreaterThan(0);
