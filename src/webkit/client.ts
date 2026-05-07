@@ -4,6 +4,8 @@ import { ConnectionError, TimeoutError, ProtocolError, EvaluationError } from '.
 export { ConnectionError, TimeoutError, ProtocolError, EvaluationError } from './errors';
 import { ProtocolTransport, WebSocketProtocolTransport } from './protocol-transport';
 export type { ProtocolTransport } from './protocol-transport';
+import { TargetSessionManager } from './target-session';
+export type { TargetCommandSender } from './target-session';
 import {
   BrowserBackend,
   NavigateOptions,
@@ -41,20 +43,14 @@ export interface WebKitTarget {
 export class WebKitClient extends EventEmitter implements BrowserBackend {
   private transport: ProtocolTransport;
   private messageId = 0;
-  private enabledDomains: Set<string> = new Set();
-  private enabledDomainsPerTarget: Map<string, Set<string>> = new Map();
+  private innerMessageId = 0;
   private connected = false;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private lastUrl: string = '';
   private reconnecting = false;
   readonly backendType = 'safari' as const;
 
-  // Target-multiplexed protocol state
-  private activeTargetId: string | null = null;
-  private knownTargets: Set<string> = new Set();
-  private innerMessageId = 0;
-  private targetReady: Promise<void> | null = null;
-  private targetReadyResolve: (() => void) | null = null;
+  private targetSession: TargetSessionManager;
 
   constructor(private options: WebKitClientOptions) {
     super();
@@ -62,6 +58,7 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
       connectTimeout: options.connectTimeout,
       sendTimeout: options.sendTimeout,
     });
+    this.targetSession = new TargetSessionManager(this.transport, this);
     this.bindTransportEvents();
   }
 
@@ -97,53 +94,14 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
       // Error already handled — connection state tracked via transport:close
     });
 
-    // Target lifecycle events emitted by the transport
-    this.transport.on('Target.targetCreated', (params: any) => {
-      this.handleTargetCreated(params);
+    // Forward target lifecycle events emitted by TargetSessionManager to this EventEmitter.
+    this.targetSession.on('target:created', (payload: any) => {
+      this.emit('target:created', payload);
     });
 
-    this.transport.on('Target.targetDestroyed', (params: any) => {
-      this.handleTargetDestroyed(params);
+    this.targetSession.on('target:destroyed', (payload: any) => {
+      this.emit('target:destroyed', payload);
     });
-  }
-
-  // ========== Target Lifecycle Handlers (moved from handleMessage) ==========
-
-  private handleTargetCreated(params: any): void {
-    const info = params?.targetInfo;
-    if (info?.type !== 'page') return;
-
-    this.knownTargets.add(info.targetId);
-    this.emit('target:created', { targetId: info.targetId, url: info.url });
-
-    if (!this.activeTargetId) {
-      this.activeTargetId = info.targetId;
-    }
-
-    const globalDomains = [...this.enabledDomains];
-    const perTargetDomains = this.enabledDomainsPerTarget.get(info.targetId);
-    const domainsToEnable = new Set([...globalDomains, ...(perTargetDomains ?? [])]);
-    Promise.all(
-      [...domainsToEnable].map(domain =>
-        this.sendToTarget(`${domain}.enable`, undefined, info.targetId).catch(err => {
-          console.error(`[WebKitClient] Failed to re-enable ${domain} on new target: ${(err as Error).message}`);
-        })
-      )
-    ).then(() => {
-      this.targetReadyResolve?.();
-    });
-  }
-
-  private handleTargetDestroyed(params: any): void {
-    const destroyedId = params?.targetId;
-    this.knownTargets.delete(destroyedId);
-    this.enabledDomainsPerTarget.delete(destroyedId);
-    this.emit('target:destroyed', { targetId: destroyedId });
-    if (destroyedId === this.activeTargetId) {
-      this.activeTargetId = this.knownTargets.size > 0
-        ? this.knownTargets.values().next().value ?? null
-        : null;
-    }
   }
 
   /**
@@ -204,12 +162,8 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
     this.stopHeartbeat();
     await this.transport.disconnect();
     this.connected = false;
-    this.enabledDomains.clear();
-    this.enabledDomainsPerTarget.clear();
-    this.activeTargetId = null;
-    this.knownTargets.clear();
-    this.targetReady = null;
-    this.targetReadyResolve = null;
+    this.targetSession.reset();
+    this.targetSession.resetGlobalDomains();
   }
 
   isConnected(): boolean {
@@ -265,7 +219,7 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
     method: string,
     params?: Record<string, unknown>,
   ): Promise<T> {
-    return this.sendToTarget<T>(method, params, this.activeTargetId);
+    return this.sendToTarget<T>(method, params, this.targetSession.getActiveTargetId());
   }
 
   /**
@@ -277,7 +231,7 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
     params?: Record<string, unknown>,
     targetId?: string | null,
   ): Promise<T> {
-    const resolvedTargetId = targetId ?? this.activeTargetId;
+    const resolvedTargetId = targetId ?? this.targetSession.getActiveTargetId();
     if (!resolvedTargetId) {
       throw new ConnectionError(
         'No active target. Is Safari open in the simulator?',
@@ -294,9 +248,9 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
   // ========== Domain Management ==========
 
   async enableDomain(domain: string): Promise<void> {
-    if (!this.enabledDomains.has(domain)) {
+    if (!this.targetSession.hasGlobalEnabledDomain(domain)) {
       await this.send(`${domain}.enable`);
-      this.enabledDomains.add(domain);
+      this.targetSession.addGlobalEnabledDomain(domain);
     }
   }
 
@@ -306,31 +260,25 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
    */
   async enableDomainForTarget(domain: string, targetId: string): Promise<void> {
     await this.sendToTarget(`${domain}.enable`, undefined, targetId);
-    if (!this.enabledDomainsPerTarget.has(targetId)) {
-      this.enabledDomainsPerTarget.set(targetId, new Set());
-    }
-    this.enabledDomainsPerTarget.get(targetId)!.add(domain);
+    this.targetSession.addEnabledDomainForTarget(domain, targetId);
   }
 
   // ========== Multi-Tab Target Management ==========
 
   getActiveTargetId(): string | null {
-    return this.activeTargetId;
+    return this.targetSession.getActiveTargetId();
   }
 
   setActiveTargetId(targetId: string): void {
-    if (!this.knownTargets.has(targetId)) {
-      throw new ConnectionError(`Target ${targetId} not found in known targets`);
-    }
-    this.activeTargetId = targetId;
+    this.targetSession.setActiveTargetId(targetId);
   }
 
   getKnownTargets(): Set<string> {
-    return new Set(this.knownTargets);
+    return this.targetSession.getKnownTargets();
   }
 
   getEnabledDomainsForTarget(targetId: string): Set<string> {
-    return new Set(this.enabledDomainsPerTarget.get(targetId) ?? []);
+    return this.targetSession.getEnabledDomainsForTarget(targetId);
   }
 
   // ========== Heartbeat ==========
@@ -363,8 +311,7 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
 
     // Clear stale pending requests before reconnect
     (this.transport as WebSocketProtocolTransport).clearPendingRequests();
-    this.activeTargetId = null;
-    this.knownTargets.clear();
+    this.targetSession.resetTargets();
 
     this.stopHeartbeat();
 
@@ -390,9 +337,9 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
         console.error(`[WebKitClient] Reconnected successfully`);
 
         // Re-enable domains (global + per-target state is rebuilt via enableDomain/enableDomainForTarget)
-        const domains = [...this.enabledDomains];
-        this.enabledDomains.clear();
-        this.enabledDomainsPerTarget.clear();
+        const domains = this.targetSession.snapshotGlobalDomains();
+        this.targetSession.resetGlobalDomains();
+        this.targetSession.resetPerTargetDomains();
         for (const domain of domains) {
           await this.enableDomain(domain);
         }
@@ -1098,10 +1045,7 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
 
   private async connectToTarget(wsUrl: string): Promise<void> {
     // Set up target discovery promise before connecting
-    this.activeTargetId = null;
-    this.targetReady = new Promise<void>((resolve) => {
-      this.targetReadyResolve = resolve;
-    });
+    const targetReady = this.targetSession.prepareForConnect();
 
     await this.transport.connect(wsUrl);
     this.connected = true;
@@ -1118,7 +1062,7 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
       );
     });
     try {
-      await Promise.race([this.targetReady, targetTimeout]);
+      await Promise.race([targetReady, targetTimeout]);
     } finally {
       clearTimeout(targetTimer!);
     }
