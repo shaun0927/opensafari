@@ -395,15 +395,26 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
    * No-ops if the domain is already enabled for this target (avoids duplicate RPCs).
    */
   async enableDomainForTarget(domain: string, targetId: string): Promise<void> {
-    if (!this.enabledDomainsPerTarget.has(targetId)) {
+    const hadEntry = this.enabledDomainsPerTarget.has(targetId);
+    if (!hadEntry) {
       this.enabledDomainsPerTarget.set(targetId, new Set());
     }
     const targetDomains = this.enabledDomainsPerTarget.get(targetId)!;
     if (targetDomains.has(domain)) {
       return;
     }
-    await this.sendToTarget(`${domain}.enable`, undefined, targetId);
-    targetDomains.add(domain);
+    try {
+      await this.sendToTarget(`${domain}.enable`, undefined, targetId);
+      targetDomains.add(domain);
+    } catch (err) {
+      // If the RPC fails for an invalid/closed target, we won't receive a
+      // Target.targetDestroyed cleanup — drop the freshly-created empty Set
+      // ourselves so the map does not grow unboundedly.
+      if (!hadEntry && targetDomains.size === 0) {
+        this.enabledDomainsPerTarget.delete(targetId);
+      }
+      throw err;
+    }
   }
 
   // ========== Multi-Tab Target Management ==========

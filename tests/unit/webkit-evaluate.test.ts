@@ -453,4 +453,48 @@ describe('WebKitClient domain enable dedup', () => {
     await (client as any).enableDomainForTarget('Page', 'target-xyz');
     expect(sendToCalls.filter(c => c.method === 'Page.enable')).toHaveLength(2);
   });
+
+  it('enableDomainForTarget cleans up cache entry when sendToTarget rejects on first enable', async () => {
+    // Regression: an invalid/closed targetId never receives Target.targetDestroyed,
+    // so the freshly-created Set must be removed by the failure path itself —
+    // otherwise enabledDomainsPerTarget grows without bound for callers retrying
+    // unrelated targets.
+    const { WebKitClient } = await import('../../src/webkit/client');
+
+    const client = new WebKitClient({ host: 'localhost', port: 9221 });
+
+    jest.spyOn(client as any, 'sendToTarget').mockRejectedValue(
+      new Error('No target with given id'),
+    );
+
+    await expect(
+      (client as any).enableDomainForTarget('Page', 'invalid-target'),
+    ).rejects.toThrow('No target with given id');
+
+    const enabledForInvalid = (client as any).getEnabledDomainsForTarget('invalid-target');
+    expect(enabledForInvalid.size).toBe(0);
+    // The internal map must NOT retain an entry for the invalid target.
+    expect((client as any).enabledDomainsPerTarget.has('invalid-target')).toBe(false);
+  });
+
+  it('enableDomainForTarget preserves prior entries when a later enable fails', async () => {
+    const { WebKitClient } = await import('../../src/webkit/client');
+
+    const client = new WebKitClient({ host: 'localhost', port: 9221 });
+
+    const sendToTargetSpy = jest.spyOn(client as any, 'sendToTarget')
+      .mockResolvedValueOnce({}) // Page.enable succeeds
+      .mockRejectedValueOnce(new Error('domain rejected')); // Network.enable fails
+
+    await (client as any).enableDomainForTarget('Page', 'target-keep');
+    await expect(
+      (client as any).enableDomainForTarget('Network', 'target-keep'),
+    ).rejects.toThrow('domain rejected');
+
+    // Prior successful Page.enable entry survives the second-call failure.
+    const enabled = (client as any).getEnabledDomainsForTarget('target-keep');
+    expect(enabled.has('Page')).toBe(true);
+    expect(enabled.has('Network')).toBe(false);
+    expect(sendToTargetSpy).toHaveBeenCalledTimes(2);
+  });
 });
