@@ -22,6 +22,8 @@ jobs:
       - run: npm run lint
       - run: npm run test:ci
       - run: npm run build
+      - name: Runtime dependency audit (release gate)
+        run: npm run audit:prod
       - name: Verify dist
         run: |
           test -f dist/index.js
