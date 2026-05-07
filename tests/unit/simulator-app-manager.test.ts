@@ -337,9 +337,7 @@ describe('app-manager.listRunningApps', () => {
     expect(simctl.exec).toHaveBeenCalledWith(['spawn', DEVICE_ID, 'launchctl', 'list']);
   });
 
-  it('strips bracketed suffix with non-greedy match (e.g. bundle[0x1][extra])', async () => {
-    // A label containing multiple bracket groups — non-greedy /\[[^\]]*\]$/ strips only
-    // the trailing bracket group, leaving the bundle id intact.
+  it('strips a single trailing bracket group from bundle labels', async () => {
     const launchctlOutput = [
       'PID\tSTATUS\tLABEL',
       '200\t0\tUIKitApplication:com.example.tricky[0x1]',
@@ -351,6 +349,23 @@ describe('app-manager.listRunningApps', () => {
     const result = await listRunningApps(DEVICE_ID, { simctl, lookup });
 
     expect(result).toEqual([{ label: 'com.example.tricky', pid: 200 }]);
+  });
+
+  it('strips all trailing bracket groups (multi-suffix labels)', async () => {
+    // launchctl can emit labels with multiple trailing bracket groups, e.g.
+    // UIKitApplication:com.example.app[0x1][debug]. We must strip them all so
+    // downstream bundle-id comparisons (classifyMobileContext) match cleanly.
+    const launchctlOutput = [
+      'PID\tSTATUS\tLABEL',
+      '300\t0\tUIKitApplication:com.example.app[0x1][debug]',
+    ].join('\n');
+
+    const simctl = makeSimctl(async () => launchctlOutput);
+    const lookup = makeLookup(makeDevice());
+
+    const result = await listRunningApps(DEVICE_ID, { simctl, lookup });
+
+    expect(result).toEqual([{ label: 'com.example.app', pid: 300 }]);
   });
 
   it('returns empty array when no UIKitApplication entries', async () => {

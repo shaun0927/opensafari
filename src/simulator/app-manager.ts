@@ -173,7 +173,7 @@ export async function listRunningApps(
     const label = parts[2];
     // Filter for UIKitApplication entries (running foreground apps)
     if (!isNaN(pid) && pid > 0 && label.startsWith('UIKitApplication:')) {
-      const bundleId = label.replace('UIKitApplication:', '').replace(/\[[^\]]*\]$/, '');
+      const bundleId = label.replace('UIKitApplication:', '').replace(/(\[[^\]]*\])+$/, '');
       apps.push({ label: bundleId, pid });
     }
   }
