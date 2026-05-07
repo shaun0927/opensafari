@@ -45,28 +45,6 @@ module.exports = [
       // CLI communicates via stdout, not MCP stdio — console.log is safe
     },
   },
-  // ---------------------------------------------------------------------------
-  // #710 WebKit RDP migration gate — per-path no-explicit-any: error
-  //
-  // These files were fully DTO-migrated under issue #710 (PR #739 / PR27).
-  // The rule is intentionally NOT enforced globally; it gates only paths that
-  // have been migrated away from raw `any` types.
-  //
-  // When future areas are migrated (Flutter VM service, simctl JSON, MCP tool
-  // inputs, etc.) add their paths here as a separate PR that includes both
-  // the migration commit and the lint-gate commit — per #710's incremental
-  // contract ("lint strictness should follow migration, not precede it").
-  // ---------------------------------------------------------------------------
-  {
-    files: [
-      'src/types/webkit-rdp.ts',
-      'src/webkit/client.ts',
-      'tests/helpers/webkit-rdp-fixtures.ts',
-    ],
-    rules: {
-      '@typescript-eslint/no-explicit-any': 'error',
-    },
-  },
   // Test files
   {
     files: ['tests/**/*.ts'],
@@ -84,6 +62,33 @@ module.exports = [
       ...tsPlugin.configs.recommended.rules,
       '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
       '@typescript-eslint/no-explicit-any': 'warn',
+    },
+  },
+  // ---------------------------------------------------------------------------
+  // #710 WebKit RDP migration gate — per-path no-explicit-any: error
+  //
+  // These files were fully DTO-migrated under issue #710 (PR #739 / PR27).
+  // The rule is intentionally NOT enforced globally; it gates only paths that
+  // have been migrated away from raw `any` types.
+  //
+  // IMPORTANT: This block must remain LAST in the config array. In ESLint flat
+  // config, later entries override earlier ones. Placing this block after the
+  // tests/** glob ensures the stricter `error` level is not reset to `warn` for
+  // the test helper file that lives under tests/helpers/.
+  //
+  // When future areas are migrated (Flutter VM service, simctl JSON, MCP tool
+  // inputs, etc.) add their paths here as a separate PR that includes both
+  // the migration commit and the lint-gate commit — per #710's incremental
+  // contract ("lint strictness should follow migration, not precede it").
+  // ---------------------------------------------------------------------------
+  {
+    files: [
+      'src/types/webkit-rdp.ts',
+      'src/webkit/client.ts',
+      'tests/helpers/webkit-rdp-fixtures.ts',
+    ],
+    rules: {
+      '@typescript-eslint/no-explicit-any': 'error',
     },
   },
 ];
