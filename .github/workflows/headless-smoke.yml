@@ -426,15 +426,23 @@ jobs:
           echo "Probing VM Service at $OPENSAFARI_VM_SERVICE_URL ..."
           echo "DDS frontend compiler warmup probe URL: $VM_SERVICE_PROBE_URL"
           # The DDS HTTP endpoint becomes responsive a few seconds after the
-          # URL is written. Wait for *any* 200 response before letting jest
-          # connect — `compileExpression` (the call probeEvaluateCompile
-          # uses) requires the frontend compiler to have completed its
-          # initial compile pass, which the warmup sleep covers.
+          # URL is written. Probe the VM service JSON-RPC endpoint instead of
+          # requiring a bare GET / to return 200; Dart VM service routes may
+          # reject GET while still accepting JSON-RPC traffic. `compileExpression`
+          # (the call probeEvaluateCompile uses) requires the frontend compiler
+          # to have completed its initial compile pass, which the warmup sleep covers.
           for i in $(seq 1 30); do
-            if curl --silent --max-time 2 --output /dev/null --write-out '%{http_code}' "$VM_SERVICE_PROBE_URL" | grep -q '^200$'; then
-              echo "DDS HTTP endpoint responsive (attempt $i)"
+            http_code=$(curl --silent --max-time 2 --output /dev/null --write-out '%{http_code}' \
+              --header 'Content-Type: application/json' \
+              --data '{"jsonrpc":"2.0","id":"warmup","method":"getVM"}' \
+              "$VM_SERVICE_PROBE_URL" || true)
+            if printf '%s' "$http_code" | grep -q '^2[0-9][0-9]$'; then
+              echo "DDS JSON-RPC endpoint responsive with HTTP $http_code (attempt $i)"
               sleep 8
               exit 0
+            fi
+            if [ "$i" -eq 1 ] || [ $((i % 5)) -eq 0 ]; then
+              echo "DDS JSON-RPC endpoint not ready with HTTP ${http_code:-curl-failed} (attempt $i)"
             fi
             sleep 2
           done
