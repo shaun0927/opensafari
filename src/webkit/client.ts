@@ -17,6 +17,13 @@ import {
   DEFAULT_RECONNECT_BASE_DELAY_MS,
   DEFAULT_RECONNECT_MAX_DELAY_MS,
 } from '../config/defaults';
+import {
+  buildTapScript,
+  buildLongPressScript,
+  buildSwipeScript,
+  buildSetValueScript,
+  buildAppendCharScript,
+} from './dom-input-scripts';
 
 export interface WebKitClientOptions {
   host: string;
@@ -792,18 +799,7 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
 
     // Dispatch touch tap: touchstart → touchend → click
     // Uses document.createTouch for iOS Safari compatibility (new Touch() not supported)
-    await this.evaluate(`
-      (function(x, y) {
-        var el = document.elementFromPoint(x, y);
-        if (!el) return;
-        var touch = document.createTouch(window, el, 1, x, y, x, y);
-        var touchList = document.createTouchList(touch);
-        var emptyList = document.createTouchList();
-        el.dispatchEvent(new TouchEvent('touchstart', { touches: touchList, changedTouches: touchList, bubbles: true }));
-        el.dispatchEvent(new TouchEvent('touchend', { touches: emptyList, changedTouches: touchList, bubbles: true }));
-        el.click();
-      })(${x}, ${y})
-    `, { emulateUserGesture: true });
+    await this.evaluate(buildTapScript({ x, y }), { emulateUserGesture: true });
   }
 
   async type(selector: string, text: string, options?: { delay?: number }): Promise<void> {
@@ -819,55 +815,18 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
     if (options?.delay) {
       // Character-by-character mode with delay
       for (const char of text) {
-        await this.evaluate(`
-          (function() {
-            var el = document.querySelector(${JSON.stringify(selector)});
-            if (!el) return;
-            var ev = new KeyboardEvent('keydown', { key: ${JSON.stringify(char)}, bubbles: true });
-            el.dispatchEvent(ev);
-            el.dispatchEvent(new KeyboardEvent('keypress', { key: ${JSON.stringify(char)}, bubbles: true }));
-            // Walk the element's own prototype chain to find the value setter.
-            // Using window.HTMLInputElement.prototype would resolve to the
-            // inspector realm's prototype, causing a cross-realm TypeError.
-            var p = Object.getPrototypeOf(el);
-            while (p && !Object.getOwnPropertyDescriptor(p, 'value')) {
-              p = Object.getPrototypeOf(p);
-            }
-            var desc = p ? Object.getOwnPropertyDescriptor(p, 'value') : null;
-            if (desc && desc.set) {
-              desc.set.call(el, el.value + ${JSON.stringify(char)});
-            } else {
-              el.value += ${JSON.stringify(char)};
-            }
-            el.dispatchEvent(new Event('input', { bubbles: true }));
-            el.dispatchEvent(new KeyboardEvent('keyup', { key: ${JSON.stringify(char)}, bubbles: true }));
-          })()
-        `, { emulateUserGesture: true });
+        await this.evaluate(
+          buildAppendCharScript({ selector, char }),
+          { emulateUserGesture: true },
+        );
         await new Promise(r => setTimeout(r, options.delay));
       }
     } else {
       // Fast mode: set value directly + dispatch events
-      await this.evaluate(`
-        (function() {
-          var el = document.querySelector(${JSON.stringify(selector)});
-          if (!el) return;
-          // Walk the element's own prototype chain to find the value setter.
-          // Using window.HTMLInputElement.prototype would resolve to the
-          // inspector realm's prototype, causing a cross-realm TypeError.
-          var p = Object.getPrototypeOf(el);
-          while (p && !Object.getOwnPropertyDescriptor(p, 'value')) {
-            p = Object.getPrototypeOf(p);
-          }
-          var desc = p ? Object.getOwnPropertyDescriptor(p, 'value') : null;
-          if (desc && desc.set) {
-            desc.set.call(el, ${JSON.stringify(text)});
-          } else {
-            el.value = ${JSON.stringify(text)};
-          }
-          el.dispatchEvent(new Event('input', { bubbles: true }));
-          el.dispatchEvent(new Event('change', { bubbles: true }));
-        })()
-      `, { emulateUserGesture: true });
+      await this.evaluate(
+        buildSetValueScript({ selector, value: text, dispatchEvents: 'input-change' }),
+        { emulateUserGesture: true },
+      );
     }
   }
 
@@ -886,18 +845,10 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
     if (!center) throw new Error(`Element not found: ${selector}`);
     const dur = duration ?? 500;
 
-    await this.evaluate(`
-      (async function(x, y, duration) {
-        var el = document.elementFromPoint(x, y);
-        if (!el) return;
-        var touch = document.createTouch(window, el, 1, x, y, x, y);
-        var touchList = document.createTouchList(touch);
-        el.dispatchEvent(new TouchEvent('touchstart', { touches: touchList, changedTouches: touchList, bubbles: true }));
-        await new Promise(function(r) { setTimeout(r, duration); });
-        var emptyList = document.createTouchList();
-        el.dispatchEvent(new TouchEvent('touchend', { touches: emptyList, changedTouches: touchList, bubbles: true }));
-      })(${center.x}, ${center.y}, ${dur})
-    `, { emulateUserGesture: true });
+    await this.evaluate(
+      buildLongPressScript({ x: center.x, y: center.y, durationMs: dur }),
+      { emulateUserGesture: true },
+    );
   }
 
   async swipe(direction: 'up' | 'down' | 'left' | 'right', speed?: number): Promise<void> {
@@ -915,28 +866,10 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
     };
     const { sx, sy, ex, ey } = coords[direction];
 
-    await this.evaluate(`
-      (async function(sx, sy, ex, ey, steps) {
-        var el = document.elementFromPoint(sx, sy);
-        if (!el) return;
-        var makeTouch = function(x, y) { return document.createTouch(window, el, 1, x, y, x, y); };
-        var startTouch = makeTouch(sx, sy);
-        var startList = document.createTouchList(startTouch);
-        el.dispatchEvent(new TouchEvent('touchstart', { touches: startList, changedTouches: startList, bubbles: true }));
-        for (var i = 1; i <= steps; i++) {
-          var x = sx + (ex - sx) * (i / steps);
-          var y = sy + (ey - sy) * (i / steps);
-          var moveTouch = makeTouch(x, y);
-          var moveList = document.createTouchList(moveTouch);
-          el.dispatchEvent(new TouchEvent('touchmove', { touches: moveList, changedTouches: moveList, bubbles: true }));
-          await new Promise(function(r) { setTimeout(r, 16); });
-        }
-        var endTouch = makeTouch(ex, ey);
-        var endList = document.createTouchList(endTouch);
-        var emptyList = document.createTouchList();
-        el.dispatchEvent(new TouchEvent('touchend', { touches: emptyList, changedTouches: endList, bubbles: true }));
-      })(${sx}, ${sy}, ${ex}, ${ey}, ${steps})
-    `, { emulateUserGesture: true });
+    await this.evaluate(
+      buildSwipeScript({ startX: sx, startY: sy, endX: ex, endY: ey, steps, stepDelayMs: 16 }),
+      { emulateUserGesture: true },
+    );
   }
 
   async press(key: string): Promise<void> {
