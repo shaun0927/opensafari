@@ -38,6 +38,7 @@ const SENSITIVE_KEYS = [
   'token',
   'secret',
   'auth',
+  'authorization',
   'credential',
   'apikey',
   'api_key',
@@ -46,6 +47,12 @@ const SENSITIVE_KEYS = [
   'privatekey',
   'private_key',
   'session',
+  // Free-form user input that flows through MCP tool calls (e.g.
+  // `type.text`, `select_option.value`) can carry passwords or OTPs, so
+  // redact these keys defensively even though they are not credentials
+  // by name.
+  'text',
+  'value',
 ];
 
 const SENSITIVE_QUERY_PARAMS = [
@@ -68,20 +75,41 @@ const SENSITIVE_QUERY_PARAMS = [
   'token',
 ];
 
-function isSensitiveKey(key: string): boolean {
+// Match either the full lowercased key, or any `_`/`-` separated segment
+// of it (with simple plural `s` stripped), against the provided list.
+// Substring matching is too loose — `monkey` would match `key` and
+// `context` would match `text`.
+function matchesSensitiveTerm(key: string, terms: readonly string[]): boolean {
   const lower = key.toLowerCase();
-  return SENSITIVE_KEYS.some(s => lower.includes(s));
+  if (matchSegment(lower, terms)) return true;
+  for (const segment of lower.split(/[_-]/)) {
+    if (segment && matchSegment(segment, terms)) return true;
+  }
+  return false;
+}
+
+function matchSegment(segment: string, terms: readonly string[]): boolean {
+  if (terms.includes(segment)) return true;
+  return segment.endsWith('s') && terms.includes(segment.slice(0, -1));
+}
+
+function isSensitiveKey(key: string): boolean {
+  return matchesSensitiveTerm(key, SENSITIVE_KEYS);
 }
 
 function isSensitiveQueryParam(key: string): boolean {
-  const lower = key.toLowerCase();
-  return SENSITIVE_QUERY_PARAMS.some(s => lower === s || lower.includes(s));
+  return matchesSensitiveTerm(key, SENSITIVE_QUERY_PARAMS);
 }
 
 function redactUrl(value: string): string {
   try {
     const url = new URL(value);
     let redacted = false;
+    if (url.username || url.password) {
+      url.username = '';
+      url.password = '';
+      redacted = true;
+    }
     url.searchParams.forEach((_paramValue, key) => {
       if (isSensitiveQueryParam(key)) {
         url.searchParams.set(key, REDACTED);
@@ -133,7 +161,16 @@ function summarizeArgs(args: Record<string, unknown>): string {
   return JSON.stringify(redactValue(args, new WeakSet<object>()));
 }
 
+// Cache the directory-prep result per resolved log path so that we do
+// not run mkdir/chmod on every audit entry. `getLogPath()` reads from
+// env at call time, so we key the cache by path to stay correct if it
+// changes between calls.
+const ensuredLogPaths = new Map<string, boolean>();
+
 function ensurePrivateLogTarget(logPath: string): boolean {
+  const cached = ensuredLogPaths.get(logPath);
+  if (cached !== undefined) return cached;
+
   const logDir = path.dirname(logPath);
   try {
     fs.mkdirSync(logDir, { recursive: true, mode: AUDIT_DIR_MODE });
@@ -141,8 +178,10 @@ function ensurePrivateLogTarget(logPath: string): boolean {
     if (fs.existsSync(logPath)) {
       fs.chmodSync(logPath, AUDIT_FILE_MODE);
     }
+    ensuredLogPaths.set(logPath, true);
     return true;
   } catch {
+    ensuredLogPaths.set(logPath, false);
     return false;
   }
 }
@@ -175,7 +214,6 @@ export function logAuditEntry(tool: string, sessionId: string, args: Record<stri
   try {
     rotateLogIfNeeded(logPath, Buffer.byteLength(line));
     fs.appendFileSync(logPath, line, { mode: AUDIT_FILE_MODE });
-    fs.chmodSync(logPath, AUDIT_FILE_MODE);
   } catch (err) {
     console.error('[audit-logger] write failed:', (err as NodeJS.ErrnoException).code);
   }
