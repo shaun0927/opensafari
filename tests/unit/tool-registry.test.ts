@@ -253,12 +253,70 @@ describe('MCPServer.registerLazyTool', () => {
     // resolveHandler should include the tool name in the error
     try {
       await resolveHandler(LAZY_TOOL);
-      fail('Expected error was not thrown');
+      throw new Error('Expected error was not thrown');
     } catch (err) {
       const msg = (err as Error).message;
       expect(msg).toContain(LAZY_TOOL);
       expect(msg).toContain('Failed to load handler');
       expect(msg).toContain('./missing-handler');
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveHandler — concurrency and failure-retry behaviour
+// ---------------------------------------------------------------------------
+
+describe('resolveHandler — concurrency and failure retry', () => {
+  const TOOL_NAME = '__test_concurrency__';
+
+  beforeEach(() => {
+    toolRegistry.delete(TOOL_NAME);
+  });
+
+  afterEach(() => {
+    toolRegistry.delete(TOOL_NAME);
+  });
+
+  test('concurrent resolveHandler calls invoke loadHandler exactly once', async () => {
+    let callCount = 0;
+    const handler: ToolHandler = async () => ECHO_RESULT;
+
+    defineToolEntry(makeDefinition(TOOL_NAME), async () => {
+      callCount++;
+      return handler;
+    });
+
+    const [h1, h2, h3] = await Promise.all([
+      resolveHandler(TOOL_NAME),
+      resolveHandler(TOOL_NAME),
+      resolveHandler(TOOL_NAME),
+    ]);
+
+    expect(callCount).toBe(1);
+    expect(h1).toBe(handler);
+    expect(h2).toBe(handler);
+    expect(h3).toBe(handler);
+  });
+
+  test('after a loadHandler failure, a retry calls loadHandler again', async () => {
+    let callCount = 0;
+    const handler: ToolHandler = async () => ECHO_RESULT;
+
+    defineToolEntry(makeDefinition(TOOL_NAME), async () => {
+      callCount++;
+      if (callCount === 1) {
+        throw new Error('transient load failure');
+      }
+      return handler;
+    });
+
+    // First call should fail
+    await expect(resolveHandler(TOOL_NAME)).rejects.toThrow('transient load failure');
+
+    // Second call should succeed and invoke loadHandler a second time
+    const resolved = await resolveHandler(TOOL_NAME);
+    expect(callCount).toBe(2);
+    expect(resolved).toBe(handler);
   });
 });

@@ -6,8 +6,8 @@
  * first time a tool is invoked and cached for all subsequent calls.
  *
  * Usage:
- *   import { toolRegistry, registerLazyTools } from './registry';
- *   registerLazyTools(server);
+ *   import { toolRegistry, defineToolEntry, resolveHandler } from './registry';
+ *   defineToolEntry(definition, () => import('./my-tool').then(m => m.handler));
  */
 
 import { MCPToolDefinition, ToolHandler } from '../types/mcp';
@@ -30,6 +30,8 @@ export interface LazyToolEntry {
   loadHandler: () => Promise<ToolHandler>;
   /** Resolved handler cache — populated on first invocation. */
   _cachedHandler?: ToolHandler;
+  /** In-flight load promise — dedupes concurrent calls to loadHandler. */
+  _loading?: Promise<ToolHandler>;
 }
 
 // ---------------------------------------------------------------------------
@@ -62,12 +64,18 @@ export async function resolveHandler(name: string): Promise<ToolHandler> {
   if (entry._cachedHandler) {
     return entry._cachedHandler;
   }
-  try {
-    const handler = await entry.loadHandler();
-    entry._cachedHandler = handler;
-    return handler;
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to load handler for tool "${name}": ${msg}`);
+  if (!entry._loading) {
+    entry._loading = entry.loadHandler()
+      .then(h => {
+        entry._cachedHandler = h;
+        return h;
+      })
+      .catch(err => {
+        // Clear so a subsequent retry can attempt the load again.
+        entry._loading = undefined;
+        const msg = err instanceof Error ? err.message : String(err);
+        throw new Error(`Failed to load handler for tool "${name}": ${msg}`);
+      });
   }
+  return entry._loading;
 }

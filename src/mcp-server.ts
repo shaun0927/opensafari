@@ -302,6 +302,7 @@ export class MCPServer {
     } else if (tool.lazy) {
       try {
         handler = await resolveHandler(name);
+        tool.handler = handler;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         return {
