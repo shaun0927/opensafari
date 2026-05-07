@@ -26,7 +26,7 @@
 
 import type { FlutterVMClient } from '../flutter';
 import { FlutterVMError } from '../flutter';
-import type { InputBackend, InputBackendKind } from './native-input-backend';
+import type { InputBackend, InputBackendKind } from '../input/backend';
 import { timedInput } from '../metrics/input-telemetry';
 
 /**

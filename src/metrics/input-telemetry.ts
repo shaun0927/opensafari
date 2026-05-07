@@ -12,7 +12,7 @@
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks';
-import type { InputBackendKind } from '../tools/native-input-backend';
+import type { InputBackendKind } from '../input/backend';
 import { accumulateInputTelemetry } from './input-telemetry-rollup';
 import {
   recordMemorySample,

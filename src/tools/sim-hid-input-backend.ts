@@ -27,7 +27,7 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { existsSync } from 'fs';
 import * as path from 'path';
-import type { InputBackend } from './native-input-backend';
+import type { InputBackend } from '../input/backend';
 import { timedInput } from '../metrics/input-telemetry';
 
 const execFileAsync = promisify(execFile);

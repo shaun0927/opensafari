@@ -37,7 +37,7 @@
 
 import { existsSync } from 'fs';
 import * as path from 'path';
-import type { InputBackend } from './native-input-backend';
+import type { InputBackend } from '../input/backend';
 import {
   SimulatorKitHIDInputBackend,
   InputBackendError,
