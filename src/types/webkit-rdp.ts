@@ -84,7 +84,10 @@ export interface RdpConsoleCallFrame {
 }
 
 export interface RdpConsoleMessage {
-  level: string;
+  // Either `level` or `type` may be present depending on WebKit/DevTools
+  // version. Callers fall through `level ?? type ?? 'log'`.
+  level?: string;
+  type?: string;
   text: string;
   source?: string;
   url?: string;
@@ -141,7 +144,13 @@ export function isRdpEvent(v: unknown): v is RdpOuterEvent | RdpInnerEvent {
 export function isTargetCreatedEvent(v: unknown): v is { method: 'Target.targetCreated'; params: RdpTargetCreatedParams } {
   if (!isRdpEvent(v) || v['method'] !== 'Target.targetCreated') return false;
   const params = v['params'];
-  return isObject(params) && isObject(params['targetInfo']);
+  if (!isObject(params)) return false;
+  const targetInfo = params['targetInfo'];
+  return (
+    isObject(targetInfo) &&
+    typeof targetInfo['targetId'] === 'string' &&
+    typeof targetInfo['type'] === 'string'
+  );
 }
 
 /** Narrow to Target.targetDestroyed event. */
@@ -160,9 +169,16 @@ export function isDispatchMessageFromTargetEvent(
   return isObject(params) && typeof params['targetId'] === 'string' && typeof params['message'] === 'string';
 }
 
-/** Narrow Console.messageAdded params. */
+/** Narrow Console.messageAdded params.
+ *
+ * Requires `message.text` (always present in real payloads we care about);
+ * `level` and `type` are both optional in the wire format because some
+ * WebKit/DevTools builds emit only one of them. The caller chains them as
+ * `level ?? type ?? 'log'` to preserve severity. */
 export function isConsoleMessageAddedParams(v: unknown): v is RdpConsoleMessageAddedParams {
-  return isObject(v) && isObject(v['message']);
+  if (!isObject(v)) return false;
+  const message = v['message'];
+  return isObject(message) && typeof message['text'] === 'string';
 }
 
 /** Narrow Network.requestWillBeSent params. */

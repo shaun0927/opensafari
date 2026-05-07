@@ -1125,7 +1125,7 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
       this.on('Console.messageAdded', (params: unknown) => {
         const p = isConsoleMessageAddedParams(params) ? params : null;
         handler({
-          type: p?.message?.level ?? 'log',
+          type: p?.message?.level ?? p?.message?.type ?? 'log',
           text: p?.message?.text ?? '',
         });
       });
