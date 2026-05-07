@@ -1,7 +1,7 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { BrowserBackend, Cookie } from '../types/browser-backend';
 
 export interface DomainGroup {
@@ -189,9 +189,13 @@ export class AuthManager {
   }
 
   private async atomicWriteProfile(filePath: string, contents: string): Promise<void> {
+    // Use a fixed-length temp name (".<8-char-hash>.<pid>.<uuid>.tmp" ≈ 60 chars) so atomic writes
+    // do not fail with ENAMETOOLONG when `path.basename(filePath)` is close to the 255-byte limit.
+    // Same parent dir as the target keeps `fs.rename` atomic; uniqueness is provided by the uuid.
+    const baseHash = createHash('sha1').update(path.basename(filePath)).digest('hex').slice(0, 8);
     const tempPath = path.join(
       this.authDir,
-      `.${path.basename(filePath)}.${process.pid}.${randomUUID()}.tmp`,
+      `.${baseHash}.${process.pid}.${randomUUID()}.tmp`,
     );
 
     let handle: fs.FileHandle | undefined;

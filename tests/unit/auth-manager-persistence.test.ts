@@ -142,4 +142,21 @@ describe('AuthManager secure persistence', () => {
     expect(secondProfile.localStorage).toEqual(firstProfile.localStorage);
     expect(secondProfile.sessionStorage).toEqual(firstProfile.sessionStorage);
   });
+
+  test('save succeeds for long-but-valid site names without ENAMETOOLONG on the temp file', async () => {
+    // Many filesystems cap a single name component at 255 bytes. The atomic temp file lives in
+    // the same directory as the final profile, so its name must stay bounded regardless of site
+    // length — otherwise `<basename>.<pid>.<uuid>.tmp` overflows for legitimately long domains.
+    const longSite = 'a'.repeat(220) + '.example.com';
+
+    const filePath = await authManager.save(longSite, createFakeBackend());
+
+    expect(path.basename(filePath).length).toBeLessThanOrEqual(255);
+    const files = await fs.readdir(authDir);
+    expect(files.every((f) => f.length <= 255)).toBe(true);
+    // No temp residue: only the persisted profile should remain.
+    expect(files).toEqual([path.basename(filePath)]);
+    const profile = JSON.parse(await fs.readFile(filePath, 'utf-8'));
+    expect(profile.site).toBe(longSite);
+  });
 });
