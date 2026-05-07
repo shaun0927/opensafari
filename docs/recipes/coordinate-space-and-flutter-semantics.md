@@ -151,7 +151,7 @@ The `deviceContentMacOSPt` size is captured at the time of the AX dump / query c
 
 Production-build Flutter apps (release builds, or any Flutter app without VM Service) do not auto-activate the Flutter `Semantics` widget tree. When `SemanticsBinding.ensureSemantics()` is called on a settled release build, the framework does not fire — the tree remains empty. This causes `ax-bridge dump` to report an empty tree (content-root with no children).
 
-`simctl spawn defaults write com.apple.Accessibility ApplicationAccessibilityEnabled -int 1` can write the TCC flag, but does not nudge the Flutter framework. The flag only affects **new** accessibility sessions, so on a release build (no VM Service to hot-reload), the app must be restarted after the flag is written.
+`xcrun simctl spawn <deviceId> defaults write com.apple.Accessibility AccessibilityEnabled -bool YES` (the exact command driven by `tryActivateViaSimctl()` in `src/native/semantics-activator.ts`) can write the TCC flag, but does not nudge the Flutter framework. The flag only affects **new** accessibility sessions, so on a release build (no VM Service to hot-reload), the app must be restarted after the flag is written.
 
 **Current status**: workaround documented in troubleshooting; full fix deferred to WU2 pending investigation of `SemanticsBinding` activation on release builds.
 
