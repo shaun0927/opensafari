@@ -1,27 +1,6 @@
 #!/usr/bin/env node
 
 import { Command } from 'commander';
-import { MCPServer, getWebKitClient } from '../src/mcp-server';
-import {
-  registerAllTools,
-  setWorkflowEngine,
-  setCrossViewportCapture,
-  setBatchNavigateExecutor,
-  setBatchScreenshotExecutor,
-  setBatchExecuteExecutor,
-} from '../src/tools';
-import { DEVICE_PRESETS, checkXcodeInstallation } from '../src/simulator';
-import { SimulatorPool } from '../src/simulator/pool';
-import { BatchExecutor } from '../src/simulator/batch';
-import { SimulatorWorkflowEngine } from '../src/orchestration/workflow-engine';
-import { CrossViewportCapture } from '../src/comparison/cross-viewport';
-import { setupGracefulShutdown } from '../src/reliability/graceful-shutdown';
-import { SimulatorCrashWatcher } from '../src/reliability/crash-watcher';
-import { cleanupZombieProcesses, startPeriodicCleanup } from '../src/reliability/zombie-cleanup';
-import { setBlockedDomains } from '../src/security/domain-guard';
-import { EventLoopMonitor, setGlobalEventLoopMonitor } from '../src/watchdog/event-loop-monitor';
-import { SimulatorMonitor } from '../src/watchdog/simulator-monitor';
-import { AuthManager } from '../src/auth';
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const pkg = require('../package.json');
@@ -43,6 +22,80 @@ program
   .option('--audit-log', 'Enable tool call audit logging')
   .option('--no-zombie-cleanup', 'Disable periodic zombie simulator cleanup')
   .action(async (options) => {
+    // Lazy-load all heavy serve-only dependencies so they are excluded from
+    // --help / auth / doctor startup paths. Dynamic import errors surface with
+    // module context so they are diagnosable.
+    let mcpServerMod: typeof import('../src/mcp-server');
+    let toolsMod: typeof import('../src/tools');
+    let poolMod: typeof import('../src/simulator/pool');
+    let batchMod: typeof import('../src/simulator/batch');
+    let authMod: typeof import('../src/auth');
+    let workflowMod: typeof import('../src/orchestration/workflow-engine');
+    let captureMod: typeof import('../src/comparison/cross-viewport');
+    let shutdownMod: typeof import('../src/reliability/graceful-shutdown');
+    let crashMod: typeof import('../src/reliability/crash-watcher');
+    let zombieMod: typeof import('../src/reliability/zombie-cleanup');
+    let domainMod: typeof import('../src/security/domain-guard');
+    let elMonitorMod: typeof import('../src/watchdog/event-loop-monitor');
+    let simMonitorMod: typeof import('../src/watchdog/simulator-monitor');
+
+    try {
+      [
+        mcpServerMod,
+        toolsMod,
+        poolMod,
+        batchMod,
+        authMod,
+        workflowMod,
+        captureMod,
+        shutdownMod,
+        crashMod,
+        zombieMod,
+        domainMod,
+        elMonitorMod,
+        simMonitorMod,
+      ] = await Promise.all([
+        import('../src/mcp-server'),
+        import('../src/tools'),
+        import('../src/simulator/pool'),
+        import('../src/simulator/batch'),
+        import('../src/auth'),
+        import('../src/orchestration/workflow-engine'),
+        import('../src/comparison/cross-viewport'),
+        import('../src/reliability/graceful-shutdown'),
+        import('../src/reliability/crash-watcher'),
+        import('../src/reliability/zombie-cleanup'),
+        import('../src/security/domain-guard'),
+        import('../src/watchdog/event-loop-monitor'),
+        import('../src/watchdog/simulator-monitor'),
+      ]);
+    } catch (err) {
+      const mod = err instanceof Error && 'code' in err ? (err as NodeJS.ErrnoException).code : undefined;
+      console.error(`[OpenSafari] Failed to load serve dependencies${mod ? ` (${mod})` : ''}: ${err instanceof Error ? err.message : String(err)}`);
+      process.exit(1);
+    }
+
+    const { MCPServer } = mcpServerMod;
+    const {
+      registerAllTools,
+      setWorkflowEngine,
+      setCrossViewportCapture,
+      setBatchNavigateExecutor,
+      setBatchScreenshotExecutor,
+      setBatchExecuteExecutor,
+    } = toolsMod;
+    const { SimulatorPool } = poolMod;
+    const { BatchExecutor } = batchMod;
+    const { AuthManager } = authMod;
+    const { SimulatorWorkflowEngine } = workflowMod;
+    const { CrossViewportCapture } = captureMod;
+    const { setupGracefulShutdown } = shutdownMod;
+    const { SimulatorCrashWatcher } = crashMod;
+    const { cleanupZombieProcesses, startPeriodicCleanup } = zombieMod;
+    const { setBlockedDomains } = domainMod;
+    const { EventLoopMonitor, setGlobalEventLoopMonitor } = elMonitorMod;
+    const { SimulatorMonitor } = simMonitorMod;
+
     const server = new MCPServer();
     registerAllTools(server);
 
@@ -142,6 +195,21 @@ const auth = program.command('auth').description('Manage login persistence profi
 auth.command('save')
   .argument('<site>', 'Site domain')
   .action(async (site: string) => {
+    let mcpServerMod: typeof import('../src/mcp-server');
+    let authMod: typeof import('../src/auth');
+    try {
+      [mcpServerMod, authMod] = await Promise.all([
+        import('../src/mcp-server'),
+        import('../src/auth'),
+      ]);
+    } catch (err) {
+      console.error(`[OpenSafari] Failed to load auth save dependencies (../src/mcp-server, ../src/auth): ${err instanceof Error ? err.message : String(err)}`);
+      process.exit(1);
+    }
+
+    const { getWebKitClient } = mcpServerMod;
+    const { AuthManager } = authMod;
+
     const client = getWebKitClient();
     if (!client) {
       console.error('Error: No active Safari connection. Run "opensafari serve" first.');
@@ -154,6 +222,15 @@ auth.command('save')
 
 auth.command('list')
   .action(async () => {
+    let authMod: typeof import('../src/auth');
+    try {
+      authMod = await import('../src/auth');
+    } catch (err) {
+      console.error(`[OpenSafari] Failed to load auth module (../src/auth): ${err instanceof Error ? err.message : String(err)}`);
+      process.exit(1);
+    }
+
+    const { AuthManager } = authMod;
     const manager = new AuthManager();
     const profiles = await manager.list();
     if (profiles.length === 0) {
@@ -169,6 +246,15 @@ auth.command('list')
 auth.command('delete')
   .argument('<site>', 'Site domain to delete')
   .action(async (site: string) => {
+    let authMod: typeof import('../src/auth');
+    try {
+      authMod = await import('../src/auth');
+    } catch (err) {
+      console.error(`[OpenSafari] Failed to load auth module (../src/auth): ${err instanceof Error ? err.message : String(err)}`);
+      process.exit(1);
+    }
+
+    const { AuthManager } = authMod;
     const manager = new AuthManager();
     await manager.delete(site);
     console.log(`Auth deleted: ${site}`);
@@ -179,6 +265,16 @@ program
   .command('doctor')
   .description('Verify installation and diagnose issues')
   .action(async () => {
+    let simulatorMod: typeof import('../src/simulator');
+    try {
+      simulatorMod = await import('../src/simulator');
+    } catch (err) {
+      console.error(`[OpenSafari] Failed to load simulator module (../src/simulator): ${err instanceof Error ? err.message : String(err)}`);
+      process.exit(1);
+    }
+
+    const { checkXcodeInstallation } = simulatorMod;
+
     console.log('OpenSafari Doctor\n');
 
     const result = await checkXcodeInstallation();
@@ -222,7 +318,16 @@ program
 program
   .command('devices')
   .description('List available device presets')
-  .action(() => {
+  .action(async () => {
+    let simulatorMod: typeof import('../src/simulator');
+    try {
+      simulatorMod = await import('../src/simulator');
+    } catch (err) {
+      console.error(`[OpenSafari] Failed to load simulator module (../src/simulator): ${err instanceof Error ? err.message : String(err)}`);
+      process.exit(1);
+    }
+
+    const { DEVICE_PRESETS } = simulatorMod;
     console.log('Available Device Presets:\n');
     for (const [key, preset] of Object.entries(DEVICE_PRESETS)) {
       console.log(`  ${key.padEnd(22)} ${preset.name.padEnd(35)} ${preset.w}×${preset.h} @${preset.dpr}x`);
@@ -239,12 +344,34 @@ program
   .option('--fail-on-high', 'Exit with code 1 if high-severity issues found')
   .option('--min-score <score>', 'Exit with code 1 if score below threshold', parseInt)
   .action(async (options) => {
-    const { QAAudit } = await import('../src/qa/audit');
-    const { QAHistory } = await import('../src/qa/history');
-    const { generateAuditMarkdown } = await import('../src/qa/report-markdown');
-    const { generateAuditJUnit } = await import('../src/qa/report-junit');
-    const { generateAuditJSON } = await import('../src/qa/report-json');
-    const { WebKitClient } = await import('../src/webkit/client');
+    let auditMods: [
+      typeof import('../src/qa/audit'),
+      typeof import('../src/qa/history'),
+      typeof import('../src/qa/report-markdown'),
+      typeof import('../src/qa/report-junit'),
+      typeof import('../src/qa/report-json'),
+      typeof import('../src/webkit/client'),
+    ];
+    try {
+      auditMods = await Promise.all([
+        import('../src/qa/audit'),
+        import('../src/qa/history'),
+        import('../src/qa/report-markdown'),
+        import('../src/qa/report-junit'),
+        import('../src/qa/report-json'),
+        import('../src/webkit/client'),
+      ]);
+    } catch (err) {
+      console.error(`[OpenSafari] Failed to load audit dependencies (../src/qa/*, ../src/webkit/client): ${err instanceof Error ? err.message : String(err)}`);
+      process.exit(1);
+    }
+
+    const { QAAudit } = auditMods[0];
+    const { QAHistory } = auditMods[1];
+    const { generateAuditMarkdown } = auditMods[2];
+    const { generateAuditJUnit } = auditMods[3];
+    const { generateAuditJSON } = auditMods[4];
+    const { WebKitClient } = auditMods[5];
 
     let client: InstanceType<typeof WebKitClient> | undefined;
     try {
