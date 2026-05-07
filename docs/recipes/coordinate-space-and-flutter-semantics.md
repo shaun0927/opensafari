@@ -35,7 +35,7 @@ On iPhone 17 Pro / iOS 26.4 with observed simulator window scale:
 
 ```
 scale_x ≈ 402 / 232 ≈ 1.733
-scale_y ≈ 874 / 504 ≈ 1.733
+scale_y ≈ 874 / 504 ≈ 1.734
 ```
 
 This ratio depends on the Simulator window's "Device Window Size" setting. Different settings produce different scales.
@@ -60,7 +60,7 @@ PR #695 adds `deviceContentMacOSPt: { width, height }` to the AX dump and query 
 }
 ```
 
-**Source**: `src/native/ax-bridge.swift`, lines 37–45; reports the actual device-content-root frame size from macOS in the AX-frame coordinate system.
+**Source**: `src/native/ax-bridge.swift`, lines 37–46; reports the actual device-content-root frame size from macOS in the AX-frame coordinate system (the `deviceContentMacOSPt` property is defined on line 46).
 
 ## WU3-impl: Conversion and Wiring (PR #720)
 
@@ -102,7 +102,7 @@ export function convertMacOSPtToIOSPt(
 
 ### Wiring in app-tap-element
 
-`src/tools/app-tap-element.ts` now:
+`src/tools/app-tap-element.ts` (as of PR #720) now:
 
 1. Extracts `macOSPtSize` from the query result's `deviceContentMacOSPt` field
 2. Calls `getIosPtSizeForDevice(deviceId)` which looks up the device in `DEVICE_PRESETS` by name and returns `{ width: preset.w, height: preset.h }`
@@ -111,7 +111,7 @@ export function convertMacOSPtToIOSPt(
 
 **Example log**:
 ```
-[app_tap_element] macOS-pt→iOS-pt conversion applied: macOSPt(100.50, 200.75) → iOSPt(173.97, 347.66) scale=(1.7330, 1.7330)
+[app_tap_element] macOS-pt→iOS-pt conversion applied: macOSPt(100.50, 200.75) → iOSPt(174.17, 347.90) scale=(1.7330, 1.7330)
 ```
 
 If either size is missing or invalid, the conversion is skipped and the raw AX-frame coordinates are used (fallback to pre-WU3 behavior).
@@ -171,6 +171,6 @@ When debugging a tap that misses its visible target:
 - **WU3 (Coordinate conversion)**: PR #720, PR #695 (deviceContentMacOSPt emission)
 - **WU2 (Flutter Semantics activation)**: issue #693 WU2, #552
 - **Coordinate-space implementation**: `src/utils/coordinate-space.ts`, `src/tools/app-tap-element.ts`
-- **AX-bridge emission**: `src/native/ax-bridge.swift` (lines 37–45, 91–97)
+- **AX-bridge emission**: `src/native/ax-bridge.swift` (lines 37–46, 91–97)
 - **Device presets**: `src/simulator/presets.ts`
 - **Related recipe**: [Handling Transient simctl Errors](./transient-simctl-errors.md) (coordinate taps may follow high-velocity input and trigger transient screenshot timeouts)
