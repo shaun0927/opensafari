@@ -185,9 +185,7 @@ export class AuthManager {
 
   private async ensureAuthDir(): Promise<void> {
     await fs.mkdir(this.authDir, { recursive: true, mode: AuthManager.privateDirMode });
-    if (this.supportsPosixModes()) {
-      await fs.chmod(this.authDir, AuthManager.privateDirMode);
-    }
+    await this.softChmod(this.authDir, AuthManager.privateDirMode);
   }
 
   private async atomicWriteProfile(filePath: string, contents: string): Promise<void> {
@@ -200,18 +198,12 @@ export class AuthManager {
     try {
       handle = await fs.open(tempPath, 'wx', AuthManager.privateFileMode);
       await handle.writeFile(contents, 'utf-8');
+      await handle.datasync().catch(() => {});
       await handle.close();
       handle = undefined;
 
-      if (this.supportsPosixModes()) {
-        await fs.chmod(tempPath, AuthManager.privateFileMode);
-      }
-
+      await this.softChmod(tempPath, AuthManager.privateFileMode);
       await fs.rename(tempPath, filePath);
-
-      if (this.supportsPosixModes()) {
-        await fs.chmod(filePath, AuthManager.privateFileMode);
-      }
     } catch (error) {
       if (handle) {
         await handle.close().catch(() => {});
@@ -221,6 +213,18 @@ export class AuthManager {
     }
   }
 
+  private async softChmod(target: string, mode: number): Promise<void> {
+    if (!this.supportsPosixModes()) return;
+    try {
+      await fs.chmod(target, mode);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'ENOSYS' || code === 'ENOTSUP' || code === 'EPERM' || code === 'EINVAL') {
+        return;
+      }
+      throw error;
+    }
+  }
 
   private supportsPosixModes(): boolean {
     return process.platform !== 'win32';
