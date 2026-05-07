@@ -79,7 +79,7 @@ const CONSTANT_CONTRACTS: Array<{
     value: 100,
   },
   {
-    relPath: 'src/tools/native-input-backend.ts',
+    relPath: 'src/input/flutter-resolver.ts',
     name: 'NEGATIVE_CACHE_TTL_MS',
     value: 30_000,
   },

@@ -116,7 +116,7 @@ export class WebKitInputBackend implements InputBackend {
     });
   }
 
-  async typeText(deviceId: string, text: string): Promise<void> {
+  async typeText(deviceId: string, text: string, _delayMs?: number): Promise<void> {
     await timedInput(this.kind, 'typeText', deviceId, async () => {
       const escaped = JSON.stringify(text);
       await this.client.evaluate(`

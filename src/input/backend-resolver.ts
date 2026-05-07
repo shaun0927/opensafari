@@ -96,18 +96,27 @@ export class HeadlessInputUnavailableError extends Error {
 // ── Probe helpers ─────────────────────────────────────────────────────────────
 
 /**
- * Probe whether `simctl io input` is available by attempting a no-op tap at (0,0).
- * On Xcode 26+ this subcommand was removed and returns exit code 117.
+ * Probe whether the legacy `simctl io <device> input` subcommand is available.
+ *
+ * Uses `xcrun simctl help io` which does NOT require a booted device — so a
+ * transient device fault cannot poison the cached `simctlAvailable` flag for
+ * the lifetime of the resolver. On Xcode 26+ the `input` subcommand was
+ * removed and the help listing no longer mentions it.
  */
-async function probeSimctlInput(deviceId: string): Promise<boolean> {
+async function probeSimctlInput(): Promise<boolean> {
   const simctl = new SimctlExecutor();
   try {
-    await simctl.exec(['io', deviceId, 'input', 'tap', '0', '0'], { timeout: 5000 });
+    const helpOutput = await simctl.exec(['help', 'io'], { timeout: 5000 });
+    // Definitive negative: help text was emitted and does NOT list `input`
+    // — that's exactly the Xcode 26+ shape, so reject.
+    if (helpOutput.length > 0 && !/\binput\b/.test(helpOutput)) {
+      return false;
+    }
+    // Empty output or `input` mentioned → assume available; the actual
+    // tap/typeText calls will surface their own errors if simctl misbehaves.
     return true;
   } catch {
-    console.error(
-      '[input-backend] simctl io input unavailable (likely Xcode 26+ where this subcommand was removed)',
-    );
+    // simctl missing entirely (no Xcode CLT) — treat as unavailable.
     return false;
   }
 }
@@ -169,10 +178,12 @@ export class InputBackendResolver {
       return new FlutterVMInputBackend(flutterClient);
     }
 
-    // Probe simctl once and cache the result
+    // Probe simctl once and cache the result. The probe is device-independent
+    // (`simctl help io`) so a transient device fault cannot poison the cached
+    // `simctlAvailable` flag for the lifetime of the resolver.
     if (this.simctlAvailable === null) {
       if (!this.detectionPromise) {
-        this.detectionPromise = probeSimctlInput(deviceId).then((available) => {
+        this.detectionPromise = probeSimctlInput().then((available) => {
           this.simctlAvailable = available;
           return available;
         });

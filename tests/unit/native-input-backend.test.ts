@@ -577,7 +577,7 @@ describe('getInputBackend', () => {
     expect(backend).toBeInstanceOf(SimctlInputBackend);
     expect(backend.kind).toBe('simctl');
     expect(execMock).toHaveBeenCalledWith(
-      ['io', DEVICE, 'input', 'tap', '0', '0'],
+      ['help', 'io'],
       { timeout: 5000 },
     );
   });
