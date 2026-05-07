@@ -74,12 +74,17 @@ export interface FindSocketOptions {
 export async function findSocketPath(options?: FindSocketOptions): Promise<string | null> {
   const cacheKey = options?.targetUdid ?? NO_TARGET_KEY;
 
-  // Cache hit: return the cached path if the entry is still valid
+  // Cache hit: return the cached path if the entry is still valid.
+  // Always remove the entry on TTL expiry or failed probe so stale paths
+  // are not retained indefinitely (avoids leaking entries for simulators
+  // that have been booted and torn down).
   const cached = socketCache.get(cacheKey);
-  if (cached && Date.now() < cached.expiresAt) {
-    // Re-probe to confirm liveness; evict on failure so stale paths are not reused
-    const alive = await probeSocket(cached.socketPath);
-    if (alive) return cached.socketPath;
+  if (cached) {
+    if (Date.now() < cached.expiresAt) {
+      // Re-probe to confirm liveness; evict on failure so stale paths are not reused
+      const alive = await probeSocket(cached.socketPath);
+      if (alive) return cached.socketPath;
+    }
     socketCache.delete(cacheKey);
   }
 
@@ -105,13 +110,18 @@ export async function findSocketPath(options?: FindSocketOptions): Promise<strin
 
 /**
  * Poll `findSocketPath` until a live socket is found or timeout expires.
- * Uses staged backoff (200 → 400 → 800 → 1500 ms) to reduce CPU churn while
- * still detecting newly booted simulators quickly.
+ *
+ * When the caller supplies an explicit `interval`, that fixed delay is used
+ * between probes — preserving the legacy contract for callers that rely on
+ * tight polling. When no `interval` is given, staged backoff is used
+ * (200 → 400 → 800 → 1500 ms) to reduce CPU churn while still detecting
+ * newly booted simulators quickly.
  */
 export async function waitForSocketPath(
   options?: FindSocketOptions & { timeout?: number; interval?: number },
 ): Promise<string | null> {
   const timeout = options?.timeout ?? 10_000;
+  const explicitInterval = options?.interval;
   const start = Date.now();
   let stage = 0;
 
@@ -119,7 +129,9 @@ export async function waitForSocketPath(
     const result = await findSocketPath(options);
     if (result) return result;
 
-    const delay = BACKOFF_STAGES_MS[Math.min(stage, BACKOFF_STAGES_MS.length - 1)];
+    const delay = explicitInterval !== undefined
+      ? explicitInterval
+      : BACKOFF_STAGES_MS[Math.min(stage, BACKOFF_STAGES_MS.length - 1)];
     stage++;
 
     // Clamp delay so we never sleep past the overall timeout

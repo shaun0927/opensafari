@@ -669,6 +669,39 @@ describe('socket discovery cache (Issue #704)', () => {
     expect(noTargetResult).toBeNull();
   });
 
+  it('TTL-expired entry is explicitly deleted from the cache, not left to be overwritten', async () => {
+    probeResults[SOCKET] = true;
+
+    stubExecFile({
+      'lsof -U': {
+        stdout: `launchd_s 7010 user  8u  unix 0xa  0t0  ${SOCKET}\n`,
+      },
+    });
+
+    // Populate cache (TTL = 100ms from beforeEach)
+    await findSocketPath();
+
+    // Wait past the TTL so the entry is expired
+    await new Promise(r => setTimeout(r, 150));
+
+    // After expiry, re-stub lsof to return nothing AND make socket fail probe.
+    // If the expired entry were still in the map and Date.now() < expiresAt
+    // ever flipped back true, we'd see a stale return; instead the entry must
+    // be evicted on encounter so a fresh discovery runs and yields null.
+    probeResults[SOCKET] = false;
+    stubExecFile({ 'lsof -U': { stdout: 'COMMAND PID\n' } });
+    readdirMock.mockRejectedValue(new Error('ENOENT'));
+
+    const result = await findSocketPath();
+    expect(result).toBeNull();
+
+    // A subsequent call must again invoke lsof — confirming nothing remains
+    // cached from the expired entry.
+    const callsBefore = execFileMock.mock.calls.length;
+    await findSocketPath();
+    expect(execFileMock.mock.calls.length).toBeGreaterThan(callsBefore);
+  });
+
   it('resetSocketCache clears all entries', async () => {
     probeResults[SOCKET] = true;
 
@@ -729,6 +762,31 @@ describe('waitForSocketPath staged backoff (Issue #704)', () => {
     await jest.runAllTimersAsync();
     const result = await promise;
     expect(result).toBe(socketPath);
+  });
+
+  it('honors caller-supplied interval instead of staged backoff when provided', async () => {
+    let callCount = 0;
+    execFileMock.mockImplementation((cmd: string, args: string[], opts: unknown, cb?: unknown) => {
+      const callback = typeof opts === 'function' ? opts : cb;
+      callCount++;
+      // Always return no socket so the loop keeps polling
+      (callback as CallableFunction)(null, { stdout: 'COMMAND PID\n' });
+    });
+    readdirMock.mockRejectedValue(new Error('ENOENT'));
+
+    const promise = waitForSocketPath({ timeout: 1_000, interval: 50 });
+
+    // With a 50ms fixed interval and a 1000ms timeout, we should see far
+    // more probes (~20) than the staged backoff would allow (~6) over the
+    // same window. Advance enough to exhaust the timeout.
+    await jest.advanceTimersByTimeAsync(1_000);
+    await jest.runAllTimersAsync();
+
+    const result = await promise;
+    expect(result).toBeNull();
+    // Staged backoff over 1s reaches stages [0,200,600,1400,...] — only
+    // ~3-4 polls. A 50ms interval should drive substantially more.
+    expect(callCount).toBeGreaterThan(8);
   });
 
   it('uses staged delays: first retry is 200ms, not 500ms', async () => {
