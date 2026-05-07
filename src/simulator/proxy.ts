@@ -174,7 +174,12 @@ export class WebInspectorProxy {
 
     // Only wait for process-ready (device-list endpoint responds).
     // Target-ready is opt-in via waitForTarget().
-    await this.waitForProcessReady();
+    try {
+      await this.waitForProcessReady();
+    } catch (err) {
+      try { await this.stop(); } catch { /* swallow stop errors so original error propagates */ }
+      throw err;
+    }
   }
 
   /**
@@ -190,11 +195,18 @@ export class WebInspectorProxy {
    * @param options.timeout - Override the default target-wait timeout in ms.
    */
   async waitForTarget(options?: { timeout?: number }): Promise<void> {
+    if (!this._running) {
+      throw new Error('WebInspectorProxy must be started before waiting for a target');
+    }
+
     const timeout = options?.timeout ?? DEFAULT_PROXY_TARGET_WAIT_TIMEOUT_MS;
     const start = Date.now();
     let pollInterval = DEFAULT_PROXY_POLL_INITIAL_MS;
 
     while (Date.now() - start < timeout) {
+      if (!this._running) {
+        throw new Error('WebInspectorProxy process exited while waiting for target');
+      }
       try {
         const body = await this.httpGet(`http://localhost:${this._port}/json`);
         const targets = JSON.parse(body);
@@ -206,7 +218,7 @@ export class WebInspectorProxy {
     }
 
     // Don't throw — callers that require a target should check listTargets() afterward
-    console.error('[WebInspectorProxy] No Safari target appeared within timeout — Safari may not be open');
+    console.error('[WebInspectorProxy] No Safari target appeared within timeout — Safari may not be open', timeout);
   }
 
   /** Stop the proxy process gracefully with SIGKILL fallback. */

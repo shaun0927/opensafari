@@ -35,6 +35,7 @@ jest.mock('child_process', () => {
 import { WebInspectorProxy } from '../../src/simulator/proxy';
 import * as socketFinder from '../../src/simulator/socket-finder';
 import { WebKitClient } from '../../src/webkit/client';
+import { DEFAULT_PROXY_PROCESS_READY_TIMEOUT_MS } from '../../src/config/defaults';
 
 // Access private methods via type cast for white-box testing
 type ProxyPrivate = {
@@ -76,6 +77,11 @@ describe('WebInspectorProxy initialization timing', () => {
   // -----------------------------------------------------------------------
 
   describe('waitForTarget', () => {
+    beforeEach(() => {
+      // waitForTarget requires _running = true; simulate a started proxy
+      (proxy as unknown as { _running: boolean })._running = true;
+    });
+
     it('returns immediately when server responds with a valid JSON array', async () => {
       httpGetSpy = jest
         .spyOn(privateProxy(proxy) as unknown as { httpGet: (url: string) => Promise<string> }, 'httpGet')
@@ -189,9 +195,10 @@ describe('WebInspectorProxy initialization timing', () => {
       // Must resolve (not reject) — non-fatal timeout
       await expect(waitPromise).resolves.toBeUndefined();
 
-      // Should have logged a warning
+      // Should have logged a warning with the timeout value
       expect(consoleErrorSpy).toHaveBeenCalledWith(
         expect.stringContaining('No Safari target appeared within timeout'),
+        2000,
       );
     });
 
@@ -347,12 +354,15 @@ describe('WebInspectorProxy initialization timing', () => {
       await expect(privateProxy(proxy).waitForProcessReady(1000)).resolves.toBeUndefined();
 
       // But waitForTarget with a short timeout should time out (empty array is not target-ready)
+      // Set _running = true to satisfy the guard (process-ready was confirmed above)
+      (proxy as unknown as { _running: boolean })._running = true;
       jest.useFakeTimers();
       const targetWaitPromise = privateProxy(proxy).waitForTarget({ timeout: 500 });
       await jest.advanceTimersByTimeAsync(700);
       await expect(targetWaitPromise).resolves.toBeUndefined(); // non-fatal
       expect(consoleErrorSpy).toHaveBeenCalledWith(
         expect.stringContaining('No Safari target appeared within timeout'),
+        500,
       );
     });
   });
@@ -431,6 +441,110 @@ describe('WebInspectorProxy reuse path — no target wait', () => {
     // Must NOT have polled the forwarding port (/json)
     const forwardingPolled = capturedUrls.some(u => u.includes('/json'));
     expect(forwardingPolled).toBe(false);
+  });
+});
+
+describe('WebInspectorProxy _running guards and cleanup-on-timeout', () => {
+  let proxy: WebInspectorProxy;
+
+  beforeEach(() => {
+    proxy = new WebInspectorProxy({ port: 9722, deviceListPort: 9721 });
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+    jest.useRealTimers();
+  });
+
+  it('start() calls stop() and rethrows when waitForProcessReady() rejects (timeout)', async () => {
+    // Setup: port checks pass, binary found, socket found, spawn returns fake proc
+    jest.spyOn(
+      proxy as unknown as { isPortInUse: (port: number) => Promise<boolean> },
+      'isPortInUse',
+    ).mockResolvedValue(false);
+
+    mockExecFileAsync.mockResolvedValue({ stdout: '/usr/local/bin/ios_webkit_debug_proxy\n', stderr: '' });
+    jest.spyOn(socketFinder, 'waitForSocketPath').mockResolvedValue('/tmp/fake.sock');
+
+    const fakeProc = {
+      pid: 99999,
+      stderr: { on: jest.fn() },
+      on: jest.fn(),
+      kill: jest.fn(),
+    };
+    mockSpawn.mockReturnValue(fakeProc);
+
+    // Stub ref tracking so no filesystem I/O
+    jest.spyOn(
+      proxy as unknown as { registerRefSync: () => void },
+      'registerRefSync',
+    ).mockImplementation(() => {});
+    jest.spyOn(
+      proxy as unknown as { unregisterRefSync: () => number },
+      'unregisterRefSync',
+    ).mockReturnValue(0);
+
+    // httpGet always fails → waitForProcessReady will time out
+    jest.spyOn(
+      proxy as unknown as { httpGet: (url: string) => Promise<string> },
+      'httpGet',
+    ).mockRejectedValue(new Error('connect ECONNREFUSED'));
+
+    jest.useFakeTimers();
+
+    const startPromise = proxy.start();
+    // Attach rejection handler immediately
+    const assertion = expect(startPromise).rejects.toThrow('did not become ready within');
+
+    // Advance past the process-ready timeout, then past stop()'s 3000ms SIGKILL fallback
+    await jest.advanceTimersByTimeAsync(DEFAULT_PROXY_PROCESS_READY_TIMEOUT_MS + 5000);
+
+    await assertion;
+
+    // After start() rejects, _running must be false (stop() was called)
+    expect(proxy.running).toBe(false);
+  });
+
+  it('waitForTarget() throws synchronously (via rejection) if called before start()', async () => {
+    // proxy is freshly constructed — not started
+    await expect(privateProxy(proxy).waitForTarget({ timeout: 5000 })).rejects.toThrow(
+      'WebInspectorProxy must be started before waiting for a target',
+    );
+  });
+
+  it('waitForTarget() aborts mid-loop if _running is set to false between polls', async () => {
+    // Manually set _running to true to simulate a started proxy
+    (proxy as unknown as { _running: boolean })._running = true;
+
+    let callCount = 0;
+    jest.spyOn(
+      proxy as unknown as { httpGet: (url: string) => Promise<string> },
+      'httpGet',
+    ).mockImplementation(async () => {
+      callCount++;
+      // After first poll, simulate concurrent stop() by setting _running to false
+      if (callCount === 1) {
+        (proxy as unknown as { _running: boolean })._running = false;
+      }
+      return '[]'; // not target-ready
+    });
+
+    jest.useFakeTimers();
+
+    const waitPromise = privateProxy(proxy).waitForTarget({ timeout: 10000 });
+    // Attach rejection handler immediately
+    const assertion = expect(waitPromise).rejects.toThrow(
+      'WebInspectorProxy process exited while waiting for target',
+    );
+
+    // Advance to trigger first poll, then the sleep after it
+    await jest.advanceTimersByTimeAsync(300);
+
+    await assertion;
+
+    // Should have polled exactly once before aborting
+    expect(callCount).toBe(1);
   });
 });
 
