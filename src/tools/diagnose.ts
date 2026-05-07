@@ -8,7 +8,7 @@
 import { MCPServer } from '../mcp-server';
 import { getSessionManager } from '../session-manager';
 import { peekProxyForDevice } from '../simulator/proxy-manager';
-import { tryCreateSimulatorKitHIDBackend } from './sim-hid-input-backend';
+import { tryCreateSimulatorKitHIDBackend } from '../input/sim-hid-backend';
 import {
   getInputTelemetryRollup,
   type InputTelemetryRollup,
