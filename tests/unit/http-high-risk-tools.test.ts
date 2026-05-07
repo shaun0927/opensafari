@@ -204,6 +204,54 @@ describe('HTTP high-risk MCP tool gate', () => {
     expect(auditLines[0]).not.toContain('secret-cookie');
   });
 
+  test('HTTP audit log redacts the cookies tool arguments including nested cookie values', async () => {
+    const server = new MCPServer();
+    server.registerTool(
+      {
+        name: 'cookies',
+        description: 'fixture cookies tool',
+        inputSchema: {
+          type: 'object' as const,
+          properties: {
+            action: { type: 'string' },
+            cookies: { type: 'array' },
+            domain: { type: 'string' },
+          },
+        },
+      },
+      async () => ({ content: [{ type: 'text' as const, text: 'cookies set' }] }),
+    );
+    enableHttpHighRiskTools(server);
+
+    await handleMessage(server, {
+      jsonrpc: '2.0',
+      id: 30,
+      method: 'tools/call',
+      params: {
+        name: 'cookies',
+        arguments: {
+          action: 'set',
+          cookies: [
+            { name: 'sid', value: 'super-secret-session', domain: 'example.com', path: '/' },
+            { name: 'auth_token', value: 'super-secret-auth', domain: '.example.com' },
+          ],
+          domain: 'example.com',
+        },
+      },
+    }, { transport: 'http', sessionId: 'cookie-audit' });
+
+    expect(auditLines).toHaveLength(1);
+    const audit = JSON.parse(auditLines[0]) as Record<string, unknown>;
+    expect(audit.tool).toBe('cookies');
+    expect(audit.status).toBe('allowed');
+    const summary = JSON.parse(audit.args_summary as string) as Record<string, unknown>;
+    expect(summary.action).toBe('set');
+    expect(summary.cookies).toBe('[REDACTED]');
+    expect(summary.domain).toBe('example.com');
+    expect(auditLines[0]).not.toContain('super-secret-session');
+    expect(auditLines[0]).not.toContain('super-secret-auth');
+  });
+
   test.each([
     'batch_execute',
     'flutter_call_service_extension',
