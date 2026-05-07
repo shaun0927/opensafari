@@ -170,6 +170,34 @@ describe('audit logger', () => {
     }
   });
 
+  it('does not chmod a directory mistakenly configured as the log path', () => {
+    // If OPENSAFARI_AUDIT_LOG_PATH is misconfigured to point at a
+    // directory, the logger must not strip the directory's execute
+    // bits — that would break traversal for other services/users.
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'audit-logger-dir-target-'));
+    const dirAsLogPath = path.join(root, 'audit.log'); // we'll mkdir it
+    fs.mkdirSync(dirAsLogPath, { mode: 0o755 });
+    const beforeMode = fs.statSync(dirAsLogPath).mode & 0o777;
+
+    const previous = process.env.OPENSAFARI_AUDIT_LOG_PATH;
+    process.env.OPENSAFARI_AUDIT_LOG_PATH = dirAsLogPath;
+    try {
+      // The append will fail (EISDIR), but ensurePrivateLogTarget must
+      // not chmod the directory to 0o600 along the way.
+      logAuditEntry('navigate', 'session-dir-target', { url: 'https://example.test/' });
+
+      const afterMode = fs.statSync(dirAsLogPath).mode & 0o777;
+      expect(afterMode).toBe(beforeMode);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENSAFARI_AUDIT_LOG_PATH;
+      } else {
+        process.env.OPENSAFARI_AUDIT_LOG_PATH = previous;
+      }
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('does not chmod a pre-existing parent log directory', () => {
     // Pre-create the log directory with a permissive mode (e.g. shared
     // /var/log) and verify the audit logger does NOT tighten it.

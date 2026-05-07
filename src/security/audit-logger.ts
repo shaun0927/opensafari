@@ -192,8 +192,19 @@ function ensurePrivateLogTarget(logPath: string): boolean {
     if (!dirExisted) {
       fs.chmodSync(logDir, AUDIT_DIR_MODE);
     }
+    // Apply file-mode permissions only to regular files. If
+    // OPENSAFARI_AUDIT_LOG_PATH is misconfigured to a directory,
+    // chmod-ing it would strip execute bits and break traversal for
+    // other services. Leave such a target alone — the subsequent
+    // append will fail with EISDIR and the error path will surface it.
     if (fs.existsSync(logPath)) {
-      fs.chmodSync(logPath, AUDIT_FILE_MODE);
+      try {
+        if (fs.statSync(logPath).isFile()) {
+          fs.chmodSync(logPath, AUDIT_FILE_MODE);
+        }
+      } catch {
+        // best-effort: stat failure should not block the append attempt
+      }
     }
     ensuredLogPaths.add(logPath);
     return true;
