@@ -322,9 +322,20 @@ export class BrowserCommands {
     try {
       const result = await this.sender.send<{ cookies: Array<Record<string, unknown>> }>('Page.getCookies');
       if (result?.cookies) {
+        // Domain match per RFC 6265: a `domain` filter of `example.com` should match
+        // - `example.com` and `.example.com` (exact, with optional leading dot)
+        // - `www.example.com` (cookie scoped to a subdomain of the requested host)
+        // - cookies whose own scope is a parent of the requested host
+        // …but NOT `another-example.com`. Plain substring `.includes()` (the prior
+        // implementation) gave the false-positive flagged in review.
         const wanted = domain?.replace(/^\./, '');
+        const matchesDomain = (cookieDomain: string): boolean => {
+          if (!wanted) return true;
+          const cd = cookieDomain.replace(/^\./, '');
+          return cd === wanted || cd.endsWith(`.${wanted}`) || wanted.endsWith(`.${cd}`);
+        };
         return result.cookies
-          .filter(c => !wanted || ((c.domain as string) || '').replace(/^\./, '') === wanted)
+          .filter(c => matchesDomain(((c.domain as string) || '')))
           .map(c => ({
             name: (c.name as string) || '',
             value: (c.value as string) || '',
