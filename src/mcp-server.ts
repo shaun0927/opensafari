@@ -21,6 +21,7 @@ import { BrowserBackend } from './types/browser-backend';
 import { logAuditEntry } from './security/audit-logger';
 import { getSessionManager } from './session-manager';
 import { getVersion } from './version';
+import { resolveHandler } from './tools/registry';
 
 // Re-export so callers can use canonical names without knowing the internal alias
 export type { MCPToolDefinition as ToolDefinition, ToolHandler };
@@ -82,7 +83,10 @@ export function setWebKitClient(client: BrowserBackend | null, deviceId?: string
 
 interface RegisteredTool {
   definition: MCPToolDefinition;
-  handler: ToolHandler;
+  /** Eagerly-provided handler (registerTool path). */
+  handler?: ToolHandler;
+  /** When true, handler is resolved lazily from the tool registry on first call. */
+  lazy?: boolean;
   tier: number;
 }
 
@@ -110,6 +114,16 @@ export class MCPServer {
   registerTool(definition: MCPToolDefinition, handler: ToolHandler): void {
     const tier = getToolTier(definition.name);
     this.tools.set(definition.name, { definition, handler, tier });
+  }
+
+  /**
+   * Register a tool whose handler is loaded lazily from the tool registry on
+   * first invocation.  The schema and tier are available immediately so
+   * tools/list works without triggering any dynamic import.
+   */
+  registerLazyTool(definition: MCPToolDefinition): void {
+    const tier = getToolTier(definition.name);
+    this.tools.set(definition.name, { definition, lazy: true, tier });
   }
 
   getToolHandler(name: string): ToolHandler | undefined {
@@ -281,8 +295,38 @@ export class MCPServer {
     const sessionId = (request.params as Record<string, unknown> | undefined)
       ?._sessionId as string | undefined ?? 'default';
 
+    // Resolve the handler — either eager (already attached) or lazy (registry).
+    let handler: ToolHandler;
+    if (tool.handler) {
+      handler = tool.handler;
+    } else if (tool.lazy) {
+      try {
+        handler = await resolveHandler(name);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return {
+          jsonrpc: '2.0',
+          id: request.id,
+          result: {
+            content: [{ type: 'text', text: `Error: ${msg}` }],
+            isError: true,
+          },
+        };
+      }
+    } else {
+      // Should never happen — registerTool always sets handler.
+      return {
+        jsonrpc: '2.0',
+        id: request.id,
+        result: {
+          content: [{ type: 'text', text: `Error: no handler registered for tool "${name}"` }],
+          isError: true,
+        },
+      };
+    }
+
     try {
-      const result: MCPResult = await tool.handler(sessionId, args);
+      const result: MCPResult = await handler(sessionId, args);
       if (this.auditLogEnabled) {
         logAuditEntry(name, sessionId, args);
       }
