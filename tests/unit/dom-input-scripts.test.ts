@@ -118,18 +118,27 @@ describe('buildSwipeScript', () => {
     expect(script).not.toContain('window.scrollBy');
   });
 
-  it('falls back to document.body when scroll option is set', () => {
+  it('falls back to document.body || document.documentElement when scroll option is set', () => {
     const script = buildSwipeScript({
       startX: 0, startY: 300, endX: 0, endY: 100,
       steps: 20, stepDelayMs: 25,
       scroll: { scrollX: 0, scrollY: 200 },
     });
-    expect(script).toContain('document.body');
+    expect(script).toContain('document.body || document.documentElement');
   });
 
   it('returns early when no scroll and element missing', () => {
     const script = buildSwipeScript({ startX: 0, startY: 300, endX: 0, endY: 100, steps: 10, stepDelayMs: 16 });
     expect(script).toContain('return');
+  });
+
+  it('uses document.documentElement as final fallback when scroll is set', () => {
+    const script = buildSwipeScript({
+      startX: 0, startY: 300, endX: 0, endY: 100,
+      steps: 10, stepDelayMs: 16,
+      scroll: { scrollX: 0, scrollY: 100 },
+    });
+    expect(script).toContain('document.body || document.documentElement');
   });
 
   it('stable snapshot for fixed input without scroll', () => {
@@ -243,6 +252,11 @@ describe('buildAppendCharScript', () => {
     expect(script).toContain("'keypress'");
     expect(script).toContain("'input'");
     expect(script).toContain("'keyup'");
+  });
+
+  it('contains guard against non-input-like elements (no value descriptor and no value property)', () => {
+    const script = buildAppendCharScript({ selector: '#name', char: 'a' });
+    expect(script).toContain("if (!desc && !('value' in el)) return");
   });
 
   it('stable snapshot for fixed input', () => {

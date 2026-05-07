@@ -12,6 +12,7 @@ exports[`buildAppendCharScript stable snapshot for fixed input 1`] = `
     p = Object.getPrototypeOf(p);
   }
   var desc = p ? Object.getOwnPropertyDescriptor(p, 'value') : null;
+  if (!desc && !('value' in el)) return;
   var val = (desc && desc.get) ? desc.get.call(el) : (el.value || '');
   if (desc && desc.set) {
     desc.set.call(el, val + "a");
@@ -59,7 +60,7 @@ exports[`buildSwipeScript stable snapshot for fixed input with scroll 1`] = `
   window.scrollBy(0, 200);
 
   var el = document.elementFromPoint(sx, sy);
-  if (!el) el = document.body;
+  if (!el) el = document.body || document.documentElement;
   var makeTouch = function(x, y) { return document.createTouch(window, el, 1, x, y, x, y); };
   var startTouch = makeTouch(sx, sy);
   var startList = document.createTouchList(startTouch);

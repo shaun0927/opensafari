@@ -99,7 +99,7 @@ export function buildSwipeScript(opts: SwipeScriptOptions): string {
   return `
 (async function(sx, sy, ex, ey, steps, stepDelay) {
 ${scrollLine}  var el = document.elementFromPoint(sx, sy);
-  if (!el) ${scroll ? 'el = document.body' : 'return'};
+  if (!el) ${scroll ? 'el = document.body || document.documentElement' : 'return'};
   var makeTouch = function(x, y) { return document.createTouch(window, el, 1, x, y, x, y); };
   var startTouch = makeTouch(sx, sy);
   var startList = document.createTouchList(startTouch);
@@ -209,6 +209,7 @@ export function buildAppendCharScript(opts: AppendCharScriptOptions): string {
   el.dispatchEvent(ev);
   el.dispatchEvent(new KeyboardEvent('keypress', { key: ${charJson}, bubbles: true }));
   ${PROTO_VALUE_DESC_WALK}
+  if (!desc && !('value' in el)) return;
   var val = (desc && desc.get) ? desc.get.call(el) : (el.value || '');
   if (desc && desc.set) {
     desc.set.call(el, val + ${charJson});
