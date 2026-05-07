@@ -20,6 +20,13 @@ import type { TransportOptions } from './index';
 /** Maximum allowed HTTP request body size (10 MB) to prevent OOM from oversized requests */
 const MAX_BODY_BYTES = 10 * 1024 * 1024;
 const DEFAULT_HTTP_HOST = '127.0.0.1';
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1', 'localhost']);
+
+function isLoopbackHost(host: string): boolean {
+  if (LOOPBACK_HOSTS.has(host)) return true;
+  // IPv4 loopback range 127.0.0.0/8
+  return /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
+}
 
 /** Active SSE connections for server-initiated notifications */
 interface SSEConnection {
@@ -79,6 +86,13 @@ export class HTTPTransport implements MCPTransport {
   }
 
   async start(): Promise<void> {
+    if (this.insecure && !isLoopbackHost(this.host)) {
+      throw new Error(
+        `[HTTPTransport] Refusing to start: --http-insecure-local requires a loopback bind host (got "${this.host}"). ` +
+          'Either drop --http-insecure-local / OPENSAFARI_HTTP_INSECURE or set --http-host to 127.0.0.1, ::1, or localhost.',
+      );
+    }
+
     this.server = http.createServer((req, res) => {
       this.handleHTTPRequest(req, res);
     });
@@ -258,11 +272,16 @@ export class HTTPTransport implements MCPTransport {
     }
 
     const auth = req.headers.authorization;
-    if (typeof auth !== 'string' || !auth.startsWith('Bearer ')) {
+    if (typeof auth !== 'string') {
+      return false;
+    }
+    // RFC 7235: auth-scheme is case-insensitive ("Bearer", "bearer", "BEARER" all valid).
+    const match = /^\s*Bearer\s+(.+?)\s*$/i.exec(auth);
+    if (!match) {
       return false;
     }
 
-    const suppliedToken = Buffer.from(auth.slice('Bearer '.length), 'utf8');
+    const suppliedToken = Buffer.from(match[1], 'utf8');
     const expectedToken = Buffer.from(this.authToken, 'utf8');
     if (suppliedToken.length !== expectedToken.length) {
       return false;

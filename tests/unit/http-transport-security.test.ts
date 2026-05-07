@@ -166,5 +166,37 @@ describe('HTTP transport security defaults', () => {
       expect(res.status).toBe(403);
       expect(res.headers['access-control-allow-origin']).toBeUndefined();
     });
+
+    test.each([
+      ['bearer', `bearer ${TOKEN}`],
+      ['BEARER', `BEARER ${TOKEN}`],
+      ['Bearer with extra whitespace', `Bearer   ${TOKEN}  `],
+    ])('accepts case-insensitive %s scheme', async (_label, header) => {
+      const res = await mcpRequest('POST', { Authorization: header }, { jsonrpc: '2.0', id: 1, method: 'initialize', params: {} });
+
+      expect(res.status).toBe(200);
+      expect(res.json).toHaveProperty('result');
+    });
+  });
+
+  describe('insecure mode requires loopback bind', () => {
+    test('refuses to start when --http-insecure-local is paired with a non-loopback host', async () => {
+      const transport = new HTTPTransport(0, { insecure: true, host: '0.0.0.0' });
+
+      await expect(transport.start()).rejects.toThrow(/loopback bind host/);
+    });
+
+    test.each(['127.0.0.1', '::1', 'localhost'])(
+      'starts with insecure mode when host is loopback (%s)',
+      async (host) => {
+        const transport = new HTTPTransport(0, { insecure: true, host });
+        try {
+          await transport.start();
+          expect(transport.getAddress()).not.toBeNull();
+        } finally {
+          await transport.close();
+        }
+      },
+    );
   });
 });
