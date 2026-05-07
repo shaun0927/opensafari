@@ -215,6 +215,34 @@ describe('WebInspectorProxy initialization timing', () => {
       expect(capturedUrls[0]).toBe(`http://localhost:${proxy.port}/json`);
     });
 
+    it('succeeds when a target appears during the final sleep window', async () => {
+      // Regression test for the boundary-poll fix: a target that appears during
+      // the last sleep (after the loop guard would exit) must still be found.
+      let callCount = 0;
+      httpGetSpy = jest
+        .spyOn(privateProxy(proxy) as unknown as { httpGet: (url: string) => Promise<string> }, 'httpGet')
+        .mockImplementation(async () => {
+          callCount++;
+          // First 3 polls return empty; 4th (post-loop boundary poll) returns a target
+          if (callCount < 4) return '[]';
+          return '[{"webSocketDebuggerUrl":"ws://x"}]';
+        });
+
+      jest.useFakeTimers();
+
+      // timeout=1000: polls at ~0ms(empty), sleep 200ms, ~200ms(empty),
+      // sleep 400ms, ~600ms(empty), sleep min(800,400)=400ms → wakes at ~1000ms,
+      // loop guard fails, post-loop boundary poll fires → finds target.
+      const waitPromise = privateProxy(proxy).waitForTarget({ timeout: 1000 });
+
+      // Advance past the timeout so the boundary poll fires
+      await jest.advanceTimersByTimeAsync(1100);
+
+      await expect(waitPromise).resolves.toBeUndefined();
+      expect(httpGetSpy).toHaveBeenCalledTimes(4);
+      expect(consoleErrorSpy).not.toHaveBeenCalled();
+    });
+
     it('uses adaptive polling — second interval is larger than the first', async () => {
       const callTimes: number[] = [];
       httpGetSpy = jest

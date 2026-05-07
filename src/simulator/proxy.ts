@@ -212,9 +212,23 @@ export class WebInspectorProxy {
         const targets = JSON.parse(body);
         if (Array.isArray(targets) && targets.length > 0) return;
       } catch { /* retry */ }
-      await new Promise(r => setTimeout(r, pollInterval));
+      // Cap the sleep so it never overshoots the remaining budget
+      const remaining = timeout - (Date.now() - start);
+      if (remaining <= 0) break;
+      const sleepMs = Math.min(pollInterval, remaining);
+      await new Promise(r => setTimeout(r, sleepMs));
       // Adaptive backoff: double the interval each iteration, capped at max
       pollInterval = Math.min(pollInterval * 2, DEFAULT_PROXY_POLL_MAX_MS);
+    }
+
+    // One last attempt at the boundary — a target that appeared during the final
+    // sleep would otherwise be reported as "not ready".
+    if (this._running) {
+      try {
+        const body = await this.httpGet(`http://localhost:${this._port}/json`);
+        const targets = JSON.parse(body);
+        if (Array.isArray(targets) && targets.length > 0) return;
+      } catch { /* fall through to timeout warning */ }
     }
 
     // If the proxy died right at the timeout boundary, surface it as a hard error
