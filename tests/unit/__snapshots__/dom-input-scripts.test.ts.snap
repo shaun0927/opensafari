@@ -18,8 +18,8 @@ exports[`buildAppendCharScript stable snapshot for fixed input 1`] = `
     } else {
       el.value = val + "a";
     }
-    el.dispatchEvent(new Event('input', { bubbles: true }));
   }
+  el.dispatchEvent(new Event('input', { bubbles: true }));
   el.dispatchEvent(new KeyboardEvent('keyup', { key: "a", bubbles: true }));
 })()"
 `;

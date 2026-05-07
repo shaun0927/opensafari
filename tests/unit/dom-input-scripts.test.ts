@@ -279,11 +279,36 @@ describe('buildAppendCharScript', () => {
     expect(script).toContain("dispatchEvent(new KeyboardEvent('keyup'");
     // Value mutation must be inside the conditional wrapper
     expect(script).toContain("if (desc || ('value' in el))");
+    // input event is dispatched unconditionally — present outside the conditional
+    expect(script).toContain("dispatchEvent(new Event('input'");
     // No early return between keydown and keyup
     const keydownIdx = script.indexOf("dispatchEvent(new KeyboardEvent('keydown'");
     const keyupIdx = script.indexOf("dispatchEvent(new KeyboardEvent('keyup'");
     const between = script.slice(keydownIdx, keyupIdx);
     expect(between).not.toContain('return;');
+  });
+
+  it('dispatches input event unconditionally (not gated by desc/value)', () => {
+    const script = buildAppendCharScript({ selector: '#name', char: 'a' });
+    // Find the closing brace of the if (desc || ('value' in el)) { ... } block
+    const ifBlockStart = script.indexOf("if (desc || ('value' in el))");
+    // Locate the closing } that ends that block — it follows the nested setter block
+    // Find the last `}` before the input dispatch
+    const inputDispatchIdx = script.indexOf("dispatchEvent(new Event('input'");
+    expect(ifBlockStart).toBeGreaterThanOrEqual(0);
+    expect(inputDispatchIdx).toBeGreaterThanOrEqual(0);
+    // The input dispatch must appear AFTER the if block
+    expect(inputDispatchIdx).toBeGreaterThan(ifBlockStart);
+    // Find the closing brace of the if block — it's the `}` that precedes the input dispatch
+    const blocksBefore = script.slice(ifBlockStart, inputDispatchIdx);
+    // Count open vs close braces to confirm the if block is fully closed before input fires
+    let depth = 0;
+    let closed = false;
+    for (const ch of blocksBefore) {
+      if (ch === '{') depth++;
+      else if (ch === '}') { depth--; if (depth === 0) closed = true; }
+    }
+    expect(closed).toBe(true);
   });
 
   it('stable snapshot for fixed input', () => {

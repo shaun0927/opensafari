@@ -215,8 +215,8 @@ export function buildAppendCharScript(opts: AppendCharScriptOptions): string {
     } else {
       el.value = val + ${charJson};
     }
-    el.dispatchEvent(new Event('input', { bubbles: true }));
   }
+  el.dispatchEvent(new Event('input', { bubbles: true }));
   el.dispatchEvent(new KeyboardEvent('keyup', { key: ${charJson}, bubbles: true }));
 })()
 `.trim();
