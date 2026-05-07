@@ -426,9 +426,11 @@ export class SimulatorKitHIDInputBackend implements InputBackend {
 }
 
 /**
- * Attempt to locate a usable sim-hid-bridge. Returns a ready-to-use backend
- * or `null` if the helper is not installed on this machine. Callers are
- * expected to fall through to another tier in that case.
+ * Attempt to locate a usable sim-hid-bridge. Returns a ready-to-use backend,
+ * or throws an `InputBackendError` with code `HID_BRIDGE_MISSING` when no
+ * helper is installed on this machine. Callers in the resolver chain are
+ * expected to catch that error and fall through to the next tier; callers
+ * that always require the bridge (e.g. `pasteboard-input`) propagate it.
  *
  * Lookup order:
  *   1. Compiled binary at `dist/sim-hid-bridge` (next to `dist/ax-bridge`).
@@ -439,6 +441,10 @@ export class SimulatorKitHIDInputBackend implements InputBackend {
  *      and executing unsigned Swift source via the interpreter sidesteps any
  *      future codesigning we add to the compiled binary, so this candidate
  *      is intentionally NOT auto-discovered in production installs.
+ *
+ * Note: the return type still includes `null` for forward compatibility with
+ * a future tier-fallback variant that prefers null over throwing. Today the
+ * function only resolves to a backend or throws.
  */
 export async function tryCreateSimulatorKitHIDBackend(): Promise<
   SimulatorKitHIDInputBackend | null

@@ -38,14 +38,18 @@
  * #707 (b) consolidation. The old path is kept as a re-export shim.
  */
 
+import { execFile } from 'child_process';
 import { existsSync } from 'fs';
 import * as path from 'path';
+import { promisify } from 'util';
 import type { InputBackend } from './backend';
 import {
   SimulatorKitHIDInputBackend,
   InputBackendError,
 } from './sim-hid-backend';
 import { timedInput } from '../metrics/input-telemetry';
+
+const execFileAsync = promisify(execFile);
 
 /**
  * Env flag that enables the PointerService backend (Phase 1 opt-in).
@@ -137,10 +141,6 @@ export class PointerServiceInputBackend implements InputBackend {
  * failure-handling path stays local and auditable.
  */
 async function runTapPs(bridgePath: string, args: string[]): Promise<void> {
-  const { execFile } = await import('child_process');
-  const { promisify } = await import('util');
-  const execFileAsync = promisify(execFile);
-
   const isSwiftSource = bridgePath.endsWith('.swift');
   const cmd = isSwiftSource ? 'swift' : bridgePath;
   const cmdArgs = isSwiftSource ? [bridgePath, ...args] : args;
