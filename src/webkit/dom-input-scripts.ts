@@ -15,8 +15,6 @@
 export interface TapScriptOptions {
   x: number;
   y: number;
-  /** When true the script is wrapped in an async IIFE (for long-press path). */
-  async?: boolean;
 }
 
 /**
@@ -208,10 +206,11 @@ export function buildAppendCharScript(opts: AppendValueScriptOptions): string {
     p = Object.getPrototypeOf(p);
   }
   var desc = p ? Object.getOwnPropertyDescriptor(p, 'value') : null;
+  var val = (desc && desc.get) ? desc.get.call(el) : (el.value || '');
   if (desc && desc.set) {
-    desc.set.call(el, el.value + ${charJson});
+    desc.set.call(el, val + ${charJson});
   } else {
-    el.value += ${charJson};
+    el.value = val + ${charJson};
   }
   el.dispatchEvent(new Event('input', { bubbles: true }));
   el.dispatchEvent(new KeyboardEvent('keyup', { key: ${charJson}, bubbles: true }));

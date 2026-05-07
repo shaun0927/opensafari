@@ -12,10 +12,11 @@ exports[`buildAppendCharScript stable snapshot for fixed input 1`] = `
     p = Object.getPrototypeOf(p);
   }
   var desc = p ? Object.getOwnPropertyDescriptor(p, 'value') : null;
+  var val = (desc && desc.get) ? desc.get.call(el) : (el.value || '');
   if (desc && desc.set) {
-    desc.set.call(el, el.value + "a");
+    desc.set.call(el, val + "a");
   } else {
-    el.value += "a";
+    el.value = val + "a";
   }
   el.dispatchEvent(new Event('input', { bubbles: true }));
   el.dispatchEvent(new KeyboardEvent('keyup', { key: "a", bubbles: true }));
