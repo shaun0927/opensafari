@@ -4,6 +4,12 @@ import { readFileSync, writeFileSync, unlinkSync } from 'fs';
 import * as http from 'http';
 import * as net from 'net';
 import { findSocketPath, waitForSocketPath } from './socket-finder';
+import {
+  DEFAULT_PROXY_PROCESS_READY_TIMEOUT_MS,
+  DEFAULT_PROXY_TARGET_WAIT_TIMEOUT_MS,
+  DEFAULT_PROXY_POLL_INITIAL_MS,
+  DEFAULT_PROXY_POLL_MAX_MS,
+} from '../config/defaults';
 
 const execFileAsync = promisify(execFile);
 
@@ -27,6 +33,15 @@ export interface ProxyOptions {
 
 /**
  * Manages an ios_webkit_debug_proxy process for WebKit remote debugging.
+ *
+ * Readiness is split into two distinct states:
+ *
+ *   Process-ready: the proxy HTTP endpoint responds (device-list page loads).
+ *     This is always awaited by start().
+ *
+ *   Target-ready: at least one usable Safari/WebView page target exists under /json.
+ *     This is opt-in via waitForTarget() and is NOT awaited by start().
+ *     An empty [] response from /json is healthy (proxy is up) but not target-ready.
  *
  * The default device-connection port is **9322**, deliberately offset from the
  * Chrome DevTools default (9222) so OpenSafari and openchrome can coexist.
@@ -71,7 +86,15 @@ export class WebInspectorProxy {
     return findSocketPath(targetUdid ? { targetUdid } : undefined);
   }
 
-  /** Start the proxy process. Resolves once the proxy is ready. */
+  /**
+   * Start the proxy process. Resolves once the proxy process is ready (process-ready state).
+   *
+   * Target-ready state (a Safari/WebView page being available) is NOT awaited here.
+   * Call waitForTarget() separately when an active page is required.
+   *
+   * The reuse path also does NOT wait for a target — existing sessions may already
+   * have one, and waiting would add unnecessary latency.
+   */
   async start(options?: { targetUdid?: string }): Promise<void> {
     if (this._running) return;
 
@@ -84,7 +107,7 @@ export class WebInspectorProxy {
         this._running = true;
         this._reusing = true;
         this.registerRefSync();
-        await this.waitForForwarding();
+        // Reuse path: process-ready is confirmed by isProxyHealthy(). No target wait.
         return;
       }
       throw new Error(
@@ -149,8 +172,41 @@ export class WebInspectorProxy {
       this.process = null;
     });
 
-    await this.waitForReady();
-    await this.waitForForwarding();
+    // Only wait for process-ready (device-list endpoint responds).
+    // Target-ready is opt-in via waitForTarget().
+    await this.waitForProcessReady();
+  }
+
+  /**
+   * Wait until at least one Safari/WebView page target is available on the forwarding port.
+   *
+   * Uses adaptive polling: starts at DEFAULT_PROXY_POLL_INITIAL_MS and doubles each
+   * iteration up to DEFAULT_PROXY_POLL_MAX_MS, reducing fixed latency when a target
+   * appears quickly.
+   *
+   * On timeout, logs a warning and resolves (non-fatal) — the caller decides whether
+   * to surface a "No Safari targets found" error to the user.
+   *
+   * @param options.timeout - Override the default target-wait timeout in ms.
+   */
+  async waitForTarget(options?: { timeout?: number }): Promise<void> {
+    const timeout = options?.timeout ?? DEFAULT_PROXY_TARGET_WAIT_TIMEOUT_MS;
+    const start = Date.now();
+    let pollInterval = DEFAULT_PROXY_POLL_INITIAL_MS;
+
+    while (Date.now() - start < timeout) {
+      try {
+        const body = await this.httpGet(`http://localhost:${this._port}/json`);
+        // Empty [] means proxy is up but no pages registered yet — not target-ready
+        if (body.startsWith('[') && body.trim() !== '[]') return;
+      } catch { /* retry */ }
+      await new Promise(r => setTimeout(r, pollInterval));
+      // Adaptive backoff: double the interval each iteration, capped at max
+      pollInterval = Math.min(pollInterval * 2, DEFAULT_PROXY_POLL_MAX_MS);
+    }
+
+    // Don't throw — callers that require a target should check listTargets() afterward
+    console.error('[WebInspectorProxy] No Safari target appeared within timeout — Safari may not be open');
   }
 
   /** Stop the proxy process gracefully with SIGKILL fallback. */
@@ -266,7 +322,12 @@ export class WebInspectorProxy {
     return pids.length;
   }
 
-  private async waitForReady(timeout = 5000): Promise<void> {
+  /**
+   * Wait until the proxy process HTTP endpoint (device-list port) responds.
+   * This confirms the proxy process is alive and serving — "process-ready".
+   * An empty target list at the forwarding port is acceptable at this stage.
+   */
+  private async waitForProcessReady(timeout = DEFAULT_PROXY_PROCESS_READY_TIMEOUT_MS): Promise<void> {
     const start = Date.now();
     while (Date.now() - start < timeout) {
       try {
@@ -276,25 +337,6 @@ export class WebInspectorProxy {
       await new Promise(r => setTimeout(r, 500));
     }
     throw new Error(`WebInspectorProxy did not become ready within ${timeout}ms`);
-  }
-
-  /**
-   * Poll the first device forwarding port until it returns a valid JSON target list.
-   * ios_webkit_debug_proxy requires ~10s initialization before page forwarding is available.
-   * If the timeout expires we log a warning instead of throwing — Safari may not be open yet.
-   */
-  private async waitForForwarding(timeout = 15000): Promise<void> {
-    const start = Date.now();
-    while (Date.now() - start < timeout) {
-      try {
-        const body = await this.httpGet(`http://localhost:${this._port}/json`);
-        // Require at least one target — `[]` means proxy is up but no pages registered yet
-        if (body.startsWith('[') && body.trim() !== '[]') return;
-      } catch { /* retry */ }
-      await new Promise(r => setTimeout(r, 1000));
-    }
-    // Don't throw — forwarding may not be available if no Safari is open yet
-    console.error('[WebInspectorProxy] Forwarding port not ready within timeout — Safari may not be open');
   }
 
   private isPortInUse(port: number): Promise<boolean> {
