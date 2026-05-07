@@ -130,9 +130,13 @@ export class WebSocketProtocolTransport extends EventEmitter implements Protocol
       try {
         handler(event, ...args);
       } catch (err) {
-        // Surface listener errors via the standard 'error' channel so a
-        // misbehaving subscriber cannot break the message-routing loop.
-        this.emit('error', err as Error);
+        // Surface listener errors via the existing `transport:error`
+        // lifecycle channel that WebKitClient already subscribes to.
+        // Avoid the standard `'error'` event because Node throws and
+        // terminates the process if no listener is registered, which
+        // would let a misbehaving subscriber crash the host even
+        // though the routing loop is otherwise resilient.
+        this.emit('transport:error', err as Error);
       }
     }
   }

@@ -338,4 +338,33 @@ describe('WebSocketProtocolTransport', () => {
     });
     expect(received).toHaveLength(2);
   });
+
+  it('routes a throwing onProtocolEvent handler through transport:error without using the standard error channel', () => {
+    const { transport, ws } = makeConnectedTransport();
+
+    const transportErrors: Error[] = [];
+    transport.on('transport:error', err => transportErrors.push(err));
+
+    const errorListenerCalls: Error[] = [];
+    transport.on('error', err => errorListenerCalls.push(err));
+
+    const boom = new Error('listener boom');
+    transport.onProtocolEvent(() => {
+      throw boom;
+    });
+
+    // Drive any protocol event — the handler will throw on delivery.
+    expect(() => {
+      ws.receive({
+        method: 'Target.targetCreated',
+        params: { targetInfo: { targetId: 't-x', type: 'page', url: 'about:blank' } },
+      });
+    }).not.toThrow();
+
+    // Failure surfaced on the lifecycle channel that the client subscribes to,
+    // not via Node's default 'error' event (which would kill the process when
+    // no listener is registered).
+    expect(transportErrors).toEqual([boom]);
+    expect(errorListenerCalls).toEqual([]);
+  });
 });
