@@ -1,8 +1,9 @@
-import WebSocket from 'ws';
 import http from 'http';
 import { EventEmitter } from 'events';
 import { ConnectionError, TimeoutError, ProtocolError, EvaluationError } from './errors';
 export { ConnectionError, TimeoutError, ProtocolError, EvaluationError } from './errors';
+import { ProtocolTransport, WebSocketProtocolTransport } from './protocol-transport';
+export type { ProtocolTransport } from './protocol-transport';
 import {
   BrowserBackend,
   NavigateOptions,
@@ -38,16 +39,8 @@ export interface WebKitTarget {
 }
 
 export class WebKitClient extends EventEmitter implements BrowserBackend {
-  private ws: WebSocket | null = null;
+  private transport: ProtocolTransport;
   private messageId = 0;
-  private pendingRequests: Map<
-    number,
-    {
-      resolve: (value: any) => void;
-      reject: (error: Error) => void;
-      timer: ReturnType<typeof setTimeout>;
-    }
-  > = new Map();
   private enabledDomains: Set<string> = new Set();
   private enabledDomainsPerTarget: Map<string, Set<string>> = new Map();
   private connected = false;
@@ -60,23 +53,98 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
   private activeTargetId: string | null = null;
   private knownTargets: Set<string> = new Set();
   private innerMessageId = 0;
-  private innerPendingRequests: Map<
-    number,
-    {
-      resolve: (value: any) => void;
-      reject: (error: Error) => void;
-      timer: ReturnType<typeof setTimeout>;
-    }
-  > = new Map();
   private targetReady: Promise<void> | null = null;
   private targetReadyResolve: (() => void) | null = null;
 
   constructor(private options: WebKitClientOptions) {
     super();
+    this.transport = new WebSocketProtocolTransport({
+      connectTimeout: options.connectTimeout,
+      sendTimeout: options.sendTimeout,
+    });
+    this.bindTransportEvents();
   }
 
   getHost(): string { return this.options.host; }
   getPort(): number { return this.options.port; }
+
+  // ========== Transport Event Binding ==========
+
+  /**
+   * Forward all transport-emitted events (domain events, target lifecycle events) to this
+   * EventEmitter so that callers using `client.on('Page.loadEventFired', ...)` continue to work.
+   */
+  private bindTransportEvents(): void {
+    // Wildcard forwarding is not natively available on EventEmitter, so we intercept emit.
+    // We replace the transport's emit to also forward to client's emit.
+    const originalEmit = this.transport.emit.bind(this.transport);
+    (this.transport as any).emit = (event: string, ...args: any[]): boolean => {
+      const result = originalEmit(event, ...args);
+      if (event !== 'transport:close' && event !== 'transport:error' && event !== 'newListener' && event !== 'removeListener') {
+        (EventEmitter.prototype.emit as any).call(this, event, ...args);
+      }
+      return result;
+    };
+
+    this.transport.on('transport:close', () => {
+      if (this.connected && !this.reconnecting) {
+        this.connected = false;
+        this.handleDisconnect();
+      }
+    });
+
+    this.transport.on('transport:error', (_err: Error) => {
+      // Error already handled — connection state tracked via transport:close
+    });
+
+    // Target lifecycle events emitted by the transport
+    this.transport.on('Target.targetCreated', (params: any) => {
+      this.handleTargetCreated(params);
+    });
+
+    this.transport.on('Target.targetDestroyed', (params: any) => {
+      this.handleTargetDestroyed(params);
+    });
+  }
+
+  // ========== Target Lifecycle Handlers (moved from handleMessage) ==========
+
+  private handleTargetCreated(params: any): void {
+    const info = params?.targetInfo;
+    if (info?.type !== 'page') return;
+
+    this.knownTargets.add(info.targetId);
+    this.emit('target:created', { targetId: info.targetId, url: info.url });
+
+    if (!this.activeTargetId) {
+      this.activeTargetId = info.targetId;
+    }
+
+    const globalDomains = [...this.enabledDomains];
+    const perTargetDomains = this.enabledDomainsPerTarget.get(info.targetId);
+    const domainsToEnable = new Set([...globalDomains, ...(perTargetDomains ?? [])]);
+    Promise.all(
+      [...domainsToEnable].map(domain =>
+        this.sendToTarget(`${domain}.enable`, undefined, info.targetId).catch(err => {
+          console.error(`[WebKitClient] Failed to re-enable ${domain} on new target: ${(err as Error).message}`);
+        })
+      )
+    ).then(() => {
+      this.targetReadyResolve?.();
+    });
+  }
+
+  private handleTargetDestroyed(params: any): void {
+    const destroyedId = params?.targetId;
+    this.knownTargets.delete(destroyedId);
+    this.enabledDomainsPerTarget.delete(destroyedId);
+    this.emit('target:destroyed', { targetId: destroyedId });
+    if (destroyedId === this.activeTargetId) {
+      this.activeTargetId = this.knownTargets.size > 0
+        ? this.knownTargets.values().next().value ?? null
+        : null;
+    }
+  }
 
   /**
    * Connect directly to a specific WebSocket URL (e.g., per-tab endpoint).
@@ -134,14 +202,7 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
 
   async disconnect(): Promise<void> {
     this.stopHeartbeat();
-    this.clearPendingRequests();
-    if (this.ws) {
-      this.ws.removeAllListeners();
-      if (this.ws.readyState === WebSocket.OPEN) {
-        this.ws.close();
-      }
-      this.ws = null;
-    }
+    await this.transport.disconnect();
     this.connected = false;
     this.enabledDomains.clear();
     this.enabledDomainsPerTarget.clear();
@@ -152,7 +213,7 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
   }
 
   isConnected(): boolean {
-    return this.connected && this.ws?.readyState === WebSocket.OPEN;
+    return this.transport.isConnected();
   }
 
   // ========== Target Discovery ==========
@@ -216,9 +277,6 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
     params?: Record<string, unknown>,
     targetId?: string | null,
   ): Promise<T> {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      throw new ConnectionError('WebSocket not connected');
-    }
     const resolvedTargetId = targetId ?? this.activeTargetId;
     if (!resolvedTargetId) {
       throw new ConnectionError(
@@ -228,157 +286,9 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
 
     const innerId = ++this.innerMessageId;
     const outerId = ++this.messageId;
-    const timeout =
-      this.options.sendTimeout ?? DEFAULT_WEBKIT_SEND_TIMEOUT_MS;
+    const timeout = this.options.sendTimeout ?? DEFAULT_WEBKIT_SEND_TIMEOUT_MS;
 
-    const innerPromise = new Promise<T>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.innerPendingRequests.delete(innerId);
-        reject(new TimeoutError(`${method} timed out after ${timeout}ms`));
-      }, timeout);
-      this.innerPendingRequests.set(innerId, { resolve, reject, timer });
-    });
-
-    // Track outer message for error propagation (e.g., invalid targetId)
-    const outerTimer = setTimeout(() => {
-      this.pendingRequests.delete(outerId);
-    }, timeout);
-    this.pendingRequests.set(outerId, {
-      resolve: () => { /* outer ack ignored — real response via dispatchMessageFromTarget */ },
-      reject: (err: Error) => {
-        // Outer error means inner will never resolve — reject inner too
-        const innerPending = this.innerPendingRequests.get(innerId);
-        if (innerPending) {
-          clearTimeout(innerPending.timer);
-          this.innerPendingRequests.delete(innerId);
-          innerPending.reject(err);
-        }
-      },
-      timer: outerTimer,
-    });
-
-    // Wrap in Target.sendMessageToTarget
-    const innerMessage = JSON.stringify({ id: innerId, method, params });
-    this.ws.send(
-      JSON.stringify({
-        id: outerId,
-        method: 'Target.sendMessageToTarget',
-        params: { targetId: resolvedTargetId, message: innerMessage },
-      }),
-    );
-
-    return innerPromise;
-  }
-
-  private handleMessage(data: string): void {
-    let msg: any;
-    try {
-      msg = JSON.parse(data);
-    } catch {
-      return;
-    }
-
-    // Handle Target events (multiplexing protocol)
-    if (msg.method === 'Target.targetCreated') {
-      const info = msg.params?.targetInfo;
-      if (info?.type === 'page') {
-        this.knownTargets.add(info.targetId);
-        this.emit('target:created', { targetId: info.targetId, url: info.url });
-
-        // Set as active target only if none is active yet (single-tab compat)
-        // In multi-tab mode, callers manage targets explicitly via TabPool
-        if (!this.activeTargetId) {
-          this.activeTargetId = info.targetId;
-        }
-
-        // Re-enable domains on new target (e.g., after navigation destroys old target)
-        // Merge global domains + any per-target domains that were tracked for this target
-        const globalDomains = [...this.enabledDomains];
-        const perTargetDomains = this.enabledDomainsPerTarget.get(info.targetId);
-        const domainsToEnable = new Set([...globalDomains, ...(perTargetDomains ?? [])]);
-        // Re-enable domains then signal target readiness
-        Promise.all(
-          [...domainsToEnable].map(domain =>
-            this.sendToTarget(`${domain}.enable`, undefined, info.targetId).catch(err => {
-              console.error(`[WebKitClient] Failed to re-enable ${domain} on new target: ${(err as Error).message}`);
-            })
-          )
-        ).then(() => {
-          this.targetReadyResolve?.();
-        });
-        return;
-      }
-      return;
-    }
-
-    if (msg.method === 'Target.targetDestroyed') {
-      const destroyedId = msg.params?.targetId;
-      this.knownTargets.delete(destroyedId);
-      this.enabledDomainsPerTarget.delete(destroyedId);
-      this.emit('target:destroyed', { targetId: destroyedId });
-      if (destroyedId === this.activeTargetId) {
-        // Fallback to another known target, or null
-        this.activeTargetId = this.knownTargets.size > 0
-          ? this.knownTargets.values().next().value ?? null
-          : null;
-      }
-      return;
-    }
-
-    if (msg.method === 'Target.dispatchMessageFromTarget') {
-      // This contains the REAL response to our domain commands
-      let innerMsg: any;
-      try {
-        innerMsg = JSON.parse(msg.params.message);
-      } catch {
-        return;
-      }
-      if (innerMsg.id !== undefined) {
-        const pending = this.innerPendingRequests.get(innerMsg.id);
-        if (pending) {
-          clearTimeout(pending.timer);
-          this.innerPendingRequests.delete(innerMsg.id);
-          if (innerMsg.error) {
-            pending.reject(
-              new ProtocolError(
-                innerMsg.error.message ?? JSON.stringify(innerMsg.error),
-                innerMsg.error.code,
-              ),
-            );
-          } else {
-            pending.resolve(innerMsg.result);
-          }
-        }
-      } else if (innerMsg.method) {
-        // Inner event (e.g., Page.loadEventFired, Runtime.consoleAPICalled)
-        // Include targetId so multi-tab consumers can filter by target
-        const sourceTargetId = msg.params.targetId;
-        this.emit(innerMsg.method, innerMsg.params, { targetId: sourceTargetId });
-      }
-      return;
-    }
-
-    if (msg.id !== undefined) {
-      // Outer ack response to Target.sendMessageToTarget — just clean up
-      const pending = this.pendingRequests.get(msg.id);
-      if (pending) {
-        clearTimeout(pending.timer);
-        this.pendingRequests.delete(msg.id);
-        // Don't resolve/reject caller — real response comes via dispatchMessageFromTarget
-        // But if there's an outer error (e.g., invalid targetId), propagate it
-        if (msg.error) {
-          pending.reject(
-            new ProtocolError(
-              msg.error.message ?? JSON.stringify(msg.error),
-              msg.error.code,
-            ),
-          );
-        }
-      }
-    } else if (msg.method) {
-      // Other event notifications not handled above
-      this.emit(msg.method, msg.params);
-    }
+    return this.transport.sendToTarget<T>(method, params, resolvedTargetId, innerId, outerId, timeout);
   }
 
   // ========== Domain Management ==========
@@ -451,12 +361,8 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
     this.reconnecting = true;
     this.connected = false;
 
-    // Clear stale inner requests before reconnect
-    for (const [, pending] of this.innerPendingRequests) {
-      clearTimeout(pending.timer);
-      pending.reject(new ConnectionError('Connection lost during reconnect'));
-    }
-    this.innerPendingRequests.clear();
+    // Clear stale pending requests before reconnect
+    (this.transport as WebSocketProtocolTransport).clearPendingRequests();
     this.activeTargetId = null;
     this.knownTargets.clear();
 
@@ -1197,46 +1103,9 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
       this.targetReadyResolve = resolve;
     });
 
-    await new Promise<void>((resolve, reject) => {
-      const connectTimeout =
-        this.options.connectTimeout ?? DEFAULT_WEBKIT_CONNECT_TIMEOUT_MS;
-
-      const timeout = setTimeout(() => {
-        reject(
-          new ConnectionError(
-            `Connection timeout after ${connectTimeout}ms`,
-          ),
-        );
-      }, connectTimeout);
-
-      const ws = new WebSocket(wsUrl);
-
-      ws.on('open', () => {
-        clearTimeout(timeout);
-        this.ws = ws;
-        this.connected = true;
-        this.startHeartbeat();
-        resolve();
-      });
-
-      ws.on('message', (data: WebSocket.Data) => {
-        this.handleMessage(data.toString());
-      });
-
-      ws.on('close', () => {
-        if (this.connected && !this.reconnecting) {
-          this.connected = false;
-          this.handleDisconnect();
-        }
-      });
-
-      ws.on('error', (err: Error) => {
-        clearTimeout(timeout);
-        if (!this.connected) {
-          reject(new ConnectionError(`WebSocket error: ${err.message}`));
-        }
-      });
-    });
+    await this.transport.connect(wsUrl);
+    this.connected = true;
+    this.startHeartbeat();
 
     // Wait for first page target to be discovered
     const connectTimeout =
@@ -1253,20 +1122,6 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
     } finally {
       clearTimeout(targetTimer!);
     }
-  }
-
-  private clearPendingRequests(): void {
-    for (const [, req] of this.pendingRequests) {
-      clearTimeout(req.timer);
-      req.reject(new ConnectionError('Connection closed'));
-    }
-    this.pendingRequests.clear();
-
-    for (const [, req] of this.innerPendingRequests) {
-      clearTimeout(req.timer);
-      req.reject(new ConnectionError('Connection closed'));
-    }
-    this.innerPendingRequests.clear();
   }
 
   private httpGet(url: string): Promise<string> {
