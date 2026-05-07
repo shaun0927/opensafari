@@ -25,6 +25,8 @@ Every CI machine that runs OpenSafari must satisfy the following requirements.
 
 `opensafari serve --http` binds to `127.0.0.1` by default and requires a bearer token for `/mcp`. Store the token in your CI secret manager as `OPENSAFARI_HTTP_TOKEN`; do not echo it. HTTP health checks may call `/health` without the token, but MCP JSON-RPC calls must include `Authorization: Bearer $OPENSAFARI_HTTP_TOKEN`.
 
+High-risk tools that execute code or move authentication/session material are disabled in HTTP mode unless explicitly enabled: `javascript`, `flutter_evaluate`, `auth_save`, `auth_restore`, and `cookies`. Prefer leaving them disabled in CI. If a controlled job requires them, set `OPENSAFARI_HTTP_ENABLE_HIGH_RISK_TOOLS=1` or pass `--http-enable-high-risk-tools`; OpenSafari records high-risk HTTP calls in the audit log with sensitive arguments redacted.
+
 ## GitHub Actions Recipe
 
 A complete workflow that covers three jobs:

@@ -67,6 +67,7 @@ export async function createServer(options?: {
   authToken?: string;
   httpInsecure?: boolean;
   allowedOrigins?: string[];
+  httpHighRiskTools?: boolean;
   allTools?: boolean;
 }): Promise<MCPServer> {
   const server = new MCPServer();
@@ -88,6 +89,7 @@ export async function createServer(options?: {
     authToken: options?.authToken,
     httpInsecure: options?.httpInsecure,
     allowedOrigins: options?.allowedOrigins,
+    httpHighRiskTools: options?.httpHighRiskTools,
   });
   return server;
 }

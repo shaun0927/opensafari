@@ -12,6 +12,7 @@ interface AuditEntry {
   tool: string;           // tool name
   domain: string | null;  // extracted from page URL, null if N/A
   sessionId: string;
+  status?: string;
   args_summary: string;   // brief summary, no sensitive data
 }
 
@@ -28,35 +29,48 @@ function extractDomain(url?: string): string | null {
   return extractHostname(url) || null;
 }
 
-const SENSITIVE_KEYS = ['password', 'cookie', 'token', 'secret', 'auth', 'credential', 'value', 'text'];
+const SENSITIVE_KEYS = ['password', 'cookie', 'token', 'secret', 'auth', 'credential', 'value', 'text', 'expression', 'script', 'code'];
 
 function isSensitiveKey(key: string): boolean {
   const lower = key.toLowerCase();
   return SENSITIVE_KEYS.some(s => lower.includes(s));
 }
 
-// Summarize args (redact sensitive values)
-function summarizeArgs(args: Record<string, unknown>): string {
-  // Include keys like tabId, url, action but redact values of sensitive keys
-  const safe: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(args)) {
-    if (isSensitiveKey(key)) {
-      safe[key] = '[REDACTED]';
-    } else if (typeof value === 'string' && value.length > 100) {
-      safe[key] = value.slice(0, 100) + '...';
-    } else {
-      safe[key] = value;
-    }
+function redactValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(redactValue);
   }
-  return JSON.stringify(safe);
+  if (value && typeof value === 'object') {
+    const safe: Record<string, unknown> = {};
+    for (const [key, nestedValue] of Object.entries(value as Record<string, unknown>)) {
+      safe[key] = isSensitiveKey(key) ? '[REDACTED]' : redactValue(nestedValue);
+    }
+    return safe;
+  }
+  if (typeof value === 'string' && value.length > 100) {
+    return value.slice(0, 100) + '...';
+  }
+  return value;
 }
 
-export function logAuditEntry(tool: string, sessionId: string, args: Record<string, unknown>, pageUrl?: string): void {
+// Summarize args (redact sensitive values)
+function summarizeArgs(args: Record<string, unknown>): string {
+  return JSON.stringify(redactValue(args));
+}
+
+export function logAuditEntry(
+  tool: string,
+  sessionId: string,
+  args: Record<string, unknown>,
+  pageUrl?: string,
+  status?: string,
+): void {
   const entry: AuditEntry = {
     timestamp: new Date().toISOString(),
     tool,
     domain: extractDomain(pageUrl || (args.url as string)),
     sessionId,
+    ...(status ? { status } : {}),
     args_summary: summarizeArgs(args),
   };
 
