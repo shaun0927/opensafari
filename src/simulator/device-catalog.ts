@@ -4,13 +4,15 @@ import { DEVICE_PRESETS } from './presets';
 import { DeviceNotFoundError } from './errors';
 
 interface SimctlListResult {
-  devices: Record<string, Array<{
+  // `simctl list devices -j` returns only `devices`; `simctl list runtimes -j`
+  // returns only `runtimes`. Treat both as optional so a missing key is not a crash.
+  devices?: Record<string, Array<{
     udid: string;
     name: string;
     state: string;
     isAvailable: boolean;
   }>>;
-  runtimes: Array<{
+  runtimes?: Array<{
     identifier: string;
     version: string;
     isAvailable: boolean;
@@ -22,7 +24,7 @@ export async function listDevices(simctl: SimctlExecutor): Promise<SimulatorDevi
   const result = await simctl.execJson<SimctlListResult>(['list', 'devices']);
   const devices: SimulatorDevice[] = [];
 
-  for (const [runtimeId, deviceList] of Object.entries(result.devices)) {
+  for (const [runtimeId, deviceList] of Object.entries(result.devices ?? {})) {
     const version = runtimeId.match(/iOS-(\d+)-(\d+)/);
     const runtimeVersion = version ? `${version[1]}.${version[2]}` : 'unknown';
 
@@ -45,7 +47,7 @@ export async function listDevices(simctl: SimctlExecutor): Promise<SimulatorDevi
 
 export async function listRuntimes(simctl: SimctlExecutor): Promise<SimulatorRuntime[]> {
   const result = await simctl.execJson<SimctlListResult>(['list', 'runtimes']);
-  return result.runtimes.filter(r => r.isAvailable);
+  return (result.runtimes ?? []).filter(r => r.isAvailable);
 }
 
 export async function getDevice(simctl: SimctlExecutor, deviceId: string): Promise<SimulatorDevice | null> {
@@ -76,13 +78,17 @@ export async function resolveDevice(simctl: SimctlExecutor, presetKey: string): 
   const substring = devices.find(d => d.name.toLowerCase().includes(lower));
   if (substring) return substring;
 
-  // 4. Fuzzy: split words, match all keywords
-  const keywords = lower.split(/[\s-]+/);
-  const fuzzy = devices.find(d => {
-    const dLower = d.name.toLowerCase();
-    return keywords.every(kw => dLower.includes(kw));
-  });
-  if (fuzzy) return fuzzy;
+  // 4. Fuzzy: split words, match all keywords. Filter empty tokens so that
+  // whitespace/separator-only input doesn't reduce to `every(kw => …includes(""))`,
+  // which would silently match the first available device.
+  const keywords = lower.split(/[\s-]+/).filter(Boolean);
+  if (keywords.length > 0) {
+    const fuzzy = devices.find(d => {
+      const dLower = d.name.toLowerCase();
+      return keywords.every(kw => dLower.includes(kw));
+    });
+    if (fuzzy) return fuzzy;
+  }
 
   throw new DeviceNotFoundError(presetKey, devices.map(d => d.name));
 }
