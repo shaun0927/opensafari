@@ -1,6 +1,8 @@
 import WebSocket from 'ws';
 import http from 'http';
 import { EventEmitter } from 'events';
+import { ConnectionError, TimeoutError, ProtocolError, EvaluationError } from './errors';
+export { ConnectionError, TimeoutError, ProtocolError, EvaluationError } from './errors';
 import {
   BrowserBackend,
   NavigateOptions,
@@ -1277,38 +1279,5 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
         })
         .on('error', reject);
     });
-  }
-}
-
-// ========== Error Classes ==========
-
-export class ConnectionError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'ConnectionError';
-  }
-}
-
-export class TimeoutError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'TimeoutError';
-  }
-}
-
-export class ProtocolError extends Error {
-  constructor(
-    message: string,
-    public readonly code?: number,
-  ) {
-    super(message);
-    this.name = 'ProtocolError';
-  }
-}
-
-export class EvaluationError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'EvaluationError';
   }
 }
