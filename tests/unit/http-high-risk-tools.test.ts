@@ -257,6 +257,7 @@ describe('HTTP high-risk MCP tool gate', () => {
     'flutter_call_service_extension',
     'run_scenario',
     'assert_all_devices',
+    'mock_geolocation',
   ])('HTTP gates code-execution tool %s without the capability', async (toolName) => {
     expect(getHighRiskToolMetadata(toolName)).toEqual({
       category: 'code-execution',

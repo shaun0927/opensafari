@@ -43,6 +43,14 @@ export const HIGH_RISK_MCP_TOOLS: Readonly<Record<string, HighRiskToolMetadata>>
     category: 'code-execution',
     requiredCapability: HTTP_HIGH_RISK_TOOL_CAPABILITY,
   },
+  // mock_geolocation interpolates `latitude`/`longitude`/`accuracy`/`altitude` directly into
+  // a JS template that is then run via `client.evaluate` (src/tools/mock-geolocation.ts).
+  // MCP does not enforce JSON Schema at runtime, so a string payload that survives the numeric
+  // range check (e.g. NaN-on-coercion) yields arbitrary code execution in the page context.
+  mock_geolocation: {
+    category: 'code-execution',
+    requiredCapability: HTTP_HIGH_RISK_TOOL_CAPABILITY,
+  },
   auth_save: {
     category: 'credential-movement',
     requiredCapability: HTTP_HIGH_RISK_TOOL_CAPABILITY,
