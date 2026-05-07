@@ -1,6 +1,7 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
+import { randomUUID } from 'crypto';
 import { BrowserBackend, Cookie } from '../types/browser-backend';
 
 export interface DomainGroup {
@@ -29,6 +30,8 @@ export interface ExpiryInfo {
 
 export class AuthManager {
   private authDir: string;
+  private static readonly privateDirMode = 0o700;
+  private static readonly privateFileMode = 0o600;
 
   constructor(authDir?: string) {
     this.authDir = authDir ?? path.join(os.homedir(), '.opensafari', 'auth');
@@ -71,9 +74,9 @@ export class AuthManager {
       sessionStorage: sessionStorage ?? {},
     };
 
-    await fs.mkdir(this.authDir, { recursive: true });
+    await this.ensureAuthDir();
     const filePath = path.join(this.authDir, this.sanitizeSite(site) + '.json');
-    await fs.writeFile(filePath, JSON.stringify(profile, null, 2));
+    await this.atomicWriteProfile(filePath, JSON.stringify(profile, null, 2));
 
     return filePath;
   }
@@ -178,5 +181,48 @@ export class AuthManager {
 
   private sanitizeSite(site: string): string {
     return site.replace(/[^a-zA-Z0-9.-]/g, '_');
+  }
+
+  private async ensureAuthDir(): Promise<void> {
+    await fs.mkdir(this.authDir, { recursive: true, mode: AuthManager.privateDirMode });
+    if (this.supportsPosixModes()) {
+      await fs.chmod(this.authDir, AuthManager.privateDirMode);
+    }
+  }
+
+  private async atomicWriteProfile(filePath: string, contents: string): Promise<void> {
+    const tempPath = path.join(
+      this.authDir,
+      `.${path.basename(filePath)}.${process.pid}.${randomUUID()}.tmp`,
+    );
+
+    let handle: fs.FileHandle | undefined;
+    try {
+      handle = await fs.open(tempPath, 'wx', AuthManager.privateFileMode);
+      await handle.writeFile(contents, 'utf-8');
+      await handle.close();
+      handle = undefined;
+
+      if (this.supportsPosixModes()) {
+        await fs.chmod(tempPath, AuthManager.privateFileMode);
+      }
+
+      await fs.rename(tempPath, filePath);
+
+      if (this.supportsPosixModes()) {
+        await fs.chmod(filePath, AuthManager.privateFileMode);
+      }
+    } catch (error) {
+      if (handle) {
+        await handle.close().catch(() => {});
+      }
+      await fs.unlink(tempPath).catch(() => {});
+      throw error;
+    }
+  }
+
+
+  private supportsPosixModes(): boolean {
+    return process.platform !== 'win32';
   }
 }
