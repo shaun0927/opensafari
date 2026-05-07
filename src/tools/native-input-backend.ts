@@ -54,6 +54,18 @@ export type InputBackendKind =
   | 'ax-press'
   | 'pointer-service';
 
+/**
+ * A single tap event used in batch dispatch. Mirrors the signature of
+ * `InputBackend.tap` but excludes the `deviceId` (supplied once at the
+ * batch-call level) to avoid repetition in large queues.
+ */
+export interface BatchTapEvent {
+  x: number;
+  y: number;
+  /** Optional long-press duration in seconds. */
+  duration?: number;
+}
+
 export interface InputBackend {
   /** Stable identifier used for observability / audit logging. */
   readonly kind: InputBackendKind;
@@ -80,6 +92,40 @@ export interface InputBackend {
   typeText(deviceId: string, text: string, delayMs?: number): Promise<void>;
   keypress(deviceId: string, keyCode: string): Promise<void>;
   sendKey(deviceId: string, keyName: string): Promise<void>;
+
+  /**
+   * Whether this backend supports the `tapBatch()` method for submitting
+   * multiple tap events in a single logical call. Callers MUST check this
+   * before calling `tapBatch()` — the method is absent on backends that
+   * return `false`.
+   *
+   * **Unsupported combinations**: `tapBatch` is intentionally NOT available
+   * on `SimctlInputBackend` (each simctl invocation opens a separate Xcode
+   * process, so batching at the TS level provides no meaningful reduction),
+   * `WebKitInputBackend` (JS injection is already in-process with no spawn
+   * cost), `FlutterVMInputBackend` (same — evaluate over a WebSocket),
+   * `AppleScriptInputBackend` (opt-in focus-stealing path; batching would
+   * hide per-tap activation overhead rather than remove it), and
+   * `PointerServiceInputBackend` (tap-ps subcommand is experimental;
+   * batching is deferred until Phase 2 of #590).
+   */
+  supportsBatching(): boolean;
+
+  /**
+   * Submit multiple tap events to `deviceId` sequentially, reducing the
+   * per-call overhead that a caller would otherwise pay by invoking
+   * `tap()` in a loop.
+   *
+   * Only available when `supportsBatching()` returns `true`. Callers must
+   * guard with `supportsBatching()` before calling this method; calling
+   * it on a backend that does not advertise batching support is a
+   * programming error and will throw.
+   *
+   * The events are dispatched in order. If any event fails, the batch
+   * stops and rejects with that error — already-dispatched events are
+   * NOT rolled back (HID injection is fire-and-forget at the OS level).
+   */
+  tapBatch?(deviceId: string, events: BatchTapEvent[]): Promise<void>;
 }
 
 // ── SimctlInputBackend ───────────────────────────────────────────────────────
@@ -149,6 +195,15 @@ export class SimctlInputBackend implements InputBackend {
       await this.simctl.exec(['io', deviceId, 'sendkey', keyName]);
     });
   }
+
+  /**
+   * Batching is not supported on SimctlInputBackend. Each `xcrun simctl io
+   * input` invocation opens a separate Xcode IPC channel; accumulating calls
+   * at the TypeScript level would not reduce that per-call overhead.
+   */
+  supportsBatching(): boolean {
+    return false;
+  }
 }
 
 // ── AppleScriptInputBackend ──────────────────────────────────────────────────
@@ -202,15 +257,48 @@ export class AppleScriptInputBackend implements InputBackend {
   /** Set of deviceIds that have already emitted the AX fallback warning. */
   private warnedDevices = new Set<string>();
 
+  /**
+   * Simulator activation state cache (opt-in AppleScript path only).
+   *
+   * Activating Simulator.app via `osascript` costs ~100–200 ms per call
+   * (AppleScript IPC + the mandatory 150 ms settle delay). When the same
+   * backend instance is used for consecutive operations inside a short burst
+   * (e.g. typing a multi-character PIN via `keypress` in a loop), this cache
+   * avoids re-activating on each call if we reasonably believe Simulator is
+   * still in the foreground.
+   *
+   * TTL is deliberately short (2 s): long enough to benefit a tight loop of
+   * input calls, short enough that a user who switches away to another app and
+   * returns within a few seconds still gets a real activation on the next call.
+   *
+   * This cache is scoped to the AppleScript backend instance and does NOT
+   * affect any headless tier. It is NOT shared with `getInputBackend()`.
+   */
+  private static readonly ACTIVATION_CACHE_TTL_MS = 2_000;
+  private lastActivationAt = 0;
+
   private async runAppleScript(lines: string[]): Promise<string> {
     const args = lines.flatMap((line) => ['-e', line]);
     const { stdout } = await execFileAsync('osascript', args, { timeout: 10_000 });
     return stdout.trim();
   }
 
+  /**
+   * Activate Simulator.app via AppleScript if the cached activation has
+   * expired. Skips the IPC call and 150 ms settle delay when we believe
+   * Simulator is still frontmost (within `ACTIVATION_CACHE_TTL_MS`).
+   *
+   * This optimisation applies ONLY to the opt-in focus-stealing path —
+   * all headless backends skip this method entirely.
+   */
   private async activateSimulator(): Promise<void> {
+    const now = Date.now();
+    if (now - this.lastActivationAt < AppleScriptInputBackend.ACTIVATION_CACHE_TTL_MS) {
+      return;
+    }
     await this.runAppleScript(['tell application "Simulator" to activate']);
     await delay(150);
+    this.lastActivationAt = Date.now();
   }
 
   /**
@@ -430,6 +518,16 @@ export class AppleScriptInputBackend implements InputBackend {
       ]);
     });
   }
+
+  /**
+   * Batching is not supported on AppleScriptInputBackend. This is the
+   * opt-in focus-stealing path; each tap must activate Simulator.app first,
+   * so there is no meaningful process-spawn reduction available. Callers
+   * that need repeated taps via this backend must invoke `tap()` in a loop.
+   */
+  supportsBatching(): boolean {
+    return false;
+  }
 }
 
 // ── WebKitInputBackend ──────────────────────────────────────────────────
@@ -583,6 +681,16 @@ export class WebKitInputBackend implements InputBackend {
       const mapped = SENDKEY_TO_WEBKIT_KEY[keyName] ?? keyName;
       await this.client.press(mapped);
     });
+  }
+
+  /**
+   * Batching is not supported on WebKitInputBackend. JS injection executes
+   * in-process over an already-established WebSocket — there is no process
+   * spawn overhead to reduce. Each `tap()` call is already near-zero-cost
+   * from a spawn perspective.
+   */
+  supportsBatching(): boolean {
+    return false;
   }
 }
 
