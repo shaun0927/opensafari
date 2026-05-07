@@ -1,9 +1,8 @@
 /**
  * Unit tests for the simulator polling optimisations introduced in #703:
  *   - SimulatorStateCache: TTL, invalidation, concurrent-tick deduplication
- *   - hasBootstatus capability detection (with memoisation reset)
- *   - SimulatorManager.boot() uses bootstatus when capable
- *   - SimulatorManager.boot() falls back to list when bootstatus unavailable
+ *   - SimulatorManager.getDeviceState() never uses `bootstatus -b` (mutating)
+ *   - SimulatorManager.boot() throws when device disappears after Booted (race)
  *   - SimulatorManager.shutdown() timeout error surfaces (not hidden)
  *   - Cache invalidates after boot / shutdown / delete
  *   - Parallel pool tick: shared state reads
@@ -19,7 +18,7 @@ import {
   resetBootstatusCapabilityForTests,
   SimctlError,
 } from '../../src/simulator/simctl';
-import { SimulatorManager } from '../../src/simulator/manager';
+import { SimulatorManager, DeviceNotFoundError } from '../../src/simulator/manager';
 import { SimPool } from '../../src/simulator/sim-pool';
 
 // ── helpers ────────────────────────────────────────────────────────────────
@@ -45,9 +44,6 @@ function makeFakeUuid(seed: number): string {
 }
 
 const UDID = 'AAAAAAAA-0001-0002-0003-000000000001';
-
-/** Probe UDID used by hasBootstatus() — any call to this UDID is just a probe. */
-const PROBE_UDID = '00000000-0000-0000-0000-000000000000';
 
 // ── makeManager helper ─────────────────────────────────────────────────────
 
@@ -129,153 +125,126 @@ describe('SimulatorStateCache', () => {
   });
 });
 
-// ── bootstatus capability + getDeviceState ─────────────────────────────────
+// ── getDeviceState: never uses bootstatus -b ───────────────────────────────
 
 describe('SimulatorManager.getDeviceState()', () => {
   beforeEach(() => resetBootstatusCapabilityForTests());
 
-  test('uses bootstatus and returns Booted when it exits 0', async () => {
-    const { manager, fakeExec } = makeManager();
-
-    // Probe UDID gets device-not-found (capability present — not "Unknown command")
-    // Real UDID: exit 0 = Booted
-    fakeExec.mockImplementation(async (args: string[]) => {
-      if (args[0] === 'bootstatus') {
-        if (args[1] === PROBE_UDID) {
-          throw new SimctlError('Unable to lookup sim by UDID', args, 1);
-        }
-        return ''; // exit 0 = Booted
-      }
-      return '';
-    });
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const state = await (manager as any).getDeviceState(UDID);
-    expect(state).toBe('Booted');
-
-    // mock.calls entries are [args: string[]], so c[0] is the args array
-    const bootstatusCalls = (fakeExec as jest.Mock).mock.calls.filter(
-      (c: [string[]]) => c[0][0] === 'bootstatus' && c[0][1] === UDID,
-    );
-    expect(bootstatusCalls.length).toBeGreaterThanOrEqual(1);
-  });
-
-  test('falls back to list when bootstatus is unavailable', async () => {
+  test('never executes bootstatus -b (mutating command) when reading device state', async () => {
     const { manager, fakeExec, fakeExecJson } = makeManager();
 
-    fakeExec.mockImplementation(async (args: string[]) => {
-      if (args[0] === 'bootstatus') {
-        throw new SimctlError('Unknown command: bootstatus', args, 1);
-      }
-      return '';
-    });
     fakeExecJson.mockResolvedValue(makeDeviceJson(UDID, 'Booted'));
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const state = await (manager as any).getDeviceState(UDID);
     expect(state).toBe('Booted');
 
-    // bootstatus should NOT have been called with the real UDID
-    const bootstatusReal = (fakeExec as jest.Mock).mock.calls.filter(
-      (c: [string[]]) => c[0][0] === 'bootstatus' && c[0][1] === UDID,
+    // Assert that no exec call contained both 'bootstatus' and '-b'
+    const mutateCalls = (fakeExec as jest.Mock).mock.calls.filter(
+      (c: [string[]]) => c[0].includes('bootstatus') && c[0].includes('-b'),
     );
-    expect(bootstatusReal.length).toBe(0);
+    expect(mutateCalls.length).toBe(0);
+  });
 
-    // Full list must have been used
+  test('reads state via per-UDID simctl list devices', async () => {
+    const { manager, fakeExecJson } = makeManager();
+
+    fakeExecJson.mockResolvedValue(makeDeviceJson(UDID, 'Shutdown'));
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const state = await (manager as any).getDeviceState(UDID);
+    expect(state).toBe('Shutdown');
+
+    // execJson must have been called with ['list', 'devices', UDID]
+    const listCalls = (fakeExecJson as jest.Mock).mock.calls.filter(
+      (c: [string[]]) => c[0][0] === 'list' && c[0][1] === 'devices' && c[0][2] === UDID,
+    );
+    expect(listCalls.length).toBeGreaterThanOrEqual(1);
+  });
+
+  test('returns null when device is not found in the list output', async () => {
+    const { manager, fakeExecJson } = makeManager();
+
+    // Return a device list that does NOT contain UDID
+    fakeExecJson.mockResolvedValue({
+      devices: {
+        'com.apple.CoreSimulator.SimRuntime.iOS-17-0': [
+          { udid: 'OTHER-UDID', name: 'Other', state: 'Booted', isAvailable: true },
+        ],
+      },
+      runtimes: [],
+    });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const state = await (manager as any).getDeviceState(UDID);
+    expect(state).toBeNull();
+  });
+
+  test('returns null on simctl error (does not throw)', async () => {
+    const { manager, fakeExecJson } = makeManager();
+
+    fakeExecJson.mockRejectedValue(new SimctlError('simctl list devices failed: timeout', ['list', 'devices'], 1));
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const state = await (manager as any).getDeviceState(UDID);
+    expect(state).toBeNull();
+  });
+
+  test('serves cache hit without calling simctl', async () => {
+    const { manager, fakeExecJson, stateCache } = makeManager();
+
+    // Pre-warm cache
+    stateCache.set(UDID, 'Booted');
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const state = await (manager as any).getDeviceState(UDID);
+    expect(state).toBe('Booted');
+
+    // No simctl call needed — cache was fresh
+    expect((fakeExecJson as jest.Mock).mock.calls.length).toBe(0);
+  });
+
+  test('bypassCache=true skips cache and calls simctl', async () => {
+    const { manager, fakeExecJson, stateCache } = makeManager();
+
+    stateCache.set(UDID, 'Booted');
+    fakeExecJson.mockResolvedValue(makeDeviceJson(UDID, 'ShuttingDown'));
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const state = await (manager as any).getDeviceState(UDID, { bypassCache: true });
+    expect(state).toBe('ShuttingDown');
+
+    // simctl must have been called despite a cache entry existing
     expect((fakeExecJson as jest.Mock).mock.calls.length).toBeGreaterThanOrEqual(1);
   });
 });
 
-// ── queryBootstatus: ambiguous errors fall back to list ───────────────────
+// ── boot() race: device disappears after Booted signal ───────────────────
 
-describe('SimulatorManager.queryBootstatus() error handling', () => {
+describe('SimulatorManager.boot() race condition', () => {
   beforeEach(() => resetBootstatusCapabilityForTests());
 
-  test('probe error (timeout) does NOT cause getDeviceState() to return Shutdown', async () => {
+  test('throws DeviceNotFoundError when device disappears between state=Booted and getDevice()', async () => {
     const { manager, fakeExec, fakeExecJson } = makeManager();
 
-    // Capability probe: returns non-"Unknown command" error so bootstatus is considered available
-    // Real UDID call: simulates a timeout / CoreSimulator crash (not a DeviceNotBootedError)
-    fakeExec.mockImplementation(async (args: string[]) => {
-      if (args[0] === 'bootstatus') {
-        if (args[1] === PROBE_UDID) {
-          throw new SimctlError('Unable to lookup sim by UDID', args, 1);
-        }
-        // Ambiguous failure — timeout or xcrun issue, NOT a DeviceNotBootedError
-        throw new SimctlError('simctl bootstatus failed: timed out', args, 1);
+    fakeExec.mockResolvedValue('');
+
+    let execJsonCalls = 0;
+    fakeExecJson.mockImplementation(async (args: string[]) => {
+      execJsonCalls++;
+      if (args[0] === 'list' && args[1] === 'devices' && args[2] === UDID) {
+        // Per-UDID state query: device is Booted
+        return makeDeviceJson(UDID, 'Booted');
       }
-      return '';
+      // Full list query (resolveDevice or getDevice):
+      //   - call 1: resolveDevice sees Shutdown → triggers boot
+      //   - call 2: getDevice post-boot sees null → device removed (race)
+      if (execJsonCalls === 1) return makeDeviceJson(UDID, 'Shutdown');
+      // Return empty device list — device has been removed
+      return { devices: {}, runtimes: [] };
     });
-    // Full-list fallback shows the device is actually Booted
-    fakeExecJson.mockResolvedValue(makeDeviceJson(UDID, 'Booted'));
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const state = await (manager as any).getDeviceState(UDID);
-
-    // Must NOT report Shutdown — should have fallen back to full list and returned Booted
-    expect(state).not.toBe('Shutdown');
-    expect(state).toBe('Booted');
-  });
-
-  test('explicit DeviceNotBootedError from simctl returns Shutdown without list fallback', async () => {
-    const { manager, fakeExec, fakeExecJson } = makeManager();
-
-    fakeExec.mockImplementation(async (args: string[]) => {
-      if (args[0] === 'bootstatus') {
-        if (args[1] === PROBE_UDID) {
-          throw new SimctlError('Unable to lookup sim by UDID', args, 1);
-        }
-        // Explicit simctl signal that device is not booted
-        throw new SimctlError('DeviceNotBootedError: device is not booted', args, 1);
-      }
-      return '';
-    });
-    fakeExecJson.mockResolvedValue(makeDeviceJson(UDID, 'Booted'));
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const state = await (manager as any).getDeviceState(UDID);
-
-    // Explicit not-booted signal → Shutdown; full list must NOT have been called
-    expect(state).toBe('Shutdown');
-    expect((fakeExecJson as jest.Mock).mock.calls.length).toBe(0);
-  });
-});
-
-// ── hasBootstatus: concurrent callers share one probe ─────────────────────
-
-describe('hasBootstatus() concurrent-probe deduplication', () => {
-  beforeEach(() => resetBootstatusCapabilityForTests());
-
-  test('N concurrent hasBootstatus() calls fire only ONE underlying simctl exec', async () => {
-    // Import hasBootstatus — it is a module-level export
-    const { hasBootstatus } = await import('../../src/simulator/simctl');
-
-    let probeCount = 0;
-    const fakeSimctl = {
-      exec: jest.fn(async (_args: string[]) => {
-        probeCount++;
-        // Simulate the probe taking a tick so concurrent callers can pile up
-        await new Promise(r => setTimeout(r, 10));
-        // Non-"Unknown command" error → capability present
-        throw new SimctlError('Unable to lookup sim by UDID', _args, 1);
-      }),
-    };
-
-    // Fire 5 concurrent callers before the first probe completes
-    const results = await Promise.all([
-      hasBootstatus(fakeSimctl as any), // eslint-disable-line @typescript-eslint/no-explicit-any
-      hasBootstatus(fakeSimctl as any), // eslint-disable-line @typescript-eslint/no-explicit-any
-      hasBootstatus(fakeSimctl as any), // eslint-disable-line @typescript-eslint/no-explicit-any
-      hasBootstatus(fakeSimctl as any), // eslint-disable-line @typescript-eslint/no-explicit-any
-      hasBootstatus(fakeSimctl as any), // eslint-disable-line @typescript-eslint/no-explicit-any
-    ]);
-
-    // All callers must agree the capability is present
-    expect(results.every(r => r === true)).toBe(true);
-
-    // Only ONE underlying exec call must have been made despite 5 concurrent callers
-    expect(probeCount).toBe(1);
-    expect(fakeSimctl.exec).toHaveBeenCalledTimes(1);
+    await expect(manager.boot(UDID, { timeout: 5000 })).rejects.toThrow(DeviceNotFoundError);
   });
 });
 
@@ -287,10 +256,8 @@ describe('SimulatorManager: cache invalidation after lifecycle mutations', () =>
   test('boot() clears the stale Shutdown entry before the polling loop', async () => {
     const { manager, fakeExec, fakeExecJson, stateCache } = makeManager();
 
-    fakeExec.mockImplementation(async (args: string[]) => {
-      if (args[0] === 'bootstatus') throw new SimctlError('Unknown command: bootstatus', args, 1);
-      return '';
-    });
+    fakeExec.mockResolvedValue('');
+
     let execJsonCalls = 0;
     fakeExecJson.mockImplementation(async () => {
       execJsonCalls++;
@@ -324,10 +291,8 @@ describe('SimulatorManager: cache invalidation after lifecycle mutations', () =>
   test('shutdown() invalidates the cache entry after issuing the command', async () => {
     const { manager, fakeExec, fakeExecJson, stateCache } = makeManager();
 
-    fakeExec.mockImplementation(async (args: string[]) => {
-      if (args[0] === 'bootstatus') throw new SimctlError('Unknown command: bootstatus', args, 1);
-      return '';
-    });
+    fakeExec.mockResolvedValue('');
+
     let execJsonCalls = 0;
     fakeExecJson.mockImplementation(async () => {
       execJsonCalls++;
@@ -355,9 +320,7 @@ describe('SimulatorManager.shutdown() timeout behavior', () => {
     const { manager, fakeExec, fakeExecJson } = makeManager();
     const eraseArgs: string[][] = [];
 
-    // bootstatus unavailable; device is always Booted (stuck)
     fakeExec.mockImplementation(async (args: string[]) => {
-      if (args[0] === 'bootstatus') throw new SimctlError('Unknown command: bootstatus', args, 1);
       if (args[0] === 'erase') eraseArgs.push([...args]);
       return '';
     });
@@ -373,25 +336,12 @@ describe('SimulatorManager.shutdown() timeout behavior', () => {
     expect(eraseArgs[0][1]).toBe(UDID);
   }, 15000 /* ms — covers the 5 s retry-sleep inside shutdown() */);
 
-  test('shutdown() observes ShuttingDown state via full list (not bootstatus)', async () => {
-    // Regression test for Gemini CRITICAL: bootstatus is binary and cannot
-    // report ShuttingDown. shutdown() must always use the full list parse so
-    // that a device in ShuttingDown is treated as still in progress, not done.
+  test('shutdown() observes ShuttingDown state via full list (bypassCache)', async () => {
+    // Regression test: shutdown() must always bypass the cache so it can observe
+    // the transient ShuttingDown state on every poll tick.
     const { manager, fakeExec, fakeExecJson } = makeManager();
 
-    // bootstatus is available on this host
-    fakeExec.mockImplementation(async (args: string[]) => {
-      if (args[0] === 'bootstatus') {
-        if (args[1] === PROBE_UDID) {
-          // Capability probe: non-"Unknown command" error = capability present
-          throw new SimctlError('Unable to lookup sim', args, 1);
-        }
-        // If shutdown() were to use bootstatus it would see "Shutdown" immediately
-        // (non-zero exit = not booted), causing a premature return.
-        throw new SimctlError('DeviceNotBootedError', args, 1);
-      }
-      return '';
-    });
+    fakeExec.mockResolvedValue('');
 
     let listCallCount = 0;
     fakeExecJson.mockImplementation(async () => {
@@ -411,53 +361,44 @@ describe('SimulatorManager.shutdown() timeout behavior', () => {
   });
 });
 
-// ── boot() uses bootstatus ─────────────────────────────────────────────────
+// ── boot() polling loop ────────────────────────────────────────────────────
 
-describe('SimulatorManager.boot() bootstatus integration', () => {
+describe('SimulatorManager.boot() polling integration', () => {
   beforeEach(() => resetBootstatusCapabilityForTests());
 
-  test('polling loop uses bootstatus and skips full-list reads', async () => {
+  test('polling loop uses per-UDID list and never calls bootstatus', async () => {
     const { manager, fakeExec, fakeExecJson } = makeManager();
 
-    const bootstatusCalls: string[] = [];
-    const listCalls: string[][] = [];
+    const bootstatusCalls: string[][] = [];
 
     fakeExec.mockImplementation(async (args: string[]) => {
-      if (args[0] === 'bootstatus') {
-        if (args[1] === PROBE_UDID) {
-          // Capability probe: non-"Unknown command" error = capability present
-          throw new SimctlError('Unable to lookup sim', args, 1);
-        }
-        bootstatusCalls.push(args[1]);
-        return ''; // exit 0 = Booted
-      }
-      if (args[0] === 'list') listCalls.push([...args]);
+      if (args[0] === 'bootstatus') bootstatusCalls.push([...args]);
       return '';
     });
 
-    // First execJson = resolveDevice (Shutdown); second = getDevice after confirmed boot
+    // First execJson (resolveDevice full list): Shutdown; subsequent narrow list: Booted
     let execJsonCalls = 0;
-    fakeExecJson.mockImplementation(async () => {
+    fakeExecJson.mockImplementation(async (args: string[]) => {
       execJsonCalls++;
+      if (args[0] === 'list' && args[1] === 'devices' && args[2] === UDID) {
+        // Narrow per-UDID state query during polling: Booted
+        return makeDeviceJson(UDID, 'Booted');
+      }
+      // Full list (resolveDevice or post-boot getDevice)
       return makeDeviceJson(UDID, execJsonCalls === 1 ? 'Shutdown' : 'Booted');
     });
 
     const result = await manager.boot(UDID, { timeout: 5000 });
 
     expect(result.udid).toBe(UDID);
-    // bootstatus was used during the polling loop
-    expect(bootstatusCalls.length).toBeGreaterThanOrEqual(1);
-    // No raw 'list' exec calls during the polling loop
-    expect(listCalls.length).toBe(0);
+    // bootstatus must NOT have been called — it is a mutating command
+    expect(bootstatusCalls.length).toBe(0);
   });
 
-  test('polling loop falls back to full list when bootstatus unavailable', async () => {
+  test('polling loop falls back gracefully when narrow list returns empty', async () => {
     const { manager, fakeExec, fakeExecJson } = makeManager();
 
-    fakeExec.mockImplementation(async (args: string[]) => {
-      if (args[0] === 'bootstatus') throw new SimctlError('Unknown command: bootstatus', args, 1);
-      return '';
-    });
+    fakeExec.mockResolvedValue('');
 
     let execJsonCalls = 0;
     fakeExecJson.mockImplementation(async () => {
@@ -468,12 +409,7 @@ describe('SimulatorManager.boot() bootstatus integration', () => {
     const result = await manager.boot(UDID, { timeout: 5000 });
 
     expect(result.udid).toBe(UDID);
-    // bootstatus was never called with the real UDID (only probe UDID)
-    const realBootstatusCalls = (fakeExec as jest.Mock).mock.calls.filter(
-      (c: [string[]]) => c[0][0] === 'bootstatus' && c[0][1] === UDID,
-    );
-    expect(realBootstatusCalls.length).toBe(0);
-    // Full list was used for polling (at least resolveDevice + one poll tick)
+    // Full list was used for resolveDevice + poll ticks
     expect(execJsonCalls).toBeGreaterThanOrEqual(2);
   });
 });
