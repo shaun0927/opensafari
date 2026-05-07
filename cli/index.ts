@@ -36,6 +36,10 @@ program
   .command('serve')
   .description('Start OpenSafari MCP server')
   .option('--http [port]', 'Use HTTP transport (default: stdio)')
+  .option('--http-host <host>', 'HTTP bind host (default: 127.0.0.1)')
+  .option('--http-token <token>', 'Bearer token required for HTTP /mcp requests')
+  .option('--http-allow-origin <origins>', 'Allowed browser origins for HTTP /mcp CORS (comma-separated)')
+  .option('--http-insecure-local', 'Disable HTTP /mcp token auth for explicit local-only insecure use')
   .option('--devices <presets>', 'Auto-boot devices (comma-separated)')
   .option('--auth <path>', 'Auth profile to auto-restore')
   .option('--all-tools', 'Expose all tool tiers immediately (equivalent to OPENSAFARI_TOOL_TIER=3)')
@@ -131,8 +135,18 @@ program
 
     const transport = options.http ? 'http' as const : 'stdio' as const;
     const port = typeof options.http === 'string' ? parseInt(options.http, 10) : 3100;
+    const allowedOrigins = typeof options.httpAllowOrigin === 'string'
+      ? options.httpAllowOrigin.split(',').map((origin: string) => origin.trim()).filter(Boolean)
+      : undefined;
 
-    await server.start({ transport, port });
+    await server.start({
+      transport,
+      port,
+      host: options.httpHost,
+      authToken: options.httpToken,
+      httpInsecure: options.httpInsecureLocal,
+      allowedOrigins,
+    });
     console.error('[OpenSafari] MCP server running');
   });
 

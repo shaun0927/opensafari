@@ -12,11 +12,14 @@
 
 import * as http from 'node:http';
 import * as crypto from 'node:crypto';
+import type { AddressInfo } from 'node:net';
 import { MCPResponse, MCPErrorCodes } from '../types/mcp';
 import { MCPTransport } from './index';
+import type { TransportOptions } from './index';
 
 /** Maximum allowed HTTP request body size (10 MB) to prevent OOM from oversized requests */
 const MAX_BODY_BYTES = 10 * 1024 * 1024;
+const DEFAULT_HTTP_HOST = '127.0.0.1';
 
 /** Active SSE connections for server-initiated notifications */
 interface SSEConnection {
@@ -32,12 +35,20 @@ export class HTTPTransport implements MCPTransport {
   private server: http.Server | null = null;
   private messageHandler: ((msg: Record<string, unknown>) => Promise<MCPResponse | null>) | null = null;
   private port: number;
+  private host: string;
+  private authToken?: string;
+  private insecure: boolean;
+  private allowedOrigins: Set<string>;
   private sessions: Set<string> = new Set();
   private sseConnections: SSEConnection[] = [];
   private sessionDeleteHandler: ((sessionId: string) => void) | null = null;
 
-  constructor(port: number) {
+  constructor(port: number, options: TransportOptions = {}) {
     this.port = port;
+    this.host = options.host || DEFAULT_HTTP_HOST;
+    this.authToken = options.authToken || process.env.OPENSAFARI_HTTP_TOKEN;
+    this.insecure = options.insecure === true;
+    this.allowedOrigins = new Set(options.allowedOrigins ?? []);
   }
 
   /**
@@ -99,15 +110,24 @@ export class HTTPTransport implements MCPTransport {
             port: this.port,
             message: err.message,
           }));
-        console.error(`[HTTPTransport] Listening on port ${this.port}`);
-        console.error(`[HTTPTransport] MCP endpoint: http://localhost:${this.port}/mcp`);
+        console.error(`[HTTPTransport] Listening on ${this.host}:${this.port}`);
+        console.error(`[HTTPTransport] MCP endpoint: http://${this.host}:${this.port}/mcp`);
+        if (this.insecure) {
+          console.error('[HTTPTransport] Warning: HTTP /mcp token auth is disabled by explicit insecure mode');
+        } else if (!this.authToken) {
+          console.error('[HTTPTransport] Warning: HTTP /mcp requires OPENSAFARI_HTTP_TOKEN or --http-token; requests will be rejected');
+        }
         resolve();
       };
 
       this.server!.once('error', startupError);
       this.server!.once('listening', onListening);
-      this.server!.listen(this.port);
+      this.server!.listen(this.port, this.host);
     });
+  }
+
+  getAddress(): AddressInfo | string | null {
+    return this.server?.address() ?? null;
   }
 
   async close(): Promise<void> {
@@ -137,14 +157,15 @@ export class HTTPTransport implements MCPTransport {
     const url = new URL(req.url || '/', `http://localhost:${this.port}`);
     const pathname = url.pathname;
 
-    // CORS headers for all responses
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Mcp-Session-Id');
-    res.setHeader('Access-Control-Expose-Headers', 'Mcp-Session-Id');
+    const corsAllowed = this.applyCorsHeaders(req, res, pathname);
 
     // Handle CORS preflight
     if (req.method === 'OPTIONS') {
+      if (pathname === '/mcp' && !corsAllowed) {
+        res.writeHead(403, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Origin not allowed' }));
+        return;
+      }
       res.writeHead(204);
       res.end();
       return;
@@ -156,6 +177,17 @@ export class HTTPTransport implements MCPTransport {
     }
 
     if (pathname === '/mcp') {
+      if (!corsAllowed) {
+        res.writeHead(403, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Origin not allowed' }));
+        return;
+      }
+
+      if (!this.isAuthorized(req)) {
+        this.writeUnauthorized(res);
+        return;
+      }
+
       switch (req.method) {
         case 'POST':
           this.handlePost(req, res);
@@ -176,6 +208,72 @@ export class HTTPTransport implements MCPTransport {
     // Unknown path
     res.writeHead(404, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'Not found' }));
+  }
+
+  private applyCorsHeaders(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    pathname: string,
+  ): boolean {
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, Mcp-Session-Id');
+    res.setHeader('Access-Control-Expose-Headers', 'Mcp-Session-Id');
+
+    const originHeader = req.headers.origin;
+    if (!originHeader || Array.isArray(originHeader)) {
+      return true;
+    }
+
+    if (pathname === '/mcp' && !this.isAllowedOrigin(originHeader)) {
+      return false;
+    }
+
+    if (this.isAllowedOrigin(originHeader)) {
+      res.setHeader('Access-Control-Allow-Origin', originHeader);
+      res.setHeader('Vary', 'Origin');
+    }
+
+    return true;
+  }
+
+  private isAllowedOrigin(origin: string): boolean {
+    if (this.allowedOrigins.has(origin)) {
+      return true;
+    }
+
+    try {
+      const url = new URL(origin);
+      return ['localhost', '127.0.0.1', '::1', '[::1]'].includes(url.hostname);
+    } catch {
+      return false;
+    }
+  }
+
+  private isAuthorized(req: http.IncomingMessage): boolean {
+    if (this.insecure) {
+      return true;
+    }
+    if (!this.authToken) {
+      return false;
+    }
+
+    const auth = req.headers.authorization;
+    return typeof auth === 'string' && auth === `Bearer ${this.authToken}`;
+  }
+
+  private writeUnauthorized(res: http.ServerResponse): void {
+    res.writeHead(401, {
+      'Content-Type': 'application/json',
+      'WWW-Authenticate': 'Bearer',
+    });
+    res.end(JSON.stringify({
+      jsonrpc: '2.0',
+      id: 0,
+      error: {
+        code: MCPErrorCodes.INVALID_REQUEST,
+        message: 'Unauthorized',
+      },
+    }));
   }
 
   /**

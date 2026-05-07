@@ -58,7 +58,7 @@ describe('MCPServer — JSON-RPC protocol', () => {
       async () => { throw new Error('intentional failure'); },
     );
     server.setTier(3);
-    await server.start({ transport: 'http', port: PORT });
+    await server.start({ transport: 'http', port: PORT, httpInsecure: true });
   });
 
   afterAll(async () => {

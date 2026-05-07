@@ -95,6 +95,14 @@ export interface MCPServerOptions {
   transport?: TransportMode;
   /** HTTP port — only relevant when transport === 'http'. */
   port?: number;
+  /** HTTP host — only relevant when transport === 'http'. Defaults to loopback. */
+  host?: string;
+  /** Bearer token required for HTTP /mcp requests. */
+  authToken?: string;
+  /** Explicitly disable HTTP /mcp token auth for local-only insecure use. */
+  httpInsecure?: boolean;
+  /** Extra allowed browser origins for HTTP /mcp CORS. */
+  allowedOrigins?: string[];
 }
 
 export class MCPServer {
@@ -126,7 +134,13 @@ export class MCPServer {
 
   async start(options: MCPServerOptions = {}): Promise<void> {
     const mode: TransportMode = options.transport ?? 'stdio';
-    this.transport = await createTransport(mode, { port: options.port });
+    this.transport = await createTransport(mode, {
+      port: options.port,
+      host: options.host,
+      authToken: options.authToken,
+      insecure: options.httpInsecure,
+      allowedOrigins: options.allowedOrigins,
+    });
 
     this.transport.onMessage((msg) => this.handleMessage(msg));
     await this.transport.start();

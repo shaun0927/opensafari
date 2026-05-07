@@ -37,6 +37,10 @@ export type TransportMode = 'stdio' | 'http';
 
 export interface TransportOptions {
   port?: number;
+  host?: string;
+  authToken?: string;
+  insecure?: boolean;
+  allowedOrigins?: string[];
 }
 
 /**
@@ -46,7 +50,7 @@ export async function createTransport(mode: TransportMode, options?: TransportOp
   if (mode === 'http') {
     // Use dynamic import to avoid loading HTTP module when not needed
     const { HTTPTransport } = await import('./http');
-    return new HTTPTransport(options?.port || 3100);
+    return new HTTPTransport(options?.port || 3100, options);
   }
   const { StdioTransport } = await import('./stdio');
   return new StdioTransport();
