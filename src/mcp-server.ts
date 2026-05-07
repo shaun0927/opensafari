@@ -122,14 +122,26 @@ export class MCPServer {
    * tools/list works without triggering any dynamic import.
    */
   registerLazyTool(definition: MCPToolDefinition): void {
-    if (!toolRegistry.has(definition.name)) {
+    const entry = toolRegistry.get(definition.name);
+    if (!entry) {
       throw new Error(
         `Cannot register lazy tool "${definition.name}": ` +
         `no entry found in toolRegistry. Call defineToolEntry() first.`,
       );
     }
+    // Warn if caller-provided definition drifts from the registry's source of truth.
+    if (
+      definition.description !== entry.definition.description ||
+      JSON.stringify(definition.inputSchema) !== JSON.stringify(entry.definition.inputSchema)
+    ) {
+      console.error(
+        `[mcp-server] registerLazyTool: caller definition for "${definition.name}" differs from toolRegistry entry. ` +
+        `Using registry version.`,
+      );
+    }
     const tier = getToolTier(definition.name);
-    this.tools.set(definition.name, { definition, lazy: true, tier });
+    // Use the registry's definition as the single source of truth for schema.
+    this.tools.set(definition.name, { definition: entry.definition, lazy: true, tier });
   }
 
   /**
@@ -321,12 +333,15 @@ export class MCPServer {
         tool.handler = handler;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
+        if (this.auditLogEnabled) {
+          logAuditEntry(name, sessionId, args);
+        }
         return {
           jsonrpc: '2.0',
           id: request.id,
-          result: {
-            content: [{ type: 'text', text: `Error: ${msg}` }],
-            isError: true,
+          error: {
+            code: MCPErrorCodes.INTERNAL_ERROR,
+            message: `Failed to load handler for tool "${name}": ${msg}`,
           },
         };
       }
