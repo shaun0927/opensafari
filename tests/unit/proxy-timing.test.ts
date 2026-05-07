@@ -195,10 +195,9 @@ describe('WebInspectorProxy initialization timing', () => {
       // Must resolve (not reject) — non-fatal timeout
       await expect(waitPromise).resolves.toBeUndefined();
 
-      // Should have logged a warning with the timeout value
+      // Should have logged a warning with the timeout value inline
       expect(consoleErrorSpy).toHaveBeenCalledWith(
-        expect.stringContaining('No Safari target appeared within timeout'),
-        2000,
+        expect.stringContaining('No Safari target appeared within 2000ms'),
       );
     });
 
@@ -361,8 +360,7 @@ describe('WebInspectorProxy initialization timing', () => {
       await jest.advanceTimersByTimeAsync(700);
       await expect(targetWaitPromise).resolves.toBeUndefined(); // non-fatal
       expect(consoleErrorSpy).toHaveBeenCalledWith(
-        expect.stringContaining('No Safari target appeared within timeout'),
-        500,
+        expect.stringContaining('No Safari target appeared within 500ms'),
       );
     });
   });

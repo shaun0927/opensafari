@@ -222,7 +222,7 @@ export class WebInspectorProxy {
       throw new Error('WebInspectorProxy process exited while waiting for target');
     }
     // Don't throw — callers that require a target should check listTargets() afterward
-    console.error('[WebInspectorProxy] No Safari target appeared within timeout — Safari may not be open', timeout);
+    console.error(`[WebInspectorProxy] No Safari target appeared within ${timeout}ms — Safari may not be open`);
   }
 
   /** Stop the proxy process gracefully with SIGKILL fallback. */

@@ -98,6 +98,10 @@ export function registerDeviceBootTool(server: MCPServer): void {
             }
           }
 
+          // Give slow Safari registrations a short window to appear before the first
+          // connect attempt. Falls through tolerantly so fast paths stay fast.
+          await proxy.waitForTarget({ timeout: 3000 }).catch(() => { /* tolerated */ });
+
           // Connect to WebKit with retries — Safari may need time to register with WebInspector
           const client = new WebKitClient({ host: 'localhost', port: proxy.port });
           await client.connect({ retries: 5, retryDelay: 2000 });
