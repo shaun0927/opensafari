@@ -4,7 +4,7 @@ import * as path from 'path';
 import { randomUUID } from 'crypto';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import { SimctlExecutor, SimctlError } from './simctl';
+import { SimctlExecutor, SimctlError, SimulatorStateCache, hasBootstatus } from './simctl';
 import { SimulatorDevice, SimulatorRuntime } from './types';
 import { DEVICE_PRESETS } from './presets';
 import { DEFAULT_SIMULATOR_BOOT_TIMEOUT_MS, DEFAULT_SIMULATOR_SHUTDOWN_TIMEOUT_MS, DEFAULT_SCREENSHOT_TIMEOUT_MS } from '../config/defaults';
@@ -30,8 +30,21 @@ export interface RotationResult {
   orientation?: string;
 }
 
+/**
+ * TTL for the per-device state cache inside SimulatorManager.
+ * Sized to match the longest polling interval used in this file (1 000 ms) so
+ * that multiple callers within a single tick share one `simctl list devices`
+ * parse, but the next tick always sees fresh data.
+ */
+const STATE_CACHE_TTL_MS = 900;
+
 export class SimulatorManager {
   private simctl = new SimctlExecutor();
+  /**
+   * Short-lived cache for device states during polling loops.
+   * Invalidated immediately on any lifecycle mutation (boot / shutdown / delete).
+   */
+  private stateCache = new SimulatorStateCache(STATE_CACHE_TTL_MS);
 
   async listDevices(): Promise<SimulatorDevice[]> {
     const result = await this.simctl.execJson<SimctlListResult>(['list', 'devices']);
@@ -70,7 +83,74 @@ export class SimulatorManager {
 
   async getDevice(deviceId: string): Promise<SimulatorDevice | null> {
     const devices = await this.listDevices();
-    return devices.find(d => d.udid === deviceId) ?? null;
+    const device = devices.find(d => d.udid === deviceId) ?? null;
+    if (device) {
+      this.stateCache.set(deviceId, device.state);
+    }
+    return device;
+  }
+
+  /**
+   * Return the booted/shutdown state of a single device without always
+   * parsing the full device list. Used exclusively by polling loops.
+   *
+   * Strategy (in order of preference):
+   *   1. Short-lived cache hit — free, shared across concurrent callers.
+   *   2. `simctl bootstatus <udid> -b` — narrow command, fast on Xcode 13+.
+   *   3. Full `simctl list devices` parse — legacy fallback.
+   *
+   * The result is placed into the cache so that sibling callers in the same
+   * polling tick benefit from the shared read.
+   */
+  async getDeviceState(deviceId: string): Promise<SimulatorDevice['state'] | null> {
+    // 1. Cache hit
+    const cached = this.stateCache.get(deviceId);
+    if (cached) {
+      return cached.state;
+    }
+
+    // 2. bootstatus narrow command (Xcode 13+)
+    if (await hasBootstatus(this.simctl)) {
+      const state = await this.queryBootstatus(deviceId);
+      if (state !== null) {
+        this.stateCache.set(deviceId, state);
+        return state;
+      }
+    }
+
+    // 3. Full list fallback
+    const device = await this.getDevice(deviceId);
+    return device?.state ?? null;
+  }
+
+  /**
+   * Run `simctl bootstatus <udid> -b` and translate the exit code / output
+   * into a device state string. Returns null when the device is not found.
+   *
+   * Exit-code semantics (from simctl man page / source):
+   *   0  — device is booted (ready)
+   *   A non-zero exit code with output "DeviceNotBootedError" or similar
+   *   means the device is not yet booted or is shutting down.
+   */
+  private async queryBootstatus(deviceId: string): Promise<SimulatorDevice['state'] | null> {
+    try {
+      await this.simctl.exec(['bootstatus', deviceId, '-b'], { timeout: 5000 });
+      if (process.env.DEBUG) {
+        console.error(`[SimulatorManager] bootstatus ${deviceId}: Booted`);
+      }
+      return 'Booted';
+    } catch (err) {
+      const msg = err instanceof SimctlError ? err.message : String(err);
+      if (process.env.DEBUG) {
+        console.error(`[SimulatorManager] bootstatus ${deviceId}: not booted (${msg.slice(0, 80)})`);
+      }
+      // "Unable to look up" / "domain not found" means the UDID does not exist
+      if (msg.includes('Unable to lookup') || msg.includes('domain not found') || msg.includes('Invalid device')) {
+        return null;
+      }
+      // Any other error means device exists but is not booted
+      return 'Shutdown';
+    }
   }
 
   /**
@@ -129,18 +209,23 @@ export class SimulatorManager {
       return device;
     }
 
-    // Boot
+    // Boot — invalidate cache so the polling loop sees fresh state
     await this.simctl.exec(['boot', device.udid]);
+    this.stateCache.invalidate(device.udid);
 
-    // Poll until booted or timeout
+    // Poll until booted or timeout.
+    // Uses getDeviceState() which prefers the narrow `bootstatus` command
+    // (Xcode 13+) over a full device-list parse on every tick.
     const timeout = options?.timeout ?? DEFAULT_SIMULATOR_BOOT_TIMEOUT_MS;
     const start = Date.now();
     const pollInterval = 1000;
 
     while (Date.now() - start < timeout) {
-      const current = await this.getDevice(device.udid);
-      if (current?.state === 'Booted') {
-        return current;
+      const state = await this.getDeviceState(device.udid);
+      if (state === 'Booted') {
+        // Fetch full metadata once for the caller
+        const current = await this.getDevice(device.udid);
+        return current ?? device;
       }
       await new Promise(r => setTimeout(r, pollInterval));
     }
@@ -149,36 +234,39 @@ export class SimulatorManager {
   }
 
   async shutdown(deviceId: string, options?: { timeout?: number }): Promise<void> {
-    const device = await this.getDevice(deviceId);
-    if (!device || device.state === 'Shutdown') {
-      return; // Already shutdown
+    const state = await this.getDeviceState(deviceId);
+    if (!state || state === 'Shutdown') {
+      return; // Already shut down or device not found
     }
 
-    // Graceful shutdown
+    // Graceful shutdown — invalidate cache so polling sees fresh state
     try {
       await this.simctl.exec(['shutdown', deviceId]);
     } catch {
       // May already be shutting down
     }
+    this.stateCache.invalidate(deviceId);
 
-    // Wait for shutdown
+    // Poll until shutdown or timeout.
+    // Uses getDeviceState() to avoid parsing the full device list on every tick.
     const timeout = options?.timeout ?? DEFAULT_SIMULATOR_SHUTDOWN_TIMEOUT_MS;
     const start = Date.now();
 
     while (Date.now() - start < timeout) {
-      const current = await this.getDevice(deviceId);
-      if (!current || current.state === 'Shutdown') {
+      const current = await this.getDeviceState(deviceId);
+      if (!current || current === 'Shutdown') {
         return;
       }
       await new Promise(r => setTimeout(r, 1000));
     }
 
-    // Retry shutdown
+    // Timeout reached — retry shutdown once before escalating
     try {
       await this.simctl.exec(['shutdown', deviceId]);
+      this.stateCache.invalidate(deviceId);
       await new Promise(r => setTimeout(r, 5000));
-      const current = await this.getDevice(deviceId);
-      if (!current || current.state === 'Shutdown') return;
+      const current = await this.getDeviceState(deviceId);
+      if (!current || current === 'Shutdown') return;
     } catch {
       // Fall through to erase
     }
@@ -186,6 +274,7 @@ export class SimulatorManager {
     // Nuclear option — erase device (WARNING: deletes all data)
     console.error(`[SimulatorManager] Force erasing device ${deviceId} after shutdown timeout`);
     await this.simctl.exec(['erase', deviceId]);
+    this.stateCache.invalidate(deviceId);
   }
 
   async bootPreset(presetKey: string): Promise<SimulatorDevice> {
@@ -475,6 +564,7 @@ export class SimulatorManager {
 
   async deleteDevice(deviceId: string): Promise<void> {
     await this.simctl.exec(['delete', deviceId]);
+    this.stateCache.invalidate(deviceId);
   }
 
   // === Status Bar Override (for deterministic screenshots) ===
