@@ -17,6 +17,7 @@ import {
   DEFAULT_RECONNECT_BASE_DELAY_MS,
   DEFAULT_RECONNECT_MAX_DELAY_MS,
 } from '../config/defaults';
+import { evaluateValue } from './evaluate';
 
 export interface WebKitClientOptions {
   host: string;
@@ -581,8 +582,10 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
   async screenshot(options?: ScreenshotOptions): Promise<Buffer> {
     try {
       // Try WebKit Protocol: Page.snapshotRect
-      // Get viewport dimensions first
-      const viewport = await this.evaluate<{ w: number; h: number }>(
+      // Get viewport dimensions via evaluateValue fast path (returnByValue:true,
+      // single RPC — skips the objectId/callFunctionOn round-trip).
+      const viewport = await evaluateValue<{ w: number; h: number }>(
+        this,
         '({w: window.innerWidth, h: window.innerHeight})',
       );
 
