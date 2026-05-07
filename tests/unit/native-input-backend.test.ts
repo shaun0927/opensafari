@@ -1279,25 +1279,24 @@ describe('AppleScriptInputBackend activation caching (#705)', () => {
     backend = new AppleScriptInputBackend();
   });
 
-  test('consecutive typeText calls within TTL skip re-activation', async () => {
-    // First call: frontmost query (not Simulator) + activate + keystroke 'a'
-    // Second call within TTL: skips both frontmost check and activate → just keystroke 'b'
+  test('consecutive typeText calls both check frontmost and skip activation when Simulator stays frontmost', async () => {
+    // Each call does a frontmost check. When Simulator remains frontmost,
+    // neither call issues an activate command.
     execFileMock
-      .mockResolvedValueOnce({ stdout: 'Other App', stderr: '' }) // frontmost query
-      .mockResolvedValueOnce({ stdout: '', stderr: '' })           // activate
+      .mockResolvedValueOnce({ stdout: 'Simulator', stderr: '' }) // frontmost query — call 1
       .mockResolvedValueOnce({ stdout: '', stderr: '' })           // keystroke 'a'
-      .mockResolvedValueOnce({ stdout: '', stderr: '' });          // keystroke 'b' (no activation)
+      .mockResolvedValueOnce({ stdout: 'Simulator', stderr: '' }) // frontmost query — call 2
+      .mockResolvedValueOnce({ stdout: '', stderr: '' });          // keystroke 'b'
 
     await backend.typeText(DEVICE, 'a');
     await backend.typeText(DEVICE, 'b');
 
-    // 4 calls total: frontmost + activate + keystroke 'a' + keystroke 'b'
-    // (no second frontmost/activate because we are within the TTL)
+    // 4 calls total: 2 frontmost queries + 2 keystrokes; no activate calls
     expect(execFileMock).toHaveBeenCalledTimes(4);
     const activateCalls = execFileMock.mock.calls.filter((args) =>
       (args[1] as string[]).some((a) => String(a).includes('to activate')),
     );
-    expect(activateCalls).toHaveLength(1);
+    expect(activateCalls).toHaveLength(0);
   });
 
   test('first call always activates Simulator', async () => {
@@ -1314,28 +1313,23 @@ describe('AppleScriptInputBackend activation caching (#705)', () => {
     expect(activateCalls).toHaveLength(1);
   });
 
-  test('re-activates when frontmost app changed within TTL window', async () => {
-    // Simulate: first call activates Simulator (lastActivationAt is set).
-    // Then, before TTL expires (500 ms), frontmost app changes to something
-    // else. The NEXT call outside TTL must detect the change and re-activate.
+  test('re-activates on consecutive calls when frontmost app changes between them', async () => {
+    // Every call checks frontmost state. When the frontmost app changes between
+    // two consecutive calls, each call correctly re-activates Simulator.
 
-    // First call: frontmost check returns "Other App" → activates, TTL starts.
+    // First call: not frontmost → activates.
     execFileMock
-      .mockResolvedValueOnce({ stdout: 'Other App', stderr: '' }) // frontmost query
+      .mockResolvedValueOnce({ stdout: 'Other App', stderr: '' }) // frontmost query — call 1
       .mockResolvedValueOnce({ stdout: '', stderr: '' })           // activate
-      .mockResolvedValueOnce({ stdout: '', stderr: '' });          // keystroke 1
+      .mockResolvedValueOnce({ stdout: '', stderr: '' });          // keystroke 'a'
 
     await backend.typeText(DEVICE, 'a');
 
-    // Expire the TTL by rewinding lastActivationAt.
-    // Access via bracket notation to reach private field in the test only.
-    (backend as unknown as { lastActivationAt: number }).lastActivationAt = 0;
-
-    // Second call: frontmost app is now "Notes" (not Simulator) → must re-activate.
+    // Second call: focus changed to "Notes" → must re-activate.
     execFileMock
-      .mockResolvedValueOnce({ stdout: 'Notes', stderr: '' }) // frontmost query
+      .mockResolvedValueOnce({ stdout: 'Notes', stderr: '' }) // frontmost query — call 2
       .mockResolvedValueOnce({ stdout: '', stderr: '' })       // re-activate
-      .mockResolvedValueOnce({ stdout: '', stderr: '' });      // keystroke 2
+      .mockResolvedValueOnce({ stdout: '', stderr: '' });      // keystroke 'b'
 
     await backend.typeText(DEVICE, 'b');
 
@@ -1346,11 +1340,8 @@ describe('AppleScriptInputBackend activation caching (#705)', () => {
     expect(activateCalls).toHaveLength(2);
   });
 
-  test('skips activation when Simulator is already frontmost (outside TTL)', async () => {
-    // Expire the TTL immediately so the frontmost check runs.
-    (backend as unknown as { lastActivationAt: number }).lastActivationAt = 0;
-
-    // Frontmost check returns "Simulator" → no activate needed.
+  test('skips activation when Simulator is already frontmost', async () => {
+    // Frontmost check returns "Simulator" → no activate call needed.
     execFileMock
       .mockResolvedValueOnce({ stdout: 'Simulator', stderr: '' }) // frontmost query
       .mockResolvedValueOnce({ stdout: '', stderr: '' });          // keystroke
