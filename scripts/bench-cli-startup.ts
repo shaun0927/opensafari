@@ -33,7 +33,10 @@ for (let i = 0; i < RUNS; i++) {
 }
 
 times.sort((a, b) => a - b);
-const median = times[Math.floor(RUNS / 2)];
+const median =
+  RUNS % 2 === 0
+    ? (times[RUNS / 2 - 1] + times[RUNS / 2]) / 2
+    : times[Math.floor(RUNS / 2)];
 const min = times[0];
 const max = times[times.length - 1];
 const mean = times.reduce((a, b) => a + b, 0) / RUNS;
