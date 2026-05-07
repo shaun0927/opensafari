@@ -17,6 +17,17 @@ import {
   DEFAULT_RECONNECT_BASE_DELAY_MS,
   DEFAULT_RECONNECT_MAX_DELAY_MS,
 } from '../config/defaults';
+import {
+  isRdpResponse,
+  isRdpEvent,
+  isTargetCreatedEvent,
+  isTargetDestroyedEvent,
+  isDispatchMessageFromTargetEvent,
+  isConsoleMessageAddedParams,
+  isRequestWillBeSentParams,
+  isResponseReceivedParams,
+  type RdpConsoleCallFrame,
+} from '../types/webkit-rdp';
 
 export interface WebKitClientOptions {
   host: string;
@@ -41,7 +52,7 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
   private pendingRequests: Map<
     number,
     {
-      resolve: (value: any) => void;
+      resolve: (value: unknown) => void;
       reject: (error: Error) => void;
       timer: ReturnType<typeof setTimeout>;
     }
@@ -61,7 +72,7 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
   private innerPendingRequests: Map<
     number,
     {
-      resolve: (value: any) => void;
+      resolve: (value: unknown) => void;
       reject: (error: Error) => void;
       timer: ReturnType<typeof setTimeout>;
     }
@@ -234,7 +245,7 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
         this.innerPendingRequests.delete(innerId);
         reject(new TimeoutError(`${method} timed out after ${timeout}ms`));
       }, timeout);
-      this.innerPendingRequests.set(innerId, { resolve, reject, timer });
+      this.innerPendingRequests.set(innerId, { resolve: resolve as (value: unknown) => void, reject, timer });
     });
 
     // Track outer message for error propagation (e.g., invalid targetId)
@@ -269,7 +280,7 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
   }
 
   private handleMessage(data: string): void {
-    let msg: any;
+    let msg: unknown;
     try {
       msg = JSON.parse(data);
     } catch {
@@ -277,9 +288,9 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
     }
 
     // Handle Target events (multiplexing protocol)
-    if (msg.method === 'Target.targetCreated') {
-      const info = msg.params?.targetInfo;
-      if (info?.type === 'page') {
+    if (isTargetCreatedEvent(msg)) {
+      const info = msg.params.targetInfo;
+      if (info.type === 'page') {
         this.knownTargets.add(info.targetId);
         this.emit('target:created', { targetId: info.targetId, url: info.url });
 
@@ -309,8 +320,8 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
       return;
     }
 
-    if (msg.method === 'Target.targetDestroyed') {
-      const destroyedId = msg.params?.targetId;
+    if (isTargetDestroyedEvent(msg)) {
+      const destroyedId = msg.params.targetId;
       this.knownTargets.delete(destroyedId);
       this.enabledDomainsPerTarget.delete(destroyedId);
       this.emit('target:destroyed', { targetId: destroyedId });
@@ -323,15 +334,15 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
       return;
     }
 
-    if (msg.method === 'Target.dispatchMessageFromTarget') {
+    if (isDispatchMessageFromTargetEvent(msg)) {
       // This contains the REAL response to our domain commands
-      let innerMsg: any;
+      let innerMsg: unknown;
       try {
         innerMsg = JSON.parse(msg.params.message);
       } catch {
         return;
       }
-      if (innerMsg.id !== undefined) {
+      if (isRdpResponse(innerMsg)) {
         const pending = this.innerPendingRequests.get(innerMsg.id);
         if (pending) {
           clearTimeout(pending.timer);
@@ -347,7 +358,7 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
             pending.resolve(innerMsg.result);
           }
         }
-      } else if (innerMsg.method) {
+      } else if (isRdpEvent(innerMsg)) {
         // Inner event (e.g., Page.loadEventFired, Runtime.consoleAPICalled)
         // Include targetId so multi-tab consumers can filter by target
         const sourceTargetId = msg.params.targetId;
@@ -356,7 +367,7 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
       return;
     }
 
-    if (msg.id !== undefined) {
+    if (isRdpResponse(msg)) {
       // Outer ack response to Target.sendMessageToTarget — just clean up
       const pending = this.pendingRequests.get(msg.id);
       if (pending) {
@@ -373,7 +384,7 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
           );
         }
       }
-    } else if (msg.method) {
+    } else if (isRdpEvent(msg)) {
       // Other event notifications not handled above
       this.emit(msg.method, msg.params);
     }
@@ -1111,10 +1122,11 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
 
   onConsole(handler: (msg: { type: string; text: string }) => void): void {
     this.enableDomain('Console').then(() => {
-      this.on('Console.messageAdded', (params: any) => {
+      this.on('Console.messageAdded', (params: unknown) => {
+        const p = isConsoleMessageAddedParams(params) ? params : null;
         handler({
-          type: params.message?.level ?? params.message?.type ?? 'log',
-          text: params.message?.text ?? '',
+          type: p?.message?.level ?? 'log',
+          text: p?.message?.text ?? '',
         });
       });
     });
@@ -1128,10 +1140,11 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
 
   onRequest(handler: (request: { url: string; method: string }) => void): void {
     this.enableDomain('Network').then(() => {
-      this.on('Network.requestWillBeSent', (params: any) => {
+      this.on('Network.requestWillBeSent', (params: unknown) => {
+        const p = isRequestWillBeSentParams(params) ? params : null;
         handler({
-          url: params.request?.url ?? '',
-          method: params.request?.method ?? 'GET',
+          url: p?.request?.url ?? '',
+          method: p?.request?.method ?? 'GET',
         });
       });
     });
@@ -1139,10 +1152,11 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
 
   onResponse(handler: (response: { url: string; status: number }) => void): void {
     this.enableDomain('Network').then(() => {
-      this.on('Network.responseReceived', (params: any) => {
+      this.on('Network.responseReceived', (params: unknown) => {
+        const p = isResponseReceivedParams(params) ? params : null;
         handler({
-          url: params.response?.url ?? '',
-          status: params.response?.status ?? 0,
+          url: p?.response?.url ?? '',
+          status: p?.response?.status ?? 0,
         });
       });
     });
@@ -1153,11 +1167,12 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
     // WebKit reports unhandled JS errors via Console.messageAdded with level "error"
     // (Runtime.exceptionThrown is Chrome-specific and not available in WebKit)
     this.enableDomain('Console').then(() => {
-      this.on('Console.messageAdded', (params: any) => {
-        const msg = params.message ?? {};
+      this.on('Console.messageAdded', (params: unknown) => {
+        if (!isConsoleMessageAddedParams(params)) return;
+        const msg = params.message;
         if (msg.level === 'error' && msg.source === 'javascript') {
-          const frames = msg.stackTrace?.callFrames ?? [];
-          const stackLines = frames.map((f: any) =>
+          const frames: RdpConsoleCallFrame[] = msg.stackTrace?.callFrames ?? [];
+          const stackLines = frames.map((f) =>
             `  at ${f.functionName || '(anonymous)'} (${f.url}:${f.lineNumber}:${f.columnNumber})`
           );
           handler({
