@@ -1,6 +1,4 @@
 // ========== Error Classes ==========
-// Behavior-preserving extraction from client.ts.
-// Same class names, constructor signatures, and instanceof semantics.
 
 /** Thrown when a WebSocket connection cannot be established or is lost. */
 export class ConnectionError extends Error {
