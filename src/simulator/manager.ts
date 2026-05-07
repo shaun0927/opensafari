@@ -6,23 +6,30 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { SimctlExecutor, SimctlError } from './simctl';
 import { SimulatorDevice, SimulatorRuntime } from './types';
-import { DEVICE_PRESETS } from './presets';
 import { DEFAULT_SIMULATOR_BOOT_TIMEOUT_MS, DEFAULT_SIMULATOR_SHUTDOWN_TIMEOUT_MS, DEFAULT_SCREENSHOT_TIMEOUT_MS } from '../config/defaults';
+import {
+  BootTimeoutError,
+  DeviceNotBootedError,
+  AppNotInstalledError,
+  AppLaunchError,
+} from './errors';
+import {
+  listDevices as catalogListDevices,
+  listRuntimes as catalogListRuntimes,
+  getDevice as catalogGetDevice,
+  resolveDevice as catalogResolveDevice,
+} from './device-catalog';
 
-interface SimctlListResult {
-  devices: Record<string, Array<{
-    udid: string;
-    name: string;
-    state: string;
-    isAvailable: boolean;
-  }>>;
-  runtimes: Array<{
-    identifier: string;
-    version: string;
-    isAvailable: boolean;
-    platform: string;
-  }>;
-}
+// Re-export error classes for backward compatibility — callers should migrate to ./errors
+export {
+  BootTimeoutError,
+  ShutdownTimeoutError,
+  DeviceNotFoundError,
+  DeviceNotBootedError,
+  ScreenshotTimeoutError,
+  AppNotInstalledError,
+  AppLaunchError,
+} from './errors';
 
 export interface RotationResult {
   success: boolean;
@@ -34,33 +41,11 @@ export class SimulatorManager {
   private simctl = new SimctlExecutor();
 
   async listDevices(): Promise<SimulatorDevice[]> {
-    const result = await this.simctl.execJson<SimctlListResult>(['list', 'devices']);
-    const devices: SimulatorDevice[] = [];
-
-    for (const [runtimeId, deviceList] of Object.entries(result.devices)) {
-      const version = runtimeId.match(/iOS-(\d+)-(\d+)/);
-      const runtimeVersion = version ? `${version[1]}.${version[2]}` : 'unknown';
-
-      for (const device of deviceList) {
-        if (device.isAvailable) {
-          devices.push({
-            udid: device.udid,
-            name: device.name,
-            state: device.state as SimulatorDevice['state'],
-            isAvailable: device.isAvailable,
-            runtime: runtimeId,
-            runtimeVersion,
-          });
-        }
-      }
-    }
-
-    return devices;
+    return catalogListDevices(this.simctl);
   }
 
   async listRuntimes(): Promise<SimulatorRuntime[]> {
-    const result = await this.simctl.execJson<SimctlListResult>(['list', 'runtimes']);
-    return result.runtimes.filter(r => r.isAvailable);
+    return catalogListRuntimes(this.simctl);
   }
 
   async listBooted(): Promise<SimulatorDevice[]> {
@@ -69,8 +54,7 @@ export class SimulatorManager {
   }
 
   async getDevice(deviceId: string): Promise<SimulatorDevice | null> {
-    const devices = await this.listDevices();
-    return devices.find(d => d.udid === deviceId) ?? null;
+    return catalogGetDevice(this.simctl, deviceId);
   }
 
   /**
@@ -78,33 +62,7 @@ export class SimulatorManager {
    * Tries: exact UDID match → preset name match → fuzzy name match
    */
   async resolveDevice(presetKey: string): Promise<SimulatorDevice> {
-    const devices = await this.listDevices();
-
-    // 1. Exact UDID match
-    const byUdid = devices.find(d => d.udid === presetKey);
-    if (byUdid) return byUdid;
-
-    // 2. Preset name match
-    const preset = DEVICE_PRESETS[presetKey];
-    if (preset) {
-      const exact = devices.find(d => d.name === preset.name);
-      if (exact) return exact;
-    }
-
-    // 3. Case-insensitive substring match
-    const lower = presetKey.toLowerCase();
-    const substring = devices.find(d => d.name.toLowerCase().includes(lower));
-    if (substring) return substring;
-
-    // 4. Fuzzy: split words, match all keywords
-    const keywords = lower.split(/[\s-]+/);
-    const fuzzy = devices.find(d => {
-      const dLower = d.name.toLowerCase();
-      return keywords.every(kw => dLower.includes(kw));
-    });
-    if (fuzzy) return fuzzy;
-
-    throw new DeviceNotFoundError(presetKey, devices.map(d => d.name));
+    return catalogResolveDevice(this.simctl, presetKey);
   }
 
   async checkRuntimes(): Promise<{ installed: SimulatorRuntime[]; issues: string[]; suggestions: string[] }> {
@@ -490,71 +448,5 @@ export class SimulatorManager {
       '--batteryLevel', '100',
       '--cellularBars', '4',
     ]);
-  }
-}
-
-export class BootTimeoutError extends Error {
-  constructor(
-    public readonly deviceId: string,
-    public readonly deviceName: string,
-    public readonly timeoutMs: number,
-  ) {
-    super(`Simulator boot timeout: "${deviceName}" (${deviceId}) did not boot within ${timeoutMs}ms`);
-    this.name = 'BootTimeoutError';
-  }
-}
-
-export class ShutdownTimeoutError extends Error {
-  constructor(
-    public readonly deviceId: string,
-    public readonly timeoutMs: number,
-  ) {
-    super(`Simulator shutdown timeout: ${deviceId} did not shutdown within ${timeoutMs}ms`);
-    this.name = 'ShutdownTimeoutError';
-  }
-}
-
-export class DeviceNotFoundError extends Error {
-  constructor(
-    public readonly requested: string,
-    public readonly available: string[],
-  ) {
-    super(`Device not found: "${requested}". Available: ${available.slice(0, 5).join(', ')}${available.length > 5 ? '...' : ''}`);
-    this.name = 'DeviceNotFoundError';
-  }
-}
-
-export class DeviceNotBootedError extends Error {
-  constructor(public readonly deviceId: string) {
-    super(`Device ${deviceId} is not booted. Call boot() first.`);
-    this.name = 'DeviceNotBootedError';
-  }
-}
-
-export class ScreenshotTimeoutError extends Error {
-  constructor(public readonly deviceId: string) {
-    super(`Screenshot capture timed out for device ${deviceId}`);
-    this.name = 'ScreenshotTimeoutError';
-  }
-}
-
-export class AppNotInstalledError extends Error {
-  constructor(
-    public readonly bundleId: string,
-    public readonly deviceId: string,
-  ) {
-    super(`App "${bundleId}" is not installed on device ${deviceId}`);
-    this.name = 'AppNotInstalledError';
-  }
-}
-
-export class AppLaunchError extends Error {
-  constructor(
-    public readonly bundleId: string,
-    public readonly deviceId: string,
-    public readonly reason: string,
-  ) {
-    super(`Failed to launch "${bundleId}" on device ${deviceId}: ${reason}`);
-    this.name = 'AppLaunchError';
   }
 }
