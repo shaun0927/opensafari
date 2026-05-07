@@ -197,8 +197,8 @@ export class WebInspectorProxy {
     while (Date.now() - start < timeout) {
       try {
         const body = await this.httpGet(`http://localhost:${this._port}/json`);
-        // Empty [] means proxy is up but no pages registered yet — not target-ready
-        if (body.startsWith('[') && body.trim() !== '[]') return;
+        const targets = JSON.parse(body);
+        if (Array.isArray(targets) && targets.length > 0) return;
       } catch { /* retry */ }
       await new Promise(r => setTimeout(r, pollInterval));
       // Adaptive backoff: double the interval each iteration, capped at max

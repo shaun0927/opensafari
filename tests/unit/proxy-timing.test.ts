@@ -131,6 +131,28 @@ describe('WebInspectorProxy initialization timing', () => {
       expect(httpGetSpy).toHaveBeenCalledTimes(3);
     });
 
+    it('treats malformed JSON response as not-ready and retries', async () => {
+      let callCount = 0;
+      httpGetSpy = jest
+        .spyOn(privateProxy(proxy) as unknown as { httpGet: (url: string) => Promise<string> }, 'httpGet')
+        .mockImplementation(async () => {
+          callCount++;
+          if (callCount < 3) return '[ invalid json }';
+          return '[{"id":"target1"}]';
+        });
+
+      jest.useFakeTimers();
+
+      const waitPromise = privateProxy(proxy).waitForTarget({ timeout: 10000 });
+
+      // Adaptive: 200ms + 400ms = 600ms for two retries
+      await jest.advanceTimersByTimeAsync(600);
+
+      await waitPromise;
+
+      expect(httpGetSpy).toHaveBeenCalledTimes(3);
+    });
+
     it('retries when server throws (connection refused) and eventually succeeds', async () => {
       let callCount = 0;
       httpGetSpy = jest
