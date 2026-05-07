@@ -20,6 +20,15 @@ import { SimctlError } from './simctl';
 import { DeviceNotBootedError, AppNotInstalledError, AppLaunchError } from './errors';
 import { SimulatorDevice } from './types';
 
+/**
+ * Returns true when the simctl error message indicates the bundle is not installed.
+ * Centralises detection of "domain not found" / "not installed" patterns used by
+ * launchApp, terminateApp, activateApp, and resetApp.
+ */
+function isAppNotInstalledError(err: SimctlError): boolean {
+  return err.message.includes('domain not found') || err.message.includes('not installed');
+}
+
 /** Minimal simctl interface the app-manager functions depend on. */
 export interface AppManagerSimctl {
   exec(args: string[], options?: { timeout?: number; env?: Record<string, string> }): Promise<string>;
@@ -68,7 +77,7 @@ export async function launchApp(
     return { pid, bundleId, deviceId };
   } catch (err) {
     if (err instanceof SimctlError) {
-      if (err.message.includes('domain not found') || err.message.includes('not installed')) {
+      if (isAppNotInstalledError(err)) {
         throw new AppNotInstalledError(bundleId, deviceId);
       }
     }
@@ -100,7 +109,7 @@ export async function terminateApp(
       if (err.message.includes('not running') || err.message.includes('Failed to terminate')) {
         return { terminated: false, bundleId, deviceId };
       }
-      if (err.message.includes('domain not found') || err.message.includes('not installed')) {
+      if (isAppNotInstalledError(err)) {
         throw new AppNotInstalledError(bundleId, deviceId);
       }
     }
@@ -132,7 +141,7 @@ export async function activateApp(
     return { activated: true, bundleId, deviceId, pid };
   } catch (err) {
     if (err instanceof SimctlError) {
-      if (err.message.includes('domain not found') || err.message.includes('not installed')) {
+      if (isAppNotInstalledError(err)) {
         throw new AppNotInstalledError(bundleId, deviceId);
       }
     }
@@ -164,7 +173,7 @@ export async function listRunningApps(
     const label = parts[2];
     // Filter for UIKitApplication entries (running foreground apps)
     if (!isNaN(pid) && pid > 0 && label.startsWith('UIKitApplication:')) {
-      const bundleId = label.replace('UIKitApplication:', '').replace(/\[.*\]$/, '');
+      const bundleId = label.replace('UIKitApplication:', '').replace(/\[[^\]]*\]$/, '');
       apps.push({ label: bundleId, pid });
     }
   }
@@ -214,7 +223,7 @@ export async function resetApp(
     steps.push('uninstalled');
   } catch (err) {
     if (err instanceof SimctlError) {
-      if (err.message.includes('domain not found') || err.message.includes('not installed')) {
+      if (isAppNotInstalledError(err)) {
         throw new AppNotInstalledError(bundleId, deviceId);
       }
     }

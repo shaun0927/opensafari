@@ -231,9 +231,19 @@ describe('app-manager.terminateApp', () => {
     expect(simctl.exec).not.toHaveBeenCalled();
   });
 
-  it('throws AppNotInstalledError when bundle not found', async () => {
+  it('throws AppNotInstalledError when bundle not found (domain not found)', async () => {
     const simctl = makeSimctl(async () => {
       throw new SimctlError('simctl terminate failed: domain not found', ['terminate'], 1);
+    });
+    const lookup = makeLookup(makeDevice());
+
+    await expect(terminateApp(DEVICE_ID, BUNDLE_ID, { simctl, lookup }))
+      .rejects.toThrow(AppNotInstalledError);
+  });
+
+  it('throws AppNotInstalledError when bundle not found (not installed)', async () => {
+    const simctl = makeSimctl(async () => {
+      throw new SimctlError('simctl terminate failed: not installed', ['terminate'], 1);
     });
     const lookup = makeLookup(makeDevice());
 
@@ -273,9 +283,19 @@ describe('app-manager.activateApp', () => {
       .rejects.toThrow(DeviceNotBootedError);
   });
 
-  it('throws AppNotInstalledError when bundle not found', async () => {
+  it('throws AppNotInstalledError when bundle not found (domain not found)', async () => {
     const simctl = makeSimctl(async () => {
       throw new SimctlError('simctl launch failed: domain not found', ['launch'], 1);
+    });
+    const lookup = makeLookup(makeDevice());
+
+    await expect(activateApp(DEVICE_ID, BUNDLE_ID, { simctl, lookup }))
+      .rejects.toThrow(AppNotInstalledError);
+  });
+
+  it('throws AppNotInstalledError when bundle not found (not installed)', async () => {
+    const simctl = makeSimctl(async () => {
+      throw new SimctlError('simctl launch failed: not installed', ['launch'], 1);
     });
     const lookup = makeLookup(makeDevice());
 
@@ -315,6 +335,22 @@ describe('app-manager.listRunningApps', () => {
       { label: 'com.example.app2', pid: 102 },
     ]);
     expect(simctl.exec).toHaveBeenCalledWith(['spawn', DEVICE_ID, 'launchctl', 'list']);
+  });
+
+  it('strips bracketed suffix with non-greedy match (e.g. bundle[0x1][extra])', async () => {
+    // A label containing multiple bracket groups — non-greedy /\[[^\]]*\]$/ strips only
+    // the trailing bracket group, leaving the bundle id intact.
+    const launchctlOutput = [
+      'PID\tSTATUS\tLABEL',
+      '200\t0\tUIKitApplication:com.example.tricky[0x1]',
+    ].join('\n');
+
+    const simctl = makeSimctl(async () => launchctlOutput);
+    const lookup = makeLookup(makeDevice());
+
+    const result = await listRunningApps(DEVICE_ID, { simctl, lookup });
+
+    expect(result).toEqual([{ label: 'com.example.tricky', pid: 200 }]);
   });
 
   it('returns empty array when no UIKitApplication entries', async () => {
