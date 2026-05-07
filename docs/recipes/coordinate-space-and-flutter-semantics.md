@@ -64,11 +64,11 @@ PR #695 adds `deviceContentMacOSPt: { width, height }` to the AX dump and query 
 
 ## WU3-impl: Conversion and Wiring (PR #720)
 
-PR #720 lands `convertMacOSPtToIOSPt` helper and wires it into `app-tap-element` so taps are dispatched at the correct scaled coordinates.
+> **Status — pending merge.** This section describes the implementation in PR #720. On any commit that does not yet contain that PR (including this docs branch in isolation), the files referenced below — `src/utils/coordinate-space.ts`, `convertMacOSPtToIOSPt`, the `getIosPtSizeForDevice` lookup in `src/tools/app-tap-element.ts`, and the conversion log line — are not yet present. The "Verification" checklist further down only applies after PR #720 is merged into `develop`. Until then, taps continue to use raw AX-frame coordinates.
 
 ### Helper: `convertMacOSPtToIOSPt`
 
-Located in `src/utils/coordinate-space.ts`:
+Will be located in `src/utils/coordinate-space.ts` once PR #720 merges:
 
 ```typescript
 export function convertMacOSPtToIOSPt(
@@ -102,12 +102,12 @@ export function convertMacOSPtToIOSPt(
 
 ### Wiring in app-tap-element
 
-`src/tools/app-tap-element.ts` (as of PR #720) now:
+After PR #720 merges, `src/tools/app-tap-element.ts` will:
 
-1. Extracts `macOSPtSize` from the query result's `deviceContentMacOSPt` field
-2. Calls `getIosPtSizeForDevice(deviceId)` which looks up the device in `DEVICE_PRESETS` by name and returns `{ width: preset.w, height: preset.h }`
-3. Passes both sizes to `convertMacOSPtToIOSPt` to scale the AX-frame center coordinates
-4. Logs the conversion (including the computed scale factor) to stderr for debugging
+1. Extract `macOSPtSize` from the query result's `deviceContentMacOSPt` field
+2. Call `getIosPtSizeForDevice(deviceId)` which looks up the device in `DEVICE_PRESETS` by name (case-insensitive) and returns `{ width: preset.w, height: preset.h }`
+3. Pass both sizes to `convertMacOSPtToIOSPt` to scale the AX-frame center coordinates
+4. Log the conversion (including the computed scale factor) to stderr for debugging
 
 **Example log**:
 ```
