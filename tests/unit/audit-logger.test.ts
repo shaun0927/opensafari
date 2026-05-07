@@ -132,6 +132,44 @@ describe('audit logger', () => {
     });
   });
 
+  it('retries log target setup after a transient initialization error', () => {
+    // Point the logger at a path under a parent that doesn't yet exist and
+    // can't be created (a regular file, so mkdir(recursive) will EEXIST/ENOTDIR).
+    // First call: setup fails, no log is written.
+    // Then we replace the blocker with a real directory and call again — the
+    // second call must retry setup (not return cached failure) and succeed.
+    const blockerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'audit-logger-blocker-'));
+    const blockedParent = path.join(blockerDir, 'parent');
+    fs.writeFileSync(blockedParent, ''); // a *file* where the dir is expected
+    const logPathUnderBlocker = path.join(blockedParent, 'audit.log');
+
+    const previous = process.env.OPENSAFARI_AUDIT_LOG_PATH;
+    process.env.OPENSAFARI_AUDIT_LOG_PATH = logPathUnderBlocker;
+    try {
+      // First attempt — setup must fail because parent is a regular file
+      logAuditEntry('navigate', 'session-init-fail', { url: 'https://example.test/' });
+      expect(fs.existsSync(logPathUnderBlocker)).toBe(false);
+
+      // Remove the blocker; the path is now legitimately constructable
+      fs.unlinkSync(blockedParent);
+
+      // Second attempt — must retry setup and succeed (no permanent disable)
+      logAuditEntry('navigate', 'session-init-recover', { url: 'https://example.test/recover' });
+      expect(fs.existsSync(logPathUnderBlocker)).toBe(true);
+      const recovered = fs.readFileSync(logPathUnderBlocker, 'utf8').trim().split('\n');
+      expect(recovered).toHaveLength(1);
+      const entry = JSON.parse(recovered[0]) as Record<string, unknown>;
+      expect(entry.sessionId).toBe('session-init-recover');
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENSAFARI_AUDIT_LOG_PATH;
+      } else {
+        process.env.OPENSAFARI_AUDIT_LOG_PATH = previous;
+      }
+      fs.rmSync(blockerDir, { recursive: true, force: true });
+    }
+  });
+
   it('does not chmod a pre-existing parent log directory', () => {
     // Pre-create the log directory with a permissive mode (e.g. shared
     // /var/log) and verify the audit logger does NOT tighten it.

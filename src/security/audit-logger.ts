@@ -168,15 +168,18 @@ function summarizeArgs(args: Record<string, unknown>): string {
   return JSON.stringify(redactValue(args, new WeakSet<object>()));
 }
 
-// Cache the directory-prep result per resolved log path so that we do
+// Remember which log paths have been successfully prepped so that we do
 // not run mkdir/chmod on every audit entry. `getLogPath()` reads from
-// env at call time, so we key the cache by path to stay correct if it
-// changes between calls.
-const ensuredLogPaths = new Map<string, boolean>();
+// env at call time, so we key by path to stay correct if it changes.
+//
+// Only successes are cached — a transient mkdir/chmod failure (e.g. a
+// not-yet-mounted volume at startup) must not permanently disable audit
+// writes for the rest of the process, so we retry setup on subsequent
+// calls until it succeeds.
+const ensuredLogPaths = new Set<string>();
 
 function ensurePrivateLogTarget(logPath: string): boolean {
-  const cached = ensuredLogPaths.get(logPath);
-  if (cached !== undefined) return cached;
+  if (ensuredLogPaths.has(logPath)) return true;
 
   const logDir = path.dirname(logPath);
   try {
@@ -192,10 +195,9 @@ function ensurePrivateLogTarget(logPath: string): boolean {
     if (fs.existsSync(logPath)) {
       fs.chmodSync(logPath, AUDIT_FILE_MODE);
     }
-    ensuredLogPaths.set(logPath, true);
+    ensuredLogPaths.add(logPath);
     return true;
   } catch {
-    ensuredLogPaths.set(logPath, false);
     return false;
   }
 }
