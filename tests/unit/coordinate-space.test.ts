@@ -6,6 +6,7 @@
 
 import { convertMacOSPtToIOSPt } from '../../src/utils/coordinate-space';
 import type { Size2D, Point2D } from '../../src/utils/coordinate-space';
+import { DEVICE_PRESETS } from '../../src/simulator/presets';
 
 // iPhone 17 Pro reference sizes
 const IPHONE_17_PRO_MACOS_PT: Size2D = { width: 697, height: 1515 };
@@ -122,8 +123,6 @@ describe('convertMacOSPtToIOSPt', () => {
 // per-device ratio.  Real ratios will differ for iPads; the 0.5 px tolerance
 // accommodates any sub-pixel rounding.
 
-import { DEVICE_PRESETS } from '../../src/simulator/presets';
-
 const MACOS_SCALE = 697 / 402; // ~1.7338 — reference ratio from iPhone 17 Pro
 
 describe('convertMacOSPtToIOSPt — device-class breadth', () => {
@@ -137,7 +136,7 @@ describe('convertMacOSPtToIOSPt — device-class breadth', () => {
   }));
 
   it.each(deviceTable)(
-    'round-trips iOS-pt size within 0.5 px for %s (%o)',
+    'round-trips iOS-pt size within 0.5 px for $key',
     ({ preset, macOSPtSize }) => {
       // Use the full macOS-pt content area as input point (bottom-right corner),
       // which after conversion should equal the iOS-pt size.

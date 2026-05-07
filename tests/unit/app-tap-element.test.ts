@@ -13,6 +13,7 @@ jest.mock('../../src/mcp-server', () => {
 import { MCPServer } from '../../src/mcp-server';
 import { registerAppTapElementTool, sanitizeTapTarget } from '../../src/tools/app-tap-element';
 import type { AXNode, AXQueryResult } from '../../src/native/ax-types';
+import { DEVICE_PRESETS } from '../../src/simulator/presets';
 
 // ── Mocks ──────────────────────────────────────────────────────────────────
 
@@ -1029,8 +1030,6 @@ describe('app_tap_element — macOS-pt → iOS-pt coordinate conversion (#693 WU
 });
 
 // ── WU4: multi-device integration (.each) ────────────────────────────────────
-
-import { DEVICE_PRESETS } from '../../src/simulator/presets';
 
 describe('app_tap_element — macOS-pt → iOS-pt conversion (#693 WU4 multi-device)', () => {
   // Representative device sample: iPhone 17 Pro, iPhone 17e (different form
