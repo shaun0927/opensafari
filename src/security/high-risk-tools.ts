@@ -14,7 +14,32 @@ export const HIGH_RISK_MCP_TOOLS: Readonly<Record<string, HighRiskToolMetadata>>
     category: 'code-execution',
     requiredCapability: HTTP_HIGH_RISK_TOOL_CAPABILITY,
   },
+  // batch_execute fans out an arbitrary JS expression to every active simulator
+  // (src/tools/batch-execute.ts), so it is a code-execution surface equivalent to `javascript`.
+  batch_execute: {
+    category: 'code-execution',
+    requiredCapability: HTTP_HIGH_RISK_TOOL_CAPABILITY,
+  },
   flutter_evaluate: {
+    category: 'code-execution',
+    requiredCapability: HTTP_HIGH_RISK_TOOL_CAPABILITY,
+  },
+  // flutter_call_service_extension explicitly documents itself as accepting
+  // arbitrary VM-service extension code in `args` and must be treated like flutter_evaluate
+  // (src/tools/flutter-service-extensions.ts).
+  flutter_call_service_extension: {
+    category: 'code-execution',
+    requiredCapability: HTTP_HIGH_RISK_TOOL_CAPABILITY,
+  },
+  // run_scenario evaluates a caller-supplied JS `assertion` in the page context
+  // (src/tools/scenario-tools.ts), so it can run arbitrary code in HTTP mode.
+  run_scenario: {
+    category: 'code-execution',
+    requiredCapability: HTTP_HIGH_RISK_TOOL_CAPABILITY,
+  },
+  // assert_all_devices accepts a JS `assertion` for the "custom" check
+  // (src/tools/assert-all-devices.ts), executed in the page context across all devices.
+  assert_all_devices: {
     category: 'code-execution',
     requiredCapability: HTTP_HIGH_RISK_TOOL_CAPABILITY,
   },

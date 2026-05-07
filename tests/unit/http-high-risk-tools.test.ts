@@ -1,6 +1,11 @@
 import fs from 'fs';
 import { MCPServer } from '../../src/mcp-server';
-import { HTTP_HIGH_RISK_TOOLS_ENV, HTTP_HIGH_RISK_TOOLS_FLAG } from '../../src/security/high-risk-tools';
+import {
+  HIGH_RISK_MCP_TOOLS,
+  HTTP_HIGH_RISK_TOOLS_ENV,
+  HTTP_HIGH_RISK_TOOLS_FLAG,
+  getHighRiskToolMetadata,
+} from '../../src/security/high-risk-tools';
 import { MCPMessageContext, MCPResponse } from '../../src/types/mcp';
 
 function handleMessage(
@@ -197,6 +202,86 @@ describe('HTTP high-risk MCP tool gate', () => {
     expect(auditLines[0]).not.toContain('secret-auth');
     expect(auditLines[0]).not.toContain('secret-session');
     expect(auditLines[0]).not.toContain('secret-cookie');
+  });
+
+  test.each([
+    'batch_execute',
+    'flutter_call_service_extension',
+    'run_scenario',
+    'assert_all_devices',
+  ])('HTTP gates code-execution tool %s without the capability', async (toolName) => {
+    expect(getHighRiskToolMetadata(toolName)).toEqual({
+      category: 'code-execution',
+      requiredCapability: 'http-high-risk-tools',
+    });
+
+    const server = new MCPServer();
+    const calls: string[] = [];
+    server.registerTool(
+      {
+        name: toolName,
+        description: `fixture for ${toolName}`,
+        inputSchema: {
+          type: 'object' as const,
+          properties: { expression: { type: 'string' } },
+        },
+      },
+      async (_sessionId, params) => {
+        calls.push(JSON.stringify(params));
+        return { content: [{ type: 'text' as const, text: 'executed' }] };
+      },
+    );
+    server.setTier(3);
+
+    const blocked = await handleMessage(server, {
+      jsonrpc: '2.0',
+      id: 20,
+      method: 'tools/call',
+      params: { name: toolName, arguments: { expression: 'document.cookie' } },
+    }, { transport: 'http', sessionId: 'gate-session' });
+
+    const blockedResult = blocked?.result as Record<string, unknown>;
+    const blockedContent = blockedResult.content as Array<Record<string, unknown>>;
+    expect(blockedResult.isError).toBe(true);
+    expect(blockedContent[0].text).toContain(HTTP_HIGH_RISK_TOOLS_FLAG);
+    expect(blockedContent[0].text).toContain(`${HTTP_HIGH_RISK_TOOLS_ENV}=1`);
+    expect(calls).toEqual([]);
+
+    const listResponse = await handleMessage(server, {
+      jsonrpc: '2.0',
+      id: 21,
+      method: 'tools/list',
+      params: {},
+    }, { transport: 'http', sessionId: 'gate-session' });
+
+    const listResult = listResponse?.result as Record<string, unknown>;
+    const tools = listResult.tools as Array<Record<string, unknown>>;
+    expect(tools.map((t) => t.name)).not.toContain(toolName);
+
+    enableHttpHighRiskTools(server);
+    const allowed = await handleMessage(server, {
+      jsonrpc: '2.0',
+      id: 22,
+      method: 'tools/call',
+      params: { name: toolName, arguments: { expression: '1 + 1' } },
+    }, { transport: 'http', sessionId: 'gate-session' });
+
+    const allowedResult = allowed?.result as Record<string, unknown>;
+    const allowedContent = allowedResult.content as Array<Record<string, unknown>>;
+    expect(allowedContent[0].text).toBe('executed');
+    expect(calls).toHaveLength(1);
+  });
+
+  test('high-risk denylist still covers the originally hardened code/credential tools', () => {
+    for (const expectedTool of [
+      'javascript',
+      'flutter_evaluate',
+      'auth_save',
+      'auth_restore',
+      'cookies',
+    ]) {
+      expect(HIGH_RISK_MCP_TOOLS[expectedTool]).toBeDefined();
+    }
   });
 
   test('stdio context preserves high-risk tool availability without HTTP capability', async () => {
