@@ -21,7 +21,7 @@ import { BrowserBackend } from './types/browser-backend';
 import { logAuditEntry } from './security/audit-logger';
 import { getSessionManager } from './session-manager';
 import { getVersion } from './version';
-import { resolveHandler } from './tools/registry';
+import { resolveHandler, toolRegistry } from './tools/registry';
 
 // Re-export so callers can use canonical names without knowing the internal alias
 export type { MCPToolDefinition as ToolDefinition, ToolHandler };
@@ -122,6 +122,12 @@ export class MCPServer {
    * tools/list works without triggering any dynamic import.
    */
   registerLazyTool(definition: MCPToolDefinition): void {
+    if (!toolRegistry.has(definition.name)) {
+      throw new Error(
+        `Cannot register lazy tool "${definition.name}": ` +
+        `no entry found in toolRegistry. Call defineToolEntry() first.`,
+      );
+    }
     const tier = getToolTier(definition.name);
     this.tools.set(definition.name, { definition, lazy: true, tier });
   }
@@ -319,9 +325,9 @@ export class MCPServer {
       return {
         jsonrpc: '2.0',
         id: request.id,
-        result: {
-          content: [{ type: 'text', text: `Error: no handler registered for tool "${name}"` }],
-          isError: true,
+        error: {
+          code: MCPErrorCodes.INTERNAL_ERROR,
+          message: `Internal error: no handler registered for tool "${name}"`,
         },
       };
     }

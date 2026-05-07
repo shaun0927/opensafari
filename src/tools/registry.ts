@@ -67,6 +67,10 @@ export async function resolveHandler(name: string): Promise<ToolHandler> {
   if (!entry._loading) {
     entry._loading = entry.loadHandler()
       .then(h => {
+        if (typeof h !== 'function') {
+          throw new Error(`Handler for tool "${name}" is not a function`);
+        }
+        entry._loading = undefined;
         entry._cachedHandler = h;
         return h;
       })

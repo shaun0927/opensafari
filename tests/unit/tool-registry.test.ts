@@ -133,6 +133,17 @@ describe('resolveHandler — lazy load and cache', () => {
     );
   });
 
+  test('resolveHandler throws when loadHandler resolves to a non-function', async () => {
+    defineToolEntry(makeDefinition(TOOL_NAME), async () => {
+      // Simulate a misconfigured module that exports an object instead of a function
+      return {} as unknown as import('../../src/types/mcp').ToolHandler;
+    });
+
+    await expect(resolveHandler(TOOL_NAME)).rejects.toThrow(
+      `Handler for tool "${TOOL_NAME}" is not a function`,
+    );
+  });
+
   test('dynamic-import failure surfaces with module context in error message', async () => {
     defineToolEntry(makeDefinition(TOOL_NAME), async () => {
       // Simulate a failed dynamic import
@@ -239,6 +250,14 @@ describe('MCPServer.registerLazyTool', () => {
 
     const result = await h1('sid', { x: 'hello' });
     expect(result.content![0].text).toBe('echo:hello');
+  });
+
+  test('registerLazyTool throws when tool name has no toolRegistry entry', () => {
+    const server = new MCPServer();
+    // '__no_registry_entry__' is deliberately NOT added to toolRegistry
+    expect(() => {
+      server.registerLazyTool(makeDefinition('__no_registry_entry__'));
+    }).toThrow('Cannot register lazy tool "__no_registry_entry__"');
   });
 
   test('lazy-import failure is surfaced with tool name context', async () => {

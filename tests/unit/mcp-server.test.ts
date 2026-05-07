@@ -210,6 +210,33 @@ describe('MCPServer — JSON-RPC protocol', () => {
     expect(res.status).toBe(202);
   });
 
+  // ── no-handler JSON-RPC error ──
+
+  test('tools/call on tool without handler returns JSON-RPC INTERNAL_ERROR', async () => {
+    // Inject a RegisteredTool entry with no handler and not in toolRegistry
+    // by reaching into the server's internal tools map via a cast.
+    const internalTools = (server as unknown as { tools: Map<string, unknown> }).tools;
+    internalTools.set('__no_handler__', {
+      definition: { name: '__no_handler__', description: 'no handler', inputSchema: { type: 'object', properties: {}, required: [] } },
+      tier: 3,
+      // handler intentionally omitted; lazy intentionally omitted
+    });
+
+    const res = await mcpPost(PORT, {
+      jsonrpc: '2.0', id: 901, method: 'tools/call',
+      params: { name: '__no_handler__', arguments: {} },
+    });
+
+    // Must be a top-level error, NOT result.isError
+    expect(res.body).toHaveProperty('error');
+    expect(res.body).not.toHaveProperty('result');
+    const error = res.body.error as Record<string, unknown>;
+    expect(error.code).toBe(-32603); // INTERNAL_ERROR
+    expect(String(error.message)).toContain('no handler registered for tool');
+
+    internalTools.delete('__no_handler__');
+  });
+
   // ── health endpoint ──
 
   test('GET /health returns ok status', async () => {
