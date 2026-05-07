@@ -78,17 +78,22 @@ export interface EventBridgeHost {
  * Call `attach()` once during construction to wire up all event forwarding.
  */
 export class EventBridge {
+  private attached = false;
+
   constructor(
     private readonly transport: ProtocolTransport,
-    private readonly targetSessionEmitter: NodeJS.EventEmitter,
+    private readonly targetSessionEmitter: EventEmitter,
     private readonly host: EventBridgeHost & EventEmitter,
   ) {}
 
   /**
    * Wire up all transport and target-session event forwarding.
-   * Must be called once, after transport and targetSession are initialized.
+   * Idempotent — repeat calls are no-ops so we never double-wrap transport.emit
+   * or stack duplicate target lifecycle listeners.
    */
   attach(): void {
+    if (this.attached) return;
+    this.attached = true;
     this.bindTransportForwarding();
     this.bindTargetLifecycle();
   }
@@ -135,18 +140,37 @@ export class EventBridge {
   // ========== Typed convenience listeners ==========
 
   /**
+   * Attach `event` on `host` with `listener` synchronously, then enable `domain`.
+   * If the enable fails, detach the listener and surface the error so callers
+   * are not left silently subscribed to a domain that never woke up.
+   *
+   * Attaching the listener before awaiting enableDomain closes the window where
+   * an event fires between the resolver send and the promise microtask.
+   */
+  private wireDomainListener(
+    domain: string,
+    event: string,
+    listener: (...args: any[]) => void,
+  ): void {
+    this.host.on(event, listener);
+    this.host.enableDomain(domain).catch((err: unknown) => {
+      this.host.removeListener(event, listener);
+      const reason = err instanceof Error ? err.message : String(err);
+      console.error(`[EventBridge] Failed to enable ${domain} domain: ${reason}`);
+    });
+  }
+
+  /**
    * Subscribe to Console domain events with a typed handler.
    * Enables the Console domain automatically.
    *
    * Translates raw `Console.messageAdded` params → `ConsoleMessage`.
    */
   onConsole(handler: (msg: ConsoleMessage) => void): void {
-    this.host.enableDomain('Console').then(() => {
-      this.host.on('Console.messageAdded', (params: any) => {
-        handler({
-          type: params.message?.level ?? params.message?.type ?? 'log',
-          text: params.message?.text ?? '',
-        });
+    this.wireDomainListener('Console', 'Console.messageAdded', (params: any) => {
+      handler({
+        type: params.message?.level ?? params.message?.type ?? 'log',
+        text: params.message?.text ?? '',
       });
     });
   }
@@ -156,9 +180,7 @@ export class EventBridge {
    * Enables the Page domain automatically.
    */
   onPageLoad(handler: () => void): void {
-    this.host.enableDomain('Page').then(() => {
-      this.host.on('Page.loadEventFired', handler);
-    });
+    this.wireDomainListener('Page', 'Page.loadEventFired', handler);
   }
 
   /**
@@ -168,12 +190,10 @@ export class EventBridge {
    * Translates raw `Network.requestWillBeSent` params → `RequestInfo`.
    */
   onRequest(handler: (request: RequestInfo) => void): void {
-    this.host.enableDomain('Network').then(() => {
-      this.host.on('Network.requestWillBeSent', (params: any) => {
-        handler({
-          url: params.request?.url ?? '',
-          method: params.request?.method ?? 'GET',
-        });
+    this.wireDomainListener('Network', 'Network.requestWillBeSent', (params: any) => {
+      handler({
+        url: params.request?.url ?? '',
+        method: params.request?.method ?? 'GET',
       });
     });
   }
@@ -185,12 +205,10 @@ export class EventBridge {
    * Translates raw `Network.responseReceived` params → `ResponseInfo`.
    */
   onResponse(handler: (response: ResponseInfo) => void): void {
-    this.host.enableDomain('Network').then(() => {
-      this.host.on('Network.responseReceived', (params: any) => {
-        handler({
-          url: params.response?.url ?? '',
-          status: params.response?.status ?? 0,
-        });
+    this.wireDomainListener('Network', 'Network.responseReceived', (params: any) => {
+      handler({
+        url: params.response?.url ?? '',
+        status: params.response?.status ?? 0,
       });
     });
   }
@@ -203,23 +221,21 @@ export class EventBridge {
    * Note: Runtime.exceptionThrown is Chrome-specific and not available in WebKit.
    */
   onError(handler: (error: ErrorInfo) => void): void {
-    this.host.enableDomain('Console').then(() => {
-      this.host.on('Console.messageAdded', (params: any) => {
-        const msg = params.message ?? {};
-        if (msg.level === 'error' && msg.source === 'javascript') {
-          const frames = msg.stackTrace?.callFrames ?? [];
-          const stackLines = frames.map((f: any) =>
-            `  at ${f.functionName || '(anonymous)'} (${f.url}:${f.lineNumber}:${f.columnNumber})`
-          );
-          handler({
-            message: msg.text ?? 'Unknown error',
-            stack: stackLines.length ? stackLines.join('\n') : undefined,
-            source: msg.url ?? undefined,
-            line: msg.line ?? undefined,
-            column: msg.column ?? undefined,
-          });
-        }
-      });
+    this.wireDomainListener('Console', 'Console.messageAdded', (params: any) => {
+      const msg = params.message ?? {};
+      if (msg.level === 'error' && msg.source === 'javascript') {
+        const frames = msg.stackTrace?.callFrames ?? [];
+        const stackLines = frames.map((f: any) =>
+          `  at ${f.functionName || '(anonymous)'} (${f.url}:${f.lineNumber}:${f.columnNumber})`
+        );
+        handler({
+          message: msg.text ?? 'Unknown error',
+          stack: stackLines.length ? stackLines.join('\n') : undefined,
+          source: msg.url ?? undefined,
+          line: msg.line ?? undefined,
+          column: msg.column ?? undefined,
+        });
+      }
     });
   }
 }
