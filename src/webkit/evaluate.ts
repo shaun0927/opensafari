@@ -8,7 +8,7 @@
  * arrays). Never use it for expressions that return Promises or DOM nodes.
  */
 
-import { EvaluationError } from './client';
+import { EvaluationError } from './errors';
 
 /** Minimal send interface — satisfied by WebKitClient and test fakes. */
 export interface EvaluateSender {
@@ -18,8 +18,6 @@ export interface EvaluateSender {
 export interface EvaluateValueOptions {
   /** Execution context id. Omit to use the default page context. */
   contextId?: number;
-  /** Per-call send timeout override in milliseconds. */
-  timeoutMs?: number;
 }
 
 /**
@@ -44,12 +42,6 @@ export async function evaluateValue<T>(
   if (options?.contextId !== undefined) {
     params.contextId = options.contextId;
   }
-
-  // timeoutMs is not a standard WebKit protocol field — it controls the client-
-  // level send timeout. We surface the option here for callers that need it but
-  // cannot plumb it through client.send() at this abstraction level. If the
-  // underlying client does not honour it, sends simply use the client default.
-  // (Wiring per-call timeouts into WebKitClient is a separate concern, #702c.)
 
   type EvalResult = {
     result: {

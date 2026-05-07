@@ -164,7 +164,7 @@ describe('WebKitClient.screenshot viewport fast path', () => {
         if (method === 'Runtime.evaluate') {
           // Return viewport dimensions
           return {
-            result: { type: 'object', value: { w: 375, h: 812 } },
+            result: { type: 'object', value: { width: 375, height: 812 } },
             wasThrown: false,
           };
         }

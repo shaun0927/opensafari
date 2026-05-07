@@ -18,6 +18,8 @@ import {
   DEFAULT_RECONNECT_MAX_DELAY_MS,
 } from '../config/defaults';
 import { evaluateValue } from './evaluate';
+import { EvaluationError } from './errors';
+export { EvaluationError } from './errors';
 
 export interface WebKitClientOptions {
   host: string;
@@ -584,12 +586,9 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
       // Try WebKit Protocol: Page.snapshotRect
       // Get viewport dimensions via evaluateValue fast path (returnByValue:true,
       // single RPC — skips the objectId/callFunctionOn round-trip).
-      const viewport = await evaluateValue<{ w: number; h: number }>(
-        this,
-        '({w: window.innerWidth, h: window.innerHeight})',
-      );
+      const viewport = await this.getViewportSize();
 
-      const clip = options?.clip ?? { x: 0, y: 0, width: viewport.w, height: viewport.h };
+      const clip = options?.clip ?? { x: 0, y: 0, width: viewport.width, height: viewport.height };
 
       const result = await this.send<{ dataURL: string }>('Page.snapshotRect', {
         x: clip.x,
@@ -1188,7 +1187,10 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
   }
 
   private async getViewportSize(): Promise<{ width: number; height: number }> {
-    return this.evaluate<{ width: number; height: number }>('({width: window.innerWidth, height: window.innerHeight})');
+    return evaluateValue<{ width: number; height: number }>(
+      this,
+      '({width: window.innerWidth, height: window.innerHeight})',
+    );
   }
 
   private async connectToTarget(wsUrl: string): Promise<void> {
@@ -1309,9 +1311,3 @@ export class ProtocolError extends Error {
   }
 }
 
-export class EvaluationError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'EvaluationError';
-  }
-}
