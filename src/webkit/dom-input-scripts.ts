@@ -120,6 +120,17 @@ ${scrollLine}  var el = document.elementFromPoint(sx, sy);
 `.trim();
 }
 
+// JS source fragment that walks the prototype chain to find the native
+// `value` property descriptor. Used by both buildSetValueScript and
+// buildAppendCharScript.
+const PROTO_VALUE_DESC_WALK = `
+  var p = Object.getPrototypeOf(el);
+  while (p && !Object.getOwnPropertyDescriptor(p, 'value')) {
+    p = Object.getPrototypeOf(p);
+  }
+  var desc = p ? Object.getOwnPropertyDescriptor(p, 'value') : null;
+`.trim();
+
 // ── Value setter ─────────────────────────────────────────────────────────────
 
 export interface SetValueScriptOptions {
@@ -157,11 +168,7 @@ export function buildSetValueScript(opts: SetValueScriptOptions): string {
 (function() {
   var el = document.querySelector(${selectorJson});
   if (!el) return;
-  var p = Object.getPrototypeOf(el);
-  while (p && !Object.getOwnPropertyDescriptor(p, 'value')) {
-    p = Object.getPrototypeOf(p);
-  }
-  var desc = p ? Object.getOwnPropertyDescriptor(p, 'value') : null;
+  ${PROTO_VALUE_DESC_WALK}
   if (desc && desc.set) {
     desc.set.call(el, ${valueJson});
   } else {
@@ -174,7 +181,7 @@ ${changeEvent}})()
 
 // ── Value appender (character accumulate path) ────────────────────────────────
 
-export interface AppendValueScriptOptions {
+export interface AppendCharScriptOptions {
   /** CSS selector serialized via JSON.stringify before embedding. */
   selector: string;
   /** Character to append; serialized via JSON.stringify before embedding. */
@@ -189,7 +196,7 @@ export interface AppendValueScriptOptions {
  * The selector and char are embedded with JSON.stringify() so special
  * characters are safe.
  */
-export function buildAppendCharScript(opts: AppendValueScriptOptions): string {
+export function buildAppendCharScript(opts: AppendCharScriptOptions): string {
   const { selector, char } = opts;
   const selectorJson = JSON.stringify(selector);
   const charJson = JSON.stringify(char);
@@ -201,11 +208,7 @@ export function buildAppendCharScript(opts: AppendValueScriptOptions): string {
   var ev = new KeyboardEvent('keydown', { key: ${charJson}, bubbles: true });
   el.dispatchEvent(ev);
   el.dispatchEvent(new KeyboardEvent('keypress', { key: ${charJson}, bubbles: true }));
-  var p = Object.getPrototypeOf(el);
-  while (p && !Object.getOwnPropertyDescriptor(p, 'value')) {
-    p = Object.getPrototypeOf(p);
-  }
-  var desc = p ? Object.getOwnPropertyDescriptor(p, 'value') : null;
+  ${PROTO_VALUE_DESC_WALK}
   var val = (desc && desc.get) ? desc.get.call(el) : (el.value || '');
   if (desc && desc.set) {
     desc.set.call(el, val + ${charJson});
