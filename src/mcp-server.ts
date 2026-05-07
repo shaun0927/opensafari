@@ -132,6 +132,16 @@ export class MCPServer {
     this.tools.set(definition.name, { definition, lazy: true, tier });
   }
 
+  /**
+   * Returns the handler implementation for a registered tool, or
+   * undefined if no tool with that name is registered OR if the tool
+   * is lazy and has not yet been invoked.
+   *
+   * Lazy tools are registered with their schema only; the handler is
+   * resolved on first tools/call. Callers that need the handler before
+   * an invocation should wait for the first tools/call to complete or
+   * use the async path through handleToolsCall.
+   */
   getToolHandler(name: string): ToolHandler | undefined {
     return this.tools.get(name)?.handler;
   }

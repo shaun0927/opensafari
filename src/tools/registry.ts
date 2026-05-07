@@ -70,15 +70,17 @@ export async function resolveHandler(name: string): Promise<ToolHandler> {
         if (typeof h !== 'function') {
           throw new Error(`Handler for tool "${name}" is not a function`);
         }
-        entry._loading = undefined;
         entry._cachedHandler = h;
         return h;
       })
       .catch(err => {
-        // Clear so a subsequent retry can attempt the load again.
-        entry._loading = undefined;
         const msg = err instanceof Error ? err.message : String(err);
         throw new Error(`Failed to load handler for tool "${name}": ${msg}`);
+      })
+      .finally(() => {
+        // Clear so a subsequent retry can attempt the load again on failure,
+        // and so the reference is not held after a successful load.
+        entry._loading = undefined;
       });
   }
   return entry._loading;
