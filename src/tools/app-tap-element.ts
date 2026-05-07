@@ -13,7 +13,7 @@ import {
   countNodes,
   isLikelyChromeOnlyTree,
 } from '../native';
-import type { AXNode, AXPressResponse } from '../native';
+import type { AXNode, AXPressResponse, AXQueryResult } from '../native';
 import type { AccessibilityBridge } from '../native/accessibility-bridge';
 import { walkTree, fingerprintTree } from '../native/ax-verification';
 import { resolveDeviceId, getInputBackend, runInputOp } from './native-input-utils';
@@ -24,6 +24,9 @@ import {
   NativeContextMeta,
 } from './native-app-context';
 import { SimulatorManager } from '../simulator';
+import { DEVICE_PRESETS } from '../simulator/presets';
+import { convertMacOSPtToIOSPt } from '../utils/coordinate-space';
+import type { Size2D } from '../utils/coordinate-space';
 
 type AXPressVerification = {
   verified: boolean;
@@ -150,6 +153,9 @@ export function registerAppTapElementTool(server: MCPServer): void {
         let match: AXNode | undefined;
         let totalMatches = 0;
         let ambiguous = false;
+        // Capture deviceContentMacOSPt from the last successful query result.
+        // Present only when the bridge is a recent build (#693 WU3-prep).
+        let queryResult: AXQueryResult | undefined;
         if (timeout > 0) {
           const deadline = Date.now() + timeout;
           while (Date.now() < deadline) {
@@ -158,6 +164,7 @@ export function registerAppTapElementTool(server: MCPServer): void {
             ambiguous = result.ambiguous;
             if (result.matches.length > index) {
               match = result.matches[index];
+              queryResult = result;
               break;
             }
             await sleep(300);
@@ -168,6 +175,7 @@ export function registerAppTapElementTool(server: MCPServer): void {
           ambiguous = result.ambiguous;
           if (result.matches.length > index) {
             match = result.matches[index];
+            queryResult = result;
           }
         }
 
@@ -207,9 +215,38 @@ export function registerAppTapElementTool(server: MCPServer): void {
           };
         }
 
-        // Calculate center of element
-        const rawCenterX = match.frame.x + match.frame.width / 2;
-        const rawCenterY = match.frame.y + match.frame.height / 2;
+        // Calculate center of element in AX-frame space (macOS-screen-points).
+        const axCenterX = match.frame.x + match.frame.width / 2;
+        const axCenterY = match.frame.y + match.frame.height / 2;
+
+        // Convert from macOS-screen-points to iOS-points when the bridge
+        // emits `deviceContentMacOSPt` (#693 WU3). The conversion requires
+        // the iOS-point size of the device under test, which is looked up from
+        // the preset table by matching the simulator device name. When either
+        // size is unavailable (legacy bridge, unknown device, simctl failure)
+        // the coordinates are forwarded unchanged — same behavior as before.
+        let rawCenterX = axCenterX;
+        let rawCenterY = axCenterY;
+        const macOSPtSize = queryResult?.deviceContentMacOSPt;
+        if (macOSPtSize) {
+          const iosPtSize = await getIosPtSizeForDevice(deviceId);
+          if (iosPtSize) {
+            const converted = convertMacOSPtToIOSPt(
+              { x: axCenterX, y: axCenterY },
+              macOSPtSize,
+              iosPtSize,
+            );
+            rawCenterX = converted.x;
+            rawCenterY = converted.y;
+            console.error(
+              `[app_tap_element] macOS-pt→iOS-pt conversion applied: ` +
+                `macOSPt(${axCenterX.toFixed(2)}, ${axCenterY.toFixed(2)}) → ` +
+                `iOSPt(${rawCenterX.toFixed(2)}, ${rawCenterY.toFixed(2)}) ` +
+                `scale=(${(iosPtSize.width / macOSPtSize.width).toFixed(4)}, ` +
+                `${(iosPtSize.height / macOSPtSize.height).toFixed(4)})`,
+            );
+          }
+        }
 
         // Sanitize the tap target. An accessibility tree that reports a
         // `visible: true` element with a frame whose center lands outside
@@ -470,6 +507,29 @@ export function registerAppTapElementTool(server: MCPServer): void {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Look up the iOS-point screen size for a booted simulator by its UDID.
+ *
+ * Resolves: device UDID → device name (from simctl list) → preset entry
+ * (matched by name) → `{ width: w, height: h }`.
+ *
+ * Returns `null` when the device cannot be found, no name matches a preset,
+ * or the simctl call fails — callers treat `null` as "no conversion available"
+ * and fall back to using raw AX-frame coordinates.
+ */
+async function getIosPtSizeForDevice(deviceId: string): Promise<Size2D | null> {
+  try {
+    const manager = new SimulatorManager();
+    const device = await manager.getDevice(deviceId);
+    if (!device) return null;
+    const preset = Object.values(DEVICE_PRESETS).find((p) => p.name === device.name);
+    if (!preset) return null;
+    return { width: preset.w, height: preset.h };
+  } catch {
+    return null;
+  }
 }
 
 /**
