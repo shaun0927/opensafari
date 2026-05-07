@@ -417,72 +417,72 @@ jobs:
           # client path directly.
           for i in $(seq 1 30); do
             if node <<'NODE'
-const WebSocket = require('ws');
+          const WebSocket = require('ws');
 
-const rawUrl = process.env.OPENSAFARI_VM_SERVICE_URL;
-if (!rawUrl) {
-  console.error('OPENSAFARI_VM_SERVICE_URL is empty');
-  process.exit(1);
-}
+          const rawUrl = process.env.OPENSAFARI_VM_SERVICE_URL;
+          if (!rawUrl) {
+            console.error('OPENSAFARI_VM_SERVICE_URL is empty');
+            process.exit(1);
+          }
 
-const url = new URL(rawUrl);
-if (url.protocol === 'http:') url.protocol = 'ws:';
-if (url.protocol === 'https:') url.protocol = 'wss:';
-if (url.protocol !== 'ws:' && url.protocol !== 'wss:') {
-  console.error(`Unsupported VM service protocol: ${url.protocol}`);
-  process.exit(1);
-}
-if (url.pathname.endsWith('/ws')) {
-  url.pathname = `${url.pathname}/`;
-} else if (!url.pathname.endsWith('/ws/')) {
-  url.pathname = url.pathname.replace(/\/?$/, '/ws/');
-}
+          const url = new URL(rawUrl);
+          if (url.protocol === 'http:') url.protocol = 'ws:';
+          if (url.protocol === 'https:') url.protocol = 'wss:';
+          if (url.protocol !== 'ws:' && url.protocol !== 'wss:') {
+            console.error(`Unsupported VM service protocol: ${url.protocol}`);
+            process.exit(1);
+          }
+          if (url.pathname.endsWith('/ws')) {
+            url.pathname = `${url.pathname}/`;
+          } else if (!url.pathname.endsWith('/ws/')) {
+            url.pathname = url.pathname.replace(/\/?$/, '/ws/');
+          }
 
-const ws = new WebSocket(url);
-const timer = setTimeout(() => {
-  console.error(`Timed out waiting for getVM response from ${url.href}`);
-  ws.terminate();
-  process.exit(1);
-}, 2000);
+          const ws = new WebSocket(url);
+          const timer = setTimeout(() => {
+            console.error(`Timed out waiting for getVM response from ${url.href}`);
+            ws.terminate();
+            process.exit(1);
+          }, 2000);
 
-ws.on('open', () => {
-  ws.send(JSON.stringify({ jsonrpc: '2.0', id: 'warmup', method: 'getVM' }));
-});
+          ws.on('open', () => {
+            ws.send(JSON.stringify({ jsonrpc: '2.0', id: 'warmup', method: 'getVM' }));
+          });
 
-ws.on('message', (data) => {
-  let message;
-  try {
-    message = JSON.parse(data.toString());
-  } catch (error) {
-    console.error(`Invalid VM service JSON: ${error.message}`);
-    return;
-  }
+          ws.on('message', (data) => {
+            let message;
+            try {
+              message = JSON.parse(data.toString());
+            } catch (error) {
+              console.error(`Invalid VM service JSON: ${error.message}`);
+              return;
+            }
 
-  if (message.id !== 'warmup') return;
+            if (message.id !== 'warmup') return;
 
-  clearTimeout(timer);
-  ws.close();
-  if (message.error) {
-    console.error(`getVM returned error: ${JSON.stringify(message.error)}`);
-    process.exit(1);
-  }
+            clearTimeout(timer);
+            ws.close();
+            if (message.error) {
+              console.error(`getVM returned error: ${JSON.stringify(message.error)}`);
+              process.exit(1);
+            }
 
-  const vmType = message.result && message.result.type;
-  if (vmType !== 'VM') {
-    console.error(`getVM returned unexpected result type: ${vmType || 'missing'}`);
-    process.exit(1);
-  }
+            const vmType = message.result && message.result.type;
+            if (vmType !== 'VM') {
+              console.error(`getVM returned unexpected result type: ${vmType || 'missing'}`);
+              process.exit(1);
+            }
 
-  console.log(`VM service websocket getVM accepted at ${url.href}`);
-  process.exit(0);
-});
+            console.log(`VM service websocket getVM accepted at ${url.href}`);
+            process.exit(0);
+          });
 
-ws.on('error', (error) => {
-  clearTimeout(timer);
-  console.error(`VM service websocket error: ${error.message}`);
-  process.exit(1);
-});
-NODE
+          ws.on('error', (error) => {
+            clearTimeout(timer);
+            console.error(`VM service websocket error: ${error.message}`);
+            process.exit(1);
+          });
+          NODE
             then
               echo "DDS VM service websocket responsive (attempt $i)"
               sleep 8
