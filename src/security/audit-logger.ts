@@ -12,6 +12,7 @@ interface AuditEntry {
   tool: string;           // tool name
   domain: string | null;  // extracted from page URL, null if N/A
   sessionId: string;
+  status?: string;
   args_summary: string;   // brief summary, no sensitive data
 }
 
@@ -34,6 +35,8 @@ function extractDomain(url?: string): string | null {
 
 const SENSITIVE_KEYS = [
   'password',
+  'passwd',
+  'pwd',
   'cookie',
   'token',
   'secret',
@@ -67,6 +70,8 @@ const SENSITIVE_QUERY_PARAMS = [
   'credential',
   'key',
   'password',
+  'passwd',
+  'pwd',
   'refresh_token',
   'secret',
   'session',
@@ -231,6 +236,7 @@ export function logAuditEntry(tool: string, sessionId: string, args: Record<stri
     tool,
     domain: extractDomain(pageUrl || (args.url as string)),
     sessionId,
+    ...(status ? { status } : {}),
     args_summary: summarizeArgs(args),
   };
 
