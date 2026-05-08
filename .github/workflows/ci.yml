@@ -45,3 +45,20 @@ jobs:
           test -f dist/index.js
           test -f dist/cli/index.js
           node dist/cli/index.js --help
+
+  dependency-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+      # `--force` is required on Linux because package.json restricts `os` to darwin;
+      # plain `npm ci` would exit with EBADPLATFORM. Matches the lint/build jobs above.
+      - run: npm ci --force
+      - name: Runtime dependency audit (blocking)
+        run: npm run audit:prod
+      - name: Dev dependency hygiene audit (warning only)
+        continue-on-error: true
+        run: npm run audit:all

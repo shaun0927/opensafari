@@ -50,3 +50,13 @@ export const DEFAULT_SCREENSHOT_MAX_AGE_DAYS = 7;
 // Rate Limiting
 export const DEFAULT_RATE_LIMIT_REQUESTS = 100;
 export const DEFAULT_RATE_LIMIT_WINDOW_MS = 60000;
+
+// Proxy readiness
+/** How long to wait for the ios_webkit_debug_proxy process HTTP endpoint to respond. */
+export const DEFAULT_PROXY_PROCESS_READY_TIMEOUT_MS = 5000;
+/** How long to wait for a Safari/WebView page target to appear when explicitly requested. */
+export const DEFAULT_PROXY_TARGET_WAIT_TIMEOUT_MS = 15000;
+/** Initial poll interval when waiting for a target; doubles each iteration up to the cap. */
+export const DEFAULT_PROXY_POLL_INITIAL_MS = 200;
+/** Maximum poll interval cap for adaptive target polling. */
+export const DEFAULT_PROXY_POLL_MAX_MS = 2000;

@@ -167,7 +167,18 @@ jobs:
       - name: Open Safari on smoke target URL
         run: |
           set -euo pipefail
-          xcrun simctl openurl "$SIMULATOR_UDID" https://example.com
+          for attempt in $(seq 1 3); do
+            if xcrun simctl openurl "$SIMULATOR_UDID" https://example.com; then
+              break
+            fi
+            if [ "$attempt" = "3" ]; then
+              echo "::error::simctl openurl failed after ${attempt} attempts"
+              exit 1
+            fi
+            echo "::warning::simctl openurl attempt ${attempt} failed; retrying after simulator settles"
+            xcrun simctl bootstatus "$SIMULATOR_UDID" -b 2>/dev/null || true
+            sleep 10
+          done
           for i in $(seq 1 30); do
             COUNT=$(curl --silent "http://localhost:$OPENSAFARI_PROXY_PORT/json" 2>/dev/null \
               | node -e 'const t = JSON.parse(require("fs").readFileSync(0,"utf8")); process.stdout.write(String(Array.isArray(t) ? t.length : 0));' 2>/dev/null || echo "0")
@@ -360,7 +371,7 @@ jobs:
           # Wait for `flutter run` to write the resolved VM service URI.
           # `--vmservice-out-file` only appears once the engine has actually
           # bound the port and DDS is ready to accept clients.
-          for i in $(seq 1 120); do
+          for i in $(seq 1 180); do
             if [ -s "$VM_SERVICE_FILE" ]; then
               echo "VM service file written after ${i}s: $(cat "$VM_SERVICE_FILE")"
               break
@@ -383,14 +394,30 @@ jobs:
           fi
           # Trim trailing newline / whitespace; --vmservice-out-file writes
           # the URL with a trailing newline.
-          VM_SERVICE_URL=$(cat "$VM_SERVICE_FILE" | tr -d '\n\r ' )
-          # Ensure trailing slash so downstream HTTP probes resolve correctly.
+          VM_SERVICE_RAW_URL=$(cat "$VM_SERVICE_FILE" | tr -d '\n\r ' )
+          # `flutter run --vmservice-out-file` writes a websocket URL on recent
+          # Flutter releases. Runtime code expects OPENSAFARI_VM_SERVICE_URL to
+          # be the HTTP observatory URL and converts it back to /ws internally.
+          VM_SERVICE_WS_URL="$VM_SERVICE_RAW_URL"
+          case "$VM_SERVICE_WS_URL" in
+            */ws/) ;;
+            */ws) VM_SERVICE_WS_URL="${VM_SERVICE_WS_URL}/" ;;
+            */) VM_SERVICE_WS_URL="${VM_SERVICE_WS_URL}ws/" ;;
+            *) VM_SERVICE_WS_URL="${VM_SERVICE_WS_URL}/ws/" ;;
+          esac
+          VM_SERVICE_URL="$VM_SERVICE_WS_URL"
           case "$VM_SERVICE_URL" in
-            */) ;;
-            *) VM_SERVICE_URL="${VM_SERVICE_URL}/" ;;
+            ws://*) VM_SERVICE_URL="http://${VM_SERVICE_URL#ws://}" ;;
+            wss://*) VM_SERVICE_URL="https://${VM_SERVICE_URL#wss://}" ;;
+          esac
+          case "$VM_SERVICE_URL" in
+            */ws/) VM_SERVICE_URL="${VM_SERVICE_URL%/ws/}/" ;;
+            */ws) VM_SERVICE_URL="${VM_SERVICE_URL%/ws}/" ;;
           esac
           echo "OPENSAFARI_VM_SERVICE_URL=$VM_SERVICE_URL" >> "$GITHUB_ENV"
-          echo "Discovered VM Service URL: $VM_SERVICE_URL"
+          echo "OPENSAFARI_VM_SERVICE_WS_URL=$VM_SERVICE_WS_URL" >> "$GITHUB_ENV"
+          echo "Discovered VM Service HTTP URL: $VM_SERVICE_URL"
+          echo "Discovered VM Service websocket URL: $VM_SERVICE_WS_URL"
 
       - name: Wait for DDS frontend compiler warmup
         run: |
@@ -399,21 +426,91 @@ jobs:
             echo "::error::No VM Service URL exported — cannot warm up DDS"
             exit 1
           fi
-          echo "Probing VM Service at $OPENSAFARI_VM_SERVICE_URL ..."
-          # The DDS HTTP endpoint becomes responsive a few seconds after the
-          # URL is written. Wait for *any* 200 response before letting jest
-          # connect — `compileExpression` (the call probeEvaluateCompile
-          # uses) requires the frontend compiler to have completed its
-          # initial compile pass, which the warmup sleep covers.
+          VM_SERVICE_PROBE_URL="${OPENSAFARI_VM_SERVICE_WS_URL:-$OPENSAFARI_VM_SERVICE_URL}"
+          echo "Probing VM Service at $VM_SERVICE_PROBE_URL ..."
+          # Dart VM service JSON-RPC traffic is served over the VM service
+          # websocket path. Some CI runners reject HTTP JSON-RPC probes with
+          # 405 even after the service is ready, so validate the downstream
+          # client path directly.
           for i in $(seq 1 30); do
-            if curl --silent --max-time 2 --output /dev/null --write-out '%{http_code}' "${OPENSAFARI_VM_SERVICE_URL}" | grep -q '^200$'; then
-              echo "DDS HTTP endpoint responsive (attempt $i)"
+            if node <<'NODE'
+          const WebSocket = require('ws');
+
+          const rawUrl = process.env.OPENSAFARI_VM_SERVICE_WS_URL || process.env.OPENSAFARI_VM_SERVICE_URL;
+          if (!rawUrl) {
+            console.error('OPENSAFARI_VM_SERVICE_URL is empty');
+            process.exit(1);
+          }
+
+          const url = new URL(rawUrl);
+          if (url.protocol === 'http:') url.protocol = 'ws:';
+          if (url.protocol === 'https:') url.protocol = 'wss:';
+          if (url.protocol !== 'ws:' && url.protocol !== 'wss:') {
+            console.error(`Unsupported VM service protocol: ${url.protocol}`);
+            process.exit(1);
+          }
+          if (url.pathname.endsWith('/ws')) {
+            url.pathname = `${url.pathname}/`;
+          } else if (!url.pathname.endsWith('/ws/')) {
+            url.pathname = url.pathname.replace(/\/?$/, '/ws/');
+          }
+
+          const ws = new WebSocket(url);
+          const timer = setTimeout(() => {
+            console.error(`Timed out waiting for getVM response from ${url.href}`);
+            ws.terminate();
+            process.exit(1);
+          }, 2000);
+
+          ws.on('open', () => {
+            ws.send(JSON.stringify({ jsonrpc: '2.0', id: 'warmup', method: 'getVM' }));
+          });
+
+          ws.on('message', (data) => {
+            let message;
+            try {
+              message = JSON.parse(data.toString());
+            } catch (error) {
+              console.error(`Invalid VM service JSON: ${error.message}`);
+              return;
+            }
+
+            if (message.id !== 'warmup') return;
+
+            clearTimeout(timer);
+            ws.close();
+            if (message.error) {
+              console.error(`getVM returned error: ${JSON.stringify(message.error)}`);
+              process.exit(1);
+            }
+
+            const vmType = message.result && message.result.type;
+            if (vmType !== 'VM') {
+              console.error(`getVM returned unexpected result type: ${vmType || 'missing'}`);
+              process.exit(1);
+            }
+
+            console.log(`VM service websocket getVM accepted at ${url.href}`);
+            process.exit(0);
+          });
+
+          ws.on('error', (error) => {
+            clearTimeout(timer);
+            console.error(`VM service websocket error: ${error.message}`);
+            process.exit(1);
+          });
+          NODE
+            then
+              echo "DDS VM service websocket responsive (attempt $i)"
               sleep 8
               exit 0
             fi
+            if [ "$i" -eq 1 ] || [ $((i % 5)) -eq 0 ]; then
+              echo "DDS VM service websocket not ready (attempt $i)"
+            fi
             sleep 2
           done
-          echo "::error::DDS HTTP endpoint did not respond within warmup window"
+          echo "::error::DDS VM service websocket did not accept getVM within warmup window"
           exit 1
 
       - name: Run Flutter VM headless input live test

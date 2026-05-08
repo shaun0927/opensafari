@@ -44,3 +44,69 @@ export class SimctlError extends Error {
     this.name = 'SimctlError';
   }
 }
+
+// ── resetBootstatusCapabilityForTests ────────────────────────────────────────
+
+/**
+ * No-op kept for test-file backward-compatibility.
+ * The bootstatus fast-path was removed in favour of the per-UDID
+ * `simctl list devices <udid> -j` read, which has no side-effects and
+ * requires no capability detection.
+ *
+ * @deprecated Remove callers when all test files are updated.
+ */
+export function resetBootstatusCapabilityForTests(): void {
+  // intentionally empty — no state to reset
+}
+
+// ── SimulatorStateCache ───────────────────────────────────────────────────────
+
+export interface CachedDeviceState {
+  udid: string;
+  state: 'Booted' | 'Shutdown' | 'Creating' | 'ShuttingDown';
+  cachedAt: number;
+}
+
+/**
+ * Short-lived per-device state cache for simulator polling loops.
+ *
+ * TTL is intentionally matched to a single polling interval so that multiple
+ * callers within the *same tick* share one `simctl list devices` parse, while
+ * the next tick always fetches fresh data. This is NOT a long-term inventory
+ * cache — it only exists to deduplicate redundant reads within a tight loop.
+ *
+ * Cache is invalidated immediately on any lifecycle mutation (boot / shutdown /
+ * delete) so that callers never observe stale state after an action.
+ */
+export class SimulatorStateCache {
+  private readonly entries = new Map<string, CachedDeviceState>();
+  private readonly ttlMs: number;
+
+  constructor(ttlMs: number) {
+    this.ttlMs = ttlMs;
+  }
+
+  get(udid: string): CachedDeviceState | undefined {
+    const entry = this.entries.get(udid);
+    if (!entry) return undefined;
+    if (Date.now() - entry.cachedAt > this.ttlMs) {
+      this.entries.delete(udid);
+      return undefined;
+    }
+    return entry;
+  }
+
+  set(udid: string, state: CachedDeviceState['state']): void {
+    this.entries.set(udid, { udid, state, cachedAt: Date.now() });
+  }
+
+  /** Invalidate a specific device entry (call after any lifecycle mutation). */
+  invalidate(udid: string): void {
+    this.entries.delete(udid);
+  }
+
+  /** Invalidate all entries (call after bulk operations). */
+  invalidateAll(): void {
+    this.entries.clear();
+  }
+}
