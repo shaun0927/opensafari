@@ -30,7 +30,7 @@ import {
   SimulatorKitHIDInputBackend,
   tryCreateSimulatorKitHIDBackend,
   InputBackendError,
-} from './sim-hid-input-backend';
+} from '../input/sim-hid-backend';
 import { getAccessibilityBridge } from '../native';
 import { matchLabel as matchButtonLabel } from './localized-button-matcher';
 

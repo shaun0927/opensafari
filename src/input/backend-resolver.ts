@@ -17,12 +17,12 @@
 
 import { SimctlExecutor } from '../simulator/simctl';
 import type { BrowserBackend } from '../types/browser-backend';
-import { FlutterVMInputBackend } from '../tools/flutter-vm-input-backend';
-import { tryCreateSimulatorKitHIDBackend } from '../tools/sim-hid-input-backend';
+import { FlutterVMInputBackend } from './flutter-vm-backend';
+import { tryCreateSimulatorKitHIDBackend } from './sim-hid-backend';
 import {
   isPointerServiceEnabled,
   tryCreatePointerServiceBackend,
-} from '../tools/pointer-service-input-backend';
+} from './pointer-service-backend';
 import type { InputBackend } from './backend';
 import { SimctlInputBackend } from './simctl-backend';
 import { AppleScriptInputBackend } from './applescript-backend';
