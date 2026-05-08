@@ -131,7 +131,7 @@ describe('Issue #167: CLI serve wires orchestration subsystems', () => {
 
     setupGracefulShutdown(pool);
 
-    await server.start({ transport: 'http', port: PORT, httpInsecure: true });
+    await server.start({ transport: 'http', port: PORT, httpInsecure: true, httpHighRiskTools: true });
   });
 
   afterAll(async () => {

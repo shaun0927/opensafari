@@ -50,12 +50,6 @@ const SENSITIVE_KEYS = [
   'privatekey',
   'private_key',
   'session',
-  // Free-form user input that flows through MCP tool calls (e.g.
-  // `type.text`, `select_option.value`) can carry passwords or OTPs, so
-  // redact these keys defensively even though they are not credentials
-  // by name.
-  'text',
-  'value',
 ];
 
 const SENSITIVE_QUERY_PARAMS = [
