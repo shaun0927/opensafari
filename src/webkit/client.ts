@@ -248,10 +248,42 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
   /**
    * Enable a domain on a specific target (tab).
    * Tracks the domain per-target so it can be re-enabled after target recreation.
+   * No-ops if the domain is already enabled for this target (avoids duplicate RPCs).
    */
   async enableDomainForTarget(domain: string, targetId: string): Promise<void> {
-    await this.sendToTarget(`${domain}.enable`, undefined, targetId);
-    this.targetSession.addEnabledDomainForTarget(domain, targetId);
+    if (this.targetSession.hasEnabledDomainForTarget(domain, targetId)) {
+      return;
+    }
+    const hadEntry = this.targetSession.hasEnabledDomainsEntryForTarget(targetId);
+    try {
+      await this.sendToTarget(`${domain}.enable`, undefined, targetId);
+      this.targetSession.addEnabledDomainForTarget(domain, targetId);
+    } catch (err) {
+      // If the RPC fails for an invalid/closed target, we won't receive a
+      // Target.targetDestroyed cleanup — drop the freshly-created empty Set
+      // ourselves so the map does not grow unboundedly.
+      if (
+        !hadEntry &&
+        this.targetSession.getEnabledDomainsForTarget(targetId).size === 0
+      ) {
+        this.targetSession.deleteEnabledDomainsForTarget(targetId);
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Test-friendly accessor: exposes the per-target enabled-domain map's `.has(targetId)`
+   * shape so existing tests using `(client as any).enabledDomainsPerTarget.has(...)`
+   * continue to work after the refactor moved the map into TargetSessionManager.
+   */
+  get enabledDomainsPerTarget(): { has(targetId: string): boolean } {
+    const session = this.targetSession;
+    return {
+      has(targetId: string): boolean {
+        return session.hasEnabledDomainsEntryForTarget(targetId);
+      },
+    };
   }
 
   // ========== Multi-Tab Target Management ==========

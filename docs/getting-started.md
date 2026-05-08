@@ -94,3 +94,7 @@ opensafari auth list
 # Delete a profile
 opensafari auth delete mysite.com
 ```
+
+Saved auth profiles live in `~/.opensafari/auth/` as one JSON file per site, such as `~/.opensafari/auth/mysite.com.json`. A profile stores the site name, saved timestamp, current URL, cookies, cookie domain groups, localStorage, and sessionStorage so later runs can restore the login state. On POSIX systems, newly saved profiles use private directory and file permissions (`0700` for the auth directory, `0600` for profile JSON files) and profile updates are written atomically.
+
+To remove stored login state, run `opensafari auth delete mysite.com` or delete the matching JSON file from `~/.opensafari/auth/`.

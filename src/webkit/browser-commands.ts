@@ -14,16 +14,14 @@
  *               event forwarding, domain management.
  */
 
-import { ProtocolError, TimeoutError } from './errors';
-import { evaluateValue, EvaluateSender } from './evaluate';
+import { EvaluationError, ProtocolError, TimeoutError } from './errors';
+import { evaluateValue, type EvaluateSender } from './evaluate';
 import {
   buildTapScript,
   buildLongPressScript,
   buildSwipeScript,
   buildSetValueScript,
-  buildTypeCharScript,
-  buildFocusScript,
-  buildSelectOptionScript,
+  buildAppendCharScript,
 } from './dom-input-scripts';
 import {
   NavigateOptions,
@@ -54,12 +52,74 @@ export class BrowserCommands {
   /**
    * Evaluate a JS expression in the page context.
    * Handles Promises via a separate Runtime.awaitPromise call (WebKit requirement).
+   *
+   * Step 1: Runtime.evaluate with returnByValue:false to preserve objectId for Promises.
+   *         WebKit serializes Promises as {} when returnByValue:true, losing the
+   *         objectId needed for Runtime.awaitPromise.
+   * Step 2: If the result is a Promise, use Runtime.awaitPromise to resolve it.
+   * Step 3: For non-Promise object results, use Runtime.callFunctionOn to serialize
+   *         the value without re-executing the expression (avoids double side effects).
    */
   async evaluate<T = unknown>(
     expression: string,
     options?: { emulateUserGesture?: boolean },
   ): Promise<T> {
-    return evaluateValue<T>(this.sender as EvaluateSender, expression, options);
+    const result = await this.sender.send<{
+      result: {
+        type: string;
+        subtype?: string;
+        className?: string;
+        value?: unknown;
+        objectId?: string;
+        description?: string;
+      };
+      wasThrown: boolean;
+    }>('Runtime.evaluate', {
+      expression,
+      returnByValue: false,
+      emulateUserGesture: options?.emulateUserGesture ?? false,
+    });
+
+    if (result.wasThrown) {
+      throw new EvaluationError(result.result?.description ?? 'Evaluation failed');
+    }
+
+    // WebKit Inspector may use subtype:'promise' OR className:'Promise' depending on version
+    const isPromise =
+      result.result?.type === 'object' &&
+      result.result?.objectId &&
+      (result.result?.subtype === 'promise' || result.result?.className === 'Promise');
+
+    if (isPromise) {
+      // Note: awaitPromise blocks until the Promise settles. Never-resolving Promises
+      // will block for the full send() timeout (DEFAULT_WEBKIT_SEND_TIMEOUT_MS, typically 15s).
+      const awaited = await this.sender.send<{
+        result: { type: string; value?: unknown; objectId?: string; description?: string };
+        wasThrown: boolean;
+      }>('Runtime.awaitPromise', {
+        promiseObjectId: result.result.objectId,
+        returnByValue: true,
+      });
+
+      if (awaited.wasThrown) {
+        throw new EvaluationError(awaited.result?.description ?? 'Promise rejected');
+      }
+      return awaited.result?.value as T;
+    }
+
+    if (result.result?.objectId && result.result?.value === undefined) {
+      const valued = await this.sender.send<{
+        result: { type: string; value?: unknown; description?: string };
+        wasThrown: boolean;
+      }>('Runtime.callFunctionOn', {
+        objectId: result.result.objectId,
+        functionDeclaration: 'function() { return this; }',
+        returnByValue: true,
+      });
+      return valued.result?.value as T;
+    }
+
+    return result.result?.value as T;
   }
 
   // ========== Navigate ==========
@@ -112,18 +172,28 @@ export class BrowserCommands {
       }
     }
 
-    // P0-1: Check if we actually broke out or timed out
-    const finalReadyState = await this.evaluate<string>('document.readyState').catch(() => '');
+    // P0-1 + P0-2: Batch final state reads into ONE evaluateValue call (saves 2 extra RPCs).
+    // Reads readyState, current URL, and HTTP status together so the navigation path
+    // issues exactly one Runtime.evaluate for all three values.
+    const navState = await evaluateValue<{ url: string; readyState: string; status: number }>(
+      this.sender as EvaluateSender,
+      `(function() {
+        var rs = document.readyState;
+        var url = document.URL;
+        var st = 200;
+        try { var e = performance.getEntriesByType('navigation')[0]; st = e ? (e.responseStatus || 200) : 200; } catch(ex) {}
+        return { url: url, readyState: rs, status: st };
+      })()`,
+    ).catch(() => ({ url: options.url, readyState: '', status: 200 }));
+
+    const finalReadyState = navState.readyState;
+    const currentUrl = navState.url;
+    const status = navState.status;
+
     const expectedState = waitUntil === 'domcontentloaded' ? 'interactive' : 'complete';
     if (finalReadyState !== 'complete' && finalReadyState !== expectedState) {
       throw new TimeoutError(`Navigation timeout after ${navTimeout}ms (readyState: ${finalReadyState})`);
     }
-
-    // P0-2: Try to get real HTTP status from Performance API
-    const currentUrl = await this.evaluate<string>('document.URL').catch(() => options.url);
-    const status = await this.evaluate<number>(
-      `(function() { try { var e = performance.getEntriesByType('navigation')[0]; return e ? e.responseStatus || 200 : 200; } catch(ex) { return 200; } })()`
-    ).catch(() => 200);
 
     return {
       url: currentUrl,
@@ -138,7 +208,10 @@ export class BrowserCommands {
     try {
       // Try WebKit Protocol: Page.snapshotRect (NEVER Page.captureScreenshot)
       // Only fetch viewport dimensions when no clip is provided to avoid an extra roundtrip.
-      const clip = options?.clip ?? await this.evaluate<{ x: number; y: number; width: number; height: number }>(
+      // Uses evaluateValue fast path (returnByValue:true, single RPC — skips the
+      // objectId/callFunctionOn round-trip).
+      const clip = options?.clip ?? await evaluateValue<{ x: number; y: number; width: number; height: number }>(
+        this.sender as EvaluateSender,
         '({x: 0, y: 0, width: window.innerWidth, height: window.innerHeight})',
       );
 
@@ -179,7 +252,7 @@ export class BrowserCommands {
 
     // Dispatch touch tap: touchstart → touchend → click
     // Uses document.createTouch for iOS Safari compatibility (new Touch() not supported)
-    await this.evaluate(buildTapScript(x, y), { emulateUserGesture: true });
+    await this.evaluate(buildTapScript({ x, y }), { emulateUserGesture: true });
   }
 
   // ========== Long Press ==========
@@ -188,7 +261,10 @@ export class BrowserCommands {
     const center = await this.getElementCenter(selector);
     if (!center) throw new Error(`Element not found: ${selector}`);
     const dur = duration ?? 500;
-    await this.evaluate(buildLongPressScript(center.x, center.y, dur), { emulateUserGesture: true });
+    await this.evaluate(
+      buildLongPressScript({ x: center.x, y: center.y, durationMs: dur }),
+      { emulateUserGesture: true },
+    );
   }
 
   // ========== Swipe ==========
@@ -208,25 +284,41 @@ export class BrowserCommands {
     };
     const { sx, sy, ex, ey } = coords[direction];
 
-    await this.evaluate(buildSwipeScript(sx, sy, ex, ey, steps), { emulateUserGesture: true });
+    await this.evaluate(
+      buildSwipeScript({ startX: sx, startY: sy, endX: ex, endY: ey, steps, stepDelayMs: 16 }),
+      { emulateUserGesture: true },
+    );
   }
 
   // ========== Type ==========
 
   async type(selector: string, text: string, options?: { delay?: number }): Promise<void> {
-    // Focus the element explicitly — touch-based click() doesn't reliably trigger focus
-    // preventScroll prevents iOS Safari from auto-scrolling the element into view on focus
-    await this.evaluate(buildFocusScript(selector), { emulateUserGesture: true });
+    // Focus the element explicitly — touch-based click() doesn't reliably trigger focus.
+    // preventScroll prevents iOS Safari from auto-scrolling the element into view on focus.
+    const selectorJson = JSON.stringify(selector);
+    await this.evaluate(
+      `(function() {
+        var el = document.querySelector(${selectorJson});
+        if (el && typeof el.focus === 'function') el.focus({ preventScroll: true });
+      })()`,
+      { emulateUserGesture: true },
+    );
 
     if (options?.delay) {
       // Character-by-character mode with delay
       for (const char of text) {
-        await this.evaluate(buildTypeCharScript(selector, char), { emulateUserGesture: true });
+        await this.evaluate(
+          buildAppendCharScript({ selector, char }),
+          { emulateUserGesture: true },
+        );
         await new Promise(r => setTimeout(r, options.delay));
       }
     } else {
       // Fast mode: set value directly + dispatch events
-      await this.evaluate(buildSetValueScript(selector, text), { emulateUserGesture: true });
+      await this.evaluate(
+        buildSetValueScript({ selector, value: text, dispatchEvents: 'input-change' }),
+        { emulateUserGesture: true },
+      );
     }
   }
 
@@ -290,7 +382,9 @@ export class BrowserCommands {
   // ========== Select Option ==========
 
   async selectOption(selector: string, value: string): Promise<void> {
-    await this.evaluate(buildSelectOptionScript(selector, value));
+    await this.evaluate(
+      buildSetValueScript({ selector, value, dispatchEvents: 'input-change' }),
+    );
   }
 
   // ========== Read Page ==========

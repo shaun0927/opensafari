@@ -65,21 +65,24 @@ describe('BrowserCommands.navigate', () => {
       .on('Page.navigate', () => ({}))
       .on('Runtime.evaluate', (params) => {
         const expr = (params?.expression as string) ?? '';
-        // readyState polling
-        if (expr === 'document.readyState') {
+        // Batch final-state call (evaluateValue fast path — returnByValue:true)
+        // Returns url, readyState, and status in one object.
+        if (params?.returnByValue === true) {
+          return {
+            result: {
+              type: 'object',
+              value: { url: 'https://example.com', readyState: 'complete', status: 200 },
+            },
+            wasThrown: false,
+          };
+        }
+        // Polling loop: document.readyState (returnByValue:false, comprehensive path)
+        if (expr.includes('readyState')) {
           readyStateCallCount++;
           return {
             result: { type: 'string', value: readyStateCallCount >= 2 ? 'complete' : 'loading' },
             wasThrown: false,
           };
-        }
-        // document.URL
-        if (expr === 'document.URL') {
-          return { result: { type: 'string', value: 'https://example.com' }, wasThrown: false };
-        }
-        // performance.getEntriesByType navigation status
-        if (expr.includes('performance.getEntriesByType')) {
-          return { result: { type: 'number', value: 200 }, wasThrown: false };
         }
         return { result: { type: 'string', value: 'complete' }, wasThrown: false };
       });
@@ -108,7 +111,19 @@ describe('BrowserCommands.navigate', () => {
 
     sender
       .on('Page.navigate', () => ({}))
-      .on('Runtime.evaluate', () => ({ result: { type: 'string', value: 'complete' }, wasThrown: false }));
+      .on('Runtime.evaluate', (params) => {
+        // Batch final-state call (evaluateValue, returnByValue:true)
+        if (params?.returnByValue === true) {
+          return {
+            result: {
+              type: 'object',
+              value: { url: 'https://test.com', readyState: 'complete', status: 200 },
+            },
+            wasThrown: false,
+          };
+        }
+        return { result: { type: 'string', value: 'complete' }, wasThrown: false };
+      });
 
     let capturedUrl = '';
     const navigatePromise = cmds.navigate({ url: 'https://test.com' }, (url) => { capturedUrl = url; });
@@ -128,13 +143,10 @@ describe('BrowserCommands.screenshot', () => {
 
     const fakeBase64 = Buffer.from('fake-png').toString('base64');
 
+    // screenshot() uses evaluateValue (fast path, returnByValue:true) for viewport query
     sender
       .on('Runtime.evaluate', () => ({
-        result: { type: 'object', objectId: 'obj-1' },
-        wasThrown: false,
-      }))
-      .on('Runtime.callFunctionOn', () => ({
-        result: { type: 'object', value: { w: 390, h: 844 } },
+        result: { type: 'object', value: { x: 0, y: 0, width: 390, height: 844 } },
         wasThrown: false,
       }))
       .on('Page.snapshotRect', () => ({

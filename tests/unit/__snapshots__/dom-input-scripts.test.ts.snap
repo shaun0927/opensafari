@@ -1,0 +1,117 @@
+// Jest Snapshot v1, https://jestjs.io/docs/snapshot-testing
+
+exports[`buildAppendCharScript stable snapshot for fixed input 1`] = `
+"(function() {
+  var el = document.querySelector("#name");
+  if (!el) return;
+  var p = Object.getPrototypeOf(el);
+  while (p && !Object.getOwnPropertyDescriptor(p, 'value')) {
+    p = Object.getPrototypeOf(p);
+  }
+  var desc = p ? Object.getOwnPropertyDescriptor(p, 'value') : null;
+  el.dispatchEvent(new KeyboardEvent('keydown', { key: "a", bubbles: true }));
+  el.dispatchEvent(new KeyboardEvent('keypress', { key: "a", bubbles: true }));
+  if (desc || ('value' in el)) {
+    var val = (desc && desc.get) ? desc.get.call(el) : (el.value || '');
+    if (desc && desc.set) {
+      desc.set.call(el, val + "a");
+    } else {
+      el.value = val + "a";
+    }
+  }
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+  el.dispatchEvent(new KeyboardEvent('keyup', { key: "a", bubbles: true }));
+})()"
+`;
+
+exports[`buildLongPressScript stable snapshot for fixed input 1`] = `
+"(async function(x, y, duration) {
+  var el = document.elementFromPoint(x, y);
+  if (!el) return;
+  var touch = document.createTouch(window, el, 1, x, y, x, y);
+  var touchList = document.createTouchList(touch);
+  el.dispatchEvent(new TouchEvent('touchstart', { touches: touchList, changedTouches: touchList, bubbles: true }));
+  await new Promise(function(r) { setTimeout(r, duration); });
+  var emptyList = document.createTouchList();
+  el.dispatchEvent(new TouchEvent('touchend', { touches: emptyList, changedTouches: touchList, bubbles: true }));
+})(10, 20, 500)"
+`;
+
+exports[`buildSetValueScript stable snapshot for fixed input 1`] = `
+"(function() {
+  var el = document.querySelector("#email");
+  if (!el) return;
+  var p = Object.getPrototypeOf(el);
+  while (p && !Object.getOwnPropertyDescriptor(p, 'value')) {
+    p = Object.getPrototypeOf(p);
+  }
+  var desc = p ? Object.getOwnPropertyDescriptor(p, 'value') : null;
+  if (desc && desc.set) {
+    desc.set.call(el, "user@example.com");
+  } else {
+    el.value = "user@example.com";
+  }
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+  el.dispatchEvent(new Event('change', { bubbles: true }));})()"
+`;
+
+exports[`buildSwipeScript stable snapshot for fixed input with scroll 1`] = `
+"(async function(sx, sy, ex, ey, steps, stepDelay) {
+  window.scrollBy(0, 200);
+
+  var el = document.elementFromPoint(sx, sy);
+  if (!el) el = document.body || document.documentElement;
+  var makeTouch = function(x, y) { return document.createTouch(window, el, 1, x, y, x, y); };
+  var startTouch = makeTouch(sx, sy);
+  var startList = document.createTouchList(startTouch);
+  el.dispatchEvent(new TouchEvent('touchstart', { touches: startList, changedTouches: startList, bubbles: true }));
+  for (var i = 1; i <= steps; i++) {
+    var x = sx + (ex - sx) * (i / steps);
+    var y = sy + (ey - sy) * (i / steps);
+    var moveTouch = makeTouch(x, y);
+    var moveList = document.createTouchList(moveTouch);
+    el.dispatchEvent(new TouchEvent('touchmove', { touches: moveList, changedTouches: moveList, bubbles: true }));
+    await new Promise(function(r) { setTimeout(r, stepDelay); });
+  }
+  var endTouch = makeTouch(ex, ey);
+  var endList = document.createTouchList(endTouch);
+  var emptyList = document.createTouchList();
+  el.dispatchEvent(new TouchEvent('touchend', { touches: emptyList, changedTouches: endList, bubbles: true }));
+})(200, 400, 200, 200, 20, 25)"
+`;
+
+exports[`buildSwipeScript stable snapshot for fixed input without scroll 1`] = `
+"(async function(sx, sy, ex, ey, steps, stepDelay) {
+  var el = document.elementFromPoint(sx, sy);
+  if (!el) return;
+  var makeTouch = function(x, y) { return document.createTouch(window, el, 1, x, y, x, y); };
+  var startTouch = makeTouch(sx, sy);
+  var startList = document.createTouchList(startTouch);
+  el.dispatchEvent(new TouchEvent('touchstart', { touches: startList, changedTouches: startList, bubbles: true }));
+  for (var i = 1; i <= steps; i++) {
+    var x = sx + (ex - sx) * (i / steps);
+    var y = sy + (ey - sy) * (i / steps);
+    var moveTouch = makeTouch(x, y);
+    var moveList = document.createTouchList(moveTouch);
+    el.dispatchEvent(new TouchEvent('touchmove', { touches: moveList, changedTouches: moveList, bubbles: true }));
+    await new Promise(function(r) { setTimeout(r, stepDelay); });
+  }
+  var endTouch = makeTouch(ex, ey);
+  var endList = document.createTouchList(endTouch);
+  var emptyList = document.createTouchList();
+  el.dispatchEvent(new TouchEvent('touchend', { touches: emptyList, changedTouches: endList, bubbles: true }));
+})(100, 300, 100, 100, 10, 16)"
+`;
+
+exports[`buildTapScript stable snapshot for fixed input 1`] = `
+"(function(x, y) {
+  var el = document.elementFromPoint(x, y);
+  if (!el) return;
+  var touch = document.createTouch(window, el, 1, x, y, x, y);
+  var touchList = document.createTouchList(touch);
+  var emptyList = document.createTouchList();
+  el.dispatchEvent(new TouchEvent('touchstart', { touches: touchList, changedTouches: touchList, bubbles: true }));
+  el.dispatchEvent(new TouchEvent('touchend', { touches: emptyList, changedTouches: touchList, bubbles: true }));
+  el.click();
+})(10, 20)"
+`;

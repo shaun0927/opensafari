@@ -10,6 +10,48 @@ const SOCKET_NAME = 'com.apple.webinspectord_sim.socket';
 const SOCKET_SEARCH_DIRS = ['/private/var/tmp', '/private/tmp'];
 const PROBE_TIMEOUT_MS = 2000;
 
+/**
+ * TTL for cached socket path entries in milliseconds.
+ * Short-lived by design: one polling interval so a newly booted simulator
+ * is not missed while keeping repeated discovery within a poll cycle cheap.
+ * Override via `setSocketCacheTtl()` in tests.
+ */
+let SOCKET_CACHE_TTL_MS = 1500;
+
+/** Staged backoff delays (ms) for `waitForSocketPath`. Capped at the last value. */
+const BACKOFF_STAGES_MS = [200, 400, 800, 1500];
+
+/** Cache key used when no `targetUdid` is specified. */
+const NO_TARGET_KEY = '__no_target__';
+
+interface CacheEntry {
+  socketPath: string;
+  expiresAt: number;
+}
+
+/** Module-scoped cache keyed by UDID or NO_TARGET_KEY. */
+const socketCache = new Map<string, CacheEntry>();
+
+// ---------------------------------------------------------------------------
+// Public API — cache management
+// ---------------------------------------------------------------------------
+
+/**
+ * Clear the socket discovery cache. Call this in `beforeEach` during tests to
+ * prevent cross-test cache pollution.
+ */
+export function resetSocketCache(): void {
+  socketCache.clear();
+}
+
+/**
+ * Override the cache TTL. Intended for tests that need deterministic timing.
+ * Pass `1500` to restore the default.
+ */
+export function setSocketCacheTtl(ms: number): void {
+  SOCKET_CACHE_TTL_MS = ms;
+}
+
 export interface FindSocketOptions {
   /** Target a specific simulator by UDID (for multi-simulator support). */
   targetUdid?: string;
@@ -18,18 +60,40 @@ export interface FindSocketOptions {
 /**
  * Find the active WebKit Inspector socket using tiered resolution:
  *
- *  Tier 1 – `lsof -U`: definitively maps sockets to running `launchd_sim`
- *           processes. Supports `targetUdid` for multi-simulator selection.
- *  Tier 2 – mtime-sorted `fs.stat()`: collects all candidate sockets, sorts
- *           by modification time (newest first), probes each with net.connect.
+ *  Cache   – returns a recently probed live socket without invoking lsof/mtime.
+ *            Keyed by `udid | "__no_target__"` — UDID-specific and agnostic
+ *            entries are stored in separate buckets.
+ *  Tier 1  – `lsof -U`: definitively maps sockets to running `launchd_sim`
+ *            processes. Supports `targetUdid` for multi-simulator selection.
+ *  Tier 2  – mtime-sorted `fs.stat()`: collects all candidate sockets, sorts
+ *            by modification time (newest first), probes each with net.connect.
  *
  * Both tiers validate candidates with a `net.connect()` liveness probe before
  * returning. Returns `null` when no live socket is found.
  */
 export async function findSocketPath(options?: FindSocketOptions): Promise<string | null> {
+  const cacheKey = options?.targetUdid ?? NO_TARGET_KEY;
+
+  // Cache hit: return the cached path if the entry is still valid.
+  // Always remove the entry on TTL expiry or failed probe so stale paths
+  // are not retained indefinitely (avoids leaking entries for simulators
+  // that have been booted and torn down).
+  const cached = socketCache.get(cacheKey);
+  if (cached) {
+    if (Date.now() < cached.expiresAt) {
+      // Re-probe to confirm liveness; evict on failure so stale paths are not reused
+      const alive = await probeSocket(cached.socketPath);
+      if (alive) return cached.socketPath;
+    }
+    socketCache.delete(cacheKey);
+  }
+
   // Tier 1: lsof -U — definitive process-level match
   const lsofResult = await findViaLsof(options?.targetUdid);
-  if (lsofResult) return lsofResult;
+  if (lsofResult) {
+    socketCache.set(cacheKey, { socketPath: lsofResult, expiresAt: Date.now() + SOCKET_CACHE_TTL_MS });
+    return lsofResult;
+  }
 
   // When targetUdid is specified, only lsof can map sockets to simulator UDIDs.
   // The mtime fallback cannot distinguish which simulator owns which socket,
@@ -37,24 +101,43 @@ export async function findSocketPath(options?: FindSocketOptions): Promise<strin
   if (options?.targetUdid) return null;
 
   // Tier 2: mtime-sorted fallback with liveness probe
-  return findViaMtime();
+  const mtimeResult = await findViaMtime();
+  if (mtimeResult) {
+    socketCache.set(cacheKey, { socketPath: mtimeResult, expiresAt: Date.now() + SOCKET_CACHE_TTL_MS });
+  }
+  return mtimeResult;
 }
 
 /**
  * Poll `findSocketPath` until a live socket is found or timeout expires.
- * Useful when calling immediately after `simctl boot` — the webinspectord_sim
- * daemon needs a few seconds to create its socket after the device reports "Booted".
+ *
+ * When the caller supplies an explicit `interval`, that fixed delay is used
+ * between probes — preserving the legacy contract for callers that rely on
+ * tight polling. When no `interval` is given, staged backoff is used
+ * (200 → 400 → 800 → 1500 ms) to reduce CPU churn while still detecting
+ * newly booted simulators quickly.
  */
 export async function waitForSocketPath(
   options?: FindSocketOptions & { timeout?: number; interval?: number },
 ): Promise<string | null> {
   const timeout = options?.timeout ?? 10_000;
-  const interval = options?.interval ?? 500;
+  const explicitInterval = options?.interval;
   const start = Date.now();
+  let stage = 0;
+
   while (Date.now() - start < timeout) {
     const result = await findSocketPath(options);
     if (result) return result;
-    await new Promise(r => setTimeout(r, interval));
+
+    const delay = explicitInterval !== undefined
+      ? explicitInterval
+      : BACKOFF_STAGES_MS[Math.min(stage, BACKOFF_STAGES_MS.length - 1)];
+    stage++;
+
+    // Clamp delay so we never sleep past the overall timeout
+    const remaining = timeout - (Date.now() - start);
+    if (remaining <= 0) break;
+    await new Promise(r => setTimeout(r, Math.min(delay, remaining)));
   }
   return null;
 }

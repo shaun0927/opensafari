@@ -22,6 +22,7 @@ class FakeTransport extends EventEmitter implements ProtocolTransport {
   disconnect(): Promise<void> { return Promise.resolve(); }
   isConnected(): boolean { return true; }
   sendToTarget<T>(): Promise<T> { return Promise.resolve({} as T); }
+  onProtocolEvent(): () => void { return () => {}; }
 }
 
 // ─── Minimal sender stub ─────────────────────────────────────────────────────

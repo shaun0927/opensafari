@@ -178,6 +178,29 @@ export class TargetSessionManager extends EventEmitter {
   }
 
   /**
+   * Check whether a domain is already enabled for a specific target (for dedup).
+   */
+  hasEnabledDomainForTarget(domain: string, targetId: string): boolean {
+    return this.enabledDomainsPerTarget.get(targetId)?.has(domain) ?? false;
+  }
+
+  /**
+   * Whether the manager already tracks any per-target entry for the given target id.
+   * Used by callers that need to drop a freshly-created empty Set on first-call failure.
+   */
+  hasEnabledDomainsEntryForTarget(targetId: string): boolean {
+    return this.enabledDomainsPerTarget.has(targetId);
+  }
+
+  /**
+   * Drop the per-target Set entry. Used by callers when an enable RPC fails on
+   * the first attempt for an invalid target — otherwise the map grows unbounded.
+   */
+  deleteEnabledDomainsForTarget(targetId: string): void {
+    this.enabledDomainsPerTarget.delete(targetId);
+  }
+
+  /**
    * Return a snapshot of the enabled domains for a target.
    */
   getEnabledDomainsForTarget(targetId: string): Set<string> {

@@ -9,3 +9,5 @@ export type {
   ResponseInfo,
   ErrorInfo,
 } from './events';
+export { evaluateValue } from './evaluate';
+export type { EvaluateSender, EvaluateValueOptions } from './evaluate';
