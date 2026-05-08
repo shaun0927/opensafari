@@ -86,9 +86,9 @@ describe('SimulatorManager.rotate()', () => {
   });
 
   it('should return RotationResult with correct fields on simctl success', async () => {
-    // Mock execFile to succeed on first call (simctl)
-    mockExecFile.mockImplementation((_cmd: string, _args: string[], _opts: unknown, cb?: (err: Error | null) => void) => {
-      if (cb) cb(null);
+    // SimctlExecutor.exec() uses promisify(execFile) which requires cb(null, { stdout, stderr })
+    mockExecFile.mockImplementation((_cmd: string, _args: string[], _opts: unknown, cb?: (err: Error | null, result?: { stdout: string; stderr: string }) => void) => {
+      if (cb) cb(null, { stdout: '', stderr: '' });
     });
 
     const result = await manager.rotate('test-device-id', 'left');
@@ -101,27 +101,27 @@ describe('SimulatorManager.rotate()', () => {
 
   it('should try simctl before AppleScript', async () => {
     const calls: string[] = [];
-    mockExecFile.mockImplementation((cmd: string, _args: string[], _opts: unknown, cb?: (err: Error | null) => void) => {
+    mockExecFile.mockImplementation((cmd: string, _args: string[], _opts: unknown, cb?: (err: Error | null, result?: { stdout: string; stderr: string }) => void) => {
       calls.push(cmd);
-      if (cb) cb(null);
+      if (cb) cb(null, { stdout: '', stderr: '' });
     });
 
     await manager.rotate('test-device-id', 'left');
 
-    // simctl is called via xcrun, which should be the first call
+    // simctl is called via SimctlExecutor which uses xcrun
     expect(calls[0]).toBe('xcrun');
   });
 
   it('should fall back to AppleScript when simctl fails', async () => {
     let callCount = 0;
-    mockExecFile.mockImplementation((cmd: string, _args: string[], _opts: unknown, cb?: (err: Error | null) => void) => {
+    mockExecFile.mockImplementation((cmd: string, _args: string[], _opts: unknown, cb?: (err: Error | null, result?: { stdout: string; stderr: string }) => void) => {
       callCount++;
       if (callCount === 1) {
-        // simctl fails
+        // simctl (xcrun) fails
         if (cb) cb(new Error('simctl setorientation not supported'));
       } else {
-        // AppleScript succeeds
-        if (cb) cb(null);
+        // AppleScript (osascript) succeeds
+        if (cb) cb(null, { stdout: '', stderr: '' });
       }
     });
 
@@ -148,31 +148,33 @@ describe('SimulatorManager.rotate()', () => {
 
   it('should use landscapeLeft for direction "left"', async () => {
     let capturedArgs: string[] = [];
-    mockExecFile.mockImplementation((_cmd: string, args: string[], _opts: unknown, cb?: (err: Error | null) => void) => {
+    mockExecFile.mockImplementation((_cmd: string, args: string[], _opts: unknown, cb?: (err: Error | null, result?: { stdout: string; stderr: string }) => void) => {
       capturedArgs = args;
-      if (cb) cb(null);
+      if (cb) cb(null, { stdout: '', stderr: '' });
     });
 
     const result = await manager.rotate('test-device-id', 'left');
     expect(result.orientation).toBe('landscapeLeft');
+    // SimctlExecutor wraps args as ['simctl', 'io', deviceId, 'setorientation', orientation]
     expect(capturedArgs).toContain('landscapeLeft');
   });
 
   it('should use landscapeRight for direction "right"', async () => {
     let capturedArgs: string[] = [];
-    mockExecFile.mockImplementation((_cmd: string, args: string[], _opts: unknown, cb?: (err: Error | null) => void) => {
+    mockExecFile.mockImplementation((_cmd: string, args: string[], _opts: unknown, cb?: (err: Error | null, result?: { stdout: string; stderr: string }) => void) => {
       capturedArgs = args;
-      if (cb) cb(null);
+      if (cb) cb(null, { stdout: '', stderr: '' });
     });
 
     const result = await manager.rotate('test-device-id', 'right');
     expect(result.orientation).toBe('landscapeRight');
+    // SimctlExecutor wraps args as ['simctl', 'io', deviceId, 'setorientation', orientation]
     expect(capturedArgs).toContain('landscapeRight');
   });
 
   it('should default direction to "left"', async () => {
-    mockExecFile.mockImplementation((_cmd: string, _args: string[], _opts: unknown, cb?: (err: Error | null) => void) => {
-      if (cb) cb(null);
+    mockExecFile.mockImplementation((_cmd: string, _args: string[], _opts: unknown, cb?: (err: Error | null, result?: { stdout: string; stderr: string }) => void) => {
+      if (cb) cb(null, { stdout: '', stderr: '' });
     });
 
     const result = await manager.rotate('test-device-id');
