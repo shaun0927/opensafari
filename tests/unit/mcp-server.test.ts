@@ -320,7 +320,7 @@ describe('MCPServer — JSON-RPC protocol', () => {
     });
     freshServer.setTier(3);
 
-    await freshServer.start({ transport: 'http', port: 19399 });
+    await freshServer.start({ transport: 'http', port: 19399, httpInsecure: true });
     const res = await mcpPost(19399, { jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} });
     await freshServer.stop();
 

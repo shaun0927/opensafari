@@ -66,10 +66,9 @@ describe('HTTP high-risk MCP tool gate', () => {
     delete process.env.OPENSAFARI_HTTP_ENABLE_HIGH_RISK_TOOLS;
     auditLines = [];
     mkdirSpy = jest.spyOn(fs, 'mkdirSync').mockImplementation(() => undefined as unknown as string);
-    appendSpy = jest.spyOn(fs, 'appendFile').mockImplementation(((_path, data, cb) => {
+    appendSpy = jest.spyOn(fs, 'appendFileSync').mockImplementation((_path, data) => {
       auditLines.push(String(data));
-      if (typeof cb === 'function') cb(null);
-    }) as typeof fs.appendFile);
+    });
   });
 
   afterEach(() => {

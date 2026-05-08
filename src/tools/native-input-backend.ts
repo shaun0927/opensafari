@@ -21,7 +21,7 @@
 
 // ── Re-exports: types & interfaces ───────────────────────────────────────────
 
-export type { InputBackend, InputBackendKind } from '../input/backend';
+export type { InputBackend, InputBackendKind, BatchTapEvent } from '../input/backend';
 
 // ── Re-exports: concrete backends ────────────────────────────────────────────
 
