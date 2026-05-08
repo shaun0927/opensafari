@@ -40,6 +40,7 @@ program
   .option('--http-token <token>', 'Bearer token required for HTTP /mcp requests')
   .option('--http-allow-origin <origins>', 'Allowed browser origins for HTTP /mcp CORS (comma-separated)')
   .option('--http-insecure-local', 'Disable HTTP /mcp token auth for explicit local-only insecure use')
+  .option('--http-enable-high-risk-tools', 'Allow high-risk code execution and credential movement tools over HTTP')
   .option('--devices <presets>', 'Auto-boot devices (comma-separated)')
   .option('--auth <path>', 'Auth profile to auto-restore')
   .option('--all-tools', 'Expose all tool tiers immediately (equivalent to OPENSAFARI_TOOL_TIER=3)')
@@ -146,6 +147,7 @@ program
       authToken: options.httpToken,
       httpInsecure: options.httpInsecureLocal,
       allowedOrigins,
+      httpHighRiskTools: options.httpEnableHighRiskTools,
     });
     console.error('[OpenSafari] MCP server running');
   });

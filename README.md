@@ -396,6 +396,8 @@ HTTP mode listens on `127.0.0.1` by default. The `/health` endpoint is unauthent
 
 Browser CORS for `/mcp` is restricted to local origins (`localhost`, `127.0.0.1`, `::1`) plus any comma-separated origins passed with `--http-allow-origin`. Use `--http-host` only when you intentionally need a non-loopback bind.
 
+HTTP mode also blocks high-risk MCP tools that execute page/app code or move authentication material: `javascript`, `flutter_evaluate`, `auth_save`, `auth_restore`, and `cookies`. Stdio mode is unchanged. To intentionally expose those tools over HTTP, start with `--http-enable-high-risk-tools` or set `OPENSAFARI_HTTP_ENABLE_HIGH_RISK_TOOLS=1`; allowed and blocked high-risk HTTP calls are audit-logged with sensitive arguments redacted.
+
 ```bash
 OPENSAFARI_HTTP_TOKEN="$OPENSAFARI_HTTP_TOKEN" opensafari serve --http 3100
 curl -H "Authorization: Bearer $OPENSAFARI_HTTP_TOKEN" \

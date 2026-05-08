@@ -13,7 +13,7 @@
 import * as http from 'node:http';
 import * as crypto from 'node:crypto';
 import type { AddressInfo } from 'node:net';
-import { MCPResponse, MCPErrorCodes } from '../types/mcp';
+import { MCPMessageContext, MCPResponse, MCPErrorCodes } from '../types/mcp';
 import { MCPTransport } from './index';
 import type { TransportOptions } from './index';
 
@@ -40,7 +40,7 @@ function logTransportEvent(event: string, details: Record<string, unknown>): voi
 
 export class HTTPTransport implements MCPTransport {
   private server: http.Server | null = null;
-  private messageHandler: ((msg: Record<string, unknown>) => Promise<MCPResponse | null>) | null = null;
+  private messageHandler: ((msg: Record<string, unknown>, context?: MCPMessageContext) => Promise<MCPResponse | null>) | null = null;
   private port: number;
   private host: string;
   private authToken?: string;
@@ -66,7 +66,7 @@ export class HTTPTransport implements MCPTransport {
     this.sessionDeleteHandler = handler;
   }
 
-  onMessage(handler: (msg: Record<string, unknown>) => Promise<MCPResponse | null>): void {
+  onMessage(handler: (msg: Record<string, unknown>, context?: MCPMessageContext) => Promise<MCPResponse | null>): void {
     this.messageHandler = handler;
   }
 
@@ -416,7 +416,7 @@ export class HTTPTransport implements MCPTransport {
       }
 
       try {
-        const response = await this.messageHandler(msg);
+        const response = await this.messageHandler(msg, { transport: 'http', sessionId });
 
         if (sessionId) {
           res.setHeader('Mcp-Session-Id', sessionId);
@@ -559,7 +559,7 @@ export class HTTPTransport implements MCPTransport {
       const record = msg as Record<string, unknown>;
 
       try {
-        return await handler(record);
+        return await handler(record, { transport: 'http', sessionId });
       } catch (error) {
         const id = (record.id as string | number) ?? 0;
         return {

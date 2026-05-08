@@ -14,11 +14,17 @@ import {
   MCPToolDefinition,
   ToolHandler,
   MCPErrorCodes,
+  MCPMessageContext,
 } from './types/mcp';
 import { createTransport, MCPTransport, TransportMode } from './transports';
 import { TOOL_TIERS, getToolTier } from './config/tool-tiers';
 import { BrowserBackend } from './types/browser-backend';
 import { logAuditEntry } from './security/audit-logger';
+import {
+  buildHttpHighRiskToolError,
+  getHighRiskToolMetadata,
+  parseHttpHighRiskToolsEnabled,
+} from './security/high-risk-tools';
 import { getSessionManager } from './session-manager';
 import { getVersion } from './version';
 
@@ -103,6 +109,8 @@ export interface MCPServerOptions {
   httpInsecure?: boolean;
   /** Extra allowed browser origins for HTTP /mcp CORS. */
   allowedOrigins?: string[];
+  /** Allow high-risk code execution / credential movement tools over HTTP. */
+  httpHighRiskTools?: boolean;
 }
 
 export class MCPServer {
@@ -110,6 +118,7 @@ export class MCPServer {
   private transport: MCPTransport | null = null;
   private currentTier: number = 2;
   private auditLogEnabled = false;
+  private httpHighRiskToolsEnabled = false;
 
   // ------------------------------------------------------------------
   // Tool registration
@@ -134,6 +143,9 @@ export class MCPServer {
 
   async start(options: MCPServerOptions = {}): Promise<void> {
     const mode: TransportMode = options.transport ?? 'stdio';
+    this.httpHighRiskToolsEnabled =
+      options.httpHighRiskTools === true ||
+      parseHttpHighRiskToolsEnabled(process.env.OPENSAFARI_HTTP_ENABLE_HIGH_RISK_TOOLS);
     this.transport = await createTransport(mode, {
       port: options.port,
       host: options.host,
@@ -142,7 +154,7 @@ export class MCPServer {
       allowedOrigins: options.allowedOrigins,
     });
 
-    this.transport.onMessage((msg) => this.handleMessage(msg));
+    this.transport.onMessage((msg, context) => this.handleMessage(msg, context));
     await this.transport.start();
 
     console.error(`[OpenSafari] MCP server started (${mode})`);
@@ -178,6 +190,7 @@ export class MCPServer {
 
   private async handleMessage(
     msg: Record<string, unknown>,
+    context: MCPMessageContext = { transport: 'stdio' },
   ): Promise<MCPResponse | null> {
     // Notifications have no id — process but return null (no response)
     const hasId = 'id' in msg && msg.id !== undefined;
@@ -209,10 +222,10 @@ export class MCPServer {
         return this.handleInitialize(request);
 
       case 'tools/list':
-        return this.handleToolsList(request);
+        return this.handleToolsList(request, context);
 
       case 'tools/call':
-        return this.handleToolsCall(request);
+        return this.handleToolsCall(request, context);
 
       default:
         return {
@@ -247,9 +260,10 @@ export class MCPServer {
     };
   }
 
-  private handleToolsList(request: MCPRequest): MCPResponse {
+  private handleToolsList(request: MCPRequest, context: MCPMessageContext): MCPResponse {
     const visibleTools = Array.from(this.tools.values())
       .filter((t) => t.tier <= this.currentTier)
+      .filter((t) => this.shouldAdvertiseTool(t.definition.name, context))
       .map((t) => t.definition);
 
     return {
@@ -259,7 +273,13 @@ export class MCPServer {
     };
   }
 
-  private async handleToolsCall(request: MCPRequest): Promise<MCPResponse> {
+  private shouldAdvertiseTool(name: string, context: MCPMessageContext): boolean {
+    if (context.transport !== 'http') return true;
+    if (this.httpHighRiskToolsEnabled) return true;
+    return getHighRiskToolMetadata(name) === undefined;
+  }
+
+  private async handleToolsCall(request: MCPRequest, context: MCPMessageContext): Promise<MCPResponse> {
     const params = request.params as
       | { name?: string; arguments?: Record<string, unknown> }
       | undefined;
@@ -290,15 +310,29 @@ export class MCPServer {
       };
     }
 
-    // Session ID: use Mcp-Session-Id from context if available; fall back to
-    // a stable placeholder until the HTTP transport propagates it here.
-    const sessionId = (request.params as Record<string, unknown> | undefined)
-      ?._sessionId as string | undefined ?? 'default';
+    const sessionId = context.sessionId ?? 'default';
+    const highRiskTool = getHighRiskToolMetadata(name);
+    const isHighRiskHttp = context.transport === 'http' && highRiskTool !== undefined;
+
+    if (isHighRiskHttp && !this.httpHighRiskToolsEnabled) {
+      logAuditEntry(name, sessionId, args, undefined, 'blocked');
+      return {
+        jsonrpc: '2.0',
+        id: request.id,
+        result: {
+          content: [{
+            type: 'text',
+            text: `Error: ${buildHttpHighRiskToolError(name)}`,
+          }],
+          isError: true,
+        },
+      };
+    }
 
     try {
       const result: MCPResult = await tool.handler(sessionId, args);
-      if (this.auditLogEnabled) {
-        logAuditEntry(name, sessionId, args);
+      if (this.auditLogEnabled || isHighRiskHttp) {
+        logAuditEntry(name, sessionId, args, undefined, result.isError ? 'error' : 'allowed');
       }
       return {
         jsonrpc: '2.0',
@@ -306,8 +340,8 @@ export class MCPServer {
         result,
       };
     } catch (err) {
-      if (this.auditLogEnabled) {
-        logAuditEntry(name, sessionId, args);
+      if (this.auditLogEnabled || isHighRiskHttp) {
+        logAuditEntry(name, sessionId, args, undefined, 'error');
       }
       const message = err instanceof Error ? err.message : String(err);
       return {
