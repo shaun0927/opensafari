@@ -6,9 +6,8 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { SimctlExecutor, SimctlError } from './simctl';
 import { SimulatorDevice, SimulatorRuntime } from './types';
-import { DEFAULT_SIMULATOR_BOOT_TIMEOUT_MS, DEFAULT_SIMULATOR_SHUTDOWN_TIMEOUT_MS, DEFAULT_SCREENSHOT_TIMEOUT_MS } from '../config/defaults';
+import { DEFAULT_SCREENSHOT_TIMEOUT_MS } from '../config/defaults';
 import {
-  BootTimeoutError,
   DeviceNotBootedError,
   AppNotInstalledError,
   AppLaunchError,
@@ -19,6 +18,12 @@ import {
   getDevice as catalogGetDevice,
   resolveDevice as catalogResolveDevice,
 } from './device-catalog';
+import {
+  boot as lifecycleBoot,
+  shutdown as lifecycleShutdown,
+  deleteDevice as lifecycleDeleteDevice,
+  cloneDevice as lifecycleCloneDevice,
+} from './lifecycle';
 
 // Re-export error classes for backward compatibility — callers should migrate to ./errors
 export {
@@ -80,70 +85,19 @@ export class SimulatorManager {
   }
 
   async boot(presetOrId: string, options?: { timeout?: number }): Promise<SimulatorDevice> {
-    const device = await this.resolveDevice(presetOrId);
-
-    // Already booted — return immediately
-    if (device.state === 'Booted') {
-      return device;
-    }
-
-    // Boot
-    await this.simctl.exec(['boot', device.udid]);
-
-    // Poll until booted or timeout
-    const timeout = options?.timeout ?? DEFAULT_SIMULATOR_BOOT_TIMEOUT_MS;
-    const start = Date.now();
-    const pollInterval = 1000;
-
-    while (Date.now() - start < timeout) {
-      const current = await this.getDevice(device.udid);
-      if (current?.state === 'Booted') {
-        return current;
-      }
-      await new Promise(r => setTimeout(r, pollInterval));
-    }
-
-    throw new BootTimeoutError(device.udid, device.name, timeout);
+    return lifecycleBoot(presetOrId, {
+      simctl: this.simctl,
+      lookup: this,
+      bootTimeoutMs: options?.timeout,
+    });
   }
 
   async shutdown(deviceId: string, options?: { timeout?: number }): Promise<void> {
-    const device = await this.getDevice(deviceId);
-    if (!device || device.state === 'Shutdown') {
-      return; // Already shutdown
-    }
-
-    // Graceful shutdown
-    try {
-      await this.simctl.exec(['shutdown', deviceId]);
-    } catch {
-      // May already be shutting down
-    }
-
-    // Wait for shutdown
-    const timeout = options?.timeout ?? DEFAULT_SIMULATOR_SHUTDOWN_TIMEOUT_MS;
-    const start = Date.now();
-
-    while (Date.now() - start < timeout) {
-      const current = await this.getDevice(deviceId);
-      if (!current || current.state === 'Shutdown') {
-        return;
-      }
-      await new Promise(r => setTimeout(r, 1000));
-    }
-
-    // Retry shutdown
-    try {
-      await this.simctl.exec(['shutdown', deviceId]);
-      await new Promise(r => setTimeout(r, 5000));
-      const current = await this.getDevice(deviceId);
-      if (!current || current.state === 'Shutdown') return;
-    } catch {
-      // Fall through to erase
-    }
-
-    // Nuclear option — erase device (WARNING: deletes all data)
-    console.error(`[SimulatorManager] Force erasing device ${deviceId} after shutdown timeout`);
-    await this.simctl.exec(['erase', deviceId]);
+    return lifecycleShutdown(deviceId, {
+      simctl: this.simctl,
+      lookup: this,
+      shutdownTimeoutMs: options?.timeout,
+    });
   }
 
   async bootPreset(presetKey: string): Promise<SimulatorDevice> {
@@ -426,13 +380,11 @@ export class SimulatorManager {
   // simctl clone creates a full device copy with a new UDID.
 
   async cloneDevice(deviceId: string, cloneName: string): Promise<string> {
-    const output = await this.simctl.exec(['clone', deviceId, cloneName]);
-    // simctl clone returns the new device UDID
-    return output.trim();
+    return lifecycleCloneDevice(deviceId, cloneName, { simctl: this.simctl });
   }
 
   async deleteDevice(deviceId: string): Promise<void> {
-    await this.simctl.exec(['delete', deviceId]);
+    return lifecycleDeleteDevice(deviceId, { simctl: this.simctl });
   }
 
   // === Status Bar Override (for deterministic screenshots) ===
