@@ -6,6 +6,7 @@
 
 import { convertMacOSPtToIOSPt } from '../../src/utils/coordinate-space';
 import type { Size2D, Point2D } from '../../src/utils/coordinate-space';
+import { DEVICE_PRESETS } from '../../src/simulator/presets';
 
 // iPhone 17 Pro reference sizes
 const IPHONE_17_PRO_MACOS_PT: Size2D = { width: 697, height: 1515 };
@@ -110,5 +111,81 @@ describe('convertMacOSPtToIOSPt', () => {
 
     expect(result.x).toBe(0);
     expect(result.y).toBe(0);
+  });
+});
+
+// ── Device-class breadth (#693 WU4) ──────────────────────────────────────────
+//
+// For each device preset, derive a synthetic macOS-pt content size by applying
+// a fixed ~1.733× scale (the observed iPhone 17 Pro ratio) and verify the
+// round-trip reproduces the iOS-pt size to within 0.5 px.  The scale is
+// intentionally the same for every device — this tests the *formula*, not the
+// per-device ratio.  Real ratios will differ for iPads; the 0.5 px tolerance
+// accommodates any sub-pixel rounding.
+
+const MACOS_SCALE = 697 / 402; // ~1.7338 — reference ratio from iPhone 17 Pro
+
+describe('convertMacOSPtToIOSPt — device-class breadth', () => {
+  const deviceTable = Object.entries(DEVICE_PRESETS).map(([key, preset]) => ({
+    key,
+    preset,
+    macOSPtSize: {
+      width: preset.w * MACOS_SCALE,
+      height: preset.h * MACOS_SCALE,
+    },
+  }));
+
+  it.each(deviceTable)(
+    'round-trips iOS-pt size within 0.5 px for $key',
+    ({ preset, macOSPtSize }) => {
+      // Use the full macOS-pt content area as input point (bottom-right corner),
+      // which after conversion should equal the iOS-pt size.
+      const result = convertMacOSPtToIOSPt(
+        { x: macOSPtSize.width, y: macOSPtSize.height },
+        macOSPtSize,
+        { width: preset.w, height: preset.h },
+      );
+      expect(result.x).toBeCloseTo(preset.w, 0); // within 0.5 px
+      expect(result.y).toBeCloseTo(preset.h, 0);
+    },
+  );
+});
+
+// ── Boundary coordinates (#693 WU4) ──────────────────────────────────────────
+
+describe('convertMacOSPtToIOSPt — boundary coordinates', () => {
+  // Reference sizes: iPhone 17 Pro
+  const macOS = IPHONE_17_PRO_MACOS_PT;
+  const ios = IPHONE_17_PRO_IOS_PT;
+
+  it('top-left origin (0,0) maps to (0,0)', () => {
+    const result = convertMacOSPtToIOSPt({ x: 0, y: 0 }, macOS, ios);
+    expect(result.x).toBe(0);
+    expect(result.y).toBe(0);
+  });
+
+  it('bottom-right corner of macOS content area maps to bottom-right of iOS-pt area', () => {
+    const result = convertMacOSPtToIOSPt({ x: macOS.width, y: macOS.height }, macOS, ios);
+    expect(result.x).toBeCloseTo(ios.width, 5);
+    expect(result.y).toBeCloseTo(ios.height, 5);
+  });
+
+  it('center of macOS area maps to center of iOS-pt area', () => {
+    const result = convertMacOSPtToIOSPt(
+      { x: macOS.width / 2, y: macOS.height / 2 },
+      macOS,
+      ios,
+    );
+    expect(result.x).toBeCloseTo(ios.width / 2, 3);
+    expect(result.y).toBeCloseTo(ios.height / 2, 3);
+  });
+
+  it('negative coordinates scale without throwing (defensive fallthrough)', () => {
+    // Negative coords are valid input to the converter — the clamp happens
+    // upstream in sanitizeTapTarget.  The converter just scales them.
+    const result = convertMacOSPtToIOSPt({ x: -100, y: -200 }, macOS, ios);
+    expect(result.x).toBeCloseTo(-100 * (ios.width / macOS.width), 3);
+    expect(result.y).toBeCloseTo(-200 * (ios.height / macOS.height), 3);
+    // Must not throw.
   });
 });
