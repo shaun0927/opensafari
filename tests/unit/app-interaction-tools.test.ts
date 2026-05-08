@@ -39,6 +39,22 @@ jest.mock('../../src/simulator/simctl', () => ({
       this.exitCode = exitCode;
     }
   },
+  SimulatorStateCache: class SimulatorStateCache {
+    private entries = new Map<string, { udid: string; state: string; cachedAt: number }>();
+    private ttlMs: number;
+    constructor(ttlMs: number) { this.ttlMs = ttlMs; }
+    get(udid: string) {
+      const entry = this.entries.get(udid);
+      if (!entry) return undefined;
+      if (Date.now() - entry.cachedAt > this.ttlMs) { this.entries.delete(udid); return undefined; }
+      return entry;
+    }
+    set(udid: string, state: string) { this.entries.set(udid, { udid, state, cachedAt: Date.now() }); }
+    invalidate(udid: string) { this.entries.delete(udid); }
+    invalidateAll() { this.entries.clear(); }
+  },
+  hasBootstatus: jest.fn().mockResolvedValue(false),
+  resetBootstatusCapabilityForTests: jest.fn(),
 }));
 
 // Mock getInputBackend to skip detection probe and delegate to mocked SimctlExecutor

@@ -37,23 +37,42 @@ export function registerMockGeolocationTool(server: MCPServer): void {
           isError: true,
         };
 
-      const latitude = params.latitude as number;
-      const longitude = params.longitude as number;
-      const accuracy = (params.accuracy as number) ?? 10;
-      const altitude = params.altitude as number | undefined;
+      const coerceFinite = (raw: unknown): number | undefined => {
+        if (raw === undefined || raw === null) return undefined;
+        if (typeof raw !== 'number') return Number.NaN;
+        return Number.isFinite(raw) ? raw : Number.NaN;
+      };
 
-      if (latitude < -90 || latitude > 90) {
+      const latitude = coerceFinite(params.latitude);
+      const longitude = coerceFinite(params.longitude);
+      const accuracyRaw = coerceFinite(params.accuracy);
+      const altitude = coerceFinite(params.altitude);
+
+      if (latitude === undefined || !Number.isFinite(latitude) || latitude < -90 || latitude > 90) {
         return {
-          content: [{ type: 'text' as const, text: 'Error: latitude must be between -90 and 90' }],
+          content: [{ type: 'text' as const, text: 'Error: latitude must be a finite number between -90 and 90' }],
           isError: true,
         };
       }
-      if (longitude < -180 || longitude > 180) {
+      if (longitude === undefined || !Number.isFinite(longitude) || longitude < -180 || longitude > 180) {
         return {
-          content: [{ type: 'text' as const, text: 'Error: longitude must be between -180 and 180' }],
+          content: [{ type: 'text' as const, text: 'Error: longitude must be a finite number between -180 and 180' }],
           isError: true,
         };
       }
+      if (accuracyRaw !== undefined && !Number.isFinite(accuracyRaw)) {
+        return {
+          content: [{ type: 'text' as const, text: 'Error: accuracy must be a finite number' }],
+          isError: true,
+        };
+      }
+      if (altitude !== undefined && !Number.isFinite(altitude)) {
+        return {
+          content: [{ type: 'text' as const, text: 'Error: altitude must be a finite number' }],
+          isError: true,
+        };
+      }
+      const accuracy = accuracyRaw ?? 10;
 
       const altitudeJs = altitude !== undefined ? String(altitude) : 'null';
       const altitudeAccuracyJs = altitude !== undefined ? '10' : 'null';

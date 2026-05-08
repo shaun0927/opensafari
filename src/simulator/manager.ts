@@ -4,7 +4,7 @@ import * as path from 'path';
 import { randomUUID } from 'crypto';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import { SimctlExecutor, SimctlError } from './simctl';
+import { SimctlExecutor, SimctlError, SimulatorStateCache } from './simctl';
 import { SimulatorDevice, SimulatorRuntime } from './types';
 import { DEVICE_PRESETS } from './presets';
 import { DEFAULT_SIMULATOR_BOOT_TIMEOUT_MS, DEFAULT_SIMULATOR_SHUTDOWN_TIMEOUT_MS, DEFAULT_SCREENSHOT_TIMEOUT_MS } from '../config/defaults';
@@ -30,8 +30,21 @@ export interface RotationResult {
   orientation?: string;
 }
 
+/**
+ * TTL for the per-device state cache inside SimulatorManager.
+ * Sized to match the longest polling interval used in this file (1 000 ms) so
+ * that multiple callers within a single tick share one `simctl list devices`
+ * parse, but the next tick always sees fresh data.
+ */
+const STATE_CACHE_TTL_MS = 900;
+
 export class SimulatorManager {
   private simctl = new SimctlExecutor();
+  /**
+   * Short-lived cache for device states during polling loops.
+   * Invalidated immediately on any lifecycle mutation (boot / shutdown / delete).
+   */
+  private stateCache = new SimulatorStateCache(STATE_CACHE_TTL_MS);
 
   async listDevices(): Promise<SimulatorDevice[]> {
     const result = await this.simctl.execJson<SimctlListResult>(['list', 'devices']);
@@ -70,7 +83,84 @@ export class SimulatorManager {
 
   async getDevice(deviceId: string): Promise<SimulatorDevice | null> {
     const devices = await this.listDevices();
-    return devices.find(d => d.udid === deviceId) ?? null;
+    const device = devices.find(d => d.udid === deviceId) ?? null;
+    if (device) {
+      this.stateCache.set(deviceId, device.state);
+    }
+    return device;
+  }
+
+  /**
+   * Return the booted/shutdown state of a single device without always
+   * parsing the full device list. Used exclusively by polling loops.
+   *
+   * Strategy (in order of preference):
+   *   1. Short-lived cache hit — free, shared across concurrent callers within
+   *      the same poll tick.  Skipped when `opts.bypassCache` is true (used by
+   *      shutdown polling so it can observe the transient ShuttingDown state).
+   *   2. Per-UDID `simctl list devices <udid> -j` — narrow pure-read command
+   *      that returns only the JSON for the matching device.  Much cheaper than
+   *      the full device-list parse because CoreSimulator filters server-side.
+   *
+   * The result is placed into the cache so that sibling callers in the same
+   * polling tick benefit from the shared read.
+   *
+   * NOTE: `simctl bootstatus -b` was intentionally NOT used here.  The `-b`
+   * flag is a MUTATING operation (boots the device if not already booted) and
+   * therefore breaks the read-only contract expected by callers.
+   */
+  async getDeviceState(
+    deviceId: string,
+    opts?: { bypassCache?: boolean },
+  ): Promise<SimulatorDevice['state'] | null> {
+    const bypassCache = opts?.bypassCache === true;
+
+    // 1. Cache hit — shared across concurrent callers within the same tick.
+    //    Bypass during shutdown polling so ShuttingDown is always visible.
+    if (!bypassCache) {
+      const cached = this.stateCache.get(deviceId);
+      if (cached) {
+        return cached.state;
+      }
+    }
+
+    // 2. Per-UDID narrow list read — pure, no side-effects.
+    //    `simctl list devices <search> -j` filters by the search term
+    //    (case-insensitive contains match against the UDID string), so the
+    //    returned JSON is much smaller than the full device-list payload.
+    const state = await this.queryDeviceStateByUdid(deviceId);
+    if (state !== null) {
+      this.stateCache.set(deviceId, state);
+    }
+    return state;
+  }
+
+  /**
+   * Run `simctl list devices <udid> -j` and extract the state for the given
+   * UDID. Returns null when the device is not present in the output.
+   *
+   * This is a pure read with no side-effects on the simulator.
+   */
+  private async queryDeviceStateByUdid(deviceId: string): Promise<SimulatorDevice['state'] | null> {
+    interface PartialListResult {
+      devices: Record<string, Array<{ udid: string; state: string }>>;
+    }
+    try {
+      const result = await this.simctl.execJson<PartialListResult>(['list', 'devices', deviceId]);
+      for (const deviceList of Object.values(result.devices)) {
+        const entry = deviceList.find(d => d.udid === deviceId);
+        if (entry) {
+          return entry.state as SimulatorDevice['state'];
+        }
+      }
+      return null;
+    } catch (err) {
+      if (process.env.DEBUG) {
+        const msg = err instanceof SimctlError ? err.message : String(err);
+        console.error(`[SimulatorManager] queryDeviceStateByUdid ${deviceId}: error (${msg.slice(0, 80)})`);
+      }
+      return null;
+    }
   }
 
   /**
@@ -129,17 +219,31 @@ export class SimulatorManager {
       return device;
     }
 
-    // Boot
+    // Boot — invalidate cache so the polling loop sees fresh state
     await this.simctl.exec(['boot', device.udid]);
+    this.stateCache.invalidate(device.udid);
 
-    // Poll until booted or timeout
+    // Poll until booted or timeout.
+    // Uses getDeviceState() which hits the TTL cache on repeated ticks and
+    // falls back to the per-UDID `simctl list devices <udid> -j` read.
     const timeout = options?.timeout ?? DEFAULT_SIMULATOR_BOOT_TIMEOUT_MS;
     const start = Date.now();
     const pollInterval = 1000;
 
     while (Date.now() - start < timeout) {
-      const current = await this.getDevice(device.udid);
-      if (current?.state === 'Booted') {
+      const state = await this.getDeviceState(device.udid);
+      if (state === 'Booted') {
+        // Fetch full metadata once for the caller.
+        // If the lookup returns null the device was removed between the state
+        // read and this fetch (race condition).  Returning a stale Shutdown
+        // snapshot here would be silently wrong, so throw a clear error instead.
+        const current = await this.getDevice(device.udid);
+        if (current === null || current === undefined) {
+          throw new DeviceNotFoundError(
+            device.udid,
+            [],
+          );
+        }
         return current;
       }
       await new Promise(r => setTimeout(r, pollInterval));
@@ -149,36 +253,41 @@ export class SimulatorManager {
   }
 
   async shutdown(deviceId: string, options?: { timeout?: number }): Promise<void> {
-    const device = await this.getDevice(deviceId);
-    if (!device || device.state === 'Shutdown') {
-      return; // Already shutdown
+    // Use bypassCache: true so we always read live state and can observe the
+    // transient ShuttingDown state (a cache hit might mask it).
+    const state = await this.getDeviceState(deviceId, { bypassCache: true });
+    if (!state || state === 'Shutdown') {
+      return; // Already shut down or device not found
     }
 
-    // Graceful shutdown
+    // Graceful shutdown — invalidate cache so polling sees fresh state
     try {
       await this.simctl.exec(['shutdown', deviceId]);
     } catch {
       // May already be shutting down
     }
+    this.stateCache.invalidate(deviceId);
 
-    // Wait for shutdown
+    // Poll until shutdown or timeout.
+    // Always bypasses cache so ShuttingDown is visible on every tick.
     const timeout = options?.timeout ?? DEFAULT_SIMULATOR_SHUTDOWN_TIMEOUT_MS;
     const start = Date.now();
 
     while (Date.now() - start < timeout) {
-      const current = await this.getDevice(deviceId);
-      if (!current || current.state === 'Shutdown') {
+      const current = await this.getDeviceState(deviceId, { bypassCache: true });
+      if (!current || current === 'Shutdown') {
         return;
       }
       await new Promise(r => setTimeout(r, 1000));
     }
 
-    // Retry shutdown
+    // Timeout reached — retry shutdown once before escalating
     try {
       await this.simctl.exec(['shutdown', deviceId]);
+      this.stateCache.invalidate(deviceId);
       await new Promise(r => setTimeout(r, 5000));
-      const current = await this.getDevice(deviceId);
-      if (!current || current.state === 'Shutdown') return;
+      const current = await this.getDeviceState(deviceId, { bypassCache: true });
+      if (!current || current === 'Shutdown') return;
     } catch {
       // Fall through to erase
     }
@@ -186,6 +295,7 @@ export class SimulatorManager {
     // Nuclear option — erase device (WARNING: deletes all data)
     console.error(`[SimulatorManager] Force erasing device ${deviceId} after shutdown timeout`);
     await this.simctl.exec(['erase', deviceId]);
+    this.stateCache.invalidate(deviceId);
   }
 
   async bootPreset(presetKey: string): Promise<SimulatorDevice> {
@@ -475,6 +585,7 @@ export class SimulatorManager {
 
   async deleteDevice(deviceId: string): Promise<void> {
     await this.simctl.exec(['delete', deviceId]);
+    this.stateCache.invalidate(deviceId);
   }
 
   // === Status Bar Override (for deterministic screenshots) ===

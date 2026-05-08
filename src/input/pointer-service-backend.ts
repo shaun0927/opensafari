@@ -132,6 +132,17 @@ export class PointerServiceInputBackend implements InputBackend {
   async sendKey(deviceId: string, keyName: string): Promise<void> {
     await this.delegate.sendKey(deviceId, keyName);
   }
+
+  /**
+   * Batching is not supported on PointerServiceInputBackend. The `tap-ps`
+   * subcommand is Phase 1 experimental (opt-in via
+   * `OPENSAFARI_ENABLE_POINTERSERVICE=1`); batching is deferred to Phase 2
+   * of #590 alongside the `swipe-ps` subcommand. Callers that need repeated
+   * taps via the pointer-service path must invoke `tap()` in a loop.
+   */
+  supportsBatching(): boolean {
+    return false;
+  }
 }
 
 /**

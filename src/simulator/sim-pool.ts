@@ -33,7 +33,7 @@
 
 import { SimulatorManager } from './manager';
 import { SimctlExecutor } from './simctl';
-import { SimulatorDevice } from './types';
+
 import { DEFAULT_MAX_SIMULATORS } from '../config/defaults';
 import { disableBackgroundServices } from './post-boot-optimize';
 
@@ -287,8 +287,11 @@ export class SimPool {
   private async waitForBootedState(udid: string, timeoutMs = 15_000): Promise<void> {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
-      const device: SimulatorDevice | null = await this.manager.getDevice(udid);
-      if (device?.state === 'Booted') return;
+      // Use getDeviceState() so this polling tick shares state with any
+      // concurrent manager.boot() calls — one simctl read per tick, not one
+      // per caller. Falls back to full list if bootstatus is unavailable.
+      const state = await this.manager.getDeviceState(udid);
+      if (state === 'Booted') return;
       await new Promise((r) => setTimeout(r, 500));
     }
     throw new Error(`SimPool: clone ${udid} did not reach Booted state within ${timeoutMs}ms`);

@@ -63,6 +63,9 @@ function makeStubManager(masterState: 'Booted' | 'Shutdown' = 'Shutdown') {
         runtimeVersion: '17.0',
       };
     }),
+    getDeviceState: jest.fn(async (udid: string) => {
+      return getDeviceStates.get(udid) ?? 'Booted';
+    }),
   } as any;
 
   return { manager, shutdownCalls };

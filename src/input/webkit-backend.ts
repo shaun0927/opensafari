@@ -15,6 +15,10 @@
 
 import type { BrowserBackend } from '../types/browser-backend';
 import { timedInput } from '../metrics/input-telemetry';
+import {
+  buildLongPressScript,
+  buildSwipeScript,
+} from '../webkit/dom-input-scripts';
 import type { InputBackend } from './backend';
 
 /**
@@ -56,18 +60,9 @@ export class WebKitInputBackend implements InputBackend {
     await timedInput(this.kind, 'tap', deviceId, async () => {
       if (duration && duration > 0) {
         // Long press via touch events with delay
-        await this.client.evaluate(`
-          (async function(x, y, duration) {
-            var el = document.elementFromPoint(x, y);
-            if (!el) return;
-            var touch = document.createTouch(window, el, 1, x, y, x, y);
-            var touchList = document.createTouchList(touch);
-            el.dispatchEvent(new TouchEvent('touchstart', { touches: touchList, changedTouches: touchList, bubbles: true }));
-            await new Promise(function(r) { setTimeout(r, duration); });
-            var emptyList = document.createTouchList();
-            el.dispatchEvent(new TouchEvent('touchend', { touches: emptyList, changedTouches: touchList, bubbles: true }));
-          })(${x}, ${y}, ${duration * 1000})
-        `);
+        await this.client.evaluate(
+          buildLongPressScript({ x, y, durationMs: duration * 1000 }),
+        );
       } else {
         // Normal tap — delegate to BrowserBackend.click() which dispatches
         // touchstart → touchend → click with emulateUserGesture
@@ -89,30 +84,12 @@ export class WebKitInputBackend implements InputBackend {
       const stepDelay = ((duration ?? 0.5) * 1000) / steps;
 
       // Two-pronged: window.scrollBy for native scroll + touch events for JS handlers
-      await this.client.evaluate(`
-        (async function(sx, sy, ex, ey, scrollX, scrollY, steps, stepDelay) {
-          window.scrollBy(scrollX, scrollY);
-
-          var el = document.elementFromPoint(sx, sy);
-          if (!el) el = document.body;
-          var makeTouch = function(x, y) { return document.createTouch(window, el, 1, x, y, x, y); };
-          var startTouch = makeTouch(sx, sy);
-          var startList = document.createTouchList(startTouch);
-          el.dispatchEvent(new TouchEvent('touchstart', { touches: startList, changedTouches: startList, bubbles: true }));
-          for (var i = 1; i <= steps; i++) {
-            var x = sx + (ex - sx) * (i / steps);
-            var y = sy + (ey - sy) * (i / steps);
-            var moveTouch = makeTouch(x, y);
-            var moveList = document.createTouchList(moveTouch);
-            el.dispatchEvent(new TouchEvent('touchmove', { touches: moveList, changedTouches: moveList, bubbles: true }));
-            await new Promise(function(r) { setTimeout(r, stepDelay); });
-          }
-          var endTouch = makeTouch(ex, ey);
-          var endList = document.createTouchList(endTouch);
-          var emptyList = document.createTouchList();
-          el.dispatchEvent(new TouchEvent('touchend', { touches: emptyList, changedTouches: endList, bubbles: true }));
-        })(${startX}, ${startY}, ${endX}, ${endY}, ${scrollX}, ${scrollY}, ${steps}, ${stepDelay})
-      `);
+      await this.client.evaluate(
+        buildSwipeScript({
+          startX, startY, endX, endY, steps, stepDelayMs: stepDelay,
+          scroll: { scrollX, scrollY },
+        }),
+      );
     });
   }
 
@@ -159,5 +136,15 @@ export class WebKitInputBackend implements InputBackend {
       const mapped = SENDKEY_TO_WEBKIT_KEY[keyName] ?? keyName;
       await this.client.press(mapped);
     });
+  }
+
+  /**
+   * Batching is not supported on WebKitInputBackend. JS injection executes
+   * in-process over an already-established WebSocket — there is no process
+   * spawn overhead to reduce. Each `tap()` call is already near-zero-cost
+   * from a spawn perspective.
+   */
+  supportsBatching(): boolean {
+    return false;
   }
 }

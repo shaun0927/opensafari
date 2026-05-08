@@ -147,7 +147,7 @@ describe('Auth Tools Verification — Issue #168', () => {
     server = new MCPServer();
     registerAllTools(server);
     server.setTier(3); // Make tier 3 tools visible
-    await server.start({ transport: 'http', port: PORT });
+    await server.start({ transport: 'http', port: PORT, httpInsecure: true });
   });
 
   afterAll(async () => {

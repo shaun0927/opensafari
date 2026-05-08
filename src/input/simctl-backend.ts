@@ -72,4 +72,13 @@ export class SimctlInputBackend implements InputBackend {
       await this.simctl.exec(['io', deviceId, 'sendkey', keyName]);
     });
   }
+
+  /**
+   * Batching is not supported on SimctlInputBackend. Each `xcrun simctl io
+   * input` invocation opens a separate Xcode IPC channel; accumulating calls
+   * at the TypeScript level would not reduce that per-call overhead.
+   */
+  supportsBatching(): boolean {
+    return false;
+  }
 }

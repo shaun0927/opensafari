@@ -451,6 +451,16 @@ export class FlutterVMInputBackend implements InputBackend {
     await timedInput(this.kind, 'sendKey', deviceId, () => this.sendKeyInternal(keyName));
   }
 
+  /**
+   * Batching is not supported on FlutterVMInputBackend. Events are injected
+   * via `evaluate` over an already-open WebSocket — there is no process spawn
+   * overhead to reduce. Callers should use `tap()` in a loop for repeated
+   * events.
+   */
+  supportsBatching(): boolean {
+    return false;
+  }
+
   private async sendKeyInternal(keyName: string): Promise<void> {
     const entry = SENDKEY_TO_LOGICAL_KEY[keyName];
     if (!entry) {

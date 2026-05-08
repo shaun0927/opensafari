@@ -190,6 +190,10 @@ opensafari serve
   → All simulators start already logged in
 ```
 
+Auth profiles are JSON files stored under `~/.opensafari/auth/`. Each profile contains the site name, capture timestamp, current URL, cookies, cookie domain groups, localStorage, and sessionStorage needed to restore login state. On POSIX systems, OpenSafari creates new auth profile directories as private `0700` directories and profile files as private `0600` files, then updates profiles with an atomic same-directory replacement.
+
+Delete saved login state with `opensafari auth delete myapp.com`, or remove the matching `~/.opensafari/auth/myapp.com.json` file.
+
 ### 4. iOS-Specific Auto-Detection
 
 Built-in QA checks that run on real Safari — no approximation:
@@ -376,8 +380,8 @@ npm install -g opensafari-mcp
 # Run (stdio mode — for MCP clients like Claude Code)
 opensafari serve
 
-# HTTP mode
-opensafari serve --http 3100
+# HTTP mode (binds to 127.0.0.1 and requires a bearer token for /mcp)
+OPENSAFARI_HTTP_TOKEN="replace-with-a-random-token" opensafari serve --http 3100
 
 # With all tool tiers exposed
 opensafari serve --all-tools
@@ -387,6 +391,23 @@ opensafari serve --devices "iphone-17e,iphone-17-pro-max"
 
 # With auth state
 opensafari serve --auth ~/.opensafari/auth/mysite.json
+```
+
+
+#### HTTP transport security
+
+HTTP mode listens on `127.0.0.1` by default. The `/health` endpoint is unauthenticated, but `/mcp` requires `Authorization: Bearer <token>` unless you intentionally pass `--http-insecure-local` for local-only testing. Provide the token with `OPENSAFARI_HTTP_TOKEN` or `--http-token`; OpenSafari never prints the token value.
+
+Browser CORS for `/mcp` is restricted to local origins (`localhost`, `127.0.0.1`, `::1`) plus any comma-separated origins passed with `--http-allow-origin`. Use `--http-host` only when you intentionally need a non-loopback bind.
+
+HTTP mode also blocks high-risk MCP tools that execute page/app code or move authentication material: `javascript`, `flutter_evaluate`, `auth_save`, `auth_restore`, and `cookies`. Stdio mode is unchanged. To intentionally expose those tools over HTTP, start with `--http-enable-high-risk-tools` or set `OPENSAFARI_HTTP_ENABLE_HIGH_RISK_TOOLS=1`; allowed and blocked high-risk HTTP calls are audit-logged with sensitive arguments redacted.
+
+```bash
+OPENSAFARI_HTTP_TOKEN="$OPENSAFARI_HTTP_TOKEN" opensafari serve --http 3100
+curl -H "Authorization: Bearer $OPENSAFARI_HTTP_TOKEN" \
+  -H "Content-Type: application/json" \
+  http://127.0.0.1:3100/mcp \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
 ```
 
 ### MCP Client Configuration
@@ -442,7 +463,7 @@ const server = createServer({
 await server.start();
 
 // Or start with HTTP transport
-await server.start({ transport: 'http', port: 3100 });
+await server.start({ transport: 'http', port: 3100, authToken: process.env.OPENSAFARI_HTTP_TOKEN });
 ```
 
 ### WebKitClient

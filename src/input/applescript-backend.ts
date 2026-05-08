@@ -73,15 +73,54 @@ export class AppleScriptInputBackend implements InputBackend {
   /** Set of deviceIds that have already emitted the AX fallback warning. */
   private warnedDevices = new Set<string>();
 
+  /**
+   * Timestamp of the last successful Simulator activation (ms since epoch).
+   * Retained for observability and potential future diagnostics; no longer
+   * used to gate the frontmost-app check — every `activateSimulator()` call
+   * queries System Events to confirm current focus state before deciding
+   * whether to activate.
+   *
+   * This field is scoped to the AppleScript backend instance and does NOT
+   * affect any headless tier. It is NOT shared with `getInputBackend()`.
+   */
+  private static readonly ACTIVATION_CACHE_TTL_MS = 500;
+  private lastActivationAt = 0;
+
   private async runAppleScript(lines: string[]): Promise<string> {
     const args = lines.flatMap((line) => ['-e', line]);
     const { stdout } = await execFileAsync('osascript', args, { timeout: 10_000 });
     return stdout.trim();
   }
 
+  /**
+   * Activate Simulator.app via AppleScript when it is not already frontmost.
+   *
+   * On every call we query System Events for the current frontmost process
+   * name. If Simulator is already frontmost we skip the `activate` call and
+   * the 150 ms settle delay — the frontmost check is a single cheap osascript
+   * IPC round-trip (~5–10 ms) and is always correct regardless of how recently
+   * the last activation occurred.
+   *
+   * `lastActivationAt` is retained for observability / future diagnostics but
+   * no longer gates the frontmost check — removing the TTL early-return
+   * ensures input is never delivered to the wrong app when focus changes
+   * between consecutive calls in a burst.
+   *
+   * This optimisation applies ONLY to the opt-in focus-stealing path —
+   * all headless backends skip this method entirely.
+   */
   private async activateSimulator(): Promise<void> {
-    await this.runAppleScript(['tell application "Simulator" to activate']);
-    await delay(150);
+    // Always check frontmost state; the IPC cost (~5–10 ms) is cheaper than
+    // the risk of delivering input to the wrong app after a focus change.
+    const frontApp = await this.runAppleScript([
+      'tell application "System Events" to set frontApp to name of first application process whose frontmost is true',
+      'return frontApp',
+    ]);
+    if (frontApp !== 'Simulator') {
+      await this.runAppleScript(['tell application "Simulator" to activate']);
+      await delay(150);
+    }
+    this.lastActivationAt = Date.now();
   }
 
   /**
@@ -296,5 +335,15 @@ export class AppleScriptInputBackend implements InputBackend {
         `tell application "System Events" to key code ${asKeyCode}`,
       ]);
     });
+  }
+
+  /**
+   * Batching is not supported on AppleScriptInputBackend. This is the
+   * opt-in focus-stealing path; each tap must activate Simulator.app first,
+   * so there is no meaningful process-spawn reduction available. Callers
+   * that need repeated taps via this backend must invoke `tap()` in a loop.
+   */
+  supportsBatching(): boolean {
+    return false;
   }
 }
