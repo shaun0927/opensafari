@@ -8,6 +8,21 @@ import { TargetSessionManager } from './target-session';
 export type { TargetCommandSender } from './target-session';
 import { BrowserCommands } from './browser-commands';
 import {
+  EventBridge,
+  ConsoleMessage,
+  RequestInfo,
+  ResponseInfo,
+  ErrorInfo,
+} from './events';
+export type {
+  TargetCreatedPayload,
+  TargetDestroyedPayload,
+  ConsoleMessage,
+  RequestInfo,
+  ResponseInfo,
+  ErrorInfo,
+} from './events';
+import {
   BrowserBackend,
   NavigateOptions,
   NavigateResult,
@@ -53,6 +68,7 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
 
   private targetSession: TargetSessionManager;
   private browserCommands: BrowserCommands;
+  private eventBridge: EventBridge;
 
   constructor(private options: WebKitClientOptions) {
     super();
@@ -62,50 +78,22 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
     });
     this.targetSession = new TargetSessionManager(this.transport, this);
     this.browserCommands = new BrowserCommands(this);
-    this.bindTransportEvents();
-  }
-
-  getHost(): string { return this.options.host; }
-  getPort(): number { return this.options.port; }
-
-  // ========== Transport Event Binding ==========
-
-  /**
-   * Forward all transport-emitted events (domain events, target lifecycle events) to this
-   * EventEmitter so that callers using `client.on('Page.loadEventFired', ...)` continue to work.
-   */
-  private bindTransportEvents(): void {
-    // Wildcard forwarding is not natively available on EventEmitter, so we intercept emit.
-    // We replace the transport's emit to also forward to client's emit.
-    const originalEmit = this.transport.emit.bind(this.transport);
-    (this.transport as any).emit = (event: string, ...args: any[]): boolean => {
-      const result = originalEmit(event, ...args);
-      if (event !== 'transport:close' && event !== 'transport:error' && event !== 'newListener' && event !== 'removeListener') {
-        (EventEmitter.prototype.emit as any).call(this, event, ...args);
-      }
-      return result;
-    };
-
+    this.eventBridge = new EventBridge(this.transport, this.targetSession, this);
+    this.eventBridge.attach();
+    // transport:close / transport:error are handled here, not in EventBridge
     this.transport.on('transport:close', () => {
       if (this.connected && !this.reconnecting) {
         this.connected = false;
         this.handleDisconnect();
       }
     });
-
     this.transport.on('transport:error', (_err: Error) => {
       // Error already handled — connection state tracked via transport:close
     });
-
-    // Forward target lifecycle events emitted by TargetSessionManager to this EventEmitter.
-    this.targetSession.on('target:created', (payload: any) => {
-      this.emit('target:created', payload);
-    });
-
-    this.targetSession.on('target:destroyed', (payload: any) => {
-      this.emit('target:destroyed', payload);
-    });
   }
+
+  getHost(): string { return this.options.host; }
+  getPort(): number { return this.options.port; }
 
   /**
    * Connect directly to a specific WebSocket URL (e.g., per-tab endpoint).
@@ -445,68 +433,26 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
     return this.browserCommands.waitFor(selector, options);
   }
 
-  // ========== Event Convenience Methods ==========
+  // ========== Event Convenience Methods (delegated to EventBridge) ==========
 
-  onConsole(handler: (msg: { type: string; text: string }) => void): void {
-    this.enableDomain('Console').then(() => {
-      this.on('Console.messageAdded', (params: any) => {
-        handler({
-          type: params.message?.level ?? params.message?.type ?? 'log',
-          text: params.message?.text ?? '',
-        });
-      });
-    });
+  onConsole(handler: (msg: ConsoleMessage) => void): void {
+    this.eventBridge.onConsole(handler);
   }
 
   onPageLoad(handler: () => void): void {
-    this.enableDomain('Page').then(() => {
-      this.on('Page.loadEventFired', handler);
-    });
+    this.eventBridge.onPageLoad(handler);
   }
 
-  onRequest(handler: (request: { url: string; method: string }) => void): void {
-    this.enableDomain('Network').then(() => {
-      this.on('Network.requestWillBeSent', (params: any) => {
-        handler({
-          url: params.request?.url ?? '',
-          method: params.request?.method ?? 'GET',
-        });
-      });
-    });
+  onRequest(handler: (request: RequestInfo) => void): void {
+    this.eventBridge.onRequest(handler);
   }
 
-  onResponse(handler: (response: { url: string; status: number }) => void): void {
-    this.enableDomain('Network').then(() => {
-      this.on('Network.responseReceived', (params: any) => {
-        handler({
-          url: params.response?.url ?? '',
-          status: params.response?.status ?? 0,
-        });
-      });
-    });
+  onResponse(handler: (response: ResponseInfo) => void): void {
+    this.eventBridge.onResponse(handler);
   }
 
-  onError(handler: (error: { message: string; stack?: string; source?: string; line?: number; column?: number }) => void): void {
-    // WebKit reports unhandled JS errors via Console.messageAdded with level "error"
-    // (Runtime.exceptionThrown is Chrome-specific and not available in WebKit)
-    this.enableDomain('Console').then(() => {
-      this.on('Console.messageAdded', (params: any) => {
-        const msg = params.message ?? {};
-        if (msg.level === 'error' && msg.source === 'javascript') {
-          const frames = msg.stackTrace?.callFrames ?? [];
-          const stackLines = frames.map((f: any) =>
-            `  at ${f.functionName || '(anonymous)'} (${f.url}:${f.lineNumber}:${f.columnNumber})`
-          );
-          handler({
-            message: msg.text ?? 'Unknown error',
-            stack: stackLines.length ? stackLines.join('\n') : undefined,
-            source: msg.url ?? undefined,
-            line: msg.line ?? undefined,
-            column: msg.column ?? undefined,
-          });
-        }
-      });
-    });
+  onError(handler: (error: ErrorInfo) => void): void {
+    this.eventBridge.onError(handler);
   }
 
   // ========== Private Helpers ==========
