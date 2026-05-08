@@ -357,7 +357,7 @@ export class MCPServer {
     const isHighRiskHttp = context.transport === 'http' && highRiskTool !== undefined;
 
     if (isHighRiskHttp && !this.httpHighRiskToolsEnabled) {
-      logAuditEntry(name, sessionId, args);
+      logAuditEntry(name, sessionId, args, undefined, 'denied');
       return {
         jsonrpc: '2.0',
         id: request.id,
@@ -408,7 +408,7 @@ export class MCPServer {
     try {
       const result: MCPResult = await handler(sessionId, args);
       if (this.auditLogEnabled || isHighRiskHttp) {
-        logAuditEntry(name, sessionId, args);
+        logAuditEntry(name, sessionId, args, undefined, 'allowed');
       }
       return {
         jsonrpc: '2.0',
@@ -417,7 +417,7 @@ export class MCPServer {
       };
     } catch (err) {
       if (this.auditLogEnabled || isHighRiskHttp) {
-        logAuditEntry(name, sessionId, args);
+        logAuditEntry(name, sessionId, args, undefined, 'error');
       }
       const message = err instanceof Error ? err.message : String(err);
       return {
