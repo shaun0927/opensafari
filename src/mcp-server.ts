@@ -27,6 +27,7 @@ import {
 } from './security/high-risk-tools';
 import { getSessionManager } from './session-manager';
 import { getVersion } from './version';
+import { resolveHandler, toolRegistry } from './tools/registry';
 
 // Re-export so callers can use canonical names without knowing the internal alias
 export type { MCPToolDefinition as ToolDefinition, ToolHandler };
@@ -88,7 +89,10 @@ export function setWebKitClient(client: BrowserBackend | null, deviceId?: string
 
 interface RegisteredTool {
   definition: MCPToolDefinition;
-  handler: ToolHandler;
+  /** Eagerly-provided handler (registerTool path). */
+  handler?: ToolHandler;
+  /** When true, handler is resolved lazily from the tool registry on first call. */
+  lazy?: boolean;
   tier: number;
 }
 
@@ -129,6 +133,44 @@ export class MCPServer {
     this.tools.set(definition.name, { definition, handler, tier });
   }
 
+  /**
+   * Register a tool whose handler is loaded lazily from the tool registry on
+   * first invocation.  The schema and tier are available immediately so
+   * tools/list works without triggering any dynamic import.
+   */
+  registerLazyTool(definition: MCPToolDefinition): void {
+    const entry = toolRegistry.get(definition.name);
+    if (!entry) {
+      throw new Error(
+        `Cannot register lazy tool "${definition.name}": ` +
+        `no entry found in toolRegistry. Call defineToolEntry() first.`,
+      );
+    }
+    // Warn if caller-provided definition drifts from the registry's source of truth.
+    if (
+      definition.description !== entry.definition.description ||
+      JSON.stringify(definition.inputSchema) !== JSON.stringify(entry.definition.inputSchema)
+    ) {
+      console.error(
+        `[mcp-server] registerLazyTool: caller definition for "${definition.name}" differs from toolRegistry entry. ` +
+        `Using registry version.`,
+      );
+    }
+    const tier = getToolTier(definition.name);
+    // Use the registry's definition as the single source of truth for schema.
+    this.tools.set(definition.name, { definition: entry.definition, lazy: true, tier });
+  }
+
+  /**
+   * Returns the handler implementation for a registered tool, or
+   * undefined if no tool with that name is registered OR if the tool
+   * is lazy and has not yet been invoked.
+   *
+   * Lazy tools are registered with their schema only; the handler is
+   * resolved on first tools/call. Callers that need the handler before
+   * an invocation should wait for the first tools/call to complete or
+   * use the async path through handleToolsCall.
+   */
   getToolHandler(name: string): ToolHandler | undefined {
     return this.tools.get(name)?.handler;
   }
@@ -329,8 +371,42 @@ export class MCPServer {
       };
     }
 
+    // Resolve the handler — either eager (already attached) or lazy (registry).
+    let handler: ToolHandler;
+    if (tool.handler) {
+      handler = tool.handler;
+    } else if (tool.lazy) {
+      try {
+        handler = await resolveHandler(name);
+        tool.handler = handler;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (this.auditLogEnabled) {
+          logAuditEntry(name, sessionId, args);
+        }
+        return {
+          jsonrpc: '2.0',
+          id: request.id,
+          error: {
+            code: MCPErrorCodes.INTERNAL_ERROR,
+            message: `Failed to load handler for tool "${name}": ${msg}`,
+          },
+        };
+      }
+    } else {
+      // Should never happen — registerTool always sets handler.
+      return {
+        jsonrpc: '2.0',
+        id: request.id,
+        error: {
+          code: MCPErrorCodes.INTERNAL_ERROR,
+          message: `Internal error: no handler registered for tool "${name}"`,
+        },
+      };
+    }
+
     try {
-      const result: MCPResult = await tool.handler(sessionId, args);
+      const result: MCPResult = await handler(sessionId, args);
       if (this.auditLogEnabled || isHighRiskHttp) {
         logAuditEntry(name, sessionId, args, undefined, result.isError ? 'error' : 'allowed');
       }

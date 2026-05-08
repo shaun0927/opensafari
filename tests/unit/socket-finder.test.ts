@@ -1,7 +1,13 @@
 import * as childProcess from 'child_process';
 import * as fsPromises from 'fs/promises';
 import { EventEmitter } from 'events';
-import { findSocketPath, probeSocket, waitForSocketPath } from '../../src/simulator/socket-finder';
+import {
+  findSocketPath,
+  probeSocket,
+  waitForSocketPath,
+  resetSocketCache,
+  setSocketCacheTtl,
+} from '../../src/simulator/socket-finder';
 
 // Mock modules
 jest.mock('child_process');
@@ -71,6 +77,9 @@ beforeEach(() => {
   jest.clearAllMocks();
   probeResults = {};
   rmMock.mockResolvedValue(undefined);
+  // Clear cache and use a large TTL by default so existing tests are cache-transparent
+  resetSocketCache();
+  setSocketCacheTtl(60_000);
 });
 
 describe('findSocketPath', () => {
@@ -546,6 +555,266 @@ describe('waitForSocketPath', () => {
     await jest.runAllTimersAsync();
     const result = await promise;
     expect(result).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #704: cache + backoff tests
+// ---------------------------------------------------------------------------
+
+describe('socket discovery cache (Issue #704)', () => {
+  const SOCKET = '/private/var/tmp/com.apple.launchd.CACHED/com.apple.webinspectord_sim.socket';
+
+  beforeEach(() => {
+    // Use a short TTL so expiry tests work without sleeping
+    setSocketCacheTtl(100);
+    resetSocketCache();
+  });
+
+  afterEach(() => {
+    setSocketCacheTtl(60_000);
+    resetSocketCache();
+  });
+
+  it('cache hit avoids calling lsof on second discovery for the same UDID', async () => {
+    probeResults[SOCKET] = true;
+    const udid = 'AAAA-1111-CACHE-TEST';
+
+    stubExecFile({
+      'lsof -U': {
+        stdout: `launchd_s 7001 user  8u  unix 0xa  0t0  ${SOCKET}\n`,
+      },
+      'ps -p 7001': { stdout: `launchd_sim /path/to/${udid}/data/run/bootstrap.plist` },
+    });
+
+    // First call: populates cache
+    const first = await findSocketPath({ targetUdid: udid });
+    expect(first).toBe(SOCKET);
+    const firstCallCount = execFileMock.mock.calls.length;
+
+    // Second call within TTL: must hit cache, NOT call lsof again
+    const second = await findSocketPath({ targetUdid: udid });
+    expect(second).toBe(SOCKET);
+    expect(execFileMock.mock.calls.length).toBe(firstCallCount);
+  });
+
+  it('stale cache (failed probe) triggers rediscovery and evicts the entry', async () => {
+    probeResults[SOCKET] = true;
+
+    stubExecFile({
+      'lsof -U': {
+        stdout: `launchd_s 7002 user  8u  unix 0xa  0t0  ${SOCKET}\n`,
+      },
+    });
+
+    // First call: cache populated
+    await findSocketPath();
+    const afterFirstCallCount = execFileMock.mock.calls.length;
+
+    // Socket goes stale before the second call
+    probeResults[SOCKET] = false;
+
+    // Second call: cache probe fails → eviction → lsof called again
+    const result = await findSocketPath();
+    expect(result).toBeNull(); // lsof returns same stale socket, probe fails
+    // lsof must have been called again after eviction
+    expect(execFileMock.mock.calls.length).toBeGreaterThan(afterFirstCallCount);
+  });
+
+  it('TTL expiry triggers rediscovery even when the socket remains live', async () => {
+    probeResults[SOCKET] = true;
+
+    stubExecFile({
+      'lsof -U': {
+        stdout: `launchd_s 7003 user  8u  unix 0xa  0t0  ${SOCKET}\n`,
+      },
+    });
+
+    // Populate cache with 100ms TTL
+    await findSocketPath();
+    const afterFirstCallCount = execFileMock.mock.calls.length;
+
+    // Wait for TTL to expire
+    await new Promise(r => setTimeout(r, 150));
+
+    // Now the entry is expired; lsof should be called again
+    await findSocketPath();
+    expect(execFileMock.mock.calls.length).toBeGreaterThan(afterFirstCallCount);
+  });
+
+  it('no-target lookup does not return a UDID-specific cached entry', async () => {
+    const udid = 'BBBB-2222-UDID-SPECIFIC';
+    const udidSocket = '/private/var/tmp/com.apple.launchd.UDID/com.apple.webinspectord_sim.socket';
+    probeResults[udidSocket] = true;
+
+    stubExecFile({
+      'lsof -U': {
+        stdout: `launchd_s 7004 user  8u  unix 0xa  0t0  ${udidSocket}\n`,
+      },
+      'ps -p 7004': { stdout: `launchd_sim /path/to/${udid}/data/run/bootstrap.plist` },
+    });
+
+    // Populate UDID-specific cache bucket
+    const udidResult = await findSocketPath({ targetUdid: udid });
+    expect(udidResult).toBe(udidSocket);
+
+    // No-target call must NOT return the UDID-specific cached entry
+    // (lsof will be called; it returns no targetUdid match, so mtime fallback runs)
+    readdirMock.mockRejectedValue(new Error('ENOENT'));
+    // Stub lsof to return empty for no-target path
+    stubExecFile({
+      'lsof -U': { stdout: 'COMMAND PID\n' },
+    });
+    const noTargetResult = await findSocketPath();
+    expect(noTargetResult).toBeNull();
+  });
+
+  it('TTL-expired entry is explicitly deleted from the cache, not left to be overwritten', async () => {
+    probeResults[SOCKET] = true;
+
+    stubExecFile({
+      'lsof -U': {
+        stdout: `launchd_s 7010 user  8u  unix 0xa  0t0  ${SOCKET}\n`,
+      },
+    });
+
+    // Populate cache (TTL = 100ms from beforeEach)
+    await findSocketPath();
+
+    // Wait past the TTL so the entry is expired
+    await new Promise(r => setTimeout(r, 150));
+
+    // After expiry, re-stub lsof to return nothing AND make socket fail probe.
+    // If the expired entry were still in the map and Date.now() < expiresAt
+    // ever flipped back true, we'd see a stale return; instead the entry must
+    // be evicted on encounter so a fresh discovery runs and yields null.
+    probeResults[SOCKET] = false;
+    stubExecFile({ 'lsof -U': { stdout: 'COMMAND PID\n' } });
+    readdirMock.mockRejectedValue(new Error('ENOENT'));
+
+    const result = await findSocketPath();
+    expect(result).toBeNull();
+
+    // A subsequent call must again invoke lsof — confirming nothing remains
+    // cached from the expired entry.
+    const callsBefore = execFileMock.mock.calls.length;
+    await findSocketPath();
+    expect(execFileMock.mock.calls.length).toBeGreaterThan(callsBefore);
+  });
+
+  it('resetSocketCache clears all entries', async () => {
+    probeResults[SOCKET] = true;
+
+    stubExecFile({
+      'lsof -U': {
+        stdout: `launchd_s 7005 user  8u  unix 0xa  0t0  ${SOCKET}\n`,
+      },
+    });
+
+    // Populate cache
+    await findSocketPath();
+    const afterFirstCallCount = execFileMock.mock.calls.length;
+
+    // Clear cache explicitly
+    resetSocketCache();
+
+    // Next call must bypass cache and invoke lsof again
+    await findSocketPath();
+    expect(execFileMock.mock.calls.length).toBeGreaterThan(afterFirstCallCount);
+  });
+});
+
+describe('waitForSocketPath staged backoff (Issue #704)', () => {
+  beforeEach(() => {
+    jest.useFakeTimers();
+    resetSocketCache();
+    setSocketCacheTtl(0); // disable caching so each poll hits lsof
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+    setSocketCacheTtl(60_000);
+    resetSocketCache();
+  });
+
+  it('backoff loop respects the total timeout and returns null when socket never appears', async () => {
+    stubExecFile({ 'lsof -U': { stdout: 'COMMAND PID\n' } });
+    readdirMock.mockRejectedValue(new Error('ENOENT'));
+
+    const promise = waitForSocketPath({ timeout: 1_000 });
+    const assertion = expect(promise).resolves.toBeNull();
+
+    await jest.runAllTimersAsync();
+    await assertion;
+  });
+
+  it('backoff loop resolves immediately when socket appears on first attempt', async () => {
+    const socketPath = '/private/var/tmp/com.apple.launchd.FAST/com.apple.webinspectord_sim.socket';
+    probeResults[socketPath] = true;
+
+    stubExecFile({
+      'lsof -U': {
+        stdout: `launchd_s 8001 user  8u  unix 0xa  0t0  ${socketPath}\n`,
+      },
+    });
+
+    const promise = waitForSocketPath({ timeout: 10_000 });
+    await jest.runAllTimersAsync();
+    const result = await promise;
+    expect(result).toBe(socketPath);
+  });
+
+  it('honors caller-supplied interval instead of staged backoff when provided', async () => {
+    let callCount = 0;
+    execFileMock.mockImplementation((cmd: string, args: string[], opts: unknown, cb?: unknown) => {
+      const callback = typeof opts === 'function' ? opts : cb;
+      callCount++;
+      // Always return no socket so the loop keeps polling
+      (callback as CallableFunction)(null, { stdout: 'COMMAND PID\n' });
+    });
+    readdirMock.mockRejectedValue(new Error('ENOENT'));
+
+    const promise = waitForSocketPath({ timeout: 1_000, interval: 50 });
+
+    // With a 50ms fixed interval and a 1000ms timeout, we should see far
+    // more probes (~20) than the staged backoff would allow (~6) over the
+    // same window. Advance enough to exhaust the timeout.
+    await jest.advanceTimersByTimeAsync(1_000);
+    await jest.runAllTimersAsync();
+
+    const result = await promise;
+    expect(result).toBeNull();
+    // Staged backoff over 1s reaches stages [0,200,600,1400,...] — only
+    // ~3-4 polls. A 50ms interval should drive substantially more.
+    expect(callCount).toBeGreaterThan(8);
+  });
+
+  it('uses staged delays: first retry is 200ms, not 500ms', async () => {
+    const socketPath = '/private/var/tmp/com.apple.launchd.BACKOFF/com.apple.webinspectord_sim.socket';
+    let callCount = 0;
+
+    execFileMock.mockImplementation((cmd: string, args: string[], opts: unknown, cb?: unknown) => {
+      const callback = typeof opts === 'function' ? opts : cb;
+      callCount++;
+      if (callCount < 2) {
+        (callback as CallableFunction)(null, { stdout: 'COMMAND PID\n' });
+      } else {
+        probeResults[socketPath] = true;
+        (callback as CallableFunction)(null, {
+          stdout: `launchd_s 8002 user  8u  unix 0xa  0t0  ${socketPath}\n`,
+        });
+      }
+    });
+
+    const promise = waitForSocketPath({ timeout: 10_000 });
+
+    // Advance exactly 200ms — the first staged backoff delay, then flush
+    await jest.advanceTimersByTimeAsync(200);
+    await jest.runAllTimersAsync();
+
+    const result = await promise;
+    expect(result).toBe(socketPath);
+    expect(callCount).toBeGreaterThanOrEqual(2);
   });
 });
 

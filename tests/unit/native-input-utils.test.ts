@@ -37,6 +37,9 @@ function makeBackend(kind: InputBackend['kind']): InputBackend {
     async sendKey(deviceId) {
       await timedInput(kind, 'sendKey', deviceId, async () => undefined);
     },
+    supportsBatching() {
+      return false;
+    },
   };
 }
 
