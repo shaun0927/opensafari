@@ -1,5 +1,7 @@
 import http from 'http';
 import { MCPServer } from '../../src/mcp-server';
+import { toolRegistry, defineToolEntry } from '../../src/tools/registry';
+import * as auditLogger from '../../src/security/audit-logger';
 
 // Helper: send a JSON-RPC request to the MCP HTTP server
 function mcpPost(
@@ -208,6 +210,126 @@ describe('MCPServer — JSON-RPC protocol', () => {
       req.end();
     });
     expect(res.status).toBe(202);
+  });
+
+  // ── no-handler JSON-RPC error ──
+
+  test('tools/call on tool without handler returns JSON-RPC INTERNAL_ERROR', async () => {
+    // Inject a RegisteredTool entry with no handler and not in toolRegistry
+    // by reaching into the server's internal tools map via a cast.
+    const internalTools = (server as unknown as { tools: Map<string, unknown> }).tools;
+    internalTools.set('__no_handler__', {
+      definition: { name: '__no_handler__', description: 'no handler', inputSchema: { type: 'object', properties: {}, required: [] } },
+      tier: 3,
+      // handler intentionally omitted; lazy intentionally omitted
+    });
+
+    const res = await mcpPost(PORT, {
+      jsonrpc: '2.0', id: 901, method: 'tools/call',
+      params: { name: '__no_handler__', arguments: {} },
+    });
+
+    // Must be a top-level error, NOT result.isError
+    expect(res.body).toHaveProperty('error');
+    expect(res.body).not.toHaveProperty('result');
+    const error = res.body.error as Record<string, unknown>;
+    expect(error.code).toBe(-32603); // INTERNAL_ERROR
+    expect(String(error.message)).toContain('no handler registered for tool');
+
+    internalTools.delete('__no_handler__');
+  });
+
+  // ── lazy-load failure returns JSON-RPC error ──
+
+  test('tools/call on lazy tool whose loadHandler rejects returns JSON-RPC INTERNAL_ERROR (not isError result)', async () => {
+    // Register a registry entry whose loadHandler always rejects
+    const LAZY_FAIL = '__lazy_fail__';
+    defineToolEntry(
+      { name: LAZY_FAIL, description: 'lazy fail', inputSchema: { type: 'object' as const, properties: {}, required: [] } },
+      () => Promise.reject(new Error('module not found')),
+    );
+    const internalTools = (server as unknown as { tools: Map<string, unknown> }).tools;
+    internalTools.set(LAZY_FAIL, {
+      definition: toolRegistry.get(LAZY_FAIL)!.definition,
+      lazy: true,
+      tier: 3,
+    });
+
+    const res = await mcpPost(PORT, {
+      jsonrpc: '2.0', id: 910, method: 'tools/call',
+      params: { name: LAZY_FAIL, arguments: {} },
+    });
+
+    // Must be a top-level JSON-RPC error, NOT result.isError
+    expect(res.body).toHaveProperty('error');
+    expect(res.body).not.toHaveProperty('result');
+    const error = res.body.error as Record<string, unknown>;
+    expect(error.code).toBe(-32603); // INTERNAL_ERROR
+    expect(String(error.message)).toContain('Failed to load');
+
+    internalTools.delete(LAZY_FAIL);
+    toolRegistry.delete(LAZY_FAIL);
+  });
+
+  test('tools/call on lazy tool whose loadHandler rejects logs an audit entry', async () => {
+    const LAZY_AUDIT = '__lazy_audit__';
+    defineToolEntry(
+      { name: LAZY_AUDIT, description: 'lazy audit', inputSchema: { type: 'object' as const, properties: {}, required: [] } },
+      () => Promise.reject(new Error('load failed')),
+    );
+    const internalTools = (server as unknown as { tools: Map<string, unknown> }).tools;
+    internalTools.set(LAZY_AUDIT, {
+      definition: toolRegistry.get(LAZY_AUDIT)!.definition,
+      lazy: true,
+      tier: 3,
+    });
+
+    const auditSpy = jest.spyOn(auditLogger, 'logAuditEntry').mockImplementation(() => undefined);
+    server.enableAuditLog();
+
+    await mcpPost(PORT, {
+      jsonrpc: '2.0', id: 911, method: 'tools/call',
+      params: { name: LAZY_AUDIT, arguments: {} },
+    });
+
+    expect(auditSpy).toHaveBeenCalledTimes(1);
+    expect(auditSpy).toHaveBeenCalledWith(LAZY_AUDIT, expect.any(String), expect.any(Object));
+
+    auditSpy.mockRestore();
+    internalTools.delete(LAZY_AUDIT);
+    toolRegistry.delete(LAZY_AUDIT);
+  });
+
+  // ── registerLazyTool uses registry schema as source of truth ──
+
+  test('registerLazyTool prefers registry schema over caller-provided definition when they differ', async () => {
+    // Spin up a fresh server (not the shared HTTP one) to test registerLazyTool in isolation
+    const freshServer = new MCPServer();
+    const TOOL_NAME = '__schema_truth__';
+
+    defineToolEntry(
+      { name: TOOL_NAME, description: 'registry description', inputSchema: { type: 'object' as const, properties: { x: { type: 'string' } }, required: [] } },
+      () => Promise.resolve(async () => ({ content: [{ type: 'text' as const, text: 'ok' }] })),
+    );
+
+    // Call registerLazyTool with a DIFFERENT description — registry's should win
+    freshServer.registerLazyTool({
+      name: TOOL_NAME,
+      description: 'caller description (should be ignored)',
+      inputSchema: { type: 'object' as const, properties: {}, required: [] },
+    });
+    freshServer.setTier(3);
+
+    await freshServer.start({ transport: 'http', port: 19399 });
+    const res = await mcpPost(19399, { jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} });
+    await freshServer.stop();
+
+    const tools = (res.body.result as Record<string, unknown>).tools as Array<Record<string, unknown>>;
+    const entry = tools.find((t) => t.name === TOOL_NAME);
+    expect(entry).toBeDefined();
+    expect(entry!.description).toBe('registry description');
+
+    toolRegistry.delete(TOOL_NAME);
   });
 
   // ── health endpoint ──

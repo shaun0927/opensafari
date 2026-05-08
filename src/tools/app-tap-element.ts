@@ -219,34 +219,15 @@ export function registerAppTapElementTool(server: MCPServer): void {
         const axCenterX = match.frame.x + match.frame.width / 2;
         const axCenterY = match.frame.y + match.frame.height / 2;
 
-        // Convert from macOS-screen-points to iOS-points when the bridge
-        // emits `deviceContentMacOSPt` (#693 WU3). The conversion requires
-        // the iOS-point size of the device under test, which is looked up from
-        // the preset table by matching the simulator device name. When either
-        // size is unavailable (legacy bridge, unknown device, simctl failure)
-        // the coordinates are forwarded unchanged — same behavior as before.
-        let rawCenterX = axCenterX;
-        let rawCenterY = axCenterY;
-        const macOSPtSize = queryResult?.deviceContentMacOSPt;
-        if (macOSPtSize) {
-          const iosPtSize = await getIosPtSizeForDevice(deviceId);
-          if (iosPtSize) {
-            const converted = convertMacOSPtToIOSPt(
-              { x: axCenterX, y: axCenterY },
-              macOSPtSize,
-              iosPtSize,
-            );
-            rawCenterX = converted.x;
-            rawCenterY = converted.y;
-            console.error(
-              `[app_tap_element] macOS-pt→iOS-pt conversion applied: ` +
-                `macOSPt(${axCenterX.toFixed(2)}, ${axCenterY.toFixed(2)}) → ` +
-                `iOSPt(${rawCenterX.toFixed(2)}, ${rawCenterY.toFixed(2)}) ` +
-                `scale=(${(iosPtSize.width / macOSPtSize.width).toFixed(4)}, ` +
-                `${(iosPtSize.height / macOSPtSize.height).toFixed(4)})`,
-            );
-          }
-        }
+        // The macOS-pt → iOS-pt conversion (#693 WU3) is deferred until the
+        // coordinate-dispatch path below. AXPress (the fast path) drives the
+        // tap through the macOS AX API by element path and never consumes
+        // coordinates, so paying for a `simctl list` round-trip on every
+        // successful AXPress tap is pure waste. The lookup also has its
+        // own module-level cache, so repeated dispatches on the same UDID
+        // do not re-pay the simctl cost.
+        const rawCenterX = axCenterX;
+        const rawCenterY = axCenterY;
 
         // Sanitize the tap target. An accessibility tree that reports a
         // `visible: true` element with a frame whose center lands outside
@@ -389,6 +370,33 @@ export function registerAppTapElementTool(server: MCPServer): void {
           }
         }
 
+        // Convert from macOS-screen-points to iOS-points before dispatching
+        // through the coordinate input backend (#693 WU3). The AX bridge
+        // reports element frames in macOS-pt, but `sim-hid` / `simctl`
+        // consume iOS-pt. When `deviceContentMacOSPt` is missing (legacy
+        // bridge) or the device's iOS-pt size cannot be resolved (unknown
+        // device, simctl failure), the coordinates are forwarded unchanged
+        // — same behavior as before. The lookup is deferred to here (rather
+        // than running before AXPress) so successful AXPress taps avoid the
+        // `simctl list` round-trip entirely.
+        const macOSPtSize = queryResult?.deviceContentMacOSPt;
+        if (macOSPtSize) {
+          const iosPtSize = await getIosPtSizeForDevice(deviceId);
+          if (iosPtSize) {
+            const before = { x: centerX, y: centerY };
+            const converted = convertMacOSPtToIOSPt(before, macOSPtSize, iosPtSize);
+            centerX = converted.x;
+            centerY = converted.y;
+            console.error(
+              `[app_tap_element] macOS-pt→iOS-pt conversion applied: ` +
+                `macOSPt(${before.x.toFixed(2)}, ${before.y.toFixed(2)}) → ` +
+                `iOSPt(${centerX.toFixed(2)}, ${centerY.toFixed(2)}) ` +
+                `scale=(${(iosPtSize.width / macOSPtSize.width).toFixed(4)}, ` +
+                `${(iosPtSize.height / macOSPtSize.height).toFixed(4)})`,
+            );
+          }
+        }
+
         // Tap via input backend
         const backend = await getInputBackend(deviceId, getWebKitClient(deviceId));
         const { meta } = await runInputOp(backend, deviceId, () =>
@@ -519,17 +527,44 @@ function sleep(ms: number): Promise<void> {
  * or the simctl call fails — callers treat `null` as "no conversion available"
  * and fall back to using raw AX-frame coordinates.
  */
+const iosPtSizeCache = new Map<string, Size2D | null>();
+
 async function getIosPtSizeForDevice(deviceId: string): Promise<Size2D | null> {
+  if (iosPtSizeCache.has(deviceId)) {
+    return iosPtSizeCache.get(deviceId) ?? null;
+  }
   try {
     const manager = new SimulatorManager();
     const device = await manager.getDevice(deviceId);
-    if (!device) return null;
-    const preset = Object.values(DEVICE_PRESETS).find((p) => p.name === device.name);
-    if (!preset) return null;
-    return { width: preset.w, height: preset.h };
+    if (!device) {
+      // Transient: simctl could not see the device on this call. A later
+      // dispatch after simctl recovers should retry, so do NOT memoize
+      // this failure (otherwise one transient error permanently disables
+      // coordinate conversion for the UDID until process restart).
+      return null;
+    }
+    const deviceNameLower = device.name.toLowerCase();
+    const preset = Object.values(DEVICE_PRESETS).find(
+      (p) => p.name.toLowerCase() === deviceNameLower,
+    );
+    const result: Size2D | null = preset
+      ? { width: preset.w, height: preset.h }
+      : null;
+    // simctl returned a stable device descriptor — caching the preset
+    // hit-or-miss is safe (the device's name and the preset table are
+    // both static for this process). Transient simctl failures handled
+    // by the early return above remain un-cached.
+    iosPtSizeCache.set(deviceId, result);
+    return result;
   } catch {
+    // Same rationale as the !device branch — never cache a thrown error.
     return null;
   }
+}
+
+/** @internal — test-only hook to reset the per-process iOS-pt size cache. */
+export function __resetIosPtSizeCacheForTests(): void {
+  iosPtSizeCache.clear();
 }
 
 /**

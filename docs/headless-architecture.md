@@ -569,7 +569,93 @@ See [Memory Budget](memory-budget.md) for the per-cache retention budget and evi
 
 ---
 
-## 9. References
+## 9. Batching API (#705)
+
+### Motivation
+
+Every call to `SimulatorKitHIDInputBackend` spawns a short-lived
+`sim-hid-bridge` child process (~10–50 ms OS overhead per spawn on a typical
+macOS host). When a test workflow sends many taps in rapid succession —
+filling a PIN pad, navigating a multi-step carousel, clicking through a
+sequence of buttons — each `tap()` call pays that spawn cost independently.
+
+The batching API introduced in issue #705 provides an explicit way to
+express that a set of taps forms a logical unit, enabling callers to avoid
+repeated `getInputBackend()` resolution overhead and laying the groundwork
+for a future single-spawn batch subcommand in the Swift bridge.
+
+### `supportsBatching()` capability flag
+
+Every `InputBackend` implementation exposes:
+
+```typescript
+supportsBatching(): boolean;
+```
+
+Callers **must** check this before calling `tapBatch()`. The method is
+absent on backends that return `false`.
+
+### `tapBatch(deviceId, events[])` optional method
+
+Available only on backends where `supportsBatching()` returns `true`.
+
+```typescript
+interface BatchTapEvent {
+  x: number;
+  y: number;
+  duration?: number; // long-press duration in seconds
+}
+
+tapBatch?(deviceId: string, events: BatchTapEvent[]): Promise<void>;
+```
+
+Events are dispatched in order. If any event fails the batch stops and
+rejects with that error — already-dispatched events are NOT rolled back
+(HID injection is fire-and-forget at the OS level).
+
+### Backend support matrix
+
+| Backend | `supportsBatching()` | `tapBatch` available | Reason |
+|---------|---------------------|----------------------|--------|
+| `SimulatorKitHIDInputBackend` | `true` | Yes | Compiled bridge binary; each spawn is the dominant cost |
+| `SimctlInputBackend` | `false` | No | Each invocation opens a separate Xcode IPC channel — no spawn reduction possible |
+| `WebKitInputBackend` | `false` | No | In-process JS injection over an open WebSocket — no spawn overhead |
+| `FlutterVMInputBackend` | `false` | No | `evaluate` over WebSocket — no spawn overhead |
+| `AppleScriptInputBackend` | `false` | No | Opt-in focus-stealing path; per-tap activation cost is inherent to the backend design |
+| `PointerServiceInputBackend` | `false` | No | Phase 1 experimental; batching deferred to Phase 2 of #590 |
+
+### Usage pattern
+
+```typescript
+const backend = await getInputBackend(deviceId);
+
+if (backend.supportsBatching() && backend.tapBatch) {
+  // Preferred for repeated taps on a stable simhid backend
+  await backend.tapBatch(deviceId, [
+    { x: 100, y: 200 },
+    { x: 150, y: 250 },
+    { x: 200, y: 300 },
+  ]);
+} else {
+  // Fallback: per-call dispatch for backends without batching support
+  for (const { x, y } of taps) {
+    await backend.tap(deviceId, x, y);
+  }
+}
+```
+
+### AppleScript activation caching (opt-in path only)
+
+`AppleScriptInputBackend` caches the last Simulator activation timestamp with
+a 2 s TTL. Consecutive operations within the same burst (e.g. typing a PIN
+digit by digit via `keypress` in a loop) skip the `osascript activate`
+call and 150 ms settle delay when Simulator is believed to still be
+frontmost. This optimisation is scoped to the opt-in focus-stealing path
+and does **not** affect any headless tier.
+
+---
+
+## 10. References
 
 ### Related source files
 
@@ -605,3 +691,4 @@ See [Memory Budget](memory-budget.md) for the per-cache retention budget and evi
 | [#496](https://github.com/shaun0927/opensafari/issues/496) | This document |
 | [#537](https://github.com/shaun0927/opensafari/pull/537) | Disable SimHID tap/swipe routing on Xcode 26+ while the Apple regression is open |
 | [#552](https://github.com/shaun0927/opensafari/issues/552) | `AccessibilityPressInputBackend` (Tier 1.5) — headless element-targeted tap/focus on Xcode 26+ |
+| [#705](https://github.com/shaun0927/opensafari/issues/705) | Reduce process-spawn overhead in native input routing — batching API (`supportsBatching` / `tapBatch`) on `SimulatorKitHIDInputBackend`; activation caching on `AppleScriptInputBackend` (opt-in path only) |

@@ -11,7 +11,11 @@ jest.mock('../../src/mcp-server', () => {
 });
 
 import { MCPServer } from '../../src/mcp-server';
-import { registerAppTapElementTool, sanitizeTapTarget } from '../../src/tools/app-tap-element';
+import {
+  registerAppTapElementTool,
+  sanitizeTapTarget,
+  __resetIosPtSizeCacheForTests,
+} from '../../src/tools/app-tap-element';
 import type { AXNode, AXQueryResult } from '../../src/native/ax-types';
 import { DEVICE_PRESETS } from '../../src/simulator/presets';
 
@@ -132,6 +136,10 @@ beforeAll(() => {
 beforeEach(() => {
   jest.clearAllMocks();
   jest.useRealTimers();
+  // The iOS-pt size cache is module-level so a previous test's resolved
+  // size would otherwise leak into subsequent tests that change the
+  // `mockGetDevice` return value (e.g. preset hit → preset miss).
+  __resetIosPtSizeCacheForTests();
   // Reset the press mock entirely — `clearAllMocks` does not drain the
   // `mockResolvedValueOnce` / `mockRejectedValueOnce` queue, so an
   // overridden once-value from a previous test would otherwise be

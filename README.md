@@ -190,6 +190,10 @@ opensafari serve
   → All simulators start already logged in
 ```
 
+Auth profiles are JSON files stored under `~/.opensafari/auth/`. Each profile contains the site name, capture timestamp, current URL, cookies, cookie domain groups, localStorage, and sessionStorage needed to restore login state. On POSIX systems, OpenSafari creates new auth profile directories as private `0700` directories and profile files as private `0600` files, then updates profiles with an atomic same-directory replacement.
+
+Delete saved login state with `opensafari auth delete myapp.com`, or remove the matching `~/.opensafari/auth/myapp.com.json` file.
+
 ### 4. iOS-Specific Auto-Detection
 
 Built-in QA checks that run on real Safari — no approximation:
