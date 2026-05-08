@@ -7,9 +7,16 @@
  * - Mixed input: redirect stubs are expanded, inline targets pass through.
  * - Mixed input with one failing redirect: that entry contributes [], others resolve.
  * - Empty input: returns [] with no redirect calls.
+ *
+ * Uses typed fixture builders from tests/helpers/webkit-rdp-fixtures.ts —
+ * no raw `as any` casts needed.
  */
 
 import { WebKitClient } from '../../src/webkit/client';
+import {
+  makeWebKitTarget,
+  makeDeviceRedirectStub,
+} from '../helpers/webkit-rdp-fixtures';
 
 type ClientPrivate = {
   httpGet: (url: string) => Promise<string>;
@@ -33,18 +40,8 @@ describe('WebKitClient.listTargets redirect resolution', () => {
 
   it('passes through inline targets without issuing redirect requests', async () => {
     const inline = [
-      {
-        id: 'page-1',
-        title: 'Inline A',
-        url: 'https://example.com/a',
-        webSocketDebuggerUrl: 'ws://localhost:9322/devtools/page/page-1',
-      },
-      {
-        id: 'page-2',
-        title: 'Inline B',
-        url: 'https://example.com/b',
-        webSocketDebuggerUrl: 'ws://localhost:9322/devtools/page/page-2',
-      },
+      makeWebKitTarget({ id: 'page-1', title: 'Inline A', url: 'https://example.com/a', webSocketDebuggerUrl: 'ws://localhost:9322/devtools/page/page-1' }),
+      makeWebKitTarget({ id: 'page-2', title: 'Inline B', url: 'https://example.com/b', webSocketDebuggerUrl: 'ws://localhost:9322/devtools/page/page-2' }),
     ];
 
     const spy = jest
@@ -61,22 +58,15 @@ describe('WebKitClient.listTargets redirect resolution', () => {
   });
 
   it('expands every redirect stub when the top-level /json is all redirects', async () => {
-    const topLevel = [{ url: 'localhost:9322' }, { url: 'localhost:9323' }];
+    const topLevel = [
+      makeDeviceRedirectStub({ url: 'localhost:9322' }),
+      makeDeviceRedirectStub({ url: 'localhost:9323' }),
+    ];
     const firstDevice = [
-      {
-        id: 'page-a',
-        title: 'Device 1 page',
-        url: 'https://a.example',
-        webSocketDebuggerUrl: 'ws://localhost:9322/devtools/page/page-a',
-      },
+      makeWebKitTarget({ id: 'page-a', title: 'Device 1 page', url: 'https://a.example', webSocketDebuggerUrl: 'ws://localhost:9322/devtools/page/page-a' }),
     ];
     const secondDevice = [
-      {
-        id: 'page-b',
-        title: 'Device 2 page',
-        url: 'https://b.example',
-        webSocketDebuggerUrl: 'ws://localhost:9323/devtools/page/page-b',
-      },
+      makeWebKitTarget({ id: 'page-b', title: 'Device 2 page', url: 'https://b.example', webSocketDebuggerUrl: 'ws://localhost:9323/devtools/page/page-b' }),
     ];
 
     const spy = jest
@@ -97,21 +87,11 @@ describe('WebKitClient.listTargets redirect resolution', () => {
 
   it('resolves mixed redirect + inline entries per-entry, not all-or-nothing', async () => {
     const topLevel = [
-      { url: 'localhost:9322' },
-      {
-        id: 'page-inline',
-        title: 'Inline next to redirect',
-        url: 'https://example.com',
-        webSocketDebuggerUrl: 'ws://localhost:9322/devtools/page/page-inline',
-      },
+      makeDeviceRedirectStub({ url: 'localhost:9322' }),
+      makeWebKitTarget({ id: 'page-inline', title: 'Inline next to redirect', url: 'https://example.com', webSocketDebuggerUrl: 'ws://localhost:9322/devtools/page/page-inline' }),
     ];
     const redirected = [
-      {
-        id: 'page-device',
-        title: 'Inside redirect',
-        url: 'https://device.example',
-        webSocketDebuggerUrl: 'ws://localhost:9322/devtools/page/page-device',
-      },
+      makeWebKitTarget({ id: 'page-device', title: 'Inside redirect', url: 'https://device.example', webSocketDebuggerUrl: 'ws://localhost:9322/devtools/page/page-device' }),
     ];
 
     const spy = jest
@@ -136,22 +116,12 @@ describe('WebKitClient.listTargets redirect resolution', () => {
 
   it('keeps other entries when one redirect fails to resolve', async () => {
     const topLevel = [
-      { url: 'localhost:9322' }, // will fail
-      { url: 'localhost:9323' }, // will succeed
-      {
-        id: 'page-inline',
-        title: 'Inline survivor',
-        url: 'https://example.com',
-        webSocketDebuggerUrl: 'ws://localhost:9324/devtools/page/page-inline',
-      },
+      makeDeviceRedirectStub({ url: 'localhost:9322' }), // will fail
+      makeDeviceRedirectStub({ url: 'localhost:9323' }), // will succeed
+      makeWebKitTarget({ id: 'page-inline', title: 'Inline survivor', url: 'https://example.com', webSocketDebuggerUrl: 'ws://localhost:9324/devtools/page/page-inline' }),
     ];
     const secondDevice = [
-      {
-        id: 'page-ok',
-        title: 'Resolved page',
-        url: 'https://ok.example',
-        webSocketDebuggerUrl: 'ws://localhost:9323/devtools/page/page-ok',
-      },
+      makeWebKitTarget({ id: 'page-ok', title: 'Resolved page', url: 'https://ok.example', webSocketDebuggerUrl: 'ws://localhost:9323/devtools/page/page-ok' }),
     ];
 
     jest
