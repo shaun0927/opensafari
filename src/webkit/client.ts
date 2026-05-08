@@ -394,13 +394,29 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
   /**
    * Enable a domain on a specific target (tab).
    * Tracks the domain per-target so it can be re-enabled after target recreation.
+   * No-ops if the domain is already enabled for this target (avoids duplicate RPCs).
    */
   async enableDomainForTarget(domain: string, targetId: string): Promise<void> {
-    await this.sendToTarget(`${domain}.enable`, undefined, targetId);
-    if (!this.enabledDomainsPerTarget.has(targetId)) {
+    const hadEntry = this.enabledDomainsPerTarget.has(targetId);
+    if (!hadEntry) {
       this.enabledDomainsPerTarget.set(targetId, new Set());
     }
-    this.enabledDomainsPerTarget.get(targetId)!.add(domain);
+    const targetDomains = this.enabledDomainsPerTarget.get(targetId)!;
+    if (targetDomains.has(domain)) {
+      return;
+    }
+    try {
+      await this.sendToTarget(`${domain}.enable`, undefined, targetId);
+      targetDomains.add(domain);
+    } catch (err) {
+      // If the RPC fails for an invalid/closed target, we won't receive a
+      // Target.targetDestroyed cleanup — drop the freshly-created empty Set
+      // ourselves so the map does not grow unboundedly.
+      if (!hadEntry && targetDomains.size === 0) {
+        this.enabledDomainsPerTarget.delete(targetId);
+      }
+      throw err;
+    }
   }
 
   // ========== Multi-Tab Target Management ==========
@@ -561,18 +577,28 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
       }
     }
 
-    // P0-1: Check if we actually broke out or timed out
-    const finalReadyState = await this.evaluate<string>('document.readyState').catch(() => '');
+    // P0-1 + P0-2: Batch final state reads into ONE evaluateValue call (saves 2 extra RPCs).
+    // Reads readyState, current URL, and HTTP status together so the navigation path
+    // issues exactly one Runtime.evaluate for all three values.
+    const navState = await evaluateValue<{ url: string; readyState: string; status: number }>(
+      this,
+      `(function() {
+        var rs = document.readyState;
+        var url = document.URL;
+        var st = 200;
+        try { var e = performance.getEntriesByType('navigation')[0]; st = e ? (e.responseStatus || 200) : 200; } catch(ex) {}
+        return { url: url, readyState: rs, status: st };
+      })()`,
+    ).catch(() => ({ url: options.url, readyState: '', status: 200 }));
+
+    const finalReadyState = navState.readyState;
+    const currentUrl = navState.url;
+    const status = navState.status;
+
     const expectedState = waitUntil === 'domcontentloaded' ? 'interactive' : 'complete';
     if (finalReadyState !== 'complete' && finalReadyState !== expectedState) {
       throw new TimeoutError(`Navigation timeout after ${navTimeout}ms (readyState: ${finalReadyState})`);
     }
-
-    // P0-2: Try to get real HTTP status from Performance API
-    const currentUrl = await this.evaluate<string>('document.URL').catch(() => options.url);
-    const status = await this.evaluate<number>(
-      `(function() { try { var e = performance.getEntriesByType('navigation')[0]; return e ? e.responseStatus || 200 : 200; } catch(ex) { return 200; } })()`
-    ).catch(() => 200);
 
     return {
       url: currentUrl,
