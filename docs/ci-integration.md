@@ -6,6 +6,23 @@ API gives you a reliable non-zero exit code when critical issues are found.
 
 ## GitHub Actions
 
+### Dependency audit policy
+
+OpenSafari separates release-blocking runtime dependency risk from development dependency hygiene:
+
+- `npm run audit:prod` runs `npm audit --omit=dev` and is the production release gate. Any
+  runtime dependency vulnerability reported by this command blocks publishing.
+- `npm run audit:all` runs the full `npm audit`, including `devDependencies`, as a warning-only
+  hygiene check in CI. It reports the development toolchain findings without blocking PRs or
+  releases by itself.
+- JSON variants are available as `npm run audit:prod:json` and `npm run audit:all:json` for
+  automation that needs structured output.
+
+The GitHub Actions CI workflow names these checks `Runtime dependency audit (blocking)` and
+`Dev dependency hygiene audit (warning only)` so CI logs distinguish production package risk from
+development tooling findings. The publish workflow repeats the runtime audit as
+`Runtime dependency audit (release gate)` immediately before distribution verification and publish.
+
 ### Basic JUnit workflow
 
 The example below audits a staging URL on every push to `main`, publishes results to GitHub's
