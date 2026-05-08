@@ -1,9 +1,8 @@
-import { SimctlExecutor } from './simctl';
+import { SimctlExecutor, SimctlError, SimulatorStateCache } from './simctl';
 import { SimulatorDevice, SimulatorRuntime } from './types';
 import {
   listDevices as catalogListDevices,
   listRuntimes as catalogListRuntimes,
-  getDevice as catalogGetDevice,
   resolveDevice as catalogResolveDevice,
 } from './device-catalog';
 import {
@@ -45,8 +44,21 @@ export {
 // Re-export RotationResult from ui-controller for backward compatibility
 export type { RotationResult } from './ui-controller';
 
+/**
+ * TTL for the per-device state cache inside SimulatorManager.
+ * Sized to match the longest polling interval used in the lifecycle module
+ * (1000 ms) so that multiple callers within a single tick share one
+ * `simctl list devices` parse, but the next tick always sees fresh data.
+ */
+const STATE_CACHE_TTL_MS = 900;
+
 export class SimulatorManager {
   private simctl = new SimctlExecutor();
+  /**
+   * Short-lived cache for device states during polling loops.
+   * Invalidated immediately on any lifecycle mutation (boot / shutdown / delete).
+   */
+  private stateCache = new SimulatorStateCache(STATE_CACHE_TTL_MS);
 
   async listDevices(): Promise<SimulatorDevice[]> {
     return catalogListDevices(this.simctl);
@@ -62,7 +74,85 @@ export class SimulatorManager {
   }
 
   async getDevice(deviceId: string): Promise<SimulatorDevice | null> {
-    return catalogGetDevice(this.simctl, deviceId);
+    const devices = await this.listDevices();
+    const device = devices.find(d => d.udid === deviceId) ?? null;
+    if (device) {
+      this.stateCache.set(deviceId, device.state);
+    }
+    return device;
+  }
+
+  /**
+   * Return the booted/shutdown state of a single device without always
+   * parsing the full device list. Used exclusively by polling loops.
+   *
+   * Strategy (in order of preference):
+   *   1. Short-lived cache hit — free, shared across concurrent callers within
+   *      the same poll tick.  Skipped when `opts.bypassCache` is true (used by
+   *      shutdown polling so it can observe the transient ShuttingDown state).
+   *   2. Per-UDID `simctl list devices <udid> -j` — narrow pure-read command
+   *      that returns only the JSON for the matching device.  Much cheaper than
+   *      the full device-list parse because CoreSimulator filters server-side.
+   *
+   * The result is placed into the cache so that sibling callers in the same
+   * polling tick benefit from the shared read.
+   *
+   * NOTE: `simctl bootstatus -b` was intentionally NOT used here.  The `-b`
+   * flag is a MUTATING operation (boots the device if not already booted) and
+   * therefore breaks the read-only contract expected by callers.
+   */
+  async getDeviceState(
+    deviceId: string,
+    opts?: { bypassCache?: boolean },
+  ): Promise<SimulatorDevice['state'] | null> {
+    const bypassCache = opts?.bypassCache === true;
+
+    // 1. Cache hit — shared across concurrent callers within the same tick.
+    //    Bypass during shutdown polling so ShuttingDown is always visible.
+    if (!bypassCache) {
+      const cached = this.stateCache.get(deviceId);
+      if (cached) {
+        return cached.state;
+      }
+    }
+
+    // 2. Per-UDID narrow list read — pure, no side-effects.
+    //    `simctl list devices <search> -j` filters by the search term
+    //    (case-insensitive contains match against the UDID string), so the
+    //    returned JSON is much smaller than the full device-list payload.
+    const state = await this.queryDeviceStateByUdid(deviceId);
+    if (state !== null) {
+      this.stateCache.set(deviceId, state);
+    }
+    return state;
+  }
+
+  /**
+   * Run `simctl list devices <udid> -j` and extract the state for the given
+   * UDID. Returns null when the device is not present in the output.
+   *
+   * This is a pure read with no side-effects on the simulator.
+   */
+  private async queryDeviceStateByUdid(deviceId: string): Promise<SimulatorDevice['state'] | null> {
+    interface PartialListResult {
+      devices: Record<string, Array<{ udid: string; state: string }>>;
+    }
+    try {
+      const result = await this.simctl.execJson<PartialListResult>(['list', 'devices', deviceId]);
+      for (const deviceList of Object.values(result.devices)) {
+        const entry = deviceList.find(d => d.udid === deviceId);
+        if (entry) {
+          return entry.state as SimulatorDevice['state'];
+        }
+      }
+      return null;
+    } catch (err) {
+      if (process.env.DEBUG) {
+        const msg = err instanceof SimctlError ? err.message : String(err);
+        console.error(`[SimulatorManager] queryDeviceStateByUdid ${deviceId}: error (${msg.slice(0, 80)})`);
+      }
+      return null;
+    }
   }
 
   /**
@@ -92,6 +182,7 @@ export class SimulatorManager {
       simctl: this.simctl,
       lookup: this,
       bootTimeoutMs: options?.timeout,
+      invalidateCache: udid => this.stateCache.invalidate(udid),
     });
   }
 
@@ -100,6 +191,7 @@ export class SimulatorManager {
       simctl: this.simctl,
       lookup: this,
       shutdownTimeoutMs: options?.timeout,
+      invalidateCache: udid => this.stateCache.invalidate(udid),
     });
   }
 
@@ -200,7 +292,8 @@ export class SimulatorManager {
   }
 
   async deleteDevice(deviceId: string): Promise<void> {
-    return lifecycleDeleteDevice(deviceId, { simctl: this.simctl });
+    await lifecycleDeleteDevice(deviceId, { simctl: this.simctl });
+    this.stateCache.invalidate(deviceId);
   }
 
   // === Status Bar Override — business logic in ./ui-controller ===

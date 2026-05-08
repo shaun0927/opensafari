@@ -30,6 +30,10 @@ import {
   tryCreatePointerServiceBackend,
 } from './pointer-service-input-backend';
 import { timedInput } from '../metrics/input-telemetry';
+import {
+  buildLongPressScript,
+  buildSwipeScript,
+} from '../webkit/dom-input-scripts';
 
 const execFileAsync = promisify(execFile);
 
@@ -53,6 +57,18 @@ export type InputBackendKind =
   | 'simhid'
   | 'ax-press'
   | 'pointer-service';
+
+/**
+ * A single tap event used in batch dispatch. Mirrors the signature of
+ * `InputBackend.tap` but excludes the `deviceId` (supplied once at the
+ * batch-call level) to avoid repetition in large queues.
+ */
+export interface BatchTapEvent {
+  x: number;
+  y: number;
+  /** Optional long-press duration in seconds. */
+  duration?: number;
+}
 
 export interface InputBackend {
   /** Stable identifier used for observability / audit logging. */
@@ -80,6 +96,40 @@ export interface InputBackend {
   typeText(deviceId: string, text: string, delayMs?: number): Promise<void>;
   keypress(deviceId: string, keyCode: string): Promise<void>;
   sendKey(deviceId: string, keyName: string): Promise<void>;
+
+  /**
+   * Whether this backend supports the `tapBatch()` method for submitting
+   * multiple tap events in a single logical call. Callers MUST check this
+   * before calling `tapBatch()` — the method is absent on backends that
+   * return `false`.
+   *
+   * **Unsupported combinations**: `tapBatch` is intentionally NOT available
+   * on `SimctlInputBackend` (each simctl invocation opens a separate Xcode
+   * process, so batching at the TS level provides no meaningful reduction),
+   * `WebKitInputBackend` (JS injection is already in-process with no spawn
+   * cost), `FlutterVMInputBackend` (same — evaluate over a WebSocket),
+   * `AppleScriptInputBackend` (opt-in focus-stealing path; batching would
+   * hide per-tap activation overhead rather than remove it), and
+   * `PointerServiceInputBackend` (tap-ps subcommand is experimental;
+   * batching is deferred until Phase 2 of #590).
+   */
+  supportsBatching(): boolean;
+
+  /**
+   * Submit multiple tap events to `deviceId` sequentially, reducing the
+   * per-call overhead that a caller would otherwise pay by invoking
+   * `tap()` in a loop.
+   *
+   * Only available when `supportsBatching()` returns `true`. Callers must
+   * guard with `supportsBatching()` before calling this method; calling
+   * it on a backend that does not advertise batching support is a
+   * programming error and will throw.
+   *
+   * The events are dispatched in order. If any event fails, the batch
+   * stops and rejects with that error — already-dispatched events are
+   * NOT rolled back (HID injection is fire-and-forget at the OS level).
+   */
+  tapBatch?(deviceId: string, events: BatchTapEvent[]): Promise<void>;
 }
 
 // ── SimctlInputBackend ───────────────────────────────────────────────────────
@@ -149,6 +199,15 @@ export class SimctlInputBackend implements InputBackend {
       await this.simctl.exec(['io', deviceId, 'sendkey', keyName]);
     });
   }
+
+  /**
+   * Batching is not supported on SimctlInputBackend. Each `xcrun simctl io
+   * input` invocation opens a separate Xcode IPC channel; accumulating calls
+   * at the TypeScript level would not reduce that per-call overhead.
+   */
+  supportsBatching(): boolean {
+    return false;
+  }
 }
 
 // ── AppleScriptInputBackend ──────────────────────────────────────────────────
@@ -202,15 +261,54 @@ export class AppleScriptInputBackend implements InputBackend {
   /** Set of deviceIds that have already emitted the AX fallback warning. */
   private warnedDevices = new Set<string>();
 
+  /**
+   * Timestamp of the last successful Simulator activation (ms since epoch).
+   * Retained for observability and potential future diagnostics; no longer
+   * used to gate the frontmost-app check — every `activateSimulator()` call
+   * queries System Events to confirm current focus state before deciding
+   * whether to activate.
+   *
+   * This field is scoped to the AppleScript backend instance and does NOT
+   * affect any headless tier. It is NOT shared with `getInputBackend()`.
+   */
+  private static readonly ACTIVATION_CACHE_TTL_MS = 500;
+  private lastActivationAt = 0;
+
   private async runAppleScript(lines: string[]): Promise<string> {
     const args = lines.flatMap((line) => ['-e', line]);
     const { stdout } = await execFileAsync('osascript', args, { timeout: 10_000 });
     return stdout.trim();
   }
 
+  /**
+   * Activate Simulator.app via AppleScript when it is not already frontmost.
+   *
+   * On every call we query System Events for the current frontmost process
+   * name. If Simulator is already frontmost we skip the `activate` call and
+   * the 150 ms settle delay — the frontmost check is a single cheap osascript
+   * IPC round-trip (~5–10 ms) and is always correct regardless of how recently
+   * the last activation occurred.
+   *
+   * `lastActivationAt` is retained for observability / future diagnostics but
+   * no longer gates the frontmost check — removing the TTL early-return
+   * ensures input is never delivered to the wrong app when focus changes
+   * between consecutive calls in a burst.
+   *
+   * This optimisation applies ONLY to the opt-in focus-stealing path —
+   * all headless backends skip this method entirely.
+   */
   private async activateSimulator(): Promise<void> {
-    await this.runAppleScript(['tell application "Simulator" to activate']);
-    await delay(150);
+    // Always check frontmost state; the IPC cost (~5–10 ms) is cheaper than
+    // the risk of delivering input to the wrong app after a focus change.
+    const frontApp = await this.runAppleScript([
+      'tell application "System Events" to set frontApp to name of first application process whose frontmost is true',
+      'return frontApp',
+    ]);
+    if (frontApp !== 'Simulator') {
+      await this.runAppleScript(['tell application "Simulator" to activate']);
+      await delay(150);
+    }
+    this.lastActivationAt = Date.now();
   }
 
   /**
@@ -430,6 +528,16 @@ export class AppleScriptInputBackend implements InputBackend {
       ]);
     });
   }
+
+  /**
+   * Batching is not supported on AppleScriptInputBackend. This is the
+   * opt-in focus-stealing path; each tap must activate Simulator.app first,
+   * so there is no meaningful process-spawn reduction available. Callers
+   * that need repeated taps via this backend must invoke `tap()` in a loop.
+   */
+  supportsBatching(): boolean {
+    return false;
+  }
 }
 
 // ── WebKitInputBackend ──────────────────────────────────────────────────
@@ -480,18 +588,9 @@ export class WebKitInputBackend implements InputBackend {
     await timedInput(this.kind, 'tap', deviceId, async () => {
       if (duration && duration > 0) {
         // Long press via touch events with delay
-        await this.client.evaluate(`
-          (async function(x, y, duration) {
-            var el = document.elementFromPoint(x, y);
-            if (!el) return;
-            var touch = document.createTouch(window, el, 1, x, y, x, y);
-            var touchList = document.createTouchList(touch);
-            el.dispatchEvent(new TouchEvent('touchstart', { touches: touchList, changedTouches: touchList, bubbles: true }));
-            await new Promise(function(r) { setTimeout(r, duration); });
-            var emptyList = document.createTouchList();
-            el.dispatchEvent(new TouchEvent('touchend', { touches: emptyList, changedTouches: touchList, bubbles: true }));
-          })(${x}, ${y}, ${duration * 1000})
-        `);
+        await this.client.evaluate(
+          buildLongPressScript({ x, y, durationMs: duration * 1000 }),
+        );
       } else {
         // Normal tap — delegate to BrowserBackend.click() which dispatches
         // touchstart → touchend → click with emulateUserGesture
@@ -513,30 +612,12 @@ export class WebKitInputBackend implements InputBackend {
       const stepDelay = ((duration ?? 0.5) * 1000) / steps;
 
       // Two-pronged: window.scrollBy for native scroll + touch events for JS handlers
-      await this.client.evaluate(`
-        (async function(sx, sy, ex, ey, scrollX, scrollY, steps, stepDelay) {
-          window.scrollBy(scrollX, scrollY);
-
-          var el = document.elementFromPoint(sx, sy);
-          if (!el) el = document.body;
-          var makeTouch = function(x, y) { return document.createTouch(window, el, 1, x, y, x, y); };
-          var startTouch = makeTouch(sx, sy);
-          var startList = document.createTouchList(startTouch);
-          el.dispatchEvent(new TouchEvent('touchstart', { touches: startList, changedTouches: startList, bubbles: true }));
-          for (var i = 1; i <= steps; i++) {
-            var x = sx + (ex - sx) * (i / steps);
-            var y = sy + (ey - sy) * (i / steps);
-            var moveTouch = makeTouch(x, y);
-            var moveList = document.createTouchList(moveTouch);
-            el.dispatchEvent(new TouchEvent('touchmove', { touches: moveList, changedTouches: moveList, bubbles: true }));
-            await new Promise(function(r) { setTimeout(r, stepDelay); });
-          }
-          var endTouch = makeTouch(ex, ey);
-          var endList = document.createTouchList(endTouch);
-          var emptyList = document.createTouchList();
-          el.dispatchEvent(new TouchEvent('touchend', { touches: emptyList, changedTouches: endList, bubbles: true }));
-        })(${startX}, ${startY}, ${endX}, ${endY}, ${scrollX}, ${scrollY}, ${steps}, ${stepDelay})
-      `);
+      await this.client.evaluate(
+        buildSwipeScript({
+          startX, startY, endX, endY, steps, stepDelayMs: stepDelay,
+          scroll: { scrollX, scrollY },
+        }),
+      );
     });
   }
 
@@ -583,6 +664,16 @@ export class WebKitInputBackend implements InputBackend {
       const mapped = SENDKEY_TO_WEBKIT_KEY[keyName] ?? keyName;
       await this.client.press(mapped);
     });
+  }
+
+  /**
+   * Batching is not supported on WebKitInputBackend. JS injection executes
+   * in-process over an already-established WebSocket — there is no process
+   * spawn overhead to reduce. Each `tap()` call is already near-zero-cost
+   * from a spawn perspective.
+   */
+  supportsBatching(): boolean {
+    return false;
   }
 }
 

@@ -29,7 +29,7 @@ describe('performance_audit tool registration', () => {
     const { registerPerformanceAuditTool } = await import('../../src/tools/performance-audit');
     registerPerformanceAuditTool(server);
     server.setTier(3);
-    await server.start({ transport: 'http', port: PORT });
+    await server.start({ transport: 'http', port: PORT, httpInsecure: true });
   });
 
   afterAll(async () => {

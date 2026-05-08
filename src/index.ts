@@ -63,6 +63,11 @@ export type { AutomationBackend, AutomationBackendBase, BackendType } from './ty
 export async function createServer(options?: {
   transport?: 'stdio' | 'http';
   port?: number;
+  host?: string;
+  authToken?: string;
+  httpInsecure?: boolean;
+  allowedOrigins?: string[];
+  httpHighRiskTools?: boolean;
   allTools?: boolean;
 }): Promise<MCPServer> {
   const server = new MCPServer();
@@ -80,6 +85,11 @@ export async function createServer(options?: {
   await server.start({
     transport: options?.transport ?? 'stdio',
     port: options?.port,
+    host: options?.host,
+    authToken: options?.authToken,
+    httpInsecure: options?.httpInsecure,
+    allowedOrigins: options?.allowedOrigins,
+    httpHighRiskTools: options?.httpHighRiskTools,
   });
   return server;
 }

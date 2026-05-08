@@ -14,7 +14,7 @@
  */
 
 import { SimulatorDevice } from './types';
-import { BootTimeoutError } from './errors';
+import { BootTimeoutError, DeviceNotFoundError } from './errors';
 import {
   DEFAULT_SIMULATOR_BOOT_TIMEOUT_MS,
   DEFAULT_SIMULATOR_SHUTDOWN_TIMEOUT_MS,
@@ -29,6 +29,16 @@ export interface LifecycleSimctl {
 export interface LifecycleDeviceLookup {
   getDevice(deviceId: string): Promise<SimulatorDevice | null>;
   resolveDevice(presetOrId: string): Promise<SimulatorDevice>;
+  /**
+   * Optional fast state-only read used by polling loops when available.
+   * Falls back to {@link getDevice} when absent. When present, callers may
+   * pass `bypassCache: true` to force a live read (e.g. to observe the
+   * transient `ShuttingDown` state during graceful shutdown polling).
+   */
+  getDeviceState?(
+    deviceId: string,
+    opts?: { bypassCache?: boolean },
+  ): Promise<SimulatorDevice['state'] | null>;
 }
 
 /**
@@ -45,6 +55,11 @@ export async function boot(
     sleep?: (ms: number) => Promise<void>;
     bootTimeoutMs?: number;
     pollIntervalMs?: number;
+    /**
+     * Optional callback invoked after every state-mutating simctl call
+     * (boot) so the caller can flush any short-lived state cache.
+     */
+    invalidateCache?: (udid: string) => void;
   },
 ): Promise<SimulatorDevice> {
   const {
@@ -53,6 +68,7 @@ export async function boot(
     sleep = (ms: number) => new Promise(r => setTimeout(r, ms)),
     bootTimeoutMs = DEFAULT_SIMULATOR_BOOT_TIMEOUT_MS,
     pollIntervalMs = 1000,
+    invalidateCache,
   } = deps;
 
   const device = await lookup.resolveDevice(presetOrId);
@@ -63,11 +79,32 @@ export async function boot(
   }
 
   await simctl.exec(['boot', device.udid]);
+  // Boot mutates state — flush any cached `Shutdown` reading so the polling
+  // loop below observes fresh data on the very first tick.
+  invalidateCache?.(device.udid);
 
   const start = Date.now();
   while (Date.now() - start < bootTimeoutMs) {
-    const current = await lookup.getDevice(device.udid);
-    if (current?.state === 'Booted') {
+    // Prefer the narrow state-only read when the lookup exposes it; fall back
+    // to a full getDevice call otherwise (preserves the legacy single-method
+    // contract used by older lifecycle tests).
+    let state: SimulatorDevice['state'] | null;
+    if (lookup.getDeviceState) {
+      state = await lookup.getDeviceState(device.udid);
+    } else {
+      const current = await lookup.getDevice(device.udid);
+      state = current?.state ?? null;
+    }
+
+    if (state === 'Booted') {
+      // Fetch full metadata once for the caller. If the lookup returns null
+      // the device was removed between the state read and this fetch (race
+      // condition). Returning a stale snapshot here would be silently wrong,
+      // so throw a clear error instead.
+      const current = await lookup.getDevice(device.udid);
+      if (!current) {
+        throw new DeviceNotFoundError(device.udid, []);
+      }
       return current;
     }
     await sleep(pollIntervalMs);
@@ -101,6 +138,11 @@ export async function shutdown(
     lookup: LifecycleDeviceLookup;
     sleep?: (ms: number) => Promise<void>;
     shutdownTimeoutMs?: number;
+    /**
+     * Optional callback invoked after every state-mutating simctl call
+     * (shutdown / erase) so the caller can flush any short-lived state cache.
+     */
+    invalidateCache?: (udid: string) => void;
   },
 ): Promise<void> {
   const {
@@ -108,10 +150,16 @@ export async function shutdown(
     lookup,
     sleep = (ms: number) => new Promise(r => setTimeout(r, ms)),
     shutdownTimeoutMs = DEFAULT_SIMULATOR_SHUTDOWN_TIMEOUT_MS,
+    invalidateCache,
   } = deps;
 
-  const device = await lookup.getDevice(deviceId);
-  if (!device || device.state === 'Shutdown') {
+  // Pre-check: read live state. When the lookup exposes a state-only read,
+  // bypass any short-lived cache so the transient `ShuttingDown` state is
+  // observable on every poll tick (a cache hit could mask it).
+  const initialState = lookup.getDeviceState
+    ? await lookup.getDeviceState(deviceId, { bypassCache: true })
+    : (await lookup.getDevice(deviceId))?.state ?? null;
+  if (!initialState || initialState === 'Shutdown') {
     return;
   }
 
@@ -121,12 +169,16 @@ export async function shutdown(
   } catch {
     // May already be shutting down — continue polling
   }
+  invalidateCache?.(deviceId);
 
-  // Poll until shutdown
+  // Poll until shutdown. Always bypass cache so ShuttingDown is visible on
+  // every tick.
   const start = Date.now();
   while (Date.now() - start < shutdownTimeoutMs) {
-    const current = await lookup.getDevice(deviceId);
-    if (!current || current.state === 'Shutdown') {
+    const state = lookup.getDeviceState
+      ? await lookup.getDeviceState(deviceId, { bypassCache: true })
+      : (await lookup.getDevice(deviceId))?.state ?? null;
+    if (!state || state === 'Shutdown') {
       return;
     }
     await sleep(1000);
@@ -135,9 +187,12 @@ export async function shutdown(
   // Retry shutdown once
   try {
     await simctl.exec(['shutdown', deviceId]);
+    invalidateCache?.(deviceId);
     await sleep(5000);
-    const current = await lookup.getDevice(deviceId);
-    if (!current || current.state === 'Shutdown') {
+    const state = lookup.getDeviceState
+      ? await lookup.getDeviceState(deviceId, { bypassCache: true })
+      : (await lookup.getDevice(deviceId))?.state ?? null;
+    if (!state || state === 'Shutdown') {
       return;
     }
   } catch {
@@ -151,6 +206,7 @@ export async function shutdown(
   // into a hard failure for MCP callers and was a behavior regression.
   console.error(`[lifecycle] Force erasing device ${deviceId} after shutdown timeout`);
   await simctl.exec(['erase', deviceId]);
+  invalidateCache?.(deviceId);
 }
 
 /**

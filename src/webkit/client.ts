@@ -17,6 +17,27 @@ import {
   DEFAULT_RECONNECT_BASE_DELAY_MS,
   DEFAULT_RECONNECT_MAX_DELAY_MS,
 } from '../config/defaults';
+import {
+  isRdpResponse,
+  isRdpEvent,
+  isTargetCreatedEvent,
+  isTargetDestroyedEvent,
+  isDispatchMessageFromTargetEvent,
+  isConsoleMessageAddedParams,
+  isRequestWillBeSentParams,
+  isResponseReceivedParams,
+  type RdpConsoleCallFrame,
+} from '../types/webkit-rdp';
+import {
+  buildTapScript,
+  buildLongPressScript,
+  buildSwipeScript,
+  buildSetValueScript,
+  buildAppendCharScript,
+} from './dom-input-scripts';
+import { evaluateValue } from './evaluate';
+import { EvaluationError } from './errors';
+export { EvaluationError } from './errors';
 
 export interface WebKitClientOptions {
   host: string;
@@ -41,7 +62,7 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
   private pendingRequests: Map<
     number,
     {
-      resolve: (value: any) => void;
+      resolve: (value: unknown) => void;
       reject: (error: Error) => void;
       timer: ReturnType<typeof setTimeout>;
     }
@@ -61,7 +82,7 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
   private innerPendingRequests: Map<
     number,
     {
-      resolve: (value: any) => void;
+      resolve: (value: unknown) => void;
       reject: (error: Error) => void;
       timer: ReturnType<typeof setTimeout>;
     }
@@ -234,7 +255,7 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
         this.innerPendingRequests.delete(innerId);
         reject(new TimeoutError(`${method} timed out after ${timeout}ms`));
       }, timeout);
-      this.innerPendingRequests.set(innerId, { resolve, reject, timer });
+      this.innerPendingRequests.set(innerId, { resolve: resolve as (value: unknown) => void, reject, timer });
     });
 
     // Track outer message for error propagation (e.g., invalid targetId)
@@ -269,7 +290,7 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
   }
 
   private handleMessage(data: string): void {
-    let msg: any;
+    let msg: unknown;
     try {
       msg = JSON.parse(data);
     } catch {
@@ -277,9 +298,9 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
     }
 
     // Handle Target events (multiplexing protocol)
-    if (msg.method === 'Target.targetCreated') {
-      const info = msg.params?.targetInfo;
-      if (info?.type === 'page') {
+    if (isTargetCreatedEvent(msg)) {
+      const info = msg.params.targetInfo;
+      if (info.type === 'page') {
         this.knownTargets.add(info.targetId);
         this.emit('target:created', { targetId: info.targetId, url: info.url });
 
@@ -309,8 +330,8 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
       return;
     }
 
-    if (msg.method === 'Target.targetDestroyed') {
-      const destroyedId = msg.params?.targetId;
+    if (isTargetDestroyedEvent(msg)) {
+      const destroyedId = msg.params.targetId;
       this.knownTargets.delete(destroyedId);
       this.enabledDomainsPerTarget.delete(destroyedId);
       this.emit('target:destroyed', { targetId: destroyedId });
@@ -323,15 +344,15 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
       return;
     }
 
-    if (msg.method === 'Target.dispatchMessageFromTarget') {
+    if (isDispatchMessageFromTargetEvent(msg)) {
       // This contains the REAL response to our domain commands
-      let innerMsg: any;
+      let innerMsg: unknown;
       try {
         innerMsg = JSON.parse(msg.params.message);
       } catch {
         return;
       }
-      if (innerMsg.id !== undefined) {
+      if (isRdpResponse(innerMsg)) {
         const pending = this.innerPendingRequests.get(innerMsg.id);
         if (pending) {
           clearTimeout(pending.timer);
@@ -347,7 +368,7 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
             pending.resolve(innerMsg.result);
           }
         }
-      } else if (innerMsg.method) {
+      } else if (isRdpEvent(innerMsg)) {
         // Inner event (e.g., Page.loadEventFired, Runtime.consoleAPICalled)
         // Include targetId so multi-tab consumers can filter by target
         const sourceTargetId = msg.params.targetId;
@@ -356,7 +377,7 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
       return;
     }
 
-    if (msg.id !== undefined) {
+    if (isRdpResponse(msg)) {
       // Outer ack response to Target.sendMessageToTarget — just clean up
       const pending = this.pendingRequests.get(msg.id);
       if (pending) {
@@ -373,7 +394,7 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
           );
         }
       }
-    } else if (msg.method) {
+    } else if (isRdpEvent(msg)) {
       // Other event notifications not handled above
       this.emit(msg.method, msg.params);
     }
@@ -391,13 +412,29 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
   /**
    * Enable a domain on a specific target (tab).
    * Tracks the domain per-target so it can be re-enabled after target recreation.
+   * No-ops if the domain is already enabled for this target (avoids duplicate RPCs).
    */
   async enableDomainForTarget(domain: string, targetId: string): Promise<void> {
-    await this.sendToTarget(`${domain}.enable`, undefined, targetId);
-    if (!this.enabledDomainsPerTarget.has(targetId)) {
+    const hadEntry = this.enabledDomainsPerTarget.has(targetId);
+    if (!hadEntry) {
       this.enabledDomainsPerTarget.set(targetId, new Set());
     }
-    this.enabledDomainsPerTarget.get(targetId)!.add(domain);
+    const targetDomains = this.enabledDomainsPerTarget.get(targetId)!;
+    if (targetDomains.has(domain)) {
+      return;
+    }
+    try {
+      await this.sendToTarget(`${domain}.enable`, undefined, targetId);
+      targetDomains.add(domain);
+    } catch (err) {
+      // If the RPC fails for an invalid/closed target, we won't receive a
+      // Target.targetDestroyed cleanup — drop the freshly-created empty Set
+      // ourselves so the map does not grow unboundedly.
+      if (!hadEntry && targetDomains.size === 0) {
+        this.enabledDomainsPerTarget.delete(targetId);
+      }
+      throw err;
+    }
   }
 
   // ========== Multi-Tab Target Management ==========
@@ -558,18 +595,28 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
       }
     }
 
-    // P0-1: Check if we actually broke out or timed out
-    const finalReadyState = await this.evaluate<string>('document.readyState').catch(() => '');
+    // P0-1 + P0-2: Batch final state reads into ONE evaluateValue call (saves 2 extra RPCs).
+    // Reads readyState, current URL, and HTTP status together so the navigation path
+    // issues exactly one Runtime.evaluate for all three values.
+    const navState = await evaluateValue<{ url: string; readyState: string; status: number }>(
+      this,
+      `(function() {
+        var rs = document.readyState;
+        var url = document.URL;
+        var st = 200;
+        try { var e = performance.getEntriesByType('navigation')[0]; st = e ? (e.responseStatus || 200) : 200; } catch(ex) {}
+        return { url: url, readyState: rs, status: st };
+      })()`,
+    ).catch(() => ({ url: options.url, readyState: '', status: 200 }));
+
+    const finalReadyState = navState.readyState;
+    const currentUrl = navState.url;
+    const status = navState.status;
+
     const expectedState = waitUntil === 'domcontentloaded' ? 'interactive' : 'complete';
     if (finalReadyState !== 'complete' && finalReadyState !== expectedState) {
       throw new TimeoutError(`Navigation timeout after ${navTimeout}ms (readyState: ${finalReadyState})`);
     }
-
-    // P0-2: Try to get real HTTP status from Performance API
-    const currentUrl = await this.evaluate<string>('document.URL').catch(() => options.url);
-    const status = await this.evaluate<number>(
-      `(function() { try { var e = performance.getEntriesByType('navigation')[0]; return e ? e.responseStatus || 200 : 200; } catch(ex) { return 200; } })()`
-    ).catch(() => 200);
 
     return {
       url: currentUrl,
@@ -581,12 +628,11 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
   async screenshot(options?: ScreenshotOptions): Promise<Buffer> {
     try {
       // Try WebKit Protocol: Page.snapshotRect
-      // Get viewport dimensions first
-      const viewport = await this.evaluate<{ w: number; h: number }>(
-        '({w: window.innerWidth, h: window.innerHeight})',
-      );
+      // Get viewport dimensions via evaluateValue fast path (returnByValue:true,
+      // single RPC — skips the objectId/callFunctionOn round-trip).
+      const viewport = await this.getViewportSize();
 
-      const clip = options?.clip ?? { x: 0, y: 0, width: viewport.w, height: viewport.h };
+      const clip = options?.clip ?? { x: 0, y: 0, width: viewport.width, height: viewport.height };
 
       const result = await this.send<{ dataURL: string }>('Page.snapshotRect', {
         x: clip.x,
@@ -792,18 +838,7 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
 
     // Dispatch touch tap: touchstart → touchend → click
     // Uses document.createTouch for iOS Safari compatibility (new Touch() not supported)
-    await this.evaluate(`
-      (function(x, y) {
-        var el = document.elementFromPoint(x, y);
-        if (!el) return;
-        var touch = document.createTouch(window, el, 1, x, y, x, y);
-        var touchList = document.createTouchList(touch);
-        var emptyList = document.createTouchList();
-        el.dispatchEvent(new TouchEvent('touchstart', { touches: touchList, changedTouches: touchList, bubbles: true }));
-        el.dispatchEvent(new TouchEvent('touchend', { touches: emptyList, changedTouches: touchList, bubbles: true }));
-        el.click();
-      })(${x}, ${y})
-    `, { emulateUserGesture: true });
+    await this.evaluate(buildTapScript({ x, y }), { emulateUserGesture: true });
   }
 
   async type(selector: string, text: string, options?: { delay?: number }): Promise<void> {
@@ -819,55 +854,18 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
     if (options?.delay) {
       // Character-by-character mode with delay
       for (const char of text) {
-        await this.evaluate(`
-          (function() {
-            var el = document.querySelector(${JSON.stringify(selector)});
-            if (!el) return;
-            var ev = new KeyboardEvent('keydown', { key: ${JSON.stringify(char)}, bubbles: true });
-            el.dispatchEvent(ev);
-            el.dispatchEvent(new KeyboardEvent('keypress', { key: ${JSON.stringify(char)}, bubbles: true }));
-            // Walk the element's own prototype chain to find the value setter.
-            // Using window.HTMLInputElement.prototype would resolve to the
-            // inspector realm's prototype, causing a cross-realm TypeError.
-            var p = Object.getPrototypeOf(el);
-            while (p && !Object.getOwnPropertyDescriptor(p, 'value')) {
-              p = Object.getPrototypeOf(p);
-            }
-            var desc = p ? Object.getOwnPropertyDescriptor(p, 'value') : null;
-            if (desc && desc.set) {
-              desc.set.call(el, el.value + ${JSON.stringify(char)});
-            } else {
-              el.value += ${JSON.stringify(char)};
-            }
-            el.dispatchEvent(new Event('input', { bubbles: true }));
-            el.dispatchEvent(new KeyboardEvent('keyup', { key: ${JSON.stringify(char)}, bubbles: true }));
-          })()
-        `, { emulateUserGesture: true });
+        await this.evaluate(
+          buildAppendCharScript({ selector, char }),
+          { emulateUserGesture: true },
+        );
         await new Promise(r => setTimeout(r, options.delay));
       }
     } else {
       // Fast mode: set value directly + dispatch events
-      await this.evaluate(`
-        (function() {
-          var el = document.querySelector(${JSON.stringify(selector)});
-          if (!el) return;
-          // Walk the element's own prototype chain to find the value setter.
-          // Using window.HTMLInputElement.prototype would resolve to the
-          // inspector realm's prototype, causing a cross-realm TypeError.
-          var p = Object.getPrototypeOf(el);
-          while (p && !Object.getOwnPropertyDescriptor(p, 'value')) {
-            p = Object.getPrototypeOf(p);
-          }
-          var desc = p ? Object.getOwnPropertyDescriptor(p, 'value') : null;
-          if (desc && desc.set) {
-            desc.set.call(el, ${JSON.stringify(text)});
-          } else {
-            el.value = ${JSON.stringify(text)};
-          }
-          el.dispatchEvent(new Event('input', { bubbles: true }));
-          el.dispatchEvent(new Event('change', { bubbles: true }));
-        })()
-      `, { emulateUserGesture: true });
+      await this.evaluate(
+        buildSetValueScript({ selector, value: text, dispatchEvents: 'input-change' }),
+        { emulateUserGesture: true },
+      );
     }
   }
 
@@ -886,18 +884,10 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
     if (!center) throw new Error(`Element not found: ${selector}`);
     const dur = duration ?? 500;
 
-    await this.evaluate(`
-      (async function(x, y, duration) {
-        var el = document.elementFromPoint(x, y);
-        if (!el) return;
-        var touch = document.createTouch(window, el, 1, x, y, x, y);
-        var touchList = document.createTouchList(touch);
-        el.dispatchEvent(new TouchEvent('touchstart', { touches: touchList, changedTouches: touchList, bubbles: true }));
-        await new Promise(function(r) { setTimeout(r, duration); });
-        var emptyList = document.createTouchList();
-        el.dispatchEvent(new TouchEvent('touchend', { touches: emptyList, changedTouches: touchList, bubbles: true }));
-      })(${center.x}, ${center.y}, ${dur})
-    `, { emulateUserGesture: true });
+    await this.evaluate(
+      buildLongPressScript({ x: center.x, y: center.y, durationMs: dur }),
+      { emulateUserGesture: true },
+    );
   }
 
   async swipe(direction: 'up' | 'down' | 'left' | 'right', speed?: number): Promise<void> {
@@ -915,28 +905,10 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
     };
     const { sx, sy, ex, ey } = coords[direction];
 
-    await this.evaluate(`
-      (async function(sx, sy, ex, ey, steps) {
-        var el = document.elementFromPoint(sx, sy);
-        if (!el) return;
-        var makeTouch = function(x, y) { return document.createTouch(window, el, 1, x, y, x, y); };
-        var startTouch = makeTouch(sx, sy);
-        var startList = document.createTouchList(startTouch);
-        el.dispatchEvent(new TouchEvent('touchstart', { touches: startList, changedTouches: startList, bubbles: true }));
-        for (var i = 1; i <= steps; i++) {
-          var x = sx + (ex - sx) * (i / steps);
-          var y = sy + (ey - sy) * (i / steps);
-          var moveTouch = makeTouch(x, y);
-          var moveList = document.createTouchList(moveTouch);
-          el.dispatchEvent(new TouchEvent('touchmove', { touches: moveList, changedTouches: moveList, bubbles: true }));
-          await new Promise(function(r) { setTimeout(r, 16); });
-        }
-        var endTouch = makeTouch(ex, ey);
-        var endList = document.createTouchList(endTouch);
-        var emptyList = document.createTouchList();
-        el.dispatchEvent(new TouchEvent('touchend', { touches: emptyList, changedTouches: endList, bubbles: true }));
-      })(${sx}, ${sy}, ${ex}, ${ey}, ${steps})
-    `, { emulateUserGesture: true });
+    await this.evaluate(
+      buildSwipeScript({ startX: sx, startY: sy, endX: ex, endY: ey, steps, stepDelayMs: 16 }),
+      { emulateUserGesture: true },
+    );
   }
 
   async press(key: string): Promise<void> {
@@ -1111,10 +1083,11 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
 
   onConsole(handler: (msg: { type: string; text: string }) => void): void {
     this.enableDomain('Console').then(() => {
-      this.on('Console.messageAdded', (params: any) => {
+      this.on('Console.messageAdded', (params: unknown) => {
+        const p = isConsoleMessageAddedParams(params) ? params : null;
         handler({
-          type: params.message?.level ?? params.message?.type ?? 'log',
-          text: params.message?.text ?? '',
+          type: p?.message?.level ?? p?.message?.type ?? 'log',
+          text: p?.message?.text ?? '',
         });
       });
     });
@@ -1128,10 +1101,11 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
 
   onRequest(handler: (request: { url: string; method: string }) => void): void {
     this.enableDomain('Network').then(() => {
-      this.on('Network.requestWillBeSent', (params: any) => {
+      this.on('Network.requestWillBeSent', (params: unknown) => {
+        const p = isRequestWillBeSentParams(params) ? params : null;
         handler({
-          url: params.request?.url ?? '',
-          method: params.request?.method ?? 'GET',
+          url: p?.request?.url ?? '',
+          method: p?.request?.method ?? 'GET',
         });
       });
     });
@@ -1139,10 +1113,11 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
 
   onResponse(handler: (response: { url: string; status: number }) => void): void {
     this.enableDomain('Network').then(() => {
-      this.on('Network.responseReceived', (params: any) => {
+      this.on('Network.responseReceived', (params: unknown) => {
+        const p = isResponseReceivedParams(params) ? params : null;
         handler({
-          url: params.response?.url ?? '',
-          status: params.response?.status ?? 0,
+          url: p?.response?.url ?? '',
+          status: p?.response?.status ?? 0,
         });
       });
     });
@@ -1153,11 +1128,12 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
     // WebKit reports unhandled JS errors via Console.messageAdded with level "error"
     // (Runtime.exceptionThrown is Chrome-specific and not available in WebKit)
     this.enableDomain('Console').then(() => {
-      this.on('Console.messageAdded', (params: any) => {
-        const msg = params.message ?? {};
+      this.on('Console.messageAdded', (params: unknown) => {
+        if (!isConsoleMessageAddedParams(params)) return;
+        const msg = params.message;
         if (msg.level === 'error' && msg.source === 'javascript') {
-          const frames = msg.stackTrace?.callFrames ?? [];
-          const stackLines = frames.map((f: any) =>
+          const frames: RdpConsoleCallFrame[] = msg.stackTrace?.callFrames ?? [];
+          const stackLines = frames.map((f) =>
             `  at ${f.functionName || '(anonymous)'} (${f.url}:${f.lineNumber}:${f.columnNumber})`
           );
           handler({
@@ -1185,7 +1161,10 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
   }
 
   private async getViewportSize(): Promise<{ width: number; height: number }> {
-    return this.evaluate<{ width: number; height: number }>('({width: window.innerWidth, height: window.innerHeight})');
+    return evaluateValue<{ width: number; height: number }>(
+      this,
+      '({width: window.innerWidth, height: window.innerHeight})',
+    );
   }
 
   private async connectToTarget(wsUrl: string): Promise<void> {
@@ -1306,9 +1285,3 @@ export class ProtocolError extends Error {
   }
 }
 
-export class EvaluationError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'EvaluationError';
-  }
-}

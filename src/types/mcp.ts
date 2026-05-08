@@ -22,6 +22,11 @@ export interface MCPResponse {
   error?: MCPError;
 }
 
+export interface MCPMessageContext {
+  transport: 'stdio' | 'http';
+  sessionId?: string;
+}
+
 export interface MCPResult {
   [key: string]: unknown;
   content?: MCPContent[];
