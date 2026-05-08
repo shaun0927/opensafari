@@ -33,11 +33,15 @@
     "test:ci": "jest --config jest.ci.config.js",
     "test:sentinel": "jest --config jest.sentinel.config.js",
     "test:coverage": "jest --coverage",
+    "audit:prod": "npm audit --omit=dev",
+    "audit:prod:json": "npm audit --omit=dev --json",
+    "audit:all": "npm audit",
+    "audit:all:json": "npm audit --json",
     "verify:issue-10-healthy": "ts-node --transpile-only --skip-project -O '{\"module\":\"commonjs\",\"moduleResolution\":\"node\",\"target\":\"ES2022\",\"esModuleInterop\":true,\"strict\":true}' scripts/verify-issue-10-healthy.ts",
     "lint": "eslint 'src/**/*.ts' 'cli/**/*.ts' 'tests/**/*.ts'",
     "lint:fix": "eslint --fix 'src/**/*.ts' 'cli/**/*.ts' 'tests/**/*.ts'",
     "prepare": "npm run build",
-    "prepublishOnly": "npm run build && npm test"
+    "prepublishOnly": "npm run audit:prod && npm run build && npm test"
   },
   "repository": {
     "type": "git",
