@@ -3,7 +3,7 @@ import { EventEmitter } from 'events';
 import { ConnectionError } from './errors';
 export { ConnectionError, TimeoutError, ProtocolError, EvaluationError } from './errors';
 import { ProtocolTransport, WebSocketProtocolTransport } from './protocol-transport';
-export type { ProtocolTransport } from './protocol-transport';
+export type { ProtocolTransport, ProtocolEventHandler } from './protocol-transport';
 import { TargetSessionManager } from './target-session';
 export type { TargetCommandSender } from './target-session';
 import { BrowserCommands } from './browser-commands';
@@ -300,8 +300,10 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
     this.reconnecting = true;
     this.connected = false;
 
-    // Clear stale pending requests before reconnect
-    (this.transport as WebSocketProtocolTransport).clearPendingRequests();
+    // Tear down the transport so any stale pending requests are rejected
+    // before reconnecting, then reset target-session state owned by the
+    // extracted TargetSessionManager.
+    await this.transport.disconnect();
     this.targetSession.resetTargets();
 
     this.stopHeartbeat();
