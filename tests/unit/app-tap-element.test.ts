@@ -11,7 +11,11 @@ jest.mock('../../src/mcp-server', () => {
 });
 
 import { MCPServer } from '../../src/mcp-server';
-import { registerAppTapElementTool, sanitizeTapTarget } from '../../src/tools/app-tap-element';
+import {
+  registerAppTapElementTool,
+  sanitizeTapTarget,
+  __resetIosPtSizeCacheForTests,
+} from '../../src/tools/app-tap-element';
 import type { AXNode, AXQueryResult } from '../../src/native/ax-types';
 
 // ── Mocks ──────────────────────────────────────────────────────────────────
@@ -61,6 +65,16 @@ jest.mock('../../src/session-manager', () => ({
   getSessionManager: () => ({
     getSoleDeviceId: () => 'test-device-id',
   }),
+}));
+
+// SimulatorManager is used to look up the iOS-pt size for coordinate conversion.
+// Default: return null (device not in preset table) so pre-existing tests are
+// unaffected. Individual tests override this via mockGetDevice.
+const mockGetDevice = jest.fn().mockResolvedValue(null);
+jest.mock('../../src/simulator', () => ({
+  SimulatorManager: jest.fn().mockImplementation(() => ({
+    getDevice: mockGetDevice,
+  })),
 }));
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -121,6 +135,10 @@ beforeAll(() => {
 beforeEach(() => {
   jest.clearAllMocks();
   jest.useRealTimers();
+  // The iOS-pt size cache is module-level so a previous test's resolved
+  // size would otherwise leak into subsequent tests that change the
+  // `mockGetDevice` return value (e.g. preset hit → preset miss).
+  __resetIosPtSizeCacheForTests();
   // Reset the press mock entirely — `clearAllMocks` does not drain the
   // `mockResolvedValueOnce` / `mockRejectedValueOnce` queue, so an
   // overridden once-value from a previous test would otherwise be
@@ -141,6 +159,8 @@ beforeEach(() => {
     axErrorCode: null,
   });
   mockDumpTree.mockResolvedValue(makeNodeTree(makeNode()));
+  // Default: device not found in preset table → no coordinate conversion.
+  mockGetDevice.mockResolvedValue(null);
 });
 
 // ── Tests ──────────────────────────────────────────────────────────────────
@@ -927,6 +947,92 @@ describe('app_tap_element — Tier 1.5 AX press', () => {
     );
 
     warnSpy.mockRestore();
+  });
+});
+
+describe('app_tap_element — macOS-pt → iOS-pt coordinate conversion (#693 WU3)', () => {
+  it('scales tap coordinates when query result carries deviceContentMacOSPt and device is in preset table', async () => {
+    // iPhone 17 Pro: macOS content area 697×1515, iOS pts 402×874.
+    // AX frame: x=500, y=1000, w=100, h=50 → raw center (550, 1025) in macOS-pts.
+    // Expected after conversion: x ≈ 550*(402/697) ≈ 317.07, y ≈ 1025*(874/1515) ≈ 591.53
+    const node = makeNode({ frame: { x: 500, y: 1000, width: 100, height: 50 } });
+    const queryResultWithMacOSPt = {
+      ...makeQueryResult([node]),
+      deviceContentMacOSPt: { width: 697, height: 1515 },
+    };
+    mockQuery.mockResolvedValue(queryResultWithMacOSPt);
+    // Device lookup returns iPhone 17 Pro — name matches preset 'iphone-17-pro'.
+    mockGetDevice.mockResolvedValue({ name: 'iPhone 17 Pro', udid: 'test-device-id', state: 'Booted', isAvailable: true, runtime: '', runtimeVersion: '' });
+    const warnSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = await handler('session', { label: 'Login', timeout: 0 });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(body.status).toBe('tapped');
+    // Converted coordinates must differ from the raw center (550, 1025).
+    expect(body.coordinates.x).toBeCloseTo(317.07, 0);
+    expect(body.coordinates.y).toBeCloseTo(591.53, 0);
+    // The tap backend must receive the converted coordinates.
+    const tapCall = mockTap.mock.calls[0];
+    expect(tapCall[1]).toBeCloseTo(317.07, 0);
+    expect(tapCall[2]).toBeCloseTo(591.53, 0);
+    // Log entry should mention the conversion.
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringMatching(/macOS-pt→iOS-pt conversion applied/),
+    );
+
+    warnSpy.mockRestore();
+  });
+
+  it('falls back to raw AX coordinates when deviceContentMacOSPt is absent (legacy bridge)', async () => {
+    const node = makeNode({ frame: { x: 100, y: 200, width: 200, height: 44 } });
+    // No deviceContentMacOSPt on query result.
+    mockQuery.mockResolvedValue(makeQueryResult([node]));
+    mockGetDevice.mockResolvedValue({ name: 'iPhone 17 Pro', udid: 'test-device-id', state: 'Booted', isAvailable: true, runtime: '', runtimeVersion: '' });
+
+    const result = await handler('session', { label: 'Login', timeout: 0 });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(body.status).toBe('tapped');
+    // Raw center: 100+200/2=200, 200+44/2=222
+    expect(body.coordinates).toEqual({ x: 200, y: 222 });
+    expect(mockTap).toHaveBeenCalledWith('test-device-id', 200, 222, undefined);
+  });
+
+  it('falls back to raw AX coordinates when device is not in the preset table', async () => {
+    const node = makeNode({ frame: { x: 100, y: 200, width: 200, height: 44 } });
+    const queryResultWithMacOSPt = {
+      ...makeQueryResult([node]),
+      deviceContentMacOSPt: { width: 697, height: 1515 },
+    };
+    mockQuery.mockResolvedValue(queryResultWithMacOSPt);
+    // Device name does not match any preset.
+    mockGetDevice.mockResolvedValue({ name: 'iPhone Unknown Model', udid: 'test-device-id', state: 'Booted', isAvailable: true, runtime: '', runtimeVersion: '' });
+
+    const result = await handler('session', { label: 'Login', timeout: 0 });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(body.status).toBe('tapped');
+    // Raw center unchanged: 200, 222
+    expect(body.coordinates).toEqual({ x: 200, y: 222 });
+  });
+
+  it('falls back to raw AX coordinates when getDevice returns null (simctl failure)', async () => {
+    const node = makeNode({ frame: { x: 100, y: 200, width: 200, height: 44 } });
+    const queryResultWithMacOSPt = {
+      ...makeQueryResult([node]),
+      deviceContentMacOSPt: { width: 697, height: 1515 },
+    };
+    mockQuery.mockResolvedValue(queryResultWithMacOSPt);
+    // getDevice returns null — simctl failure simulated.
+    mockGetDevice.mockResolvedValue(null);
+
+    const result = await handler('session', { label: 'Login', timeout: 0 });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(body.status).toBe('tapped');
+    // Raw center unchanged.
+    expect(body.coordinates).toEqual({ x: 200, y: 222 });
   });
 });
 
