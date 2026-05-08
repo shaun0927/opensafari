@@ -1,9 +1,27 @@
 import http from 'http';
 import { EventEmitter } from 'events';
-import { ConnectionError, TimeoutError, ProtocolError, EvaluationError } from './errors';
+import { ConnectionError } from './errors';
 export { ConnectionError, TimeoutError, ProtocolError, EvaluationError } from './errors';
 import { ProtocolTransport, WebSocketProtocolTransport } from './protocol-transport';
 export type { ProtocolTransport, ProtocolEventHandler } from './protocol-transport';
+import { TargetSessionManager } from './target-session';
+export type { TargetCommandSender } from './target-session';
+import { BrowserCommands } from './browser-commands';
+import {
+  EventBridge,
+  ConsoleMessage,
+  RequestInfo,
+  ResponseInfo,
+  ErrorInfo,
+} from './events';
+export type {
+  TargetCreatedPayload,
+  TargetDestroyedPayload,
+  ConsoleMessage,
+  RequestInfo,
+  ResponseInfo,
+  ErrorInfo,
+} from './events';
 import {
   BrowserBackend,
   NavigateOptions,
@@ -41,20 +59,16 @@ export interface WebKitTarget {
 export class WebKitClient extends EventEmitter implements BrowserBackend {
   private transport: ProtocolTransport;
   private messageId = 0;
-  private enabledDomains: Set<string> = new Set();
-  private enabledDomainsPerTarget: Map<string, Set<string>> = new Map();
+  private innerMessageId = 0;
   private connected = false;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private lastUrl: string = '';
   private reconnecting = false;
   readonly backendType = 'safari' as const;
 
-  // Target-multiplexed protocol state
-  private activeTargetId: string | null = null;
-  private knownTargets: Set<string> = new Set();
-  private innerMessageId = 0;
-  private targetReady: Promise<void> | null = null;
-  private targetReadyResolve: (() => void) | null = null;
+  private targetSession: TargetSessionManager;
+  private browserCommands: BrowserCommands;
+  private eventBridge: EventBridge;
 
   constructor(private options: WebKitClientOptions) {
     super();
@@ -62,89 +76,24 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
       connectTimeout: options.connectTimeout,
       sendTimeout: options.sendTimeout,
     });
-    this.bindTransportEvents();
-  }
-
-  getHost(): string { return this.options.host; }
-  getPort(): number { return this.options.port; }
-
-  // ========== Transport Event Binding ==========
-
-  /**
-   * Forward all transport-emitted protocol events (domain events, target
-   * lifecycle events) to this EventEmitter so that callers using
-   * `client.on('Page.loadEventFired', ...)` continue to work.
-   *
-   * Subscribes via the formal `onProtocolEvent` channel rather than monkey-
-   * patching the transport's `emit` — the channel only relays raw RDP
-   * events, so transport lifecycle (`transport:close`, `transport:error`)
-   * and EventEmitter housekeeping (`newListener`, `removeListener`) never
-   * leak through and stay scoped to this client.
-   */
-  private bindTransportEvents(): void {
-    this.transport.onProtocolEvent((event, ...args) => {
-      this.emit(event, ...args);
-    });
-
+    this.targetSession = new TargetSessionManager(this.transport, this);
+    this.browserCommands = new BrowserCommands(this);
+    this.eventBridge = new EventBridge(this.transport, this.targetSession, this);
+    this.eventBridge.attach();
+    // transport:close / transport:error are handled here, not in EventBridge
     this.transport.on('transport:close', () => {
       if (this.connected && !this.reconnecting) {
         this.connected = false;
         this.handleDisconnect();
       }
     });
-
     this.transport.on('transport:error', (_err: Error) => {
       // Error already handled — connection state tracked via transport:close
     });
-
-    // Target lifecycle events emitted by the transport
-    this.transport.on('Target.targetCreated', (params: any) => {
-      this.handleTargetCreated(params);
-    });
-
-    this.transport.on('Target.targetDestroyed', (params: any) => {
-      this.handleTargetDestroyed(params);
-    });
   }
 
-  // ========== Target Lifecycle Handlers (moved from handleMessage) ==========
-
-  private handleTargetCreated(params: any): void {
-    const info = params?.targetInfo;
-    if (info?.type !== 'page') return;
-
-    this.knownTargets.add(info.targetId);
-    this.emit('target:created', { targetId: info.targetId, url: info.url });
-
-    if (!this.activeTargetId) {
-      this.activeTargetId = info.targetId;
-    }
-
-    const globalDomains = [...this.enabledDomains];
-    const perTargetDomains = this.enabledDomainsPerTarget.get(info.targetId);
-    const domainsToEnable = new Set([...globalDomains, ...(perTargetDomains ?? [])]);
-    Promise.all(
-      [...domainsToEnable].map(domain =>
-        this.sendToTarget(`${domain}.enable`, undefined, info.targetId).catch(err => {
-          console.error(`[WebKitClient] Failed to re-enable ${domain} on new target: ${(err as Error).message}`);
-        })
-      )
-    ).then(() => {
-      this.targetReadyResolve?.();
-    });
-  }
-
-  private handleTargetDestroyed(params: any): void {
-    const destroyedId = params?.targetId;
-    this.knownTargets.delete(destroyedId);
-    this.enabledDomainsPerTarget.delete(destroyedId);
-    this.emit('target:destroyed', { targetId: destroyedId });
-    if (destroyedId === this.activeTargetId) {
-      this.activeTargetId = this.knownTargets.size > 0
-        ? this.knownTargets.values().next().value ?? null
-        : null;
-    }
-  }
+  getHost(): string { return this.options.host; }
+  getPort(): number { return this.options.port; }
 
   /**
    * Connect directly to a specific WebSocket URL (e.g., per-tab endpoint).
@@ -204,12 +153,8 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
     this.stopHeartbeat();
     await this.transport.disconnect();
     this.connected = false;
-    this.enabledDomains.clear();
-    this.enabledDomainsPerTarget.clear();
-    this.activeTargetId = null;
-    this.knownTargets.clear();
-    this.targetReady = null;
-    this.targetReadyResolve = null;
+    this.targetSession.reset();
+    this.targetSession.resetGlobalDomains();
   }
 
   isConnected(): boolean {
@@ -265,7 +210,7 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
     method: string,
     params?: Record<string, unknown>,
   ): Promise<T> {
-    return this.sendToTarget<T>(method, params, this.activeTargetId);
+    return this.sendToTarget<T>(method, params, this.targetSession.getActiveTargetId());
   }
 
   /**
@@ -277,7 +222,7 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
     params?: Record<string, unknown>,
     targetId?: string | null,
   ): Promise<T> {
-    const resolvedTargetId = targetId ?? this.activeTargetId;
+    const resolvedTargetId = targetId ?? this.targetSession.getActiveTargetId();
     if (!resolvedTargetId) {
       throw new ConnectionError(
         'No active target. Is Safari open in the simulator?',
@@ -294,9 +239,9 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
   // ========== Domain Management ==========
 
   async enableDomain(domain: string): Promise<void> {
-    if (!this.enabledDomains.has(domain)) {
+    if (!this.targetSession.hasGlobalEnabledDomain(domain)) {
       await this.send(`${domain}.enable`);
-      this.enabledDomains.add(domain);
+      this.targetSession.addGlobalEnabledDomain(domain);
     }
   }
 
@@ -306,31 +251,25 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
    */
   async enableDomainForTarget(domain: string, targetId: string): Promise<void> {
     await this.sendToTarget(`${domain}.enable`, undefined, targetId);
-    if (!this.enabledDomainsPerTarget.has(targetId)) {
-      this.enabledDomainsPerTarget.set(targetId, new Set());
-    }
-    this.enabledDomainsPerTarget.get(targetId)!.add(domain);
+    this.targetSession.addEnabledDomainForTarget(domain, targetId);
   }
 
   // ========== Multi-Tab Target Management ==========
 
   getActiveTargetId(): string | null {
-    return this.activeTargetId;
+    return this.targetSession.getActiveTargetId();
   }
 
   setActiveTargetId(targetId: string): void {
-    if (!this.knownTargets.has(targetId)) {
-      throw new ConnectionError(`Target ${targetId} not found in known targets`);
-    }
-    this.activeTargetId = targetId;
+    this.targetSession.setActiveTargetId(targetId);
   }
 
   getKnownTargets(): Set<string> {
-    return new Set(this.knownTargets);
+    return this.targetSession.getKnownTargets();
   }
 
   getEnabledDomainsForTarget(targetId: string): Set<string> {
-    return new Set(this.enabledDomainsPerTarget.get(targetId) ?? []);
+    return this.targetSession.getEnabledDomainsForTarget(targetId);
   }
 
   // ========== Heartbeat ==========
@@ -362,12 +301,10 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
     this.connected = false;
 
     // Tear down the transport so any stale pending requests are rejected
-    // before reconnecting. `disconnect()` is the documented public path —
-    // it clears pending state and releases the socket without leaning on
-    // any concrete transport implementation.
+    // before reconnecting, then reset target-session state owned by the
+    // extracted TargetSessionManager.
     await this.transport.disconnect();
-    this.activeTargetId = null;
-    this.knownTargets.clear();
+    this.targetSession.resetTargets();
 
     this.stopHeartbeat();
 
@@ -393,9 +330,9 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
         console.error(`[WebKitClient] Reconnected successfully`);
 
         // Re-enable domains (global + per-target state is rebuilt via enableDomain/enableDomainForTarget)
-        const domains = [...this.enabledDomains];
-        this.enabledDomains.clear();
-        this.enabledDomainsPerTarget.clear();
+        const domains = this.targetSession.snapshotGlobalDomains();
+        this.targetSession.resetGlobalDomains();
+        this.targetSession.resetPerTargetDomains();
         for (const domain of domains) {
           await this.enableDomain(domain);
         }
@@ -420,691 +357,111 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
     );
   }
 
-  // ========== BrowserBackend Implementation (stubs for Epic 1B.2-1B.5) ==========
+  // ========== BrowserBackend — thin facade delegating to BrowserCommands ==========
 
   async navigate(options: NavigateOptions): Promise<NavigateResult> {
-    const startTime = Date.now();
-    this.lastUrl = options.url;
-
-    await this.enableDomain('Page');
-    await this.enableDomain('Network');
-
-    // Try Page.navigate first; fall back to JS navigation if unsupported
-    try {
-      await this.send('Page.navigate', { url: options.url });
-    } catch (e) {
-      if (e instanceof ProtocolError && e.code === -32601) {
-        // Page.navigate not supported — use JS fallback
-        await this.evaluate(`window.location.href = ${JSON.stringify(options.url)}`);
-      } else {
-        throw e;
-      }
-    }
-
-    // Poll document.readyState instead of relying on Page.loadEventFired
-    const waitUntil = options.waitUntil;
-    const waitStart = Date.now();
-    const navTimeout = options.timeout ?? 30000;
-    while (Date.now() - waitStart < navTimeout) {
-      await new Promise(r => setTimeout(r, 300));
-      try {
-        const readyState = await this.evaluate<string>('document.readyState');
-        if (waitUntil === 'networkidle') {
-          // networkidle not directly detectable via polling
-          // Fall back to 'complete' readyState + extra delay
-          if (readyState === 'complete') {
-            await new Promise(r => setTimeout(r, 500)); // extra settle time
-            break;
-          }
-        } else if (waitUntil === 'domcontentloaded') {
-          if (readyState === 'interactive' || readyState === 'complete') break;
-        } else if (waitUntil === 'load') {
-          if (readyState === 'complete') break;
-        } else {
-          if (readyState === 'complete') break;
-        }
-      } catch {
-        // Target may be transitioning during navigation, keep polling
-        continue;
-      }
-    }
-
-    // P0-1: Check if we actually broke out or timed out
-    const finalReadyState = await this.evaluate<string>('document.readyState').catch(() => '');
-    const expectedState = waitUntil === 'domcontentloaded' ? 'interactive' : 'complete';
-    if (finalReadyState !== 'complete' && finalReadyState !== expectedState) {
-      throw new TimeoutError(`Navigation timeout after ${navTimeout}ms (readyState: ${finalReadyState})`);
-    }
-
-    // P0-2: Try to get real HTTP status from Performance API
-    const currentUrl = await this.evaluate<string>('document.URL').catch(() => options.url);
-    const status = await this.evaluate<number>(
-      `(function() { try { var e = performance.getEntriesByType('navigation')[0]; return e ? e.responseStatus || 200 : 200; } catch(ex) { return 200; } })()`
-    ).catch(() => 200);
-
-    return {
-      url: currentUrl,
-      status,
-      loadTime: Date.now() - startTime,
-    };
+    return this.browserCommands.navigate(options, (url) => { this.lastUrl = url; });
   }
 
   async screenshot(options?: ScreenshotOptions): Promise<Buffer> {
-    try {
-      // Try WebKit Protocol: Page.snapshotRect
-      // Get viewport dimensions first
-      const viewport = await this.evaluate<{ w: number; h: number }>(
-        '({w: window.innerWidth, h: window.innerHeight})',
-      );
-
-      const clip = options?.clip ?? { x: 0, y: 0, width: viewport.w, height: viewport.h };
-
-      const result = await this.send<{ dataURL: string }>('Page.snapshotRect', {
-        x: clip.x,
-        y: clip.y,
-        width: clip.width,
-        height: clip.height,
-        coordinateSystem: 'Viewport',
-      });
-
-      // dataURL format: "data:image/png;base64,..."
-      const base64Data = result.dataURL.split(',')[1];
-      if (!base64Data) {
-        throw new Error('Invalid dataURL from Page.snapshotRect');
-      }
-      return Buffer.from(base64Data, 'base64');
-    } catch {
-      // Fallback: return empty buffer (simctl screenshot handled at higher level)
-      throw new Error('Screenshot failed — use SimulatorManager.screenshot() as fallback');
-    }
+    return this.browserCommands.screenshot(options);
   }
 
   async evaluate<T = unknown>(expression: string, options?: { emulateUserGesture?: boolean }): Promise<T> {
-    // Step 1: Evaluate with returnByValue:false to preserve objectId for Promises.
-    // WebKit serializes Promises as {} when returnByValue:true, losing the objectId
-    // needed for Runtime.awaitPromise.
-    const result = await this.send<{
-      result: { type: string; subtype?: string; className?: string; value?: unknown; objectId?: string; description?: string };
-      wasThrown: boolean;
-    }>('Runtime.evaluate', {
-      expression,
-      returnByValue: false,
-      emulateUserGesture: options?.emulateUserGesture ?? false,
-    });
-
-    if (result.wasThrown) {
-      throw new EvaluationError(result.result?.description ?? 'Evaluation failed');
-    }
-
-    // Step 2: If result is a Promise, use awaitPromise to get the resolved value
-    // WebKit Inspector may use subtype:'promise' OR className:'Promise' depending on version
-    const isPromise = result.result?.type === 'object' && result.result?.objectId &&
-      (result.result?.subtype === 'promise' || result.result?.className === 'Promise');
-    if (isPromise) {
-      // Note: awaitPromise blocks until the Promise settles. Never-resolving Promises
-      // will block for the full send() timeout (DEFAULT_WEBKIT_SEND_TIMEOUT_MS, typically 15s).
-      const awaited = await this.send<{
-        result: { type: string; value?: unknown; objectId?: string; description?: string };
-        wasThrown: boolean;
-      }>('Runtime.awaitPromise', {
-        promiseObjectId: result.result.objectId,
-        returnByValue: true,
-      });
-
-      if (awaited.wasThrown) {
-        throw new EvaluationError(awaited.result?.description ?? 'Promise rejected');
-      }
-      return awaited.result?.value as T;
-    }
-
-    // Step 3: For non-Promise object results, use callFunctionOn to serialize the value
-    // without re-executing the expression (avoids double side effects)
-    if (result.result?.objectId && result.result?.value === undefined) {
-      const valued = await this.send<{
-        result: { type: string; value?: unknown; description?: string };
-        wasThrown: boolean;
-      }>('Runtime.callFunctionOn', {
-        objectId: result.result.objectId,
-        functionDeclaration: 'function() { return this; }',
-        returnByValue: true,
-      });
-      return valued.result?.value as T;
-    }
-
-    return result.result?.value as T;
+    return this.browserCommands.evaluate<T>(expression, options);
   }
 
   async readPage(): Promise<string> {
-    return this.evaluate<string>(`
-      (function() {
-        const walker = document.createTreeWalker(
-          document.body,
-          NodeFilter.SHOW_TEXT,
-          {
-            acceptNode(node) {
-              return node.textContent && node.textContent.trim()
-                ? NodeFilter.FILTER_ACCEPT
-                : NodeFilter.FILTER_REJECT;
-            }
-          }
-        );
-        const parts = [];
-        let node;
-        while (node = walker.nextNode()) {
-          parts.push(node.textContent.trim());
-        }
-        return parts.join('\\n');
-      })()
-    `);
+    return this.browserCommands.readPage();
   }
 
   async getCookies(domain?: string): Promise<Cookie[]> {
-    // Try Page.getCookies first (returns full metadata including httpOnly).
-    // Falls back to document.cookie if the proxy doesn't support the command.
-    try {
-      const result = await this.send<{ cookies: Array<Record<string, unknown>> }>('Page.getCookies');
-      if (result?.cookies) {
-        return result.cookies
-          .filter(c => !domain || (c.domain as string || '').includes(domain))
-          .map(c => ({
-            name: (c.name as string) || '',
-            value: (c.value as string) || '',
-            domain: (c.domain as string) || '',
-            path: (c.path as string) || '/',
-            expires: typeof c.expires === 'number' ? c.expires : -1,
-            httpOnly: !!(c.httpOnly),
-            secure: !!(c.secure),
-            ...(c.sameSite ? { sameSite: c.sameSite as Cookie['sameSite'] } : {}),
-          }));
-      }
-    } catch {
-      // Page.getCookies not supported or proxy crashed — fall back to document.cookie
-    }
-    const raw = await this.evaluate<string>('document.cookie');
-    if (!raw) return [];
-    return raw.split(';').map(pair => {
-      const [name, ...rest] = pair.trim().split('=');
-      return {
-        name: name.trim(),
-        value: rest.join('='),
-        domain: domain ?? '',
-        path: '/',
-        expires: -1,
-        httpOnly: false,
-        secure: false,
-      };
-    }).filter(c => c.name);
+    return this.browserCommands.getCookies(domain);
   }
 
   async setCookies(cookies: Cookie[]): Promise<void> {
-    // Try Page.setCookie first (supports httpOnly, sameSite).
-    // Falls back to document.cookie if the proxy doesn't support the command.
-    for (const cookie of cookies) {
-      try {
-        await this.send('Page.setCookie', {
-          name: cookie.name,
-          value: cookie.value,
-          domain: cookie.domain || undefined,
-          path: cookie.path || '/',
-          expires: cookie.expires > 0 ? cookie.expires : undefined,
-          httpOnly: cookie.httpOnly || undefined,
-          secure: cookie.secure || undefined,
-          sameSite: cookie.sameSite || undefined,
-        });
-      } catch {
-        // Page.setCookie not supported — fall back to document.cookie
-        const parts = [`${cookie.name}=${cookie.value}`];
-        if (cookie.path) parts.push(`path=${cookie.path}`);
-        if (cookie.domain) parts.push(`domain=${cookie.domain}`);
-        if (cookie.secure) parts.push('secure');
-        if (cookie.expires && cookie.expires > 0) {
-          parts.push(`expires=${new Date(cookie.expires * 1000).toUTCString()}`);
-        }
-        await this.evaluate(`document.cookie = ${JSON.stringify(parts.join('; '))}`);
-      }
-    }
+    return this.browserCommands.setCookies(cookies);
   }
 
   async clearCookies(): Promise<void> {
-    // Try Page.deleteCookie for each cookie (handles httpOnly).
-    // Falls back to document.cookie clearing if not supported.
-    try {
-      const cookies = await this.getCookies();
-      for (const cookie of cookies) {
-        await this.send('Page.deleteCookie', {
-          cookieName: cookie.name,
-          url: `https://${cookie.domain}${cookie.path}`,
-        });
-      }
-      return;
-    } catch {
-      // Page.deleteCookie not supported — fall back
-    }
-    await this.evaluate(`
-      document.cookie.split(';').forEach(function(c) {
-        var name = c.trim().split('=')[0];
-        document.cookie = name + '=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/';
-      });
-    `);
+    return this.browserCommands.clearCookies();
   }
 
   async click(target: string | { x: number; y: number }): Promise<void> {
-    let x: number, y: number;
-
-    if (typeof target === 'string') {
-      const center = await this.getElementCenter(target);
-      if (!center) throw new Error(`Element not found: ${target}`);
-      x = center.x;
-      y = center.y;
-    } else {
-      x = target.x;
-      y = target.y;
-    }
-
-    // Dispatch touch tap: touchstart → touchend → click
-    // Uses document.createTouch for iOS Safari compatibility (new Touch() not supported)
-    await this.evaluate(`
-      (function(x, y) {
-        var el = document.elementFromPoint(x, y);
-        if (!el) return;
-        var touch = document.createTouch(window, el, 1, x, y, x, y);
-        var touchList = document.createTouchList(touch);
-        var emptyList = document.createTouchList();
-        el.dispatchEvent(new TouchEvent('touchstart', { touches: touchList, changedTouches: touchList, bubbles: true }));
-        el.dispatchEvent(new TouchEvent('touchend', { touches: emptyList, changedTouches: touchList, bubbles: true }));
-        el.click();
-      })(${x}, ${y})
-    `, { emulateUserGesture: true });
+    return this.browserCommands.click(target);
   }
 
   async type(selector: string, text: string, options?: { delay?: number }): Promise<void> {
-    // Focus the element explicitly — touch-based click() doesn't reliably trigger focus
-    // preventScroll prevents iOS Safari from auto-scrolling the element into view on focus
-    await this.evaluate(`
-      (function() {
-        var el = document.querySelector(${JSON.stringify(selector)});
-        if (el && typeof el.focus === 'function') el.focus({ preventScroll: true });
-      })()
-    `, { emulateUserGesture: true });
-
-    if (options?.delay) {
-      // Character-by-character mode with delay
-      for (const char of text) {
-        await this.evaluate(`
-          (function() {
-            var el = document.querySelector(${JSON.stringify(selector)});
-            if (!el) return;
-            var ev = new KeyboardEvent('keydown', { key: ${JSON.stringify(char)}, bubbles: true });
-            el.dispatchEvent(ev);
-            el.dispatchEvent(new KeyboardEvent('keypress', { key: ${JSON.stringify(char)}, bubbles: true }));
-            // Walk the element's own prototype chain to find the value setter.
-            // Using window.HTMLInputElement.prototype would resolve to the
-            // inspector realm's prototype, causing a cross-realm TypeError.
-            var p = Object.getPrototypeOf(el);
-            while (p && !Object.getOwnPropertyDescriptor(p, 'value')) {
-              p = Object.getPrototypeOf(p);
-            }
-            var desc = p ? Object.getOwnPropertyDescriptor(p, 'value') : null;
-            if (desc && desc.set) {
-              desc.set.call(el, el.value + ${JSON.stringify(char)});
-            } else {
-              el.value += ${JSON.stringify(char)};
-            }
-            el.dispatchEvent(new Event('input', { bubbles: true }));
-            el.dispatchEvent(new KeyboardEvent('keyup', { key: ${JSON.stringify(char)}, bubbles: true }));
-          })()
-        `, { emulateUserGesture: true });
-        await new Promise(r => setTimeout(r, options.delay));
-      }
-    } else {
-      // Fast mode: set value directly + dispatch events
-      await this.evaluate(`
-        (function() {
-          var el = document.querySelector(${JSON.stringify(selector)});
-          if (!el) return;
-          // Walk the element's own prototype chain to find the value setter.
-          // Using window.HTMLInputElement.prototype would resolve to the
-          // inspector realm's prototype, causing a cross-realm TypeError.
-          var p = Object.getPrototypeOf(el);
-          while (p && !Object.getOwnPropertyDescriptor(p, 'value')) {
-            p = Object.getPrototypeOf(p);
-          }
-          var desc = p ? Object.getOwnPropertyDescriptor(p, 'value') : null;
-          if (desc && desc.set) {
-            desc.set.call(el, ${JSON.stringify(text)});
-          } else {
-            el.value = ${JSON.stringify(text)};
-          }
-          el.dispatchEvent(new Event('input', { bubbles: true }));
-          el.dispatchEvent(new Event('change', { bubbles: true }));
-        })()
-      `, { emulateUserGesture: true });
-    }
+    return this.browserCommands.type(selector, text, options);
   }
 
   async scroll(direction: 'up' | 'down' | 'left' | 'right', amount: number): Promise<void> {
-    const scrollMap: Record<string, string> = {
-      up: `window.scrollBy(0, -${amount})`,
-      down: `window.scrollBy(0, ${amount})`,
-      left: `window.scrollBy(-${amount}, 0)`,
-      right: `window.scrollBy(${amount}, 0)`,
-    };
-    await this.evaluate(scrollMap[direction]);
+    return this.browserCommands.scroll(direction, amount);
   }
 
   async longPress(selector: string, duration?: number): Promise<void> {
-    const center = await this.getElementCenter(selector);
-    if (!center) throw new Error(`Element not found: ${selector}`);
-    const dur = duration ?? 500;
-
-    await this.evaluate(`
-      (async function(x, y, duration) {
-        var el = document.elementFromPoint(x, y);
-        if (!el) return;
-        var touch = document.createTouch(window, el, 1, x, y, x, y);
-        var touchList = document.createTouchList(touch);
-        el.dispatchEvent(new TouchEvent('touchstart', { touches: touchList, changedTouches: touchList, bubbles: true }));
-        await new Promise(function(r) { setTimeout(r, duration); });
-        var emptyList = document.createTouchList();
-        el.dispatchEvent(new TouchEvent('touchend', { touches: emptyList, changedTouches: touchList, bubbles: true }));
-      })(${center.x}, ${center.y}, ${dur})
-    `, { emulateUserGesture: true });
+    return this.browserCommands.longPress(selector, duration);
   }
 
   async swipe(direction: 'up' | 'down' | 'left' | 'right', speed?: number): Promise<void> {
-    const viewport = await this.getViewportSize();
-    const cx = viewport.width / 2;
-    const cy = viewport.height / 2;
-    const distance = viewport.height * 0.4;
-    const steps = speed ?? 10;
-
-    const coords = {
-      up:    { sx: cx, sy: cy + distance / 2, ex: cx, ey: cy - distance / 2 },
-      down:  { sx: cx, sy: cy - distance / 2, ex: cx, ey: cy + distance / 2 },
-      left:  { sx: cx + distance / 2, sy: cy, ex: cx - distance / 2, ey: cy },
-      right: { sx: cx - distance / 2, sy: cy, ex: cx + distance / 2, ey: cy },
-    };
-    const { sx, sy, ex, ey } = coords[direction];
-
-    await this.evaluate(`
-      (async function(sx, sy, ex, ey, steps) {
-        var el = document.elementFromPoint(sx, sy);
-        if (!el) return;
-        var makeTouch = function(x, y) { return document.createTouch(window, el, 1, x, y, x, y); };
-        var startTouch = makeTouch(sx, sy);
-        var startList = document.createTouchList(startTouch);
-        el.dispatchEvent(new TouchEvent('touchstart', { touches: startList, changedTouches: startList, bubbles: true }));
-        for (var i = 1; i <= steps; i++) {
-          var x = sx + (ex - sx) * (i / steps);
-          var y = sy + (ey - sy) * (i / steps);
-          var moveTouch = makeTouch(x, y);
-          var moveList = document.createTouchList(moveTouch);
-          el.dispatchEvent(new TouchEvent('touchmove', { touches: moveList, changedTouches: moveList, bubbles: true }));
-          await new Promise(function(r) { setTimeout(r, 16); });
-        }
-        var endTouch = makeTouch(ex, ey);
-        var endList = document.createTouchList(endTouch);
-        var emptyList = document.createTouchList();
-        el.dispatchEvent(new TouchEvent('touchend', { touches: emptyList, changedTouches: endList, bubbles: true }));
-      })(${sx}, ${sy}, ${ex}, ${ey}, ${steps})
-    `, { emulateUserGesture: true });
+    return this.browserCommands.swipe(direction, speed);
   }
 
   async press(key: string): Promise<void> {
-    const keyMap: Record<string, { key: string; code: string; keyCode: number }> = {
-      'Enter': { key: 'Enter', code: 'Enter', keyCode: 13 },
-      'Tab': { key: 'Tab', code: 'Tab', keyCode: 9 },
-      'Escape': { key: 'Escape', code: 'Escape', keyCode: 27 },
-      'Backspace': { key: 'Backspace', code: 'Backspace', keyCode: 8 },
-      'ArrowUp': { key: 'ArrowUp', code: 'ArrowUp', keyCode: 38 },
-      'ArrowDown': { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40 },
-      'ArrowLeft': { key: 'ArrowLeft', code: 'ArrowLeft', keyCode: 37 },
-      'ArrowRight': { key: 'ArrowRight', code: 'ArrowRight', keyCode: 39 },
-      'Space': { key: ' ', code: 'Space', keyCode: 32 },
-    };
-
-    const mapped = keyMap[key] ?? { key, code: 'Key' + key.toUpperCase(), keyCode: key.charCodeAt(0) };
-    const keyJson = JSON.stringify(mapped.key);
-    const codeJson = JSON.stringify(mapped.code);
-
-    await this.evaluate(`
-      (function() {
-        var el = document.activeElement || document.body;
-        el.dispatchEvent(new KeyboardEvent('keydown', { key: ${keyJson}, code: ${codeJson}, keyCode: ${mapped.keyCode}, bubbles: true }));
-        el.dispatchEvent(new KeyboardEvent('keypress', { key: ${keyJson}, code: ${codeJson}, keyCode: ${mapped.keyCode}, bubbles: true }));
-        el.dispatchEvent(new KeyboardEvent('keyup', { key: ${keyJson}, code: ${codeJson}, keyCode: ${mapped.keyCode}, bubbles: true }));
-      })()
-    `);
+    return this.browserCommands.press(key);
   }
 
   async dismissKeyboard(): Promise<void> {
-    await this.evaluate('document.activeElement && document.activeElement.blur()');
+    return this.browserCommands.dismissKeyboard();
   }
 
   async selectOption(selector: string, value: string): Promise<void> {
-    await this.evaluate(`
-      (function() {
-        var el = document.querySelector(${JSON.stringify(selector)});
-        if (!el || el.tagName !== 'SELECT') return;
-        // Walk the element's own prototype chain to find the value setter,
-        // avoiding cross-realm TypeError with window.HTMLSelectElement.prototype.
-        var p = Object.getPrototypeOf(el);
-        while (p && !Object.getOwnPropertyDescriptor(p, 'value')) {
-          p = Object.getPrototypeOf(p);
-        }
-        var desc = p ? Object.getOwnPropertyDescriptor(p, 'value') : null;
-        if (desc && desc.set) {
-          desc.set.call(el, ${JSON.stringify(value)});
-        } else {
-          el.value = ${JSON.stringify(value)};
-        }
-        el.dispatchEvent(new Event('input', { bubbles: true }));
-        el.dispatchEvent(new Event('change', { bubbles: true }));
-      })()
-    `);
+    return this.browserCommands.selectOption(selector, value);
   }
 
   async querySelector(selector: string): Promise<ElementInfo | null> {
-    return this.evaluate<ElementInfo | null>(`
-      (function() {
-        var el = document.querySelector(${JSON.stringify(selector)});
-        if (!el) return null;
-        var rect = el.getBoundingClientRect();
-        var style = window.getComputedStyle(el);
-        return {
-          selector: ${JSON.stringify(selector)},
-          tag: el.tagName.toLowerCase(),
-          text: (el.textContent || '').trim().substring(0, 200),
-          attributes: Object.fromEntries(Array.from(el.attributes).map(function(a) { return [a.name, a.value]; })),
-          boundingBox: rect.width > 0 && rect.height > 0
-            ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
-            : null,
-          computedStyles: {
-            display: style.display,
-            visibility: style.visibility,
-            opacity: style.opacity,
-            fontSize: style.fontSize,
-            color: style.color,
-            backgroundColor: style.backgroundColor,
-            position: style.position,
-            zIndex: style.zIndex,
-            overflow: style.overflow
-          },
-          isVisible: rect.width > 0 && rect.height > 0
-            && style.display !== 'none'
-            && style.visibility !== 'hidden'
-            && parseFloat(style.opacity) > 0
-        };
-      })()
-    `);
+    return this.browserCommands.querySelector(selector);
   }
 
   async querySelectorAll(selector: string): Promise<ElementInfo[]> {
-    return this.evaluate<ElementInfo[]>(`
-      (function() {
-        var elements = document.querySelectorAll(${JSON.stringify(selector)});
-        return Array.from(elements).slice(0, 100).map(function(el) {
-          var rect = el.getBoundingClientRect();
-          var style = window.getComputedStyle(el);
-          return {
-            selector: ${JSON.stringify(selector)},
-            tag: el.tagName.toLowerCase(),
-            text: (el.textContent || '').trim().substring(0, 200),
-            attributes: Object.fromEntries(Array.from(el.attributes).map(function(a) { return [a.name, a.value]; })),
-            boundingBox: rect.width > 0 && rect.height > 0
-              ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
-              : null,
-            computedStyles: {
-              display: style.display, visibility: style.visibility, opacity: style.opacity,
-              fontSize: style.fontSize, position: style.position
-            },
-            isVisible: rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden' && parseFloat(style.opacity) > 0
-          };
-        });
-      })()
-    `);
+    return this.browserCommands.querySelectorAll(selector);
   }
 
   async inspect(selector: string): Promise<Record<string, unknown>> {
-    return this.evaluate<Record<string, unknown>>(`
-      (function() {
-        var el = document.querySelector(${JSON.stringify(selector)});
-        if (!el) return null;
-        var rect = el.getBoundingClientRect();
-        var style = window.getComputedStyle(el);
-        return {
-          tag: el.tagName.toLowerCase(),
-          id: el.id,
-          className: el.className,
-          text: (el.textContent || '').trim().substring(0, 500),
-          innerHTML: el.innerHTML.substring(0, 1000),
-          boundingBox: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
-          styles: {
-            display: style.display, position: style.position,
-            width: style.width, height: style.height,
-            margin: style.margin, padding: style.padding,
-            fontSize: style.fontSize, fontWeight: style.fontWeight,
-            color: style.color, backgroundColor: style.backgroundColor,
-            border: style.border, borderRadius: style.borderRadius,
-            overflow: style.overflow, zIndex: style.zIndex,
-            opacity: style.opacity, visibility: style.visibility
-          },
-          accessibility: {
-            role: el.getAttribute('role'),
-            ariaLabel: el.getAttribute('aria-label'),
-            ariaHidden: el.getAttribute('aria-hidden'),
-            tabIndex: el.tabIndex
-          },
-          childCount: el.children.length,
-          children: Array.from(el.children).slice(0, 10).map(function(c) {
-            return { tag: c.tagName.toLowerCase(), text: (c.textContent || '').trim().substring(0, 50) };
-          })
-        };
-      })()
-    `);
+    return this.browserCommands.inspect(selector);
   }
 
   async waitFor(selector: string, options?: { visible?: boolean; timeout?: number }): Promise<void> {
-    const timeout = options?.timeout ?? 10000;
-    const interval = 200;
-    const start = Date.now();
-
-    while (Date.now() - start < timeout) {
-      const el = await this.querySelector(selector);
-      if (el && (!options?.visible || el.isVisible)) return;
-      await new Promise(r => setTimeout(r, interval));
-    }
-
-    throw new TimeoutError(`waitFor("${selector}") timed out after ${timeout}ms`);
+    return this.browserCommands.waitFor(selector, options);
   }
 
-  // ========== Event Convenience Methods ==========
+  // ========== Event Convenience Methods (delegated to EventBridge) ==========
 
-  onConsole(handler: (msg: { type: string; text: string }) => void): void {
-    this.enableDomain('Console').then(() => {
-      this.on('Console.messageAdded', (params: any) => {
-        handler({
-          type: params.message?.level ?? params.message?.type ?? 'log',
-          text: params.message?.text ?? '',
-        });
-      });
-    });
+  onConsole(handler: (msg: ConsoleMessage) => void): void {
+    this.eventBridge.onConsole(handler);
   }
 
   onPageLoad(handler: () => void): void {
-    this.enableDomain('Page').then(() => {
-      this.on('Page.loadEventFired', handler);
-    });
+    this.eventBridge.onPageLoad(handler);
   }
 
-  onRequest(handler: (request: { url: string; method: string }) => void): void {
-    this.enableDomain('Network').then(() => {
-      this.on('Network.requestWillBeSent', (params: any) => {
-        handler({
-          url: params.request?.url ?? '',
-          method: params.request?.method ?? 'GET',
-        });
-      });
-    });
+  onRequest(handler: (request: RequestInfo) => void): void {
+    this.eventBridge.onRequest(handler);
   }
 
-  onResponse(handler: (response: { url: string; status: number }) => void): void {
-    this.enableDomain('Network').then(() => {
-      this.on('Network.responseReceived', (params: any) => {
-        handler({
-          url: params.response?.url ?? '',
-          status: params.response?.status ?? 0,
-        });
-      });
-    });
+  onResponse(handler: (response: ResponseInfo) => void): void {
+    this.eventBridge.onResponse(handler);
   }
 
-
-  onError(handler: (error: { message: string; stack?: string; source?: string; line?: number; column?: number }) => void): void {
-    // WebKit reports unhandled JS errors via Console.messageAdded with level "error"
-    // (Runtime.exceptionThrown is Chrome-specific and not available in WebKit)
-    this.enableDomain('Console').then(() => {
-      this.on('Console.messageAdded', (params: any) => {
-        const msg = params.message ?? {};
-        if (msg.level === 'error' && msg.source === 'javascript') {
-          const frames = msg.stackTrace?.callFrames ?? [];
-          const stackLines = frames.map((f: any) =>
-            `  at ${f.functionName || '(anonymous)'} (${f.url}:${f.lineNumber}:${f.columnNumber})`
-          );
-          handler({
-            message: msg.text ?? 'Unknown error',
-            stack: stackLines.length ? stackLines.join('\n') : undefined,
-            source: msg.url ?? undefined,
-            line: msg.line ?? undefined,
-            column: msg.column ?? undefined,
-          });
-        }
-      });
-    });
+  onError(handler: (error: ErrorInfo) => void): void {
+    this.eventBridge.onError(handler);
   }
+
   // ========== Private Helpers ==========
-
-  private async getElementCenter(selector: string): Promise<{ x: number; y: number } | null> {
-    return this.evaluate<{ x: number; y: number } | null>(`
-      (function() {
-        const el = document.querySelector(${JSON.stringify(selector)});
-        if (!el) return null;
-        const rect = el.getBoundingClientRect();
-        return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
-      })()
-    `);
-  }
-
-  private async getViewportSize(): Promise<{ width: number; height: number }> {
-    return this.evaluate<{ width: number; height: number }>('({width: window.innerWidth, height: window.innerHeight})');
-  }
 
   private async connectToTarget(wsUrl: string): Promise<void> {
     // Set up target discovery promise before connecting
-    this.activeTargetId = null;
-    this.targetReady = new Promise<void>((resolve) => {
-      this.targetReadyResolve = resolve;
-    });
+    const targetReady = this.targetSession.prepareForConnect();
 
     await this.transport.connect(wsUrl);
     this.connected = true;
@@ -1121,7 +478,7 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
       );
     });
     try {
-      await Promise.race([this.targetReady, targetTimeout]);
+      await Promise.race([targetReady, targetTimeout]);
     } finally {
       clearTimeout(targetTimer!);
     }
