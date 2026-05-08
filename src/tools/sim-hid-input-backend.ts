@@ -27,7 +27,7 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { existsSync } from 'fs';
 import * as path from 'path';
-import type { InputBackend } from './native-input-backend';
+import type { InputBackend, BatchTapEvent } from './native-input-backend';
 import { timedInput } from '../metrics/input-telemetry';
 
 const execFileAsync = promisify(execFile);
@@ -287,6 +287,48 @@ export class SimulatorKitHIDInputBackend implements InputBackend {
   /** Convenience alias: resolve a symbolic key name to its HID usage. */
   async pressKey(deviceId: string, key: string): Promise<void> {
     await this.sendKey(deviceId, key);
+  }
+
+  /**
+   * SimulatorKitHIDInputBackend supports batching. Each `sim-hid-bridge`
+   * invocation is a short-lived child-process spawn (~10–50 ms of OS
+   * overhead on a typical macOS host). When a caller needs to dispatch N
+   * taps in quick succession (e.g. rapidly filling a PIN pad), using
+   * `tapBatch()` allows it to express intent at the logical-batch level
+   * rather than calling `tap()` N times in a loop — which is identical at
+   * the wire level but explicitly communicates that the events form a unit.
+   * Future optimisations (e.g. a single-spawn batch subcommand in the
+   * Swift bridge, if added later) can be transparently wired in here
+   * without changing callers.
+   *
+   * **Limitation**: only tap events are supported. Batching swipe, key, or
+   * key-mod events is not implemented because the use-case is less
+   * frequent and the bridge does not yet expose a multi-command subcommand
+   * that covers those event types. See issue #705 for the follow-up scope.
+   */
+  supportsBatching(): boolean {
+    return true;
+  }
+
+  /**
+   * Dispatch multiple tap events sequentially. Events are sent in order;
+   * if any event fails the batch stops and rejects with that error.
+   *
+   * Spawn count before this API: N calls × 1 spawn each = N spawns.
+   * Spawn count after using tapBatch: N spawns (same at the bridge level,
+   * because the Swift bridge handles one command per process). The benefit
+   * is reduced caller overhead (no repeated `getInputBackend()` resolution,
+   * no per-event telemetry scaffolding outside the batch boundary) and a
+   * clear extension point when the bridge gains a batch subcommand.
+   *
+   * **Not supported** for swipe, typeText, keypress, or sendKey — those
+   * operations use separate bridge subcommands that are not yet batched.
+   * Callers that mix event types must call the individual methods directly.
+   */
+  async tapBatch(deviceId: string, events: BatchTapEvent[]): Promise<void> {
+    for (const event of events) {
+      await this.tap(deviceId, event.x, event.y, event.duration);
+    }
   }
 
   /**
