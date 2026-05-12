@@ -51,9 +51,8 @@ const SENSITIVE_KEYS = [
   'private_key',
   'session',
   // Free-form user input that flows through MCP tool calls (for example
-  // app_type_text.text or select_option.value) can carry passwords, OTPs,
-  // or other secrets even though the key is not credential-like by name.
-  // Redact these fields defensively in the local audit log.
+  // `type.text` and `select_option.value`) can carry passwords, OTPs, or
+  // other secrets even when the key is not credential-named.
   'text',
   'value',
 ];
@@ -230,13 +229,19 @@ function rotateLogIfNeeded(logPath: string, bytesToAppend: number): void {
   fs.chmodSync(rotatedPath, AUDIT_FILE_MODE);
 }
 
-export function logAuditEntry(tool: string, sessionId: string, args: Record<string, unknown>, pageUrl?: string, outcome?: string): void {
+export function logAuditEntry(
+  tool: string,
+  sessionId: string,
+  args: Record<string, unknown>,
+  pageUrl?: string,
+  status?: AuditEntry['status'],
+): void {
   const entry: AuditEntry = {
     timestamp: new Date().toISOString(),
     tool,
     domain: extractDomain(pageUrl || (args.url as string)),
     sessionId,
-    ...(outcome ? { status: outcome } : {}),
+    ...(status ? { status } : {}),
     args_summary: summarizeArgs(args),
   };
 

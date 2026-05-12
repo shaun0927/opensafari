@@ -132,12 +132,13 @@ describe('audit logger', () => {
     });
   });
 
-  it('redacts free-form text and value fields from audit summaries', () => {
-    logAuditEntry('app_type_text', 'session-freeform', {
-      text: 'otp-123456',
+  it('redacts free-form MCP text/value fields defensively', () => {
+    logAuditEntry('type', 'session-freeform', {
+      selector: '#password',
+      text: 'typed-secret-password',
       nested: {
-        value: 'selected-secret-value',
-        label: 'visible-label',
+        value: 'selected-secret-option',
+        label: 'safe label',
       },
       items: [
         { text: 'password typed into field' },
@@ -149,22 +150,17 @@ describe('audit logger', () => {
     const summary = parseArgsSummary(entry);
     const serialized = JSON.stringify(summary);
 
-    expect(serialized).not.toContain('otp-123456');
-    expect(serialized).not.toContain('selected-secret-value');
+    expect(serialized).not.toContain('typed-secret-password');
+    expect(serialized).not.toContain('selected-secret-option');
     expect(serialized).not.toContain('password typed into field');
     expect(serialized).not.toContain('token pasted into selector');
-    expect(serialized).toContain('visible-label');
-    expect(summary).toMatchObject({
-      text: '[REDACTED]',
-      nested: {
-        value: '[REDACTED]',
-        label: 'visible-label',
-      },
-      items: [
-        { text: '[REDACTED]' },
-        { value: '[REDACTED]' },
-      ],
-    });
+    expect(summary.text).toBe('[REDACTED]');
+    expect((summary.nested as Record<string, unknown>).value).toBe('[REDACTED]');
+    expect((summary.nested as Record<string, unknown>).label).toBe('safe label');
+    expect(summary.items).toEqual([
+      { text: '[REDACTED]' },
+      { value: '[REDACTED]' },
+    ]);
   });
 
   it('retries log target setup after a transient initialization error', () => {
