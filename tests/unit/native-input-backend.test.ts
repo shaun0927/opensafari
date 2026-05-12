@@ -573,7 +573,8 @@ describe('getInputBackend', () => {
   const originalEnv = process.env[OPENSAFARI_ALLOW_FOCUS_INPUT_ENV];
 
   beforeEach(() => {
-    execMock.mockClear();
+    execMock.mockReset();
+    execMock.mockResolvedValue('');
     resetInputBackend();
     delete process.env[OPENSAFARI_ALLOW_FOCUS_INPUT_ENV];
     // Ensure Tier-0 routing does not accidentally grab the real
@@ -595,7 +596,7 @@ describe('getInputBackend', () => {
     expect(backend).toBeInstanceOf(SimctlInputBackend);
     expect(backend.kind).toBe('simctl');
     expect(execMock).toHaveBeenCalledWith(
-      ['io', DEVICE, 'input', 'tap', '0', '0'],
+      ['help', 'io'],
       { timeout: 5000 },
     );
   });
@@ -687,13 +688,11 @@ describe('getInputBackend', () => {
     });
 
     test('returns SimHID backend when probe succeeds (no webkitClient)', async () => {
-      execMock.mockRejectedValueOnce(new Error('not supported'));
       const backend = await getInputBackend(DEVICE);
       expect(backend.kind).toBe('simhid');
     });
 
     test('returns SimHID backend ahead of WebKit when probe succeeds', async () => {
-      execMock.mockRejectedValueOnce(new Error('not supported'));
       const mockClient = {
         isConnected: jest.fn().mockReturnValue(true),
         connect: jest.fn().mockResolvedValue(undefined),
@@ -728,28 +727,24 @@ describe('getInputBackend', () => {
 
     test('returns pointer-service backend when opt-in flag is set', async () => {
       process.env[ENABLE_PS] = '1';
-      execMock.mockRejectedValueOnce(new Error('not supported'));
       const backend = await getInputBackend(DEVICE);
       expect(backend.kind).toBe('pointer-service');
     });
 
     test('falls through to SimHID when opt-in flag is unset', async () => {
       delete process.env[ENABLE_PS];
-      execMock.mockRejectedValueOnce(new Error('not supported'));
       const backend = await getInputBackend(DEVICE);
       expect(backend.kind).toBe('simhid');
     });
 
     test('falls through to SimHID when opt-in flag has any non-truthy value', async () => {
       process.env[ENABLE_PS] = 'maybe';
-      execMock.mockRejectedValueOnce(new Error('not supported'));
       const backend = await getInputBackend(DEVICE);
       expect(backend.kind).toBe('simhid');
     });
 
     test('returns pointer-service even when a WebKit client is attached (tier order preserved)', async () => {
       process.env[ENABLE_PS] = '1';
-      execMock.mockRejectedValueOnce(new Error('not supported'));
       const mockClient = {
         isConnected: jest.fn().mockReturnValue(true),
         connect: jest.fn().mockResolvedValue(undefined),

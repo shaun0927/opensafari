@@ -140,6 +140,10 @@ describe('audit logger', () => {
         value: 'selected-secret-option',
         label: 'safe label',
       },
+      items: [
+        { text: 'password typed into field' },
+        { value: 'token pasted into selector' },
+      ],
     });
 
     const [entry] = readAuditEntries(tmpHome);
@@ -148,9 +152,15 @@ describe('audit logger', () => {
 
     expect(serialized).not.toContain('typed-secret-password');
     expect(serialized).not.toContain('selected-secret-option');
+    expect(serialized).not.toContain('password typed into field');
+    expect(serialized).not.toContain('token pasted into selector');
     expect(summary.text).toBe('[REDACTED]');
     expect((summary.nested as Record<string, unknown>).value).toBe('[REDACTED]');
     expect((summary.nested as Record<string, unknown>).label).toBe('safe label');
+    expect(summary.items).toEqual([
+      { text: '[REDACTED]' },
+      { value: '[REDACTED]' },
+    ]);
   });
 
   it('retries log target setup after a transient initialization error', () => {
