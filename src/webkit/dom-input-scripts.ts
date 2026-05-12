@@ -138,6 +138,8 @@ export interface SetValueScriptOptions {
   selector: string;
   /** New value; serialized via JSON.stringify before embedding. */
   value: string;
+  /** Optional uppercase tag-name guard for callers that must target one element type. */
+  tagName?: string;
   /**
    * Which change events to dispatch after setting the value.
    * 'input-change' dispatches both input and change events (fast-type / select path).
@@ -155,9 +157,12 @@ export interface SetValueScriptOptions {
  * controlled strings with quotes, backslashes, or Unicode are safe.
  */
 export function buildSetValueScript(opts: SetValueScriptOptions): string {
-  const { selector, value, dispatchEvents } = opts;
+  const { selector, value, dispatchEvents, tagName } = opts;
   const selectorJson = JSON.stringify(selector);
   const valueJson = JSON.stringify(value);
+  const tagNameGuard = tagName
+    ? `  if (el.tagName !== ${JSON.stringify(tagName.toUpperCase())}) return;\n`
+    : '';
 
   const changeEvent =
     dispatchEvents === 'input-change'
@@ -168,7 +173,7 @@ export function buildSetValueScript(opts: SetValueScriptOptions): string {
 (function() {
   var el = document.querySelector(${selectorJson});
   if (!el) return;
-  ${PROTO_VALUE_DESC_WALK}
+${tagNameGuard}  ${PROTO_VALUE_DESC_WALK}
   if (desc && desc.set) {
     desc.set.call(el, ${valueJson});
   } else {

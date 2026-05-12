@@ -241,7 +241,7 @@ export function logAuditEntry(
     tool,
     domain: extractDomain(pageUrl || (args.url as string)),
     sessionId,
-    ...(status ? { status } : {}),
+    ...(status !== undefined ? { status } : {}),
     args_summary: summarizeArgs(args),
   };
 

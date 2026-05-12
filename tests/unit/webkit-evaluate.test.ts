@@ -445,9 +445,9 @@ describe('WebKitClient domain enable dedup', () => {
     expect(sendToCalls.filter(c => c.method === 'Page.enable')).toHaveLength(1);
 
     // Simulate target destruction — the cache for this target should be cleared.
-    (client as any).handleMessage(
-      JSON.stringify({ method: 'Target.targetDestroyed', params: { targetId: 'target-xyz' } }),
-    );
+    // After the #706 refactor, message dispatch lives on the protocol transport;
+    // emit the post-parse event directly to drive the target-session listener.
+    (client as any).transport.emit('Target.targetDestroyed', { targetId: 'target-xyz' });
 
     // After destruction, enabling the same domain should issue a new RPC (fresh target).
     await (client as any).enableDomainForTarget('Page', 'target-xyz');

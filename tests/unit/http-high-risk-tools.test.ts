@@ -205,6 +205,45 @@ describe('HTTP high-risk MCP tool gate', () => {
     expect(auditLines[0]).not.toContain('secret-cookie');
   });
 
+  test('HTTP audit status is error when a high-risk tool returns isError', async () => {
+    const server = new MCPServer();
+    server.registerTool(
+      {
+        name: 'javascript',
+        description: 'fixture high-risk code execution tool',
+        inputSchema: {
+          type: 'object' as const,
+          properties: { expression: { type: 'string' } },
+          required: ['expression'],
+        },
+      },
+      async () => ({
+        isError: true,
+        content: [{ type: 'text' as const, text: 'execution failed' }],
+      }),
+    );
+
+    enableHttpHighRiskTools(server);
+    const res = await handleMessage(server, {
+      jsonrpc: '2.0',
+      id: 31,
+      method: 'tools/call',
+      params: {
+        name: 'javascript',
+        arguments: { expression: 'throw new Error("boom")' },
+      },
+    }, { transport: 'http', sessionId: 'audit-error-session' });
+
+    const result = res?.result as Record<string, unknown>;
+    expect(result.isError).toBe(true);
+
+    expect(auditLines).toHaveLength(1);
+    const audit = JSON.parse(auditLines[0]) as Record<string, unknown>;
+    expect(audit.tool).toBe('javascript');
+    expect(audit.sessionId).toBe('audit-error-session');
+    expect(audit.status).toBe('error');
+  });
+
   test('HTTP audit log redacts the cookies tool arguments including nested cookie values', async () => {
     const server = new MCPServer();
     server.registerTool(

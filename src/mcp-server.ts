@@ -357,7 +357,7 @@ export class MCPServer {
     const isHighRiskHttp = context.transport === 'http' && highRiskTool !== undefined;
 
     if (isHighRiskHttp && !this.httpHighRiskToolsEnabled) {
-      logAuditEntry(name, sessionId, args, undefined, 'blocked');
+      logAuditEntry(name, sessionId, args, undefined, 'denied');
       return {
         jsonrpc: '2.0',
         id: request.id,
