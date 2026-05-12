@@ -408,7 +408,7 @@ export class MCPServer {
     try {
       const result: MCPResult = await handler(sessionId, args);
       if (this.auditLogEnabled || isHighRiskHttp) {
-        logAuditEntry(name, sessionId, args, undefined, 'allowed');
+        logAuditEntry(name, sessionId, args, undefined, result.isError ? 'error' : 'allowed');
       }
       return {
         jsonrpc: '2.0',

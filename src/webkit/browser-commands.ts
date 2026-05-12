@@ -383,7 +383,7 @@ export class BrowserCommands {
 
   async selectOption(selector: string, value: string): Promise<void> {
     await this.evaluate(
-      buildSetValueScript({ selector, value, dispatchEvents: 'input-change' }),
+      buildSetValueScript({ selector, value, dispatchEvents: 'input-change', tagName: 'SELECT' }),
     );
   }
 

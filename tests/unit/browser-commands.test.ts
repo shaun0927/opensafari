@@ -332,6 +332,29 @@ describe('BrowserCommands.type', () => {
   });
 });
 
+// ─── selectOption ─────────────────────────────────────────────────────────────
+
+describe('BrowserCommands.selectOption', () => {
+  it('guards the value setter to select elements only', async () => {
+    const { cmds, sender } = makeCmds();
+
+    let expression = '';
+    sender.on('Runtime.evaluate', (params) => {
+      expression = (params?.expression as string) ?? '';
+      return { result: { type: 'undefined', value: undefined }, wasThrown: false };
+    });
+
+    await cmds.selectOption('#country', 'kr');
+
+    expect(expression).toContain('document.querySelector("#country")');
+    expect(expression).toContain('if (el.tagName !== "SELECT") return;');
+    expect(expression).toContain('Object.getPrototypeOf');
+    expect(expression).toContain('"kr"');
+    expect(expression).toContain("new Event('input'");
+    expect(expression).toContain("new Event('change'");
+  });
+});
+
 // ─── longPress ────────────────────────────────────────────────────────────────
 
 describe('BrowserCommands.longPress', () => {
