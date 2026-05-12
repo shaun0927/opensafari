@@ -50,6 +50,11 @@ const SENSITIVE_KEYS = [
   'privatekey',
   'private_key',
   'session',
+  // Free-form user input that flows through MCP tool calls (for example
+  // `type.text` and `select_option.value`) can carry passwords, OTPs, or
+  // other secrets even when the key is not credential-named.
+  'text',
+  'value',
 ];
 
 const SENSITIVE_QUERY_PARAMS = [
@@ -224,7 +229,13 @@ function rotateLogIfNeeded(logPath: string, bytesToAppend: number): void {
   fs.chmodSync(rotatedPath, AUDIT_FILE_MODE);
 }
 
-export function logAuditEntry(tool: string, sessionId: string, args: Record<string, unknown>, pageUrl?: string, status?: string): void {
+export function logAuditEntry(
+  tool: string,
+  sessionId: string,
+  args: Record<string, unknown>,
+  pageUrl?: string,
+  status?: AuditEntry['status'],
+): void {
   const entry: AuditEntry = {
     timestamp: new Date().toISOString(),
     tool,
