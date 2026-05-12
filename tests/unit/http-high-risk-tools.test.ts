@@ -188,8 +188,8 @@ describe('HTTP high-risk MCP tool gate', () => {
     expect(audit.status).toBe('allowed');
     const summary = JSON.parse(audit.args_summary as string) as Record<string, unknown>;
     expect(summary.expression).toBe('document.querySelector("button")?.textContent');
-    expect(summary.text).toBe('ordinary text is kept');
-    expect(summary.value).toBe('ordinary value is kept');
+    expect(summary.text).toBe('[REDACTED]');
+    expect(summary.value).toBe('[REDACTED]');
     expect(summary.password).toBe('[REDACTED]');
     expect(summary.accessToken).toBe('[REDACTED]');
     expect(summary.authorization).toBe('[REDACTED]');

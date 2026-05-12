@@ -132,6 +132,41 @@ describe('audit logger', () => {
     });
   });
 
+  it('redacts free-form text and value fields from audit summaries', () => {
+    logAuditEntry('app_type_text', 'session-freeform', {
+      text: 'otp-123456',
+      nested: {
+        value: 'selected-secret-value',
+        label: 'visible-label',
+      },
+      items: [
+        { text: 'password typed into field' },
+        { value: 'token pasted into selector' },
+      ],
+    });
+
+    const [entry] = readAuditEntries(tmpHome);
+    const summary = parseArgsSummary(entry);
+    const serialized = JSON.stringify(summary);
+
+    expect(serialized).not.toContain('otp-123456');
+    expect(serialized).not.toContain('selected-secret-value');
+    expect(serialized).not.toContain('password typed into field');
+    expect(serialized).not.toContain('token pasted into selector');
+    expect(serialized).toContain('visible-label');
+    expect(summary).toMatchObject({
+      text: '[REDACTED]',
+      nested: {
+        value: '[REDACTED]',
+        label: 'visible-label',
+      },
+      items: [
+        { text: '[REDACTED]' },
+        { value: '[REDACTED]' },
+      ],
+    });
+  });
+
   it('retries log target setup after a transient initialization error', () => {
     // Point the logger at a path under a parent that doesn't yet exist and
     // can't be created (a regular file, so mkdir(recursive) will EEXIST/ENOTDIR).

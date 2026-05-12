@@ -178,19 +178,6 @@ export class InputBackendResolver {
       return new FlutterVMInputBackend(flutterClient);
     }
 
-    // Probe simctl once and cache the result. The probe is device-independent
-    // (`simctl help io`) so a transient device fault cannot poison the cached
-    // `simctlAvailable` flag for the lifetime of the resolver.
-    if (this.simctlAvailable === null) {
-      if (!this.detectionPromise) {
-        this.detectionPromise = probeSimctlInput().then((available) => {
-          this.simctlAvailable = available;
-          return available;
-        });
-      }
-      await this.detectionPromise;
-    }
-
     // Tier 1 (opt-in): PointerService backend — Phase 1 of #590.
     if (isPointerServiceEnabled()) {
       if (!this.pointerServiceProbed) {
@@ -217,6 +204,20 @@ export class InputBackendResolver {
     }
     if (this.cachedSimHidBackend) {
       return this.cachedSimHidBackend;
+    }
+
+    // Probe simctl only when the Tier 2 simctl branch is actually reached.
+    // The probe is device-independent (`simctl help io`) so a transient device
+    // fault cannot poison the cached `simctlAvailable` flag for the lifetime of
+    // the resolver, and Tier 0/Tier 1 successes do not pay this extra cost.
+    if (this.simctlAvailable === null) {
+      if (!this.detectionPromise) {
+        this.detectionPromise = probeSimctlInput().then((available) => {
+          this.simctlAvailable = available;
+          return available;
+        });
+      }
+      await this.detectionPromise;
     }
 
     // Tier 2: simctl io input (headless, works with any app — Xcode ≤16)
