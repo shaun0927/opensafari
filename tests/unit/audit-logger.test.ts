@@ -132,6 +132,27 @@ describe('audit logger', () => {
     });
   });
 
+  it('redacts free-form MCP text/value fields defensively', () => {
+    logAuditEntry('type', 'session-freeform', {
+      selector: '#password',
+      text: 'typed-secret-password',
+      nested: {
+        value: 'selected-secret-option',
+        label: 'safe label',
+      },
+    });
+
+    const [entry] = readAuditEntries(tmpHome);
+    const summary = parseArgsSummary(entry);
+    const serialized = JSON.stringify(summary);
+
+    expect(serialized).not.toContain('typed-secret-password');
+    expect(serialized).not.toContain('selected-secret-option');
+    expect(summary.text).toBe('[REDACTED]');
+    expect((summary.nested as Record<string, unknown>).value).toBe('[REDACTED]');
+    expect((summary.nested as Record<string, unknown>).label).toBe('safe label');
+  });
+
   it('retries log target setup after a transient initialization error', () => {
     // Point the logger at a path under a parent that doesn't yet exist and
     // can't be created (a regular file, so mkdir(recursive) will EEXIST/ENOTDIR).

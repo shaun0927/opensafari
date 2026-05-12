@@ -163,8 +163,8 @@ describe('HTTP high-risk MCP tool gate', () => {
         name: 'javascript',
         arguments: {
           expression: 'document.querySelector("button")?.textContent',
-          text: 'ordinary text is kept',
-          value: 'ordinary value is kept',
+          text: 'secret typed text',
+          value: 'secret selected value',
           password: 'secret-password',
           accessToken: 'secret-token',
           authorization: 'Bearer secret-auth',
@@ -188,8 +188,8 @@ describe('HTTP high-risk MCP tool gate', () => {
     expect(audit.status).toBe('allowed');
     const summary = JSON.parse(audit.args_summary as string) as Record<string, unknown>;
     expect(summary.expression).toBe('document.querySelector("button")?.textContent');
-    expect(summary.text).toBe('ordinary text is kept');
-    expect(summary.value).toBe('ordinary value is kept');
+    expect(summary.text).toBe('[REDACTED]');
+    expect(summary.value).toBe('[REDACTED]');
     expect(summary.password).toBe('[REDACTED]');
     expect(summary.accessToken).toBe('[REDACTED]');
     expect(summary.authorization).toBe('[REDACTED]');
@@ -197,6 +197,8 @@ describe('HTTP high-risk MCP tool gate', () => {
     expect((summary.nested as Record<string, unknown>).cookieValue).toBe('[REDACTED]');
     expect((summary.nested as Record<string, unknown>).safe).toBe('kept');
     expect(auditLines[0]).not.toContain('secret-password');
+    expect(auditLines[0]).not.toContain('secret typed text');
+    expect(auditLines[0]).not.toContain('secret selected value');
     expect(auditLines[0]).not.toContain('secret-token');
     expect(auditLines[0]).not.toContain('secret-auth');
     expect(auditLines[0]).not.toContain('secret-session');

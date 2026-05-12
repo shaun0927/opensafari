@@ -1,4 +1,4 @@
-import { listDevices, getDevice, resolveDevice } from '../../src/simulator/device-catalog';
+import { listDevices, listRuntimes, getDevice, resolveDevice } from '../../src/simulator/device-catalog';
 import { DeviceNotFoundError } from '../../src/simulator/errors';
 import { SimctlExecutor } from '../../src/simulator/simctl';
 
@@ -65,6 +65,42 @@ describe('device-catalog', () => {
       const devices = await listDevices(simctl);
       expect(devices).toHaveLength(2);
     });
+
+    it('returns an empty list when simctl omits the devices key', async () => {
+      const simctl = {
+        execJson: jest.fn().mockResolvedValue({}),
+        exec: jest.fn(),
+      } as unknown as SimctlExecutor;
+
+      await expect(listDevices(simctl)).resolves.toEqual([]);
+    });
+  });
+
+  describe('listRuntimes', () => {
+    it('returns only available runtimes', async () => {
+      const simctl = {
+        execJson: jest.fn().mockResolvedValue({
+          runtimes: [
+            { identifier: 'ios-available', version: '18.0', isAvailable: true, platform: 'iOS' },
+            { identifier: 'ios-missing', version: '17.0', isAvailable: false, platform: 'iOS' },
+          ],
+        }),
+        exec: jest.fn(),
+      } as unknown as SimctlExecutor;
+
+      await expect(listRuntimes(simctl)).resolves.toEqual([
+        { identifier: 'ios-available', version: '18.0', isAvailable: true, platform: 'iOS' },
+      ]);
+    });
+
+    it('returns an empty list when simctl omits the runtimes key', async () => {
+      const simctl = {
+        execJson: jest.fn().mockResolvedValue({}),
+        exec: jest.fn(),
+      } as unknown as SimctlExecutor;
+
+      await expect(listRuntimes(simctl)).resolves.toEqual([]);
+    });
   });
 
   describe('getDevice', () => {
@@ -119,6 +155,11 @@ describe('device-catalog', () => {
       expect(caught).not.toBeNull();
       expect(caught!.available).toContain('iPhone 17');
       expect(caught!.requested).toBe('iphone-99-pro-max');
+    });
+
+    it('does not fuzzy-match separator-only input to the first device', async () => {
+      const simctl = makeSimctlMock({ [RUNTIME_KEY]: [DEVICE_A] });
+      await expect(resolveDevice(simctl, ' --   - ')).rejects.toBeInstanceOf(DeviceNotFoundError);
     });
   });
 });
