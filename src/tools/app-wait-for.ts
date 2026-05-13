@@ -233,7 +233,12 @@ export function registerAppWaitForNativeTool(server: MCPServer): void {
               };
             }
           } catch {
-            // Query error during polling — continue to next attempt
+            // Query error during polling breaks any requested stability window;
+            // a condition cannot be considered continuously held across an
+            // interval where it was not observed.
+            firstMetAtMs = null;
+            lastStableForMs = 0;
+            lastEvaluation = { met: false, matchingCount: 0, sample: [] };
           }
 
           // Don't sleep past deadline

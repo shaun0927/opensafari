@@ -42,3 +42,15 @@ describe('app_wait_for diagnostic helpers', () => {
     expect(hasHeldStableSince(false, state.firstMetAtMs, 400, 250)).toEqual({ stable: false, firstMetAtMs: null, stableForMs: 0 });
   });
 });
+
+describe('app_wait_for stability reset contract', () => {
+  it('treats an unobserved poll as a broken stability window', () => {
+    const first = hasHeldStableSince(true, null, 100, 250);
+    expect(first.firstMetAtMs).toBe(100);
+    const reset = hasHeldStableSince(false, first.firstMetAtMs, 200, 250);
+    expect(reset).toEqual({ stable: false, firstMetAtMs: null, stableForMs: 0 });
+    const afterError = hasHeldStableSince(true, reset.firstMetAtMs, 300, 250);
+    expect(afterError.stable).toBe(false);
+    expect(afterError.firstMetAtMs).toBe(300);
+  });
+});
