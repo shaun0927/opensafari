@@ -21,6 +21,54 @@ const DEFAULT_INTERVAL_MS = 500;
 
 type WaitCondition = 'exists' | 'not_exists' | 'visible' | 'enabled';
 
+const DEFAULT_SAMPLE_LIMIT = 5;
+
+export interface WaitEvaluation {
+  met: boolean;
+  matchingCount: number;
+  sample: WaitCandidateSample[];
+}
+
+export interface WaitCandidateSample {
+  role: string;
+  label?: string;
+  identifier?: string;
+  visible?: boolean;
+  enabled?: boolean;
+  frame?: AXNode['frame'];
+  path?: string;
+}
+
+export function evaluateWaitCondition(
+  matches: AXNode[],
+  condition: WaitCondition,
+  sampleLimit = DEFAULT_SAMPLE_LIMIT,
+): WaitEvaluation {
+  return {
+    met: checkCondition(matches, condition),
+    matchingCount: matches.length,
+    sample: sampleMatches(matches, sampleLimit),
+  };
+}
+
+export function hasHeldStableSince(
+  conditionMet: boolean,
+  firstMetAtMs: number | null,
+  nowMs: number,
+  stableMs: number,
+): { stable: boolean; firstMetAtMs: number | null; stableForMs: number } {
+  if (!conditionMet) {
+    return { stable: false, firstMetAtMs: null, stableForMs: 0 };
+  }
+  const nextFirstMetAtMs = firstMetAtMs ?? nowMs;
+  const stableForMs = nowMs - nextFirstMetAtMs;
+  return {
+    stable: stableForMs >= Math.max(0, stableMs),
+    firstMetAtMs: nextFirstMetAtMs,
+    stableForMs,
+  };
+}
+
 export function registerAppWaitForNativeTool(server: MCPServer): void {
   server.registerTool(
     {
@@ -60,6 +108,14 @@ export function registerAppWaitForNativeTool(server: MCPServer): void {
           interval: {
             type: 'number',
             description: 'Poll interval in ms (default: 500)',
+          },
+          stable_ms: {
+            type: 'number',
+            description: 'Require the condition to hold continuously for this many ms before success (default: 0).',
+          },
+          sample_limit: {
+            type: 'number',
+            description: 'Maximum matching AX nodes to include in timeout diagnostics (default: 5, max: 20).',
           },
           device_id: {
             type: 'string',
@@ -104,6 +160,8 @@ export function registerAppWaitForNativeTool(server: MCPServer): void {
         const condition = (params.condition as WaitCondition | undefined) ?? 'exists';
         const timeout = (params.timeout as number | undefined) ?? DEFAULT_TIMEOUT_MS;
         const interval = (params.interval as number | undefined) ?? DEFAULT_INTERVAL_MS;
+        const stableMs = Math.max(0, Math.floor((params.stable_ms as number | undefined) ?? 0));
+        const sampleLimit = Math.min(20, Math.max(0, Math.floor((params.sample_limit as number | undefined) ?? DEFAULT_SAMPLE_LIMIT)));
         const bundleId = params.bundle_id as string | undefined;
         const query = { identifier, label, text, role };
 
@@ -133,15 +191,22 @@ export function registerAppWaitForNativeTool(server: MCPServer): void {
         const startTime = Date.now();
         const deadline = startTime + timeout;
         let pollCount = 0;
+        let firstMetAtMs: number | null = null;
+        let lastEvaluation: WaitEvaluation = { met: false, matchingCount: 0, sample: [] };
+        let lastStableForMs = 0;
 
         while (Date.now() < deadline) {
           pollCount++;
           try {
             const result = await bridge.query(query, { deviceId });
-            const met = checkCondition(result.matches, condition);
+            lastEvaluation = evaluateWaitCondition(result.matches, condition, sampleLimit);
+            const now = Date.now();
+            const stable = hasHeldStableSince(lastEvaluation.met, firstMetAtMs, now, stableMs);
+            firstMetAtMs = stable.firstMetAtMs;
+            lastStableForMs = stable.stableForMs;
 
-            if (met) {
-              const elapsed = Date.now() - startTime;
+            if (stable.stable) {
+              const elapsed = now - startTime;
               return {
                 content: [{
                   type: 'text' as const,
@@ -150,6 +215,9 @@ export function registerAppWaitForNativeTool(server: MCPServer): void {
                     condition,
                     elapsed,
                     polls: pollCount,
+                    stable_ms: stableMs,
+                    stable_for_ms: lastStableForMs,
+                    matching_count: lastEvaluation.matchingCount,
                     element: condition !== 'not_exists' && result.matches.length > 0
                       ? {
                         role: result.matches[0].role,
@@ -165,7 +233,12 @@ export function registerAppWaitForNativeTool(server: MCPServer): void {
               };
             }
           } catch {
-            // Query error during polling — continue to next attempt
+            // Query error during polling breaks any requested stability window;
+            // a condition cannot be considered continuously held across an
+            // interval where it was not observed.
+            firstMetAtMs = null;
+            lastStableForMs = 0;
+            lastEvaluation = { met: false, matchingCount: 0, sample: [] };
           }
 
           // Don't sleep past deadline
@@ -200,6 +273,18 @@ export function registerAppWaitForNativeTool(server: MCPServer): void {
       }
     },
   );
+}
+
+function sampleMatches(matches: AXNode[], limit: number): WaitCandidateSample[] {
+  return matches.slice(0, limit).map((m) => ({
+    role: m.role,
+    ...(m.label ? { label: m.label } : {}),
+    ...(m.identifier ? { identifier: m.identifier } : {}),
+    visible: m.visible,
+    enabled: m.enabled,
+    frame: m.frame,
+    path: m.path,
+  }));
 }
 
 function checkCondition(matches: AXNode[], condition: WaitCondition): boolean {
