@@ -1,87 +1,55 @@
 import { MCPServer, getWebKitClient } from '../mcp-server';
-import { BrowserBackend } from '../types/browser-backend';
+import {
+  NetworkInterceptor,
+  type InterceptorClient,
+  type InterceptRule,
+} from '../network-interceptor';
 
-/**
- * Network interceptor state manager.
- *
- * Uses JavaScript injection to intercept fetch/XHR requests in Safari.
- * WebKit Remote Debugging Protocol does not expose a Network interception
- * domain, so we override window.fetch and XMLHttpRequest at the page level.
- */
-class NetworkInterceptor {
-  private offline = false;
+const DEFAULT_INTERCEPTOR_SCOPE = '__default__';
+const interceptorsBySession = new Map<string, NetworkInterceptor>();
 
-  /**
-   * Enable or disable offline simulation by overriding fetch and XHR.
-   */
-  async setOffline(enabled: boolean, client: BrowserBackend): Promise<void> {
-    this.offline = enabled;
-
-    const script = enabled
-      ? `(function() {
-  if (window.__opensafariOfflineActive) return;
-  window.__opensafariOfflineActive = true;
-  window.__opensafariOriginalFetch = window.fetch;
-  window.__opensafariOriginalXHROpen = XMLHttpRequest.prototype.open;
-  window.__opensafariOriginalXHRSend = XMLHttpRequest.prototype.send;
-
-  window.fetch = function() {
-    return Promise.reject(new TypeError('Failed to fetch'));
-  };
-
-  XMLHttpRequest.prototype.open = function() {
-    this.__opensafariArgs = arguments;
-    return window.__opensafariOriginalXHROpen.apply(this, arguments);
-  };
-
-  XMLHttpRequest.prototype.send = function() {
-    var xhr = this;
-    setTimeout(function() {
-      if (typeof xhr.onerror === 'function') {
-        xhr.onerror(new Event('error'));
-      }
-      xhr.dispatchEvent(new Event('error'));
-    }, 0);
-  };
-})()`
-      : `(function() {
-  if (!window.__opensafariOfflineActive) return;
-  window.__opensafariOfflineActive = false;
-  if (window.__opensafariOriginalFetch) {
-    window.fetch = window.__opensafariOriginalFetch;
-    delete window.__opensafariOriginalFetch;
+export function getNetworkInterceptorForSession(sessionId?: string): NetworkInterceptor {
+  const key = sessionId || DEFAULT_INTERCEPTOR_SCOPE;
+  let interceptor = interceptorsBySession.get(key);
+  if (!interceptor) {
+    interceptor = new NetworkInterceptor();
+    interceptorsBySession.set(key, interceptor);
   }
-  if (window.__opensafariOriginalXHROpen) {
-    XMLHttpRequest.prototype.open = window.__opensafariOriginalXHROpen;
-    delete window.__opensafariOriginalXHROpen;
-  }
-  if (window.__opensafariOriginalXHRSend) {
-    XMLHttpRequest.prototype.send = window.__opensafariOriginalXHRSend;
-    delete window.__opensafariOriginalXHRSend;
-  }
-})()`;
-
-    await client.evaluate(script);
-  }
-
-  /**
-   * Return current offline state.
-   */
-  isOffline(): boolean {
-    return this.offline;
-  }
+  return interceptor;
 }
 
-export const networkInterceptor = new NetworkInterceptor();
-
-interface InterceptRule {
-  urlPattern: string;
-  action: 'block' | 'modify';
-  statusCode?: number;
-  body?: string;
+export function resetNetworkInterceptorsForTest(): void {
+  interceptorsBySession.clear();
 }
 
-const activeRules: InterceptRule[] = [];
+/** Legacy singleton for callers that are not yet session-aware. */
+export const networkInterceptor = getNetworkInterceptorForSession(DEFAULT_INTERCEPTOR_SCOPE);
+
+function resolveClient(deviceId: unknown): InterceptorClient | null {
+  return getWebKitClient(typeof deviceId === 'string' ? deviceId : undefined);
+}
+
+function mapRule(params: Record<string, unknown>): Omit<InterceptRule, 'id'> {
+  const urlPattern = params.urlPattern as string | undefined;
+  if (!urlPattern) {
+    throw new Error('urlPattern is required when clear is not set');
+  }
+
+  const action = ((params.action as string) || 'block') as 'block' | 'modify';
+  if (action === 'block') return { urlPattern, action: 'block' };
+
+  const statusCode = typeof params.statusCode === 'number' ? params.statusCode : 200;
+  const body = typeof params.body === 'string' ? params.body : '';
+  return {
+    urlPattern,
+    action: 'mock',
+    mockResponse: {
+      status: statusCode,
+      headers: { 'Content-Type': 'text/plain' },
+      body,
+    },
+  };
+}
 
 export function registerNetworkInterceptTool(server: MCPServer): void {
   server.registerTool(
@@ -94,7 +62,7 @@ export function registerNetworkInterceptTool(server: MCPServer): void {
         properties: {
           urlPattern: {
             type: 'string',
-            description: 'URL pattern to match (substring match against request URL)',
+            description: 'URL pattern to match (substring/glob match against request URL)',
           },
           action: {
             type: 'string',
@@ -111,88 +79,52 @@ export function registerNetworkInterceptTool(server: MCPServer): void {
           },
           clear: {
             type: 'boolean',
-            description: 'If true, remove all intercept rules and restore original network behavior',
+            description: 'If true, remove all intercept rules and restore original network behavior for this MCP session',
+          },
+          device_id: {
+            type: 'string',
+            description: 'Simulator UDID / WebKit connection to target (uses active device if omitted)',
           },
         },
         required: [],
       },
     },
-    async (_sessionId: string, params: Record<string, unknown>) => {
-      const client = getWebKitClient();
-      if (!client)
+    async (sessionId: string, params: Record<string, unknown>) => {
+      const client = resolveClient(params.device_id);
+      if (!client) {
         return { content: [{ type: 'text' as const, text: 'Error: Safari not connected' }], isError: true };
+      }
 
-      const clear = params.clear as boolean | undefined;
-      if (clear) {
-        activeRules.length = 0;
-        const restoreScript = `(function() {
-  if (window.__opensafariInterceptActive) {
-    window.__opensafariInterceptActive = false;
-    if (window.__opensafariInterceptOriginalFetch) {
-      window.fetch = window.__opensafariInterceptOriginalFetch;
-      delete window.__opensafariInterceptOriginalFetch;
-    }
-  }
-})()`;
-        await client.evaluate(restoreScript);
+      const interceptor = getNetworkInterceptorForSession(sessionId);
+      if (params.clear === true) {
+        await interceptor.disable(client);
         return { content: [{ type: 'text' as const, text: 'All intercept rules cleared' }] };
       }
 
-      const urlPattern = params.urlPattern as string | undefined;
-      if (!urlPattern) {
+      let rule: InterceptRule;
+      try {
+        rule = interceptor.addRule(mapRule(params));
+      } catch (err) {
         return {
-          content: [{ type: 'text' as const, text: 'Error: urlPattern is required when clear is not set' }],
+          content: [{ type: 'text' as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }],
           isError: true,
         };
       }
 
-      const action = ((params.action as string) || 'block') as 'block' | 'modify';
-      const statusCode = (params.statusCode as number) || 200;
-      const body = (params.body as string) || '';
+      await interceptor.enable(client);
 
-      const rule: InterceptRule = { urlPattern, action, statusCode, body };
-      activeRules.push(rule);
-
-      const rulesJson = JSON.stringify(activeRules);
-      const interceptScript = `(function() {
-  window.__opensafariInterceptRules = ${rulesJson};
-  if (window.__opensafariInterceptActive) return;
-  window.__opensafariInterceptActive = true;
-  window.__opensafariInterceptOriginalFetch = window.fetch;
-
-  window.fetch = function(input, init) {
-    var url = typeof input === 'string' ? input : (input && input.url ? input.url : '');
-    var rules = window.__opensafariInterceptRules || [];
-    for (var i = 0; i < rules.length; i++) {
-      var rule = rules[i];
-      if (url.indexOf(rule.urlPattern) !== -1) {
-        if (rule.action === 'block') {
-          return Promise.reject(new TypeError('Request blocked by intercept rule'));
-        }
-        if (rule.action === 'modify') {
-          return Promise.resolve(new Response(rule.body || '', {
-            status: rule.statusCode || 200,
-            headers: { 'Content-Type': 'text/plain' }
-          }));
-        }
-      }
-    }
-    return window.__opensafariInterceptOriginalFetch.apply(this, arguments);
-  };
-})()`;
-
-      await client.evaluate(interceptScript);
-
+      const action = rule.action === 'mock' ? 'modify' : 'block';
       return {
         content: [
           {
             type: 'text' as const,
             text: JSON.stringify({
               status: 'intercepting',
-              urlPattern,
+              ruleId: rule.id,
+              urlPattern: rule.urlPattern,
               action,
-              ...(action === 'modify' ? { statusCode, body } : {}),
-              totalRules: activeRules.length,
+              ...(rule.mockResponse ? { statusCode: rule.mockResponse.status, body: rule.mockResponse.body } : {}),
+              totalRules: interceptor.listRules().length,
             }),
           },
         ],

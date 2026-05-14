@@ -91,7 +91,17 @@ export class NetworkInterceptor {
 
   async setOffline(enabled: boolean, client: InterceptorClient): Promise<void> {
     this._offline = enabled;
-    if (enabled && !this._enabled) this._enabled = true;
+    if (enabled) {
+      if (!this._enabled) this._enabled = true;
+      await this.inject(client);
+      return;
+    }
+
+    if (!this._enabled) return;
+    if (this.rules.size === 0) {
+      await this.disable(client);
+      return;
+    }
     await this.inject(client);
   }
 

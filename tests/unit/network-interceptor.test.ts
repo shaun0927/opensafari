@@ -105,10 +105,21 @@ describe('NetworkInterceptor', () => {
       expect(interceptor.offline).toBe(true);
       expect(interceptor.enabled).toBe(true);
     });
-    it('disables offline', async () => {
+    it('disables offline and restores hooks when no intercept rules remain', async () => {
       await interceptor.setOffline(true, mockClient);
       await interceptor.setOffline(false, mockClient);
       expect(interceptor.offline).toBe(false);
+      expect(interceptor.enabled).toBe(false);
+      expect(mockClient.evaluate.mock.calls.at(-1)?.[0]).toContain('__osOriginalXHROpen');
+    });
+    it('disables offline without clearing active intercept rules', async () => {
+      interceptor.addRule({ urlPattern: '/api', action: 'block' });
+      await interceptor.enable(mockClient);
+      await interceptor.setOffline(true, mockClient);
+      await interceptor.setOffline(false, mockClient);
+      expect(interceptor.offline).toBe(false);
+      expect(interceptor.enabled).toBe(true);
+      expect(interceptor.listRules()).toHaveLength(1);
     });
   });
 
