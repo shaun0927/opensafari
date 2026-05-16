@@ -38,6 +38,8 @@ interface ManagedProxy {
 }
 
 const managed: Map<string, ManagedProxy> = new Map();
+/** In-flight proxy starts keyed by device so concurrent callers share one spawn. */
+const pendingStarts: Map<string, Promise<WebInspectorProxy>> = new Map();
 /** Ports reserved (in-use) by this manager across devices. */
 const reservedPorts: Set<number> = new Set();
 
@@ -95,17 +97,29 @@ export async function getProxyForDevice(deviceId: string): Promise<WebInspectorP
   const existing = managed.get(deviceId);
   if (existing) return existing.proxy;
 
-  const port = allocatePort(deviceId);
-  const proxy = new WebInspectorProxy({ port });
-  try {
-    await proxy.start({ targetUdid: deviceId });
-  } catch (err) {
-    reservedPorts.delete(port);
-    throw err;
-  }
+  const pending = pendingStarts.get(deviceId);
+  if (pending) return pending;
 
-  managed.set(deviceId, { proxy, deviceId, port });
-  return proxy;
+  const startPromise = (async () => {
+    const port = allocatePort(deviceId);
+    const proxy = new WebInspectorProxy({ port });
+    try {
+      await proxy.start({ targetUdid: deviceId });
+    } catch (err) {
+      reservedPorts.delete(port);
+      throw err;
+    }
+
+    managed.set(deviceId, { proxy, deviceId, port });
+    return proxy;
+  })();
+
+  pendingStarts.set(deviceId, startPromise);
+  try {
+    return await startPromise;
+  } finally {
+    pendingStarts.delete(deviceId);
+  }
 }
 
 /** Return the proxy for a device without starting a new one. */
@@ -144,5 +158,6 @@ export function listManagedProxies(): Array<{ deviceId: string; port: number }> 
 /** Reset state. Test-only — does NOT stop running proxies. */
 export function resetProxyManagerState(): void {
   managed.clear();
+  pendingStarts.clear();
   reservedPorts.clear();
 }

@@ -17,8 +17,8 @@ jest.mock('../../src/simulator/proxy', () => ({
     this.pid = 12345;
     this.running = false;
     this.start = async (_startOptions?: { targetUdid?: string }) => {
+      await mockStart(_startOptions);
       this.running = true;
-      mockStart(_startOptions);
     };
     this.stop = async () => {
       this.running = false;
@@ -120,6 +120,50 @@ describe('ProxyManager', () => {
       expect(a).not.toBe(b);
       expect(a.port).not.toBe(b.port);
       expect(constructorCalls).toHaveLength(2);
+    });
+
+
+    test('coalesces concurrent starts for the same device', async () => {
+      let releaseStart!: () => void;
+      const startGate = new Promise<void>((resolve) => {
+        releaseStart = resolve;
+      });
+      mockStart.mockImplementationOnce(async () => {
+        await startGate;
+      });
+
+      const firstPromise = getProxyForDevice(UDID_A);
+      const secondPromise = getProxyForDevice(UDID_A);
+
+      // Let both calls reach the pending-start path before unblocking start().
+      await Promise.resolve();
+      releaseStart();
+
+      const [first, second] = await Promise.all([firstPromise, secondPromise]);
+
+      expect(first).toBe(second);
+      expect(constructorCalls).toHaveLength(1);
+      expect(mockStart).toHaveBeenCalledTimes(1);
+      expect(listManagedProxies()).toHaveLength(1);
+    });
+
+    test('clears failed pending starts so a concurrent retry can create a fresh proxy', async () => {
+      mockStart.mockImplementationOnce(async () => {
+        throw new Error('proxy spawn failed');
+      });
+
+      await expect(Promise.all([
+        getProxyForDevice(UDID_A),
+        getProxyForDevice(UDID_A),
+      ])).rejects.toThrow('proxy spawn failed');
+
+      expect(peekProxyForDevice(UDID_A)).toBeNull();
+      const retry = await getProxyForDevice(UDID_A);
+
+      expect(retry).toBeDefined();
+      expect(constructorCalls).toHaveLength(2);
+      expect(mockStart).toHaveBeenCalledTimes(2);
+      expect(listManagedProxies()).toHaveLength(1);
     });
 
     test('releases the reserved port when start() throws', async () => {
