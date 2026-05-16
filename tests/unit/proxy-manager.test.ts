@@ -183,6 +183,29 @@ describe('ProxyManager', () => {
   });
 
   describe('stopProxyForDevice', () => {
+
+    test('waits for an in-flight start before stopping the target device', async () => {
+      let releaseStart!: () => void;
+      const startGate = new Promise<void>((resolve) => {
+        releaseStart = resolve;
+      });
+      mockStart.mockImplementationOnce(async () => {
+        await startGate;
+      });
+
+      const starting = getProxyForDevice(UDID_A);
+      await Promise.resolve();
+
+      const stopping = stopProxyForDevice(UDID_A);
+      releaseStart();
+
+      await Promise.all([starting, stopping]);
+
+      expect(mockStop).toHaveBeenCalledTimes(1);
+      expect(peekProxyForDevice(UDID_A)).toBeNull();
+      expect(listManagedProxies()).toHaveLength(0);
+    });
+
     test('stops only the target device proxy', async () => {
       await getProxyForDevice(UDID_A);
       await getProxyForDevice(UDID_B);
@@ -209,6 +232,28 @@ describe('ProxyManager', () => {
   });
 
   describe('stopAll', () => {
+
+    test('includes in-flight starts when stopping all proxies', async () => {
+      let releaseStart!: () => void;
+      const startGate = new Promise<void>((resolve) => {
+        releaseStart = resolve;
+      });
+      mockStart.mockImplementationOnce(async () => {
+        await startGate;
+      });
+
+      const starting = getProxyForDevice(UDID_A);
+      await Promise.resolve();
+
+      const stoppingAll = stopAll();
+      releaseStart();
+
+      await Promise.all([starting, stoppingAll]);
+
+      expect(mockStop).toHaveBeenCalledTimes(1);
+      expect(listManagedProxies()).toHaveLength(0);
+    });
+
     test('stops every managed proxy', async () => {
       await getProxyForDevice(UDID_A);
       await getProxyForDevice(UDID_B);

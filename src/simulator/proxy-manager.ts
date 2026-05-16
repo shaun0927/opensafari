@@ -129,6 +129,14 @@ export function peekProxyForDevice(deviceId: string): WebInspectorProxy | null {
 
 /** Stop and forget a device's proxy. No-op if none exists. */
 export async function stopProxyForDevice(deviceId: string): Promise<void> {
+  const pending = pendingStarts.get(deviceId);
+  if (pending) {
+    // Teardown may race with startup during parallel boot/retry flows. Wait for
+    // the in-flight start to settle so a proxy cannot register itself after a
+    // caller has already requested stop for this device.
+    await pending.catch(() => null);
+  }
+
   const entry = managed.get(deviceId);
   if (!entry) return;
   try {
@@ -142,7 +150,7 @@ export async function stopProxyForDevice(deviceId: string): Promise<void> {
 
 /** Stop every managed proxy. Used on process shutdown / from tests. */
 export async function stopAll(): Promise<void> {
-  const devices = Array.from(managed.keys());
+  const devices = Array.from(new Set([...managed.keys(), ...pendingStarts.keys()]));
   for (const id of devices) {
     await stopProxyForDevice(id);
   }
