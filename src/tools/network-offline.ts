@@ -1,5 +1,5 @@
 import { MCPServer, getWebKitClient } from '../mcp-server';
-import { networkInterceptor } from './network-intercept';
+import { getNetworkInterceptorForSession } from './network-intercept';
 
 export function registerNetworkOfflineTool(server: MCPServer): void {
   server.registerTool(
@@ -10,16 +10,17 @@ export function registerNetworkOfflineTool(server: MCPServer): void {
         type: 'object' as const,
         properties: {
           enabled: { type: 'boolean', description: 'true to go offline, false to restore connectivity' },
+          device_id: { type: 'string', description: 'Simulator UDID / WebKit connection to target (uses active device if omitted)' },
         },
         required: ['enabled'],
       },
     },
-    async (_sessionId: string, params: Record<string, unknown>) => {
-      const client = getWebKitClient();
+    async (sessionId: string, params: Record<string, unknown>) => {
+      const client = getWebKitClient(typeof params.device_id === 'string' ? params.device_id : undefined);
       if (!client)
         return { content: [{ type: 'text' as const, text: 'Error: Safari not connected' }], isError: true };
       const enabled = params.enabled as boolean;
-      await networkInterceptor.setOffline(enabled, client);
+      await getNetworkInterceptorForSession(sessionId).setOffline(enabled, client);
       return { content: [{ type: 'text' as const, text: enabled ? 'Offline mode enabled' : 'Online mode restored' }] };
     },
   );
