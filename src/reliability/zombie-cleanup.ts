@@ -12,6 +12,14 @@ const LOCK_STALE_MS = 10000;
 const LOCK_RETRY_MS = 50;
 const LOCK_TIMEOUT_MS = 5000;
 
+export function sleepWithoutBusySpin(ms: number): void {
+  const duration = Math.max(0, Math.floor(ms));
+  if (duration === 0) return;
+  const buffer = new SharedArrayBuffer(4);
+  const view = new Int32Array(buffer);
+  Atomics.wait(view, 0, 0, duration);
+}
+
 function acquireLock(): boolean {
   const deadline = Date.now() + LOCK_TIMEOUT_MS;
   while (Date.now() < deadline) {
@@ -34,8 +42,7 @@ function acquireLock(): boolean {
           releaseLock();
           continue;
         }
-        const waitUntil = Date.now() + LOCK_RETRY_MS;
-        while (Date.now() < waitUntil) { /* spin */ }
+        sleepWithoutBusySpin(LOCK_RETRY_MS);
         continue;
       }
       return false;
