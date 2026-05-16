@@ -86,6 +86,60 @@ describe('InputBackendResolver — instance isolation', () => {
     expect(backendB).toBeInstanceOf(SimctlInputBackend);
   });
 
+
+  test('coalesces concurrent Flutter VM resolution for the same device', async () => {
+    const resolver = new InputBackendResolver();
+    const fakeClient = { isConnected: () => true, evaluate: jest.fn() } as any;
+    let calls = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    resolver.setFlutterVMResolver(async () => {
+      calls++;
+      await gate;
+      return fakeClient;
+    });
+
+    const first = resolver.getInputBackend(DEVICE);
+    const second = resolver.getInputBackend(DEVICE);
+
+    await Promise.resolve();
+    release();
+
+    const [backendA, backendB] = await Promise.all([first, second]);
+
+    expect(backendA).toBeInstanceOf(FlutterVMInputBackend);
+    expect(backendB).toBeInstanceOf(FlutterVMInputBackend);
+    expect(calls).toBe(1);
+  });
+
+  test('clears failed Flutter VM pending resolution so retry can probe again', async () => {
+    const resolver = new InputBackendResolver();
+    let calls = 0;
+    resolver.setFlutterVMResolver(async () => {
+      calls++;
+      throw new Error('transient vm discovery failure');
+    });
+
+    execMock.mockResolvedValue('');
+    await Promise.all([
+      resolver.getInputBackend(DEVICE),
+      resolver.getInputBackend(DEVICE),
+    ]);
+
+    expect(calls).toBe(1);
+
+    resolver.setFlutterVMResolver(async () => {
+      calls++;
+      return null;
+    });
+    await resolver.getInputBackend(DEVICE);
+
+    expect(calls).toBe(2);
+  });
+
   test('Flutter cache size is per-instance', async () => {
     const resolverA = new InputBackendResolver();
     const resolverB = new InputBackendResolver();
