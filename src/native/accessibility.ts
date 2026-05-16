@@ -129,6 +129,14 @@ function normalizeQueryText(value: string): string {
 function normalizedContains(haystack: string | undefined, normalizedNeedle: string): boolean {
   if (!haystack) return false;
   if (!normalizedNeedle) return false;
+
+  // Fast path for the common already-normalized case. Large accessibility
+  // trees often contain thousands of simple ASCII/CJK labels; avoiding Unicode
+  // decomposition on every node keeps text queries inside the documented budget
+  // while preserving the folded fallback for diacritics, width variants, and
+  // multiline whitespace.
+  if (haystack.toLocaleLowerCase().includes(normalizedNeedle)) return true;
+
   return normalizeQueryText(haystack).includes(normalizedNeedle);
 }
 
