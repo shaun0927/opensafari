@@ -140,6 +140,7 @@ async function defaultFlutterVMResolver(
  */
 export class FlutterVMResolverInstance {
   private cache = new Map<string, FlutterClientCacheEntry>();
+  private pendingResolutions = new Map<string, Promise<FlutterVMClient | null>>();
   private resolver: FlutterVMResolver;
 
   constructor() {
@@ -153,10 +154,22 @@ export class FlutterVMResolverInstance {
    * working for native iOS apps.
    */
   async resolve(deviceId: string): Promise<FlutterVMClient | null> {
+    const pending = this.pendingResolutions.get(deviceId);
+    if (pending) return pending;
+
+    const resolution = (async () => {
+      try {
+        return await this.resolver(deviceId);
+      } catch {
+        return null;
+      }
+    })();
+
+    this.pendingResolutions.set(deviceId, resolution);
     try {
-      return await this.resolver(deviceId);
-    } catch {
-      return null;
+      return await resolution;
+    } finally {
+      this.pendingResolutions.delete(deviceId);
     }
   }
 
@@ -180,6 +193,7 @@ export class FlutterVMResolverInstance {
   /** Clear all cached entries and reset the resolver to default. */
   reset(): void {
     this.cache.clear();
+    this.pendingResolutions.clear();
     this.resolver = (deviceId) => defaultFlutterVMResolver(deviceId, this.cache);
   }
 }
