@@ -42,7 +42,11 @@ import { getAccessibilityBridge, ensureSemanticsActive } from '../native';
 import type { AXNode, AXQuery } from '../native';
 import { resolveDeviceId, getInputBackend, runInputOp } from './native-input-utils';
 import { tryPress } from './app-tap-element';
-import { typeViaPasteboard, type PasteNotAppliedError } from './pasteboard-input';
+import {
+  typeViaPasteboard,
+  isSecureFieldDescriptor,
+  type PasteNotAppliedError,
+} from './pasteboard-input';
 import { mismatchHint } from './keyboard-layout';
 
 const execFileAsync = promisify(execFile);
@@ -523,11 +527,12 @@ async function verifyTypedText(
     // as inconclusive instead of treating the mask as a divergent value
     // (which would otherwise escalate to TEXT_INPUT_DROPPED /
     // TEXT_INPUT_LAYOUT_MISMATCH and surface `isError: true`).
-    isSecureField =
-      node.role === 'AXSecureTextField' ||
-      (Array.isArray(node.traits) &&
-        (node.traits.includes('AXSecureTextField') ||
-          node.traits.includes('secure text field')));
+    // Delegated to `isSecureFieldDescriptor` so the trait-alias corpus is
+    // maintained in one place (`pasteboard-input.ts`).
+    isSecureField = isSecureFieldDescriptor({
+      role: node.role,
+      traits: node.traits,
+    });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return {
