@@ -17,6 +17,7 @@ import {
   MCPMessageContext,
 } from './types/mcp';
 import { createTransport, MCPTransport, TransportMode } from './transports';
+import { removeNetworkInterceptorForSession } from './tools/network-intercept-cache';
 import { TOOL_TIERS, getToolTier } from './config/tool-tiers';
 import { BrowserBackend } from './types/browser-backend';
 import { logAuditEntry } from './security/audit-logger';
@@ -194,6 +195,10 @@ export class MCPServer {
       authToken: options.authToken,
       insecure: options.httpInsecure,
       allowedOrigins: options.allowedOrigins,
+    });
+
+    this.transport.onSessionDelete?.((sessionId) => {
+      removeNetworkInterceptorForSession(sessionId);
     });
 
     this.transport.onMessage((msg, context) => this.handleMessage(msg, context));

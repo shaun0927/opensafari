@@ -26,6 +26,12 @@ export interface MCPTransport {
    */
   send(response: MCPResponse): void;
 
+  /**
+   * Register cleanup that runs when a stateful transport deletes an MCP session.
+   * Stateless transports can omit this hook.
+   */
+  onSessionDelete?(handler: (sessionId: string) => void): void;
+
   /** Start listening for messages (bind port or attach readline). */
   start(): void | Promise<void>;
 
