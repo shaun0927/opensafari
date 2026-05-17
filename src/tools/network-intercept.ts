@@ -21,13 +21,28 @@ function resolveClient(deviceId: unknown): InterceptorClient | null {
   return getWebKitClient(typeof deviceId === 'string' ? deviceId : undefined);
 }
 
-function mapRule(params: Record<string, unknown>): Omit<InterceptRule, 'id'> {
+/**
+ * @internal Exported so the schema-validation contract can be unit-tested
+ * directly without standing up the full MCP tool handler.
+ */
+export function mapRule(params: Record<string, unknown>): Omit<InterceptRule, 'id'> {
   const urlPattern = params.urlPattern as string | undefined;
   if (!urlPattern) {
     throw new Error('urlPattern is required when clear is not set');
   }
 
-  const action = ((params.action as string) || 'block') as 'block' | 'modify';
+  // Validate explicitly: the JSON Schema declares `enum: ['block', 'modify']`
+  // but MCP runtime schema enforcement is not guaranteed for every client, so
+  // a typo like `"blok"` would otherwise be silently coerced to "mock" by the
+  // fallthrough below (Codex review on PR #762). Reject unknown values up
+  // front instead of rewriting requests in ways callers won't expect.
+  const rawAction = params.action;
+  if (rawAction !== undefined && rawAction !== 'block' && rawAction !== 'modify') {
+    throw new Error(
+      `action must be "block" or "modify" (got ${JSON.stringify(rawAction)})`,
+    );
+  }
+  const action = (rawAction as 'block' | 'modify' | undefined) ?? 'block';
   if (action === 'block') return { urlPattern, action: 'block' };
 
   const statusCode = typeof params.statusCode === 'number' ? params.statusCode : 200;
@@ -87,7 +102,8 @@ export function registerNetworkInterceptTool(server: MCPServer): void {
         return { content: [{ type: 'text' as const, text: 'Error: Safari not connected' }], isError: true };
       }
 
-      const interceptor = getNetworkInterceptorForSession(sessionId);
+      const deviceId = typeof params.device_id === 'string' ? params.device_id : undefined;
+      const interceptor = getNetworkInterceptorForSession(sessionId, deviceId);
       if (params.clear === true) {
         await interceptor.disable(client);
         return { content: [{ type: 'text' as const, text: 'All intercept rules cleared' }] };

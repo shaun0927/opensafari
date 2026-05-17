@@ -361,8 +361,12 @@ export class WebInspectorProxy {
     const start = Date.now();
     while (Date.now() - start < timeout) {
       try {
-        const body = await this.httpGet(`http://localhost:${this._deviceListPort}`);
-        if (body.includes('iOS Devices')) return;
+        // Probe /json — works under both default frontend and -F (no-frontend)
+        // modes. Always returns a JSON array (possibly empty) when the proxy
+        // is alive. We spawn with -F (see start()), so probing `/` directly
+        // can return non-HTML content and miss the readiness signal.
+        const body = await this.httpGet(`http://localhost:${this._deviceListPort}/json`);
+        if (body.trimStart().startsWith('[')) return;
       } catch { /* retry */ }
       await new Promise(r => setTimeout(r, 500));
     }
@@ -390,8 +394,9 @@ export class WebInspectorProxy {
 
   private async isProxyHealthy(): Promise<boolean> {
     try {
-      const body = await this.httpGet(`http://localhost:${this._deviceListPort}`);
-      return body.includes('iOS Devices');
+      // See waitForReady — probe /json so the check works under -F mode.
+      const body = await this.httpGet(`http://localhost:${this._deviceListPort}/json`);
+      return body.trimStart().startsWith('[');
     } catch {
       return false;
     }

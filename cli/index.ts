@@ -1,6 +1,10 @@
 #!/usr/bin/env node
 
 import { Command } from 'commander';
+// Lazy-loaded inside command handlers below (#700 a — CLI lazy-load perf).
+// The audit-port helpers are imported eagerly because they're used by the
+// commander `--port` option parser (#696 — audit auto-spawn proxy).
+import { parseAuditProxyPort, resolveAuditProxyPort } from '../src/cli/audit-port';
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const pkg = require('../package.json');
@@ -325,11 +329,17 @@ program
   .command('audit')
   .description('Run QA audit and export results in CI-friendly formats')
   .requiredOption('--url <url>', 'URL to audit')
+  .option('--port <port>', 'WebKit debug proxy device port (default: 9322 or $OPENSAFARI_PROXY_PORT)', parseAuditProxyPort)
+  .option('--host <host>', 'WebKit debug proxy host', 'localhost')
+  .option('--no-spawn-proxy', 'Do not auto-spawn ios_webkit_debug_proxy; assume one is already running')
   .option('--format <format>', 'Output format: markdown, junit, json', 'markdown')
   .option('--output <path>', 'Write report to file instead of stdout')
   .option('--fail-on-high', 'Exit with code 1 if high-severity issues found')
   .option('--min-score <score>', 'Exit with code 1 if score below threshold', parseInt)
   .action(async (options) => {
+    // Lazy-loaded together (#700 a) — single Promise.all keeps cold-start
+    // proportional to the slowest module. WebInspectorProxy added for
+    // the audit auto-spawn path (#696).
     const [
       { QAAudit },
       { QAHistory },
@@ -337,6 +347,7 @@ program
       { generateAuditJUnit },
       { generateAuditJSON },
       { WebKitClient },
+      { WebInspectorProxy },
     ] = await Promise.all([
       import('../src/qa/audit'),
       import('../src/qa/history'),
@@ -344,53 +355,121 @@ program
       import('../src/qa/report-junit'),
       import('../src/qa/report-json'),
       import('../src/webkit/client'),
+      import('../src/simulator/proxy'),
     ]).catch((err: unknown) => {
-      console.error(`[OpenSafari] Failed to load audit dependencies (../src/qa/*, ../src/webkit/client): ${err instanceof Error ? err.message : String(err)}`);
+      console.error(`[OpenSafari] Failed to load audit dependencies (../src/qa/*, ../src/webkit/client, ../src/simulator/proxy): ${err instanceof Error ? err.message : String(err)}`);
       process.exit(1);
     });
 
+    // Prefer the existing OPENSAFARI_PROXY_PORT env var (also honored by
+    // WebInspectorProxy) so audit picks up the same value as `serve` in
+    // CI / port-conflict setups.
+    const port: number = resolveAuditProxyPort(options.port, process.env.OPENSAFARI_PROXY_PORT);
+    const host: string = options.host;
+
+    // Auto-spawn proxy when targeting localhost unless --no-spawn-proxy is set.
+    // For non-localhost hosts the user is bringing their own proxy, so we never spawn.
+    const shouldSpawn = options.spawnProxy !== false && host === 'localhost';
+
+    let proxy: InstanceType<typeof WebInspectorProxy> | undefined;
     let client: InstanceType<typeof WebKitClient> | undefined;
+    let preSpawnError: unknown;
+
+    if (shouldSpawn) {
+      // Preserve compatibility with the documented device-port-only setup:
+      //   ios_webkit_debug_proxy -c "$UDID":9322
+      // In that mode the derived device-list port (9321) is closed, so
+      // WebInspectorProxy.start() cannot detect reuse and would fail with
+      // "port in use". Try the normal audit connection first; only spawn if
+      // nothing is listening/useful on the configured device port.
+      client = new WebKitClient({ host, port });
+      try {
+        await client.connect();
+      } catch (err) {
+        preSpawnError = err;
+        await client.disconnect().catch(() => { /* ignore */ });
+        client = undefined;
+      }
+    }
+
+    const existingProxyWithoutTargets = preSpawnError instanceof Error
+      && preSpawnError.message.includes('No Safari targets found');
+
+    if (shouldSpawn && !client && !existingProxyWithoutTargets) {
+      proxy = new WebInspectorProxy({ port });
+      try {
+        await proxy.start();
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        const previous = preSpawnError instanceof Error ? preSpawnError.message : undefined;
+        console.error(`Error: Could not start ios_webkit_debug_proxy on port ${port}. ${msg}`);
+        if (previous) {
+          console.error(`Previous connection attempt at ${host}:${port} also failed: ${previous}`);
+        }
+        console.error('Hint: ensure a simulator is booted (xcrun simctl boot <device>) and ios-webkit-debug-proxy is installed (brew install ios-webkit-debug-proxy).');
+        // start() may have spawned the child and registered a ref before
+        // throwing (e.g. waitForReady timeout). Tear it down so we don't
+        // leak the proxy process or the ref file into the next run.
+        await proxy.stop().catch(() => { /* ignore */ });
+        process.exit(1);
+      }
+    }
+
     try {
-      client = new WebKitClient({ host: 'localhost', port: 9322 });
-      await client.connect();
-    } catch {
-      console.error('Error: Could not connect to Safari. Ensure a simulator is booted and ios-webkit-debug-proxy is running.');
+      client ??= new WebKitClient({ host, port });
+      if (!client.isConnected()) {
+        await client.connect();
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`Error: Could not connect to Safari at ${host}:${port}. ${msg}`);
+      if (!shouldSpawn) {
+        console.error('Hint: ensure ios_webkit_debug_proxy is running on the configured port, or omit --no-spawn-proxy to auto-spawn it.');
+      }
+      if (proxy) await proxy.stop().catch(() => { /* ignore */ });
       process.exit(1);
     }
 
-    const audit = new QAAudit(client);
-    const report = await audit.runFullAudit(options.url);
-    const history = new QAHistory();
-    await history.save(report);
+    try {
+      const audit = new QAAudit(client);
+      const report = await audit.runFullAudit(options.url);
+      const history = new QAHistory();
+      await history.save(report);
 
-    let output: string;
-    switch (options.format) {
-      case 'junit':
-        output = generateAuditJUnit(report);
-        break;
-      case 'json':
-        output = JSON.stringify(generateAuditJSON(report), null, 2);
-        break;
-      default:
-        output = generateAuditMarkdown(report);
+      let output: string;
+      switch (options.format) {
+        case 'junit':
+          output = generateAuditJUnit(report);
+          break;
+        case 'json':
+          output = JSON.stringify(generateAuditJSON(report), null, 2);
+          break;
+        default:
+          output = generateAuditMarkdown(report);
+      }
+
+      if (options.output) {
+        const fs = await import('fs/promises');
+        await fs.writeFile(options.output, output, 'utf-8');
+        console.error(`Report written to ${options.output}`);
+      } else {
+        console.log(output);
+      }
+
+      const exitCode = history.getExitCode(report, {
+        failOnCritical: true,
+        failOnHigh: !!options.failOnHigh,
+        minScore: options.minScore,
+      });
+
+      await client.disconnect();
+      if (proxy) await proxy.stop();
+      process.exit(exitCode);
+    } catch (err) {
+      if (client) await client.disconnect().catch(() => { /* ignore */ });
+      if (proxy) await proxy.stop().catch(() => { /* ignore */ });
+      throw err;
     }
-
-    if (options.output) {
-      const fs = await import('fs/promises');
-      await fs.writeFile(options.output, output, 'utf-8');
-      console.error(`Report written to ${options.output}`);
-    } else {
-      console.log(output);
-    }
-
-    const exitCode = history.getExitCode(report, {
-      failOnCritical: true,
-      failOnHigh: !!options.failOnHigh,
-      minScore: options.minScore,
-    });
-
-    await client.disconnect();
-    process.exit(exitCode);
   });
 
 program.parseAsync(process.argv).catch(err => {
