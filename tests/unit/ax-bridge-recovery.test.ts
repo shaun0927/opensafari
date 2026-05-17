@@ -10,6 +10,7 @@ import {
   DEFAULT_BACKOFF_MS,
   DEFAULT_MAX_ATTEMPTS,
   DEFAULT_REACTIVATE_TIMEOUT_MS,
+  FLUTTER_SEMANTICS_INACTIVE,
   NON_RECOVERABLE_ERROR_CODES,
   RECOVERABLE_ERROR_CODES,
   dumpTreeWithRecovery,
@@ -161,6 +162,56 @@ describe('dumpTreeWithRecovery', () => {
       code: 'DEVICE_CONTENT_ROOT_EMPTY',
       message: 'empty 3',
     });
+  });
+
+  test('persistent empty Flutter tree with failed reactivation surfaces a typed semantics-inactive error', async () => {
+    const errors = [
+      new AccessibilityBridgeError('empty 1', 'DEVICE_CONTENT_ROOT_EMPTY'),
+      new AccessibilityBridgeError('empty 2', 'DEVICE_CONTENT_ROOT_EMPTY'),
+      new AccessibilityBridgeError('empty 3', 'DEVICE_CONTENT_ROOT_EMPTY'),
+    ];
+    const { bridge } = makeBridge(errors);
+
+    let caught: (AccessibilityBridgeError & { recovery?: unknown }) | undefined;
+    try {
+      await dumpTreeWithRecovery(bridge, {
+        deviceId: 'SIM-1',
+        bundleId: 'com.example.flutter',
+        reactivate: async () => false,
+        sleep: async () => {},
+      });
+    } catch (err) {
+      caught = err as AccessibilityBridgeError & { recovery?: unknown };
+    }
+
+    expect(caught).toMatchObject({
+      name: 'AccessibilityBridgeError',
+      code: FLUTTER_SEMANTICS_INACTIVE,
+    });
+    expect(caught?.message).toContain('com.example.flutter');
+    expect(caught?.message).toContain('Original error: empty 3');
+    expect(caught?.recovery).toMatchObject({
+      attempts: 3,
+      recovered: false,
+      lastErrorCode: FLUTTER_SEMANTICS_INACTIVE,
+    });
+  });
+
+  test('persistent empty native tree without bundleId preserves original error code', async () => {
+    const errors = [
+      new AccessibilityBridgeError('empty 1', 'DEVICE_CONTENT_ROOT_EMPTY'),
+      new AccessibilityBridgeError('empty 2', 'DEVICE_CONTENT_ROOT_EMPTY'),
+      new AccessibilityBridgeError('empty 3', 'DEVICE_CONTENT_ROOT_EMPTY'),
+    ];
+    const { bridge } = makeBridge(errors);
+
+    await expect(
+      dumpTreeWithRecovery(bridge, {
+        deviceId: 'SIM-1',
+        reactivate: async () => false,
+        sleep: async () => {},
+      }),
+    ).rejects.toMatchObject({ code: 'DEVICE_CONTENT_ROOT_EMPTY', message: 'empty 3' });
   });
 
   test('non-recoverable error short-circuits without retry', async () => {
