@@ -41,6 +41,7 @@ import { DEFAULT_PROXY_PROCESS_READY_TIMEOUT_MS } from '../../src/config/default
 type ProxyPrivate = {
   waitForTarget(options?: { timeout?: number }): Promise<void>;
   waitForProcessReady(timeout?: number): Promise<void>;
+  isProxyHealthy(): Promise<boolean>;
   httpGet(url: string): Promise<string>;
 };
 
@@ -280,13 +281,13 @@ describe('WebInspectorProxy initialization timing', () => {
     it('resolves when device-list port returns "iOS Devices"', async () => {
       httpGetSpy = jest
         .spyOn(privateProxy(proxy) as unknown as { httpGet: (url: string) => Promise<string> }, 'httpGet')
-        .mockResolvedValue('<html>iOS Devices</html>');
+        .mockResolvedValue('[]');
 
       await expect(privateProxy(proxy).waitForProcessReady(5000)).resolves.toBeUndefined();
       expect(httpGetSpy).toHaveBeenCalledTimes(1);
     });
 
-    it('throws when timeout expires without "iOS Devices" response', async () => {
+    it('throws when timeout expires without a JSON-array response', async () => {
       jest.useFakeTimers();
 
       httpGetSpy = jest
@@ -303,18 +304,37 @@ describe('WebInspectorProxy initialization timing', () => {
       await assertion;
     });
 
-    it('polls the device-list port URL', async () => {
+    it('polls the device-list /json URL', async () => {
       const capturedUrls: string[] = [];
       httpGetSpy = jest
         .spyOn(privateProxy(proxy) as unknown as { httpGet: (url: string) => Promise<string> }, 'httpGet')
         .mockImplementation(async (url: string) => {
           capturedUrls.push(url);
-          return 'iOS Devices';
+          return '[]';
         });
 
       await privateProxy(proxy).waitForProcessReady(5000);
 
-      expect(capturedUrls[0]).toBe(`http://localhost:${proxy.deviceListPort}`);
+      expect(capturedUrls[0]).toBe(`http://localhost:${proxy.deviceListPort}/json`);
+    });
+  });
+
+  describe('isProxyHealthy', () => {
+    it('probes device-list /json and accepts an empty JSON array under -F mode', async () => {
+      httpGetSpy = jest
+        .spyOn(privateProxy(proxy) as unknown as { httpGet: (url: string) => Promise<string> }, 'httpGet')
+        .mockResolvedValue('[]');
+
+      await expect(privateProxy(proxy).isProxyHealthy()).resolves.toBe(true);
+      expect(httpGetSpy).toHaveBeenCalledWith(`http://localhost:${proxy.deviceListPort}/json`);
+    });
+
+    it('rejects non-array device-list responses', async () => {
+      jest
+        .spyOn(privateProxy(proxy) as unknown as { httpGet: (url: string) => Promise<string> }, 'httpGet')
+        .mockResolvedValue('<html>iOS Devices</html>');
+
+      await expect(privateProxy(proxy).isProxyHealthy()).resolves.toBe(false);
     });
   });
 
@@ -343,17 +363,20 @@ describe('WebInspectorProxy initialization timing', () => {
       };
       mockSpawn.mockReturnValue(fakeProc);
 
-      // waitForProcessReady via httpGet: device-list responds immediately
-      // httpGet is called by waitForProcessReady. We return 'iOS Devices' so it resolves.
-      // waitForTarget is NOT called by start() — so the target URL must never be polled.
+      // waitForProcessReady via httpGet: device-list responds immediately.
+      // After PR #696 the proxy probes `/json` and accepts any JSON array (works
+      // under -F mode), so a bare `[]` is the process-ready signal.
+      // waitForTarget is NOT called by start() — so the forwarding port must
+      // never be polled.
       const capturedUrls: string[] = [];
       httpGetSpy = jest
         .spyOn(privateProxy(proxy) as unknown as { httpGet: (url: string) => Promise<string> }, 'httpGet')
         .mockImplementation(async (url: string) => {
           capturedUrls.push(url);
-          // Device-list port returns "iOS Devices" (process-ready)
-          if (url.includes(String(proxy.deviceListPort))) return '<html>iOS Devices</html>';
-          // Forwarding port returns empty (not target-ready) — should never be called by start()
+          // Device-list port /json returns empty array (process-ready signal)
+          if (url.includes(String(proxy.deviceListPort))) return '[]';
+          // Forwarding port /json returns empty (not target-ready) — should
+          // never be called by start()
           return '[]';
         });
 
@@ -362,8 +385,10 @@ describe('WebInspectorProxy initialization timing', () => {
       // start() must have completed
       expect(proxy.running).toBe(true);
 
-      // Only the device-list URL (process-ready check) should have been polled
-      const forwardingPolled = capturedUrls.some(u => u.includes('/json'));
+      // Only the device-list URL (process-ready check) should have been polled.
+      // Both URLs now hit /json under -F (#696), so check the forwarding-port
+      // host:port explicitly rather than substring-matching `/json`.
+      const forwardingPolled = capturedUrls.some(u => u.includes(`localhost:${proxy.port}`));
       expect(forwardingPolled).toBe(false);
     });
 
@@ -450,7 +475,8 @@ describe('WebInspectorProxy reuse path — no target wait', () => {
       'httpGet',
     ).mockImplementation(async (url: string) => {
       capturedUrls.push(url);
-      return '<html>iOS Devices</html>';
+      // After PR #696 `isProxyHealthy` probes /json and accepts any JSON array.
+      return '[]';
     });
 
     // Stub ref tracking
@@ -464,8 +490,9 @@ describe('WebInspectorProxy reuse path — no target wait', () => {
     expect(proxy.running).toBe(true);
     expect(proxy.reusing).toBe(true);
 
-    // Must NOT have polled the forwarding port (/json)
-    const forwardingPolled = capturedUrls.some(u => u.includes('/json'));
+    // Must NOT have polled the forwarding port. Both ports now serve /json
+    // under -F mode (#696), so check the forwarding-port host:port explicitly.
+    const forwardingPolled = capturedUrls.some(u => u.includes(`localhost:${proxy.port}`));
     expect(forwardingPolled).toBe(false);
   });
 });
