@@ -8,7 +8,13 @@
 
 import { MCPServer } from '../mcp-server';
 import { getAccessibilityBridge, ensureSemanticsActive } from '../native';
+import type { AXNode } from '../native';
 import { getSessionManager } from '../session-manager';
+import {
+  activateAndClassify,
+  createContextMismatchError,
+  NativeContextMeta,
+} from './native-app-context';
 
 type AssertCondition = 'exists' | 'not_exists' | 'visible' | 'enabled' | 'disabled' | 'has_text';
 
@@ -56,6 +62,10 @@ export function registerAppAssertElementTool(server: MCPServer): void {
             type: 'string',
             description: 'Simulator UDID (uses active device if omitted)',
           },
+          bundle_id: {
+            type: 'string',
+            description: 'Target app bundle ID. When provided, the tool re-activates the app and rejects mismatched native contexts.',
+          },
         },
         required: [],
       },
@@ -91,6 +101,7 @@ export function registerAppAssertElementTool(server: MCPServer): void {
         const condition = (params.assert as AssertCondition | undefined) ?? 'exists';
         const expectedText = params.expected_text as string | undefined;
         const message = params.message as string | undefined;
+        const bundleId = params.bundle_id as string | undefined;
         const query = { identifier, label, text, role };
 
         if (condition === 'has_text' && !expectedText) {
@@ -105,10 +116,29 @@ export function registerAppAssertElementTool(server: MCPServer): void {
           };
         }
 
-        // Ensure Flutter semantics are active
-        await ensureSemanticsActive(deviceId);
-
         const bridge = getAccessibilityBridge();
+        let meta: NativeContextMeta = {
+          requestedBundleId: bundleId,
+          deviceId,
+          sourceKind: 'unknown',
+          heuristics: ['not-requested'],
+          activationAttempted: false,
+          activationRetries: 0,
+        };
+        if (bundleId) {
+          const context = await activateAndClassify({
+            bridge,
+            deviceId,
+            bundleId,
+            ensureSemanticsActive: () => ensureSemanticsActive(deviceId, { bundleId }),
+          });
+          meta = context.meta;
+          if (meta.sourceKind !== 'target-app') {
+            throw createContextMismatchError(meta);
+          }
+        } else {
+          await ensureSemanticsActive(deviceId, { bundleId });
+        }
         const result = await bridge.query(query, { deviceId });
         const matches = result.matches;
         const match = matches.length > 0 ? matches[0] : null;
@@ -155,6 +185,10 @@ export function registerAppAssertElementTool(server: MCPServer): void {
           actual,
           expected: condition === 'has_text' ? expectedText : condition,
           message: message ?? `Assert ${condition} for element`,
+          debug: !passed && match === null
+            ? await collectNoMatchDebug(bridge, deviceId, query)
+            : undefined,
+          _meta: { context: meta },
           element: match ? {
             role: match.role,
             label: match.label,
@@ -165,6 +199,13 @@ export function registerAppAssertElementTool(server: MCPServer): void {
             enabled: match.enabled,
           } : null,
         };
+
+        if (!passed && match === null) {
+          console.error(
+            `[app_assert_element] no match for fields=${JSON.stringify(query)}; ` +
+            `searched=identifier|label|value|role; candidates=${JSON.stringify(assertResult.debug?.candidates ?? [])}`,
+          );
+        }
 
         return {
           content: [{
@@ -183,4 +224,50 @@ export function registerAppAssertElementTool(server: MCPServer): void {
       }
     },
   );
+}
+
+async function collectNoMatchDebug(
+  bridge: ReturnType<typeof getAccessibilityBridge>,
+  deviceId: string,
+  query: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  try {
+    const tree = await bridge.dumpTree({ deviceId, maxDepth: 6 });
+    const candidates = collectCandidateStrings(tree).slice(0, 10);
+    return {
+      searchedFields: ['identifier', 'label', 'value', 'role'],
+      normalizedQuery: Object.fromEntries(
+        Object.entries(query)
+          .filter(([, value]) => typeof value === 'string' && value.trim().length > 0)
+          .map(([key, value]) => [key, normalizeCandidate(value as string)]),
+      ),
+      candidates,
+    };
+  } catch (error) {
+    return {
+      searchedFields: ['identifier', 'label', 'value', 'role'],
+      debugError: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+function collectCandidateStrings(node: AXNode): string[] {
+  const values = new Set<string>();
+  const stack = [node];
+  while (stack.length > 0) {
+    const current = stack.pop()!;
+    for (const raw of [current.identifier, current.label, current.value]) {
+      if (!raw) continue;
+      const normalized = normalizeCandidate(raw);
+      if (normalized) values.add(normalized);
+    }
+    for (const child of current.children ?? []) {
+      stack.push(child);
+    }
+  }
+  return [...values];
+}
+
+function normalizeCandidate(value: string): string {
+  return value.replace(/\s+/g, ' ').trim();
 }

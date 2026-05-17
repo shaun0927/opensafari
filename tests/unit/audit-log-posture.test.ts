@@ -45,6 +45,7 @@ describe('src/ci/audit-log-posture', () => {
       '{"tool":"navigate","backendKind":"webkit"}',
       '{"tool":"flutter_tap","backendKind":"flutter-vm"}',
       '{"tool":"app_tap_element","backendKind":"ax-press"}',
+      '{"tool":"app_tap","backendKind":"pointer-service"}',
     ]);
     const report = scanAuditLog(file);
     expect(report.backendKinds).toEqual(
@@ -80,6 +81,16 @@ describe('src/ci/audit-log-posture', () => {
     ]);
     const report = scanAuditLog(file);
     expect(report.backendKinds).toEqual(['ax-press']);
+    expect(report.disallowedBackendKinds).toEqual([]);
+    expect(report.applescriptHits).toBe(0);
+  });
+
+  it('treats pointer-service as an allowed headless backend', () => {
+    const file = writeLog('pointer-service.log', [
+      '{"tool":"app_tap","backendKind":"pointer-service"}',
+    ]);
+    const report = scanAuditLog(file);
+    expect(report.backendKinds).toEqual(['pointer-service']);
     expect(report.disallowedBackendKinds).toEqual([]);
     expect(report.applescriptHits).toBe(0);
   });

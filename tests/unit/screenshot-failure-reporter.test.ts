@@ -1,11 +1,14 @@
 /**
  * Unit coverage for the integration-suite screenshot-on-failure reporter.
  *
- * The reporter itself is a CommonJS module so we `require` it and treat its
- * default export as `any` — it carries no public TypeScript surface.
+ * The reporter itself is a CommonJS module with no TypeScript surface, so
+ * we `require` it here and treat the default export as `any`.
  */
 
-// eslint-disable-next-line @typescript-eslint/no-var-requires, @typescript-eslint/no-require-imports
+import os from 'os';
+import path from 'path';
+
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const ScreenshotOnFailureReporter = require('../integration/screenshot-failure-reporter.cjs');
 
 interface ReporterStatic {
@@ -161,6 +164,118 @@ describe('screenshot-failure-reporter', () => {
         });
       });
       detect.mockRestore();
+    });
+  });
+
+  describe('resolveOutputDir', () => {
+    const resolveOutputDir: (raw: unknown, cwd: string) => string =
+      ScreenshotOnFailureReporter.resolveOutputDir;
+    const cwd = process.cwd();
+    const defaultDir = path.resolve(cwd, 'test-output', 'screenshots');
+
+    let errorSpy: jest.SpyInstance;
+    beforeEach(() => {
+      errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    });
+    afterEach(() => {
+      errorSpy.mockRestore();
+    });
+
+    test('accept: absolute path under process.cwd() is returned unchanged', () => {
+      const input = path.join(cwd, 'custom-screenshots');
+      expect(resolveOutputDir(input, cwd)).toBe(input);
+      expect(errorSpy).not.toHaveBeenCalled();
+    });
+
+    test('accept: absolute path under os.tmpdir() is returned unchanged', () => {
+      const input = path.join(os.tmpdir(), 'opensafari-test-screenshots');
+      expect(resolveOutputDir(input, cwd)).toBe(input);
+      expect(errorSpy).not.toHaveBeenCalled();
+    });
+
+    test('accept: relative path is normalized to under cwd and returned', () => {
+      const result = resolveOutputDir('custom-screenshots', cwd);
+      expect(result).toBe(path.resolve(cwd, 'custom-screenshots'));
+      expect(errorSpy).not.toHaveBeenCalled();
+    });
+
+    test('reject: absolute path outside both safe roots returns default with one console.error', () => {
+      const result = resolveOutputDir('/etc/opensafari-unexpected', cwd);
+      expect(result).toBe(defaultDir);
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      expect(errorSpy.mock.calls[0][0]).toMatch(/^\[screenshot-on-failure\]/);
+      expect(errorSpy.mock.calls[0][0]).toContain('/etc/opensafari-unexpected');
+      expect(errorSpy.mock.calls[0][0]).toContain('outside safe roots');
+    });
+
+    test('reject: .. traversal escaping cwd returns default with one console.error', () => {
+      const result = resolveOutputDir('../../etc/foo', cwd);
+      expect(result).toBe(defaultDir);
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      expect(errorSpy.mock.calls[0][0]).toMatch(/^\[screenshot-on-failure\]/);
+      expect(errorSpy.mock.calls[0][0]).toContain('outside safe roots');
+    });
+
+    test('ignore (no diagnostic): empty string returns default silently', () => {
+      expect(resolveOutputDir('', cwd)).toBe(defaultDir);
+      expect(errorSpy).not.toHaveBeenCalled();
+    });
+
+    test('ignore (no diagnostic): whitespace-only string returns default silently', () => {
+      expect(resolveOutputDir('   ', cwd)).toBe(defaultDir);
+      expect(errorSpy).not.toHaveBeenCalled();
+    });
+
+    test('ignore (no diagnostic): undefined returns default silently', () => {
+      expect(resolveOutputDir(undefined, cwd)).toBe(defaultDir);
+      expect(errorSpy).not.toHaveBeenCalled();
+    });
+
+    test('invariant: built-in default resolves inside safe roots', () => {
+      const safeRoots = [path.resolve(cwd), os.tmpdir()];
+      const safe = safeRoots.some(
+        (root) => defaultDir === root || defaultDir.startsWith(root + path.sep),
+      );
+      expect(safe).toBe(true);
+    });
+
+    test('RUNNER_TEMP assertion: os.tmpdir() is a valid safe root for CI macOS runners', () => {
+      // On GitHub Actions macOS, RUNNER_TEMP resolves under TMPDIR which
+      // os.tmpdir() returns. Verify os.tmpdir() itself passes the guard.
+      const input = os.tmpdir();
+      expect(resolveOutputDir(input, cwd)).toBe(input);
+      expect(errorSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('constructor resolveOutputDir integration', () => {
+    let errorSpy: jest.SpyInstance;
+    beforeEach(() => {
+      errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    });
+    afterEach(() => {
+      errorSpy.mockRestore();
+    });
+
+    test('env var rejected value falls back to default', () => {
+      withEnv('OSF_SCREENSHOT_DIR', '/etc/opensafari-unexpected', () => {
+        const r = new Reporter({ rootDir: process.cwd() });
+        const defaultDir = path.resolve(process.cwd(), 'test-output', 'screenshots');
+        expect(r.outputDir).toBe(defaultDir);
+        expect(errorSpy).toHaveBeenCalledTimes(1);
+        expect(errorSpy.mock.calls[0][0]).toMatch(/^\[screenshot-on-failure\]/);
+      });
+    });
+
+    test('options.outputDir rejected value falls back to default and emits diagnostic', () => {
+      withEnv('OSF_SCREENSHOT_DIR', undefined, () => {
+        const r = new Reporter({ rootDir: process.cwd() }, { outputDir: '/etc/foo' });
+        const defaultDir = path.resolve(process.cwd(), 'test-output', 'screenshots');
+        expect(r.outputDir).toBe(defaultDir);
+        expect(errorSpy).toHaveBeenCalledTimes(1);
+        expect(errorSpy.mock.calls[0][0]).toMatch(/^\[screenshot-on-failure\]/);
+        expect(errorSpy.mock.calls[0][0]).toContain('/etc/foo');
+      });
     });
   });
 });

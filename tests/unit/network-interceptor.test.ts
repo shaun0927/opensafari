@@ -89,12 +89,25 @@ describe('NetworkInterceptor', () => {
       expect(interceptor.enabled).toBe(true);
       expect(mockClient.evaluate).toHaveBeenCalled();
     });
-    it('clears state on disable', async () => {
+    it('clears state and restores all browser hooks on disable', async () => {
       interceptor.addRule({ urlPattern: '*.js', action: 'block' });
       await interceptor.enable(mockClient);
       await interceptor.disable(mockClient);
       expect(interceptor.enabled).toBe(false);
       expect(interceptor.listRules()).toHaveLength(0);
+      const restoreScript = mockClient.evaluate.mock.calls.at(-1)?.[0] as string;
+      expect(restoreScript).toContain('__osOriginalFetch');
+      expect(restoreScript).toContain('__osOriginalXHROpen');
+      expect(restoreScript).toContain('__osOriginalXHRSend');
+    });
+
+    it('preserves the original XHR send across repeated injections', async () => {
+      await interceptor.enable(mockClient);
+      await interceptor.syncRules(mockClient);
+      const reinjectScript = mockClient.evaluate.mock.calls.at(-1)?.[0] as string;
+      expect(reinjectScript).toContain('if(!window.__osOriginalXHRSend)');
+      expect(reinjectScript).toContain('window.__osOriginalXHRSend.apply(this,arguments)');
+      expect(reinjectScript).not.toContain('var origSend=XMLHttpRequest.prototype.send');
     });
   });
 
@@ -105,10 +118,21 @@ describe('NetworkInterceptor', () => {
       expect(interceptor.offline).toBe(true);
       expect(interceptor.enabled).toBe(true);
     });
-    it('disables offline', async () => {
+    it('disables offline and restores hooks when no intercept rules remain', async () => {
       await interceptor.setOffline(true, mockClient);
       await interceptor.setOffline(false, mockClient);
       expect(interceptor.offline).toBe(false);
+      expect(interceptor.enabled).toBe(false);
+      expect(mockClient.evaluate.mock.calls.at(-1)?.[0]).toContain('__osOriginalXHROpen');
+    });
+    it('disables offline without clearing active intercept rules', async () => {
+      interceptor.addRule({ urlPattern: '/api', action: 'block' });
+      await interceptor.enable(mockClient);
+      await interceptor.setOffline(true, mockClient);
+      await interceptor.setOffline(false, mockClient);
+      expect(interceptor.offline).toBe(false);
+      expect(interceptor.enabled).toBe(true);
+      expect(interceptor.listRules()).toHaveLength(1);
     });
   });
 

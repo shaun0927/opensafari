@@ -121,6 +121,41 @@ describe('Native Accessibility Tools', () => {
       expect(matches[0].node.role).toBe('TextField');
     });
 
+    test('query by label normalizes multiline whitespace', () => {
+      const multilineTree: AccessibilityNode = {
+        ...sampleTree,
+        children: [
+          {
+            ...sampleTree.children[0],
+            children: [
+              {
+                role: 'Button',
+                label: '마이\n탭 4개 중 4번째',
+                identifier: 'my-tab',
+                traits: ['ButtonTrait'],
+                frame: { x: 10, y: 10, width: 100, height: 44 },
+                isVisible: true,
+                isEnabled: true,
+                children: [],
+              },
+            ],
+          },
+        ],
+      };
+
+      const exactMatches = filterTree(multilineTree, {
+        strategy: 'label',
+        value: '마이 탭 4개 중 4번째',
+      });
+      const partialMatches = filterTree(multilineTree, {
+        strategy: 'label',
+        value: '마이',
+      });
+
+      expect(exactMatches).toHaveLength(1);
+      expect(partialMatches).toHaveLength(1);
+    });
+
     test('query by text matches label and value', () => {
       const matches = filterTree(sampleTree, {
         strategy: 'text',
@@ -130,12 +165,85 @@ describe('Native Accessibility Tools', () => {
       expect(matches[0].node.role).toBe('TextField');
     });
 
+    test('query by text matches visible Korean static text', () => {
+      const koreanTree: AccessibilityNode = {
+        ...sampleTree,
+        children: [
+          {
+            ...sampleTree.children[0],
+            children: [
+              {
+                role: 'StaticText',
+                label: '매일 무료 오픈',
+                traits: ['StaticTextTrait'],
+                frame: { x: 10, y: 10, width: 200, height: 30 },
+                isVisible: true,
+                isEnabled: true,
+                children: [],
+              },
+            ],
+          },
+        ],
+      };
+
+      const matches = filterTree(koreanTree, {
+        strategy: 'text',
+        value: '매일 무료 오픈',
+      });
+
+      expect(matches).toHaveLength(1);
+      expect(matches[0].node.label).toBe('매일 무료 오픈');
+    });
+
     test('query by role', () => {
       const matches = filterTree(sampleTree, {
         strategy: 'role',
         value: 'Button',
       });
       expect(matches).toHaveLength(2);
+    });
+
+    test('query by label matches diacritic and fullwidth variants', () => {
+      const accentTree: AccessibilityNode = {
+        ...sampleTree,
+        children: [
+          {
+            ...sampleTree.children[0],
+            children: [
+              {
+                role: 'Button',
+                label: 'Café',
+                identifier: 'cafe-btn',
+                traits: ['ButtonTrait'],
+                frame: { x: 10, y: 10, width: 100, height: 44 },
+                isVisible: true,
+                isEnabled: true,
+                children: [],
+              },
+              {
+                role: 'StaticText',
+                // fullwidth latin characters (ａｂｃ → abc after NFKC folding)
+                label: 'ｈｅｌｌｏ ｗｏｒｌｄ',
+                traits: ['StaticTextTrait'],
+                frame: { x: 10, y: 60, width: 200, height: 30 },
+                isVisible: true,
+                isEnabled: true,
+                children: [],
+              },
+            ],
+          },
+        ],
+      };
+
+      // Diacritic-insensitive: query "cafe" should match label "Café"
+      const cafeMatches = filterTree(accentTree, { strategy: 'label', value: 'cafe' });
+      expect(cafeMatches).toHaveLength(1);
+      expect(cafeMatches[0].node.identifier).toBe('cafe-btn');
+
+      // Width-insensitive: query "hello world" should match fullwidth label
+      const fullwidthMatches = filterTree(accentTree, { strategy: 'label', value: 'hello world' });
+      expect(fullwidthMatches).toHaveLength(1);
+      expect(fullwidthMatches[0].node.role).toBe('StaticText');
     });
 
     test('query returns empty array when no matches', () => {
@@ -154,6 +262,59 @@ describe('Native Accessibility Tools', () => {
       expect(matches[0].path).toContain('Button');
       expect(matches[0].path).toContain('Window');
       expect(matches[0].depth).toBeGreaterThan(0);
+    });
+
+    test('AXButton lookup stays within the large-tree performance budget', () => {
+      const buttons = Array.from({ length: 4000 }, (_, index) => ({
+        role: 'Button',
+        label: `Button ${index}`,
+        identifier: `button-${index}`,
+        traits: ['ButtonTrait'],
+        frame: { x: 0, y: index, width: 100, height: 44 },
+        isVisible: true,
+        isEnabled: true,
+        children: [],
+      }));
+      const tree: AccessibilityNode = {
+        ...sampleTree,
+        children: [{ ...sampleTree.children[0], children: buttons }],
+      };
+
+      const started = Date.now();
+      const matches = filterTree(tree, {
+        strategy: 'role',
+        value: 'Button',
+      });
+      const elapsedMs = Date.now() - started;
+
+      expect(matches).toHaveLength(4000);
+      expect(elapsedMs).toBeLessThan(250);
+    });
+
+    test('AXStaticText lookup stays within the large-tree performance budget', () => {
+      const texts = Array.from({ length: 4000 }, (_, index) => ({
+        role: 'StaticText',
+        label: `매일 무료 오픈 ${index}`,
+        traits: ['StaticTextTrait'],
+        frame: { x: 0, y: index, width: 200, height: 20 },
+        isVisible: true,
+        isEnabled: true,
+        children: [],
+      }));
+      const tree: AccessibilityNode = {
+        ...sampleTree,
+        children: [{ ...sampleTree.children[0], children: texts }],
+      };
+
+      const started = Date.now();
+      const matches = filterTree(tree, {
+        strategy: 'text',
+        value: '매일 무료 오픈',
+      });
+      const elapsedMs = Date.now() - started;
+
+      expect(matches).toHaveLength(4000);
+      expect(elapsedMs).toBeLessThan(250);
     });
   });
 
@@ -207,6 +368,27 @@ describe('Native Accessibility Tools', () => {
 
     test('returns false for invalid condition format', () => {
       expect(evaluatePredicate(node, 'not a valid predicate')).toBe(false);
+    });
+
+    test('predicate ~= applies diacritic folding on label and value fields', () => {
+      const accentNode: AccessibilityNode = {
+        role: 'Button',
+        label: 'Réservér',
+        value: 'naïve',
+        identifier: 'reserve-btn',
+        traits: ['ButtonTrait'],
+        frame: { x: 0, y: 0, width: 100, height: 44 },
+        isVisible: true,
+        isEnabled: true,
+        children: [],
+      };
+
+      // Diacritic-stripped query should match label "Réservér"
+      expect(evaluatePredicate(accentNode, 'label~=reserver')).toBe(true);
+      // Diacritic-stripped query should match value "naïve"
+      expect(evaluatePredicate(accentNode, 'value~=naive')).toBe(true);
+      // Non-matching query should still return false
+      expect(evaluatePredicate(accentNode, 'label~=cancel')).toBe(false);
     });
   });
 

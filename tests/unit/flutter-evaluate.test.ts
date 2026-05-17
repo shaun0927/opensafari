@@ -204,7 +204,7 @@ describe('flutter_evaluate handler', () => {
 
     const auditCall = spy.mock.calls.find((c) => String(c[0]).includes('audit'));
     expect(auditCall).toBeDefined();
-    expect(String(auditCall?.[0])).toContain('ref.read(authProvider)');
+    expect(String(auditCall?.[0])).toContain('len=22');
     spy.mockRestore();
   });
 

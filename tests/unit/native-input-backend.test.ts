@@ -19,8 +19,13 @@ import {
   HID_TO_WEBKIT_KEY,
   SENDKEY_TO_WEBKIT_KEY,
   __setFlutterVMResolverForTest,
+  type InputBackend,
+  type BatchTapEvent,
 } from '../../src/tools/native-input-backend';
 import { FlutterVMInputBackend } from '../../src/tools/flutter-vm-input-backend';
+import {
+  SimulatorKitHIDInputBackend,
+} from '../../src/tools/sim-hid-input-backend';
 
 // ── Mocks ──────────────────────────────────────────────────────────────────
 
@@ -161,20 +166,22 @@ describe('AppleScriptInputBackend', () => {
   });
 
   test('tap activates Simulator and calls osascript click', async () => {
-    // First call: activate Simulator
-    // Second call: get window + child UI element positions
-    // Third call: click at coordinates
+    // First call: frontmost-app query (returns non-Simulator → triggers activation)
+    // Second call: activate Simulator
+    // Third call: get window + child UI element positions
+    // Fourth call: click at coordinates
     execFileMock
+      .mockResolvedValueOnce({ stdout: 'Other App', stderr: '' })           // frontmost query
       .mockResolvedValueOnce({ stdout: '', stderr: '' })                    // activate
       .mockResolvedValueOnce({ stdout: '100,200|100,230', stderr: '' })    // AX origin query
       .mockResolvedValueOnce({ stdout: '', stderr: '' });                   // click
 
     await backend.tap(DEVICE, 50, 100);
 
-    // Third call should be the click at translated coordinates
+    // Fourth call should be the click at translated coordinates
     // Child UI element (content origin) at (100, 230)
     // iOS (50, 100) → screen (150, 330)
-    const clickCall = execFileMock.mock.calls[2];
+    const clickCall = execFileMock.mock.calls[3];
     expect(clickCall[0]).toBe('osascript');
     expect(clickCall[1]).toContain(
       'tell application "System Events" to click at {150, 330}',
@@ -183,13 +190,14 @@ describe('AppleScriptInputBackend', () => {
 
   test('tap with duration uses Swift CGEvent for long press', async () => {
     execFileMock
+      .mockResolvedValueOnce({ stdout: 'Other App', stderr: '' })        // frontmost query
       .mockResolvedValueOnce({ stdout: '', stderr: '' })                  // activate
       .mockResolvedValueOnce({ stdout: '0,0|0,28', stderr: '' })         // AX origin query
       .mockResolvedValueOnce({ stdout: '', stderr: '' });                 // swift CGEvent
 
     await backend.tap(DEVICE, 200, 400, 1.5);
 
-    const swiftCall = execFileMock.mock.calls[2];
+    const swiftCall = execFileMock.mock.calls[3];
     expect(swiftCall[0]).toBe('swift');
     expect(swiftCall[1][1]).toContain('leftMouseDown');
     expect(swiftCall[1][1]).toContain('1.5');
@@ -197,12 +205,13 @@ describe('AppleScriptInputBackend', () => {
 
   test('typeText activates Simulator and sends keystroke', async () => {
     execFileMock
-      .mockResolvedValueOnce({ stdout: '', stderr: '' })  // activate
-      .mockResolvedValueOnce({ stdout: '', stderr: '' }); // keystroke
+      .mockResolvedValueOnce({ stdout: 'Other App', stderr: '' }) // frontmost query
+      .mockResolvedValueOnce({ stdout: '', stderr: '' })           // activate
+      .mockResolvedValueOnce({ stdout: '', stderr: '' });          // keystroke
 
     await backend.typeText(DEVICE, 'hello');
 
-    const keystrokeCall = execFileMock.mock.calls[1];
+    const keystrokeCall = execFileMock.mock.calls[2];
     expect(keystrokeCall[0]).toBe('osascript');
     expect(keystrokeCall[1]).toContain(
       'tell application "System Events" to keystroke "hello"',
@@ -211,12 +220,13 @@ describe('AppleScriptInputBackend', () => {
 
   test('typeText escapes special characters', async () => {
     execFileMock
-      .mockResolvedValueOnce({ stdout: '', stderr: '' })
-      .mockResolvedValueOnce({ stdout: '', stderr: '' });
+      .mockResolvedValueOnce({ stdout: 'Other App', stderr: '' }) // frontmost query
+      .mockResolvedValueOnce({ stdout: '', stderr: '' })           // activate
+      .mockResolvedValueOnce({ stdout: '', stderr: '' });          // keystroke
 
     await backend.typeText(DEVICE, 'say "hi" \\ there');
 
-    const keystrokeCall = execFileMock.mock.calls[1];
+    const keystrokeCall = execFileMock.mock.calls[2];
     expect(keystrokeCall[1]).toContain(
       'tell application "System Events" to keystroke "say \\"hi\\" \\\\ there"',
     );
@@ -224,12 +234,13 @@ describe('AppleScriptInputBackend', () => {
 
   test('keypress maps HID code to AppleScript key code', async () => {
     execFileMock
-      .mockResolvedValueOnce({ stdout: '', stderr: '' })  // activate
-      .mockResolvedValueOnce({ stdout: '', stderr: '' }); // key code
+      .mockResolvedValueOnce({ stdout: 'Other App', stderr: '' }) // frontmost query
+      .mockResolvedValueOnce({ stdout: '', stderr: '' })           // activate
+      .mockResolvedValueOnce({ stdout: '', stderr: '' });          // key code
 
     await backend.keypress(DEVICE, '40'); // Return = HID 40 → AS 36
 
-    const keyCall = execFileMock.mock.calls[1];
+    const keyCall = execFileMock.mock.calls[2];
     expect(keyCall[0]).toBe('osascript');
     expect(keyCall[1]).toContain(
       'tell application "System Events" to key code 36',
@@ -237,7 +248,9 @@ describe('AppleScriptInputBackend', () => {
   });
 
   test('keypress throws for unknown HID code', async () => {
-    execFileMock.mockResolvedValueOnce({ stdout: '', stderr: '' }); // activate
+    execFileMock
+      .mockResolvedValueOnce({ stdout: 'Other App', stderr: '' }) // frontmost query
+      .mockResolvedValueOnce({ stdout: '', stderr: '' });          // activate
     await expect(backend.keypress(DEVICE, '999')).rejects.toThrow(
       'Unknown HID key code "999"',
     );
@@ -245,19 +258,22 @@ describe('AppleScriptInputBackend', () => {
 
   test('sendKey maps key name to AppleScript key code', async () => {
     execFileMock
-      .mockResolvedValueOnce({ stdout: '', stderr: '' })
-      .mockResolvedValueOnce({ stdout: '', stderr: '' });
+      .mockResolvedValueOnce({ stdout: 'Other App', stderr: '' }) // frontmost query
+      .mockResolvedValueOnce({ stdout: '', stderr: '' })           // activate
+      .mockResolvedValueOnce({ stdout: '', stderr: '' });          // key code
 
     await backend.sendKey(DEVICE, 'Escape');
 
-    const keyCall = execFileMock.mock.calls[1];
+    const keyCall = execFileMock.mock.calls[2];
     expect(keyCall[1]).toContain(
       'tell application "System Events" to key code 53',
     );
   });
 
   test('sendKey throws for unknown key name', async () => {
-    execFileMock.mockResolvedValueOnce({ stdout: '', stderr: '' });
+    execFileMock
+      .mockResolvedValueOnce({ stdout: 'Other App', stderr: '' }) // frontmost query
+      .mockResolvedValueOnce({ stdout: '', stderr: '' });          // activate
     await expect(backend.sendKey(DEVICE, 'Unknown')).rejects.toThrow(
       'Unknown key name "Unknown"',
     );
@@ -265,13 +281,14 @@ describe('AppleScriptInputBackend', () => {
 
   test('swipe activates Simulator and uses Swift CGEvent drag', async () => {
     execFileMock
-      .mockResolvedValueOnce({ stdout: '', stderr: '' })                   // activate
-      .mockResolvedValueOnce({ stdout: '50,100|50,128', stderr: '' })     // AX origin query
-      .mockResolvedValueOnce({ stdout: '', stderr: '' });                  // swift
+      .mockResolvedValueOnce({ stdout: 'Other App', stderr: '' })          // frontmost query
+      .mockResolvedValueOnce({ stdout: '', stderr: '' })                    // activate
+      .mockResolvedValueOnce({ stdout: '50,100|50,128', stderr: '' })      // AX origin query
+      .mockResolvedValueOnce({ stdout: '', stderr: '' });                   // swift
 
     await backend.swipe(DEVICE, 200, 600, 200, 200, 0.5);
 
-    const swiftCall = execFileMock.mock.calls[2];
+    const swiftCall = execFileMock.mock.calls[3];
     expect(swiftCall[0]).toBe('swift');
     const script = swiftCall[1][1];
     expect(script).toContain('leftMouseDown');
@@ -380,6 +397,7 @@ describe('AppleScriptInputBackend', () => {
   test('tap translates iOS-point coordinates to absolute screen using dynamic origin', async () => {
     // Simulate AX returning window at (200,300) and child (content) at (200,330)
     execFileMock
+      .mockResolvedValueOnce({ stdout: 'Other App', stderr: '' })           // frontmost query
       .mockResolvedValueOnce({ stdout: '', stderr: '' })                    // activate
       .mockResolvedValueOnce({ stdout: '200,300|200,330', stderr: '' })    // AX origin
       .mockResolvedValueOnce({ stdout: '', stderr: '' });                   // click
@@ -387,7 +405,7 @@ describe('AppleScriptInputBackend', () => {
     await backend.tap(DEVICE, 75, 150);
 
     // content origin (200, 330) + iOS (75, 150) = screen (275, 480)
-    const clickCall = execFileMock.mock.calls[2];
+    const clickCall = execFileMock.mock.calls[3];
     expect(clickCall[0]).toBe('osascript');
     expect(clickCall[1]).toContain(
       'tell application "System Events" to click at {275, 480}',
@@ -555,7 +573,8 @@ describe('getInputBackend', () => {
   const originalEnv = process.env[OPENSAFARI_ALLOW_FOCUS_INPUT_ENV];
 
   beforeEach(() => {
-    execMock.mockClear();
+    execMock.mockReset();
+    execMock.mockResolvedValue('');
     resetInputBackend();
     delete process.env[OPENSAFARI_ALLOW_FOCUS_INPUT_ENV];
     // Ensure Tier-0 routing does not accidentally grab the real
@@ -577,7 +596,7 @@ describe('getInputBackend', () => {
     expect(backend).toBeInstanceOf(SimctlInputBackend);
     expect(backend.kind).toBe('simctl');
     expect(execMock).toHaveBeenCalledWith(
-      ['io', DEVICE, 'input', 'tap', '0', '0'],
+      ['help', 'io'],
       { timeout: 5000 },
     );
   });
@@ -669,13 +688,11 @@ describe('getInputBackend', () => {
     });
 
     test('returns SimHID backend when probe succeeds (no webkitClient)', async () => {
-      execMock.mockRejectedValueOnce(new Error('not supported'));
       const backend = await getInputBackend(DEVICE);
       expect(backend.kind).toBe('simhid');
     });
 
     test('returns SimHID backend ahead of WebKit when probe succeeds', async () => {
-      execMock.mockRejectedValueOnce(new Error('not supported'));
       const mockClient = {
         isConnected: jest.fn().mockReturnValue(true),
         connect: jest.fn().mockResolvedValue(undefined),
@@ -710,28 +727,24 @@ describe('getInputBackend', () => {
 
     test('returns pointer-service backend when opt-in flag is set', async () => {
       process.env[ENABLE_PS] = '1';
-      execMock.mockRejectedValueOnce(new Error('not supported'));
       const backend = await getInputBackend(DEVICE);
       expect(backend.kind).toBe('pointer-service');
     });
 
     test('falls through to SimHID when opt-in flag is unset', async () => {
       delete process.env[ENABLE_PS];
-      execMock.mockRejectedValueOnce(new Error('not supported'));
       const backend = await getInputBackend(DEVICE);
       expect(backend.kind).toBe('simhid');
     });
 
     test('falls through to SimHID when opt-in flag has any non-truthy value', async () => {
       process.env[ENABLE_PS] = 'maybe';
-      execMock.mockRejectedValueOnce(new Error('not supported'));
       const backend = await getInputBackend(DEVICE);
       expect(backend.kind).toBe('simhid');
     });
 
     test('returns pointer-service even when a WebKit client is attached (tier order preserved)', async () => {
       process.env[ENABLE_PS] = '1';
-      execMock.mockRejectedValueOnce(new Error('not supported'));
       const mockClient = {
         isConnected: jest.fn().mockReturnValue(true),
         connect: jest.fn().mockResolvedValue(undefined),
@@ -999,5 +1012,340 @@ describe('getInputBackend', () => {
       const backend = await getInputBackend(DEVICE);
       expect(backend).toBeInstanceOf(AppleScriptInputBackend);
     });
+  });
+});
+
+// ── Batching capability (#705) ─────────────────────────────────────────────
+//
+// These tests verify the batching contract introduced in issue #705:
+//   1. Only SimulatorKitHIDInputBackend advertises batching support.
+//   2. Backends without batching (simctl, webkit, applescript) return false.
+//   3. tapBatch on simhid dispatches each event in order via tap().
+//   4. tapBatch stops and rejects on the first failing event.
+//   5. Callers cannot assume tapBatch exists on a backend that returns false.
+//   6. getInputBackend default selection does NOT return AppleScript.
+//   7. Fallback reason strings are deterministic (regression guard).
+
+describe('Batching capability (#705)', () => {
+  // ── supportsBatching on individual backends ──────────────────────────────
+
+  test('SimctlInputBackend.supportsBatching() returns false', () => {
+    const backend = new SimctlInputBackend({ exec: execMock } as any);
+    expect(backend.supportsBatching()).toBe(false);
+  });
+
+  test('AppleScriptInputBackend.supportsBatching() returns false', () => {
+    const backend = new AppleScriptInputBackend();
+    expect(backend.supportsBatching()).toBe(false);
+  });
+
+  test('WebKitInputBackend.supportsBatching() returns false', () => {
+    const mockClient = { isConnected: jest.fn().mockReturnValue(true) } as any;
+    const backend = new WebKitInputBackend(mockClient);
+    expect(backend.supportsBatching()).toBe(false);
+  });
+
+  test('FlutterVMInputBackend.supportsBatching() returns false', () => {
+    const fakeClient = {
+      isConnected: () => true,
+      evaluate: jest.fn(),
+    } as any;
+    __setFlutterVMResolverForTest(async () => fakeClient);
+    const backend = new FlutterVMInputBackend(fakeClient);
+    expect(backend.supportsBatching()).toBe(false);
+  });
+
+  test('SimulatorKitHIDInputBackend.supportsBatching() returns true', () => {
+    // bridgePath does not need to exist for capability interrogation
+    const backend = new SimulatorKitHIDInputBackend('/fake/sim-hid-bridge');
+    expect(backend.supportsBatching()).toBe(true);
+  });
+
+  // ── tapBatch dispatches in order ─────────────────────────────────────────
+
+  describe('tapBatch on SimulatorKitHIDInputBackend', () => {
+    const SUCCESS_JSON = '{"ok":true,"kind":"tap","udid":"T","elapsed_ms":5}';
+
+    beforeEach(() => {
+      execFileMock.mockClear();
+    });
+
+    test('tapBatch dispatches each event via tap() in order', async () => {
+      // Wire execFileMock so each spawn of sim-hid-bridge succeeds.
+      // SimulatorKitHIDInputBackend.run() uses the promisify-wrapped execFile
+      // (wired to execFileMock by the jest.mock('util') at the top of this file).
+      execFileMock.mockResolvedValue({ stdout: SUCCESS_JSON, stderr: '' });
+
+      const backend = new SimulatorKitHIDInputBackend('/fake/sim-hid-bridge');
+      const events: BatchTapEvent[] = [
+        { x: 10, y: 20 },
+        { x: 30, y: 40 },
+        { x: 50, y: 60, duration: 0.5 },
+      ];
+
+      await backend.tapBatch(DEVICE, events);
+
+      // Three spawns — one per event
+      expect(execFileMock).toHaveBeenCalledTimes(3);
+
+      const call0Args = execFileMock.mock.calls[0][1] as string[];
+      const call1Args = execFileMock.mock.calls[1][1] as string[];
+      const call2Args = execFileMock.mock.calls[2][1] as string[];
+
+      expect(call0Args).toContain('10');
+      expect(call0Args).toContain('20');
+      expect(call1Args).toContain('30');
+      expect(call1Args).toContain('40');
+      expect(call2Args).toContain('50');
+      expect(call2Args).toContain('60');
+      expect(call2Args).toContain('0.5');
+    });
+
+    test('tapBatch with empty array dispatches nothing', async () => {
+      const backend = new SimulatorKitHIDInputBackend('/fake/sim-hid-bridge');
+      await backend.tapBatch(DEVICE, []);
+      expect(execFileMock).not.toHaveBeenCalled();
+    });
+
+    test('tapBatch stops and rejects on the first failing event', async () => {
+      // Event 0 succeeds. Event 1 exits non-zero (execFile rejects with a
+      // code=78 error) so SimulatorKitHIDInputBackend.run() throws an
+      // InputBackendError. Event 2 must never be dispatched.
+      const bridgeError = Object.assign(new Error('HID injection failed'), {
+        stdout: '',
+        stderr: 'HID injection failed',
+        code: 78, // SIMULATORKIT_UNAVAILABLE exit code
+        killed: false,
+      });
+      execFileMock
+        .mockResolvedValueOnce({ stdout: SUCCESS_JSON, stderr: '' }) // event 0 ok
+        .mockRejectedValueOnce(bridgeError);                          // event 1 fails
+
+      const backend = new SimulatorKitHIDInputBackend('/fake/sim-hid-bridge');
+      const events: BatchTapEvent[] = [
+        { x: 10, y: 20 },
+        { x: 30, y: 40 }, // bridge exits non-zero → InputBackendError
+        { x: 50, y: 60 }, // should never be reached
+      ];
+
+      await expect(backend.tapBatch(DEVICE, events)).rejects.toThrow();
+      // Only two spawns: event 0 succeeded, event 1 failed, event 2 never ran
+      expect(execFileMock).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  // ── tapBatch is absent on non-batching backends ───────────────────────────
+
+  test('tapBatch is absent on SimctlInputBackend (accessed via interface)', () => {
+    // Cast to the interface so TypeScript allows checking the optional property.
+    // The runtime value must be undefined because SimctlInputBackend does not
+    // implement tapBatch — this guards against accidental addition.
+    const backend: InputBackend = new SimctlInputBackend({ exec: execMock } as any);
+    expect(backend.tapBatch).toBeUndefined();
+  });
+
+  test('tapBatch is absent on WebKitInputBackend (accessed via interface)', () => {
+    const mockClient = { isConnected: jest.fn().mockReturnValue(true) } as any;
+    const backend: InputBackend = new WebKitInputBackend(mockClient);
+    expect(backend.tapBatch).toBeUndefined();
+  });
+
+  // ── AppleScript stays opt-in (default backend selection never returns it) ─
+
+  test('getInputBackend does not return AppleScript by default (no opt-in)', async () => {
+    resetInputBackend();
+    delete process.env[OPENSAFARI_ALLOW_FOCUS_INPUT_ENV];
+    __setFlutterVMResolverForTest(async () => null);
+    execMock.mockResolvedValueOnce(''); // simctl probe succeeds
+    const backend = await getInputBackend(DEVICE);
+    expect(backend.kind).not.toBe('applescript');
+  });
+
+  test('getInputBackend returns AppleScript only when opt-in env is set', async () => {
+    resetInputBackend();
+    process.env[OPENSAFARI_ALLOW_FOCUS_INPUT_ENV] = '1';
+    __setFlutterVMResolverForTest(async () => null);
+    execMock.mockRejectedValueOnce(new Error('not supported')); // simctl probe fails
+    const backend = await getInputBackend(DEVICE);
+    expect(backend.kind).toBe('applescript');
+    delete process.env[OPENSAFARI_ALLOW_FOCUS_INPUT_ENV];
+    resetInputBackend();
+  });
+
+  // ── Fallback reason strings are deterministic ─────────────────────────────
+  // Guards against regressions where changing the error class or reason enum
+  // would silently break MCP clients that branch on reason strings.
+
+  test('HeadlessInputUnavailableError reason=no-webkit when no client supplied', async () => {
+    resetInputBackend();
+    delete process.env[OPENSAFARI_ALLOW_FOCUS_INPUT_ENV];
+    __setFlutterVMResolverForTest(async () => null);
+    execMock.mockRejectedValueOnce(new Error('not supported'));
+    try {
+      await getInputBackend(DEVICE);
+      fail('expected HeadlessInputUnavailableError');
+    } catch (err) {
+      const e = err as HeadlessInputUnavailableError;
+      expect(e.reason).toBe('no-webkit');
+    }
+    resetInputBackend();
+  });
+
+  test('HeadlessInputUnavailableError reason=webkit-disconnected when reconnect fails', async () => {
+    resetInputBackend();
+    delete process.env[OPENSAFARI_ALLOW_FOCUS_INPUT_ENV];
+    __setFlutterVMResolverForTest(async () => null);
+    execMock.mockRejectedValueOnce(new Error('not supported'));
+    const mockClient = {
+      isConnected: jest.fn().mockReturnValue(false),
+      connect: jest.fn().mockRejectedValue(new Error('proxy dead')),
+    } as any;
+    try {
+      await getInputBackend(DEVICE, mockClient);
+      fail('expected HeadlessInputUnavailableError');
+    } catch (err) {
+      const e = err as HeadlessInputUnavailableError;
+      expect(e.reason).toBe('webkit-disconnected');
+    }
+    resetInputBackend();
+  });
+
+  test('HeadlessInputUnavailableError reason=headless-only when HEADLESS_ONLY=1', async () => {
+    resetInputBackend();
+    process.env[OPENSAFARI_HEADLESS_ONLY_ENV] = '1';
+    delete process.env[OPENSAFARI_ALLOW_FOCUS_INPUT_ENV];
+    __setFlutterVMResolverForTest(async () => null);
+    execMock.mockRejectedValueOnce(new Error('not supported'));
+    try {
+      await getInputBackend(DEVICE);
+      fail('expected HeadlessInputUnavailableError');
+    } catch (err) {
+      const e = err as HeadlessInputUnavailableError;
+      expect(e.reason).toBe('headless-only');
+    }
+    delete process.env[OPENSAFARI_HEADLESS_ONLY_ENV];
+    resetInputBackend();
+  });
+
+  // ── Compiled bridge unavailable → existing fallback path (regression) ─────
+
+  test('compiled bridge unavailable: backend falls through to simctl when simctl is available', async () => {
+    // When sim-hid-bridge is not present and simctl is available, simctl is returned.
+    // This mirrors the existing tier ordering documented in headless-architecture.md.
+    resetInputBackend();
+    delete process.env['OPENSAFARI_ALLOW_SWIFT_INTERPRETER'];
+    delete process.env[OPENSAFARI_ALLOW_FOCUS_INPUT_ENV];
+    __setFlutterVMResolverForTest(async () => null);
+    execMock.mockResolvedValueOnce(''); // simctl probe succeeds
+    const backend = await getInputBackend(DEVICE);
+    // Without OPENSAFARI_ALLOW_SWIFT_INTERPRETER=1 the sim-hid-bridge candidate
+    // list does not include the source-tree path, so tryCreateSimulatorKitHIDBackend
+    // throws HID_BRIDGE_MISSING and the tier chain falls to simctl.
+    expect(backend.kind).toBe('simctl');
+    resetInputBackend();
+  });
+
+  // ── Backend without batching support falls back to per-call dispatch ───────
+
+  test('backend without batching support has no tapBatch method (caller must loop)', () => {
+    // This test documents the explicit contract: callers MUST guard with
+    // supportsBatching() before calling tapBatch(). The absence of tapBatch
+    // on non-batching backends is deliberate, not an oversight.
+    // We access via the InputBackend interface so the optional property is visible.
+    const simctlBackend: InputBackend = new SimctlInputBackend({ exec: execMock } as any);
+    expect(simctlBackend.supportsBatching()).toBe(false);
+    expect(simctlBackend.tapBatch).toBeUndefined();
+
+    const webkitMockClient = { isConnected: jest.fn().mockReturnValue(true) } as any;
+    const webkitBackend: InputBackend = new WebKitInputBackend(webkitMockClient);
+    expect(webkitBackend.supportsBatching()).toBe(false);
+    expect(webkitBackend.tapBatch).toBeUndefined();
+  });
+});
+
+// ── AppleScript activation caching (#705) ─────────────────────────────────
+
+describe('AppleScriptInputBackend activation caching (#705)', () => {
+  let backend: AppleScriptInputBackend;
+
+  beforeEach(() => {
+    execFileMock.mockClear();
+    execFileMock.mockResolvedValue({ stdout: '', stderr: '' });
+    backend = new AppleScriptInputBackend();
+  });
+
+  test('consecutive typeText calls both check frontmost and skip activation when Simulator stays frontmost', async () => {
+    // Each call does a frontmost check. When Simulator remains frontmost,
+    // neither call issues an activate command.
+    execFileMock
+      .mockResolvedValueOnce({ stdout: 'Simulator', stderr: '' }) // frontmost query — call 1
+      .mockResolvedValueOnce({ stdout: '', stderr: '' })           // keystroke 'a'
+      .mockResolvedValueOnce({ stdout: 'Simulator', stderr: '' }) // frontmost query — call 2
+      .mockResolvedValueOnce({ stdout: '', stderr: '' });          // keystroke 'b'
+
+    await backend.typeText(DEVICE, 'a');
+    await backend.typeText(DEVICE, 'b');
+
+    // 4 calls total: 2 frontmost queries + 2 keystrokes; no activate calls
+    expect(execFileMock).toHaveBeenCalledTimes(4);
+    const activateCalls = execFileMock.mock.calls.filter((args) =>
+      (args[1] as string[]).some((a) => String(a).includes('to activate')),
+    );
+    expect(activateCalls).toHaveLength(0);
+  });
+
+  test('first call always activates Simulator', async () => {
+    execFileMock
+      .mockResolvedValueOnce({ stdout: 'Other App', stderr: '' }) // frontmost query
+      .mockResolvedValueOnce({ stdout: '', stderr: '' })           // activate
+      .mockResolvedValueOnce({ stdout: '', stderr: '' });          // keystroke
+
+    await backend.typeText(DEVICE, 'x');
+
+    const activateCalls = execFileMock.mock.calls.filter((args) =>
+      (args[1] as string[]).some((a) => String(a).includes('to activate')),
+    );
+    expect(activateCalls).toHaveLength(1);
+  });
+
+  test('re-activates on consecutive calls when frontmost app changes between them', async () => {
+    // Every call checks frontmost state. When the frontmost app changes between
+    // two consecutive calls, each call correctly re-activates Simulator.
+
+    // First call: not frontmost → activates.
+    execFileMock
+      .mockResolvedValueOnce({ stdout: 'Other App', stderr: '' }) // frontmost query — call 1
+      .mockResolvedValueOnce({ stdout: '', stderr: '' })           // activate
+      .mockResolvedValueOnce({ stdout: '', stderr: '' });          // keystroke 'a'
+
+    await backend.typeText(DEVICE, 'a');
+
+    // Second call: focus changed to "Notes" → must re-activate.
+    execFileMock
+      .mockResolvedValueOnce({ stdout: 'Notes', stderr: '' }) // frontmost query — call 2
+      .mockResolvedValueOnce({ stdout: '', stderr: '' })       // re-activate
+      .mockResolvedValueOnce({ stdout: '', stderr: '' });      // keystroke 'b'
+
+    await backend.typeText(DEVICE, 'b');
+
+    const activateCalls = execFileMock.mock.calls.filter((args) =>
+      (args[1] as string[]).some((a) => String(a).includes('to activate')),
+    );
+    // Both calls triggered activation because Simulator was not frontmost.
+    expect(activateCalls).toHaveLength(2);
+  });
+
+  test('skips activation when Simulator is already frontmost', async () => {
+    // Frontmost check returns "Simulator" → no activate call needed.
+    execFileMock
+      .mockResolvedValueOnce({ stdout: 'Simulator', stderr: '' }) // frontmost query
+      .mockResolvedValueOnce({ stdout: '', stderr: '' });          // keystroke
+
+    await backend.typeText(DEVICE, 'z');
+
+    const activateCalls = execFileMock.mock.calls.filter((args) =>
+      (args[1] as string[]).some((a) => String(a).includes('to activate')),
+    );
+    expect(activateCalls).toHaveLength(0);
   });
 });

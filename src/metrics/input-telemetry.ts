@@ -12,7 +12,7 @@
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks';
-import type { InputBackendKind } from '../tools/native-input-backend';
+import type { InputBackendKind } from '../input/backend';
 import { accumulateInputTelemetry } from './input-telemetry-rollup';
 import {
   recordMemorySample,
@@ -25,7 +25,7 @@ import {
  * Stable set of operations we time. Matches the `InputBackend` interface
  * verbs so a consumer can partition metrics by user-visible action type.
  */
-export type InputOperation = 'tap' | 'swipe' | 'typeText' | 'keypress' | 'sendKey';
+export type InputOperation = 'tap' | 'swipe' | 'typeText' | 'keypress' | 'sendKey' | 'keyChord';
 
 /**
  * One telemetry event. Keys are deliberately snake_case so downstream

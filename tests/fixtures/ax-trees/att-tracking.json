@@ -1,0 +1,74 @@
+{
+  "role": "AXApplication",
+  "label": "SpringBoard",
+  "traits": [],
+  "frame": { "x": 0, "y": 0, "width": 393, "height": 852 },
+  "visible": true,
+  "enabled": true,
+  "focused": false,
+  "path": "0",
+  "children": [
+    {
+      "role": "AXWindow",
+      "traits": [],
+      "frame": { "x": 0, "y": 0, "width": 393, "height": 852 },
+      "visible": true,
+      "enabled": true,
+      "focused": false,
+      "path": "0/0",
+      "children": [
+        {
+          "role": "AXSheet",
+          "traits": [],
+          "frame": { "x": 20, "y": 200, "width": 353, "height": 400 },
+          "visible": true,
+          "enabled": true,
+          "focused": false,
+          "path": "0/0/0",
+          "children": [
+            {
+              "role": "AXStaticText",
+              "label": "Allow \"SomeApp\" to track your activity across other companies' apps and websites?",
+              "traits": ["AXHeading"],
+              "frame": { "x": 40, "y": 220, "width": 313, "height": 80 },
+              "visible": true,
+              "enabled": true,
+              "focused": false,
+              "path": "0/0/0/0"
+            },
+            {
+              "role": "AXStaticText",
+              "label": "Your data will be used to deliver personalized ads to you.",
+              "traits": [],
+              "frame": { "x": 40, "y": 310, "width": 313, "height": 40 },
+              "visible": true,
+              "enabled": true,
+              "focused": false,
+              "path": "0/0/0/1"
+            },
+            {
+              "role": "AXButton",
+              "label": "Allow",
+              "traits": [],
+              "frame": { "x": 40, "y": 370, "width": 313, "height": 44 },
+              "visible": true,
+              "enabled": true,
+              "focused": false,
+              "path": "0/0/0/2"
+            },
+            {
+              "role": "AXButton",
+              "label": "Ask App Not to Track",
+              "traits": [],
+              "frame": { "x": 40, "y": 424, "width": 313, "height": 44 },
+              "visible": true,
+              "enabled": true,
+              "focused": false,
+              "path": "0/0/0/3"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

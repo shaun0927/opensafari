@@ -36,7 +36,7 @@
 
 ## Headless Capabilities
 
-OpenSafari runs fully headless on CI — no display server, no mouse focus, no `Simulator.app` window required. See [docs/headless-architecture.md](docs/headless-architecture.md) for the full technical design.
+OpenSafari runs fully headless on CI — no display server, no mouse focus, no `Simulator.app` window required. See [docs/headless-architecture.md](docs/headless-architecture.md) for the full technical design. For Universal Link channel recipes (Notes paste-and-tap, `captureLogs`, channel matrix), see [docs/recipes/universal-link-channels.md](docs/recipes/universal-link-channels.md).
 
 | Scenario | Query (AX Tree) | Input (Tap/Type) | Headless | Backend |
 |---|---|---|---|---|
@@ -190,6 +190,10 @@ opensafari serve
   → All simulators start already logged in
 ```
 
+Auth profiles are JSON files stored under `~/.opensafari/auth/`. Each profile contains the site name, capture timestamp, current URL, cookies, cookie domain groups, localStorage, and sessionStorage needed to restore login state. On POSIX systems, OpenSafari creates new auth profile directories as private `0700` directories and profile files as private `0600` files, then updates profiles with an atomic same-directory replacement.
+
+Delete saved login state with `opensafari auth delete myapp.com`, or remove the matching `~/.opensafari/auth/myapp.com.json` file.
+
 ### 4. iOS-Specific Auto-Detection
 
 Built-in QA checks that run on real Safari — no approximation:
@@ -263,6 +267,8 @@ OpenSafari shares battle-tested infrastructure with [OpenChrome](https://github.
 | `device_shutdown` | Shutdown simulator |
 | `device_rotate` | Toggle portrait/landscape |
 | `appearance_toggle` | Switch light/dark mode via `simctl ui` |
+| `device_network_set` | Toggle host-level network state (`online` / `offline` / `airplane`) so native apps see real `SocketException` / `NSURLErrorNotConnectedToInternet` — see [docs/tools/device-network.md](docs/tools/device-network.md) |
+| `device_network_get` | Read the current simulated network state set by `device_network_set` |
 
 ### App Lifecycle (Tier 2)
 
@@ -272,7 +278,9 @@ OpenSafari shares battle-tested infrastructure with [OpenChrome](https://github.
 | `app_terminate` | Terminate a running app by bundle ID |
 | `app_activate` | Bring app to foreground (launches if not running) |
 | `app_list_running` | List running foreground apps with PIDs |
+| `app_context` | Report the current mobile context and optionally guard on an expected bundle |
 | `app_reset` | Reset app state: terminate, clear permissions, uninstall |
+| `app_notes_paste_and_tap_url` | Reviewer-equivalent Universal Link tap: launches Notes.app, paste-injects the URL, waits for iOS Data Detector to produce an `AXLink`, and taps it — see [docs/recipes/universal-link-channels.md](docs/recipes/universal-link-channels.md) |
 
 ### Auth Tools (Tier 3)
 
@@ -372,8 +380,8 @@ npm install -g opensafari-mcp
 # Run (stdio mode — for MCP clients like Claude Code)
 opensafari serve
 
-# HTTP mode
-opensafari serve --http 3100
+# HTTP mode (binds to 127.0.0.1 and requires a bearer token for /mcp)
+OPENSAFARI_HTTP_TOKEN="replace-with-a-random-token" opensafari serve --http 3100
 
 # With all tool tiers exposed
 opensafari serve --all-tools
@@ -383,6 +391,23 @@ opensafari serve --devices "iphone-17e,iphone-17-pro-max"
 
 # With auth state
 opensafari serve --auth ~/.opensafari/auth/mysite.json
+```
+
+
+#### HTTP transport security
+
+HTTP mode listens on `127.0.0.1` by default. The `/health` endpoint is unauthenticated, but `/mcp` requires `Authorization: Bearer <token>` unless you intentionally pass `--http-insecure-local` for local-only testing. Provide the token with `OPENSAFARI_HTTP_TOKEN` or `--http-token`; OpenSafari never prints the token value.
+
+Browser CORS for `/mcp` is restricted to local origins (`localhost`, `127.0.0.1`, `::1`) plus any comma-separated origins passed with `--http-allow-origin`. Use `--http-host` only when you intentionally need a non-loopback bind.
+
+HTTP mode also blocks high-risk MCP tools that execute page/app code or move authentication material: `javascript`, `flutter_evaluate`, `auth_save`, `auth_restore`, and `cookies`. Stdio mode is unchanged. To intentionally expose those tools over HTTP, start with `--http-enable-high-risk-tools` or set `OPENSAFARI_HTTP_ENABLE_HIGH_RISK_TOOLS=1`; allowed and blocked high-risk HTTP calls are audit-logged with sensitive arguments redacted.
+
+```bash
+OPENSAFARI_HTTP_TOKEN="$OPENSAFARI_HTTP_TOKEN" opensafari serve --http 3100
+curl -H "Authorization: Bearer $OPENSAFARI_HTTP_TOKEN" \
+  -H "Content-Type: application/json" \
+  http://127.0.0.1:3100/mcp \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
 ```
 
 ### MCP Client Configuration
@@ -438,7 +463,7 @@ const server = createServer({
 await server.start();
 
 // Or start with HTTP transport
-await server.start({ transport: 'http', port: 3100 });
+await server.start({ transport: 'http', port: 3100, authToken: process.env.OPENSAFARI_HTTP_TOKEN });
 ```
 
 ### WebKitClient
@@ -542,7 +567,14 @@ Multiple Claude Code sessions can share the same proxy. When a session detects a
 OpenSafari dispatches native input (`app_tap`, `app_swipe_native`,
 `app_scroll_native`, `app_double_tap`, `app_type_text`, `app_key_input`)
 through a 5-tier fallback chain and surfaces the selected path in each tool
-result via a `backend` field.
+result via a `backend` field. Coordinate and element-targeted tap tools also
+surface whether the interaction was **verified** by a post-action AX-tree check.
+Transport success alone is no longer treated as interaction success when no
+observable UI effect can be confirmed. `app_tap_element` now applies the same
+contract after it falls back from `ax-press` to a coordinate backend: callers
+get `verified: false` with `effect: "verification_unavailable"` when the AX
+proof is unavailable, or a typed `TAP_NO_EFFECT` result when the UI stays
+unchanged after the dispatched tap.
 
 | Tier | Backend | Identifier | Headless? | When used |
 |------|---------|------------|-----------|-----------|
@@ -557,6 +589,15 @@ decision flowchart and the full scenario matrix. Tool responses also include
 `_meta: { backendKind, headless, deviceId }` so CI can assert
 `_meta.headless === true`.
 
+Raw bridge consumers can now ask for the same foreground diagnostics directly:
+
+- `dist/ax-bridge context --device <udid> [--expect-bundle <bundle>] [--require-match true]`
+- `dist/sim-hid-bridge context <udid> [--expect-bundle <bundle>] [--require-match true]`
+
+`dist/sim-hid-bridge tap|swipe` also appends `classification`, `verified`,
+`frontmost`, and `expectedBundleMatched` to its JSON result so downstream QA can
+tell the difference between a clean in-app tap and a wrong-foreground outcome.
+
 Example tool result:
 
 ```json
@@ -566,9 +607,72 @@ Example tool result:
   "y": 200,
   "deviceId": "…",
   "backend": "simhid",
+  "verified": true,
+  "effect": "subtree_changed",
   "_meta": { "backendKind": "simhid", "headless": true, "deviceId": "…" }
 }
 ```
+
+### Raw `dist/ax-bridge` Contract
+
+`dist/ax-bridge` is a Node.js wrapper that sits in front of the compiled
+Swift binary `dist/ax-bridge-native` (Mach-O). The wrapper intercepts
+`--help` / `-h` before argument validation, runs `ensureSemanticsActive()`
+for tree-read commands by default (opt out with `--ensure-semantics off`),
+then delegates every other invocation unchanged to `dist/ax-bridge-native`.
+
+**Bridge resolution order:**
+
+1. `dist/ax-bridge-native` next to the script (standard installed layout)
+2. Swift interpreter fallback — only when `dist/ax-bridge.swift` is present
+
+**Contract:** commands that cannot expose app content return a typed error
+code as JSON on stdout (exit 1) instead of an empty-success tree:
+
+| Code | Meaning |
+|------|---------|
+| `DEVICE_RESOLUTION_FAILED` | Requested device not found / not booted |
+| `DEVICE_RESOLUTION_AMBIGUOUS` | Multiple booted simulators match |
+| `DEVICE_WINDOW_NOT_FOUND` | No AX window matched the requested device |
+| `DEVICE_CONTENT_ROOT_EMPTY` | Window resolved but no app-semantics content (#40) |
+| `APP_CONTENT_NOT_EXPOSED` | Tree is Simulator chrome only after bootstrap (#41) |
+| `EXPECTED_BUNDLE_MISMATCH` | (context) Expected bundle not foreground |
+| `BRIDGE_NOT_FOUND` | `ax-bridge-native` / `ax-bridge.swift` missing |
+| `AX_WRAPPER_FAILED` | Wrapper-level unexpected error |
+| `BAD_ARGS` | Invalid or missing CLI flags |
+| `UNKNOWN_COMMAND` | Command not recognized |
+
+**Example invocations:**
+
+```bash
+# dump — success: full JSON accessibility tree on stdout, exit 0
+node dist/ax-bridge dump --device booted
+# dump — error: chrome-only tree after bootstrap, exit 1
+# stdout: {"error":"...","code":"APP_CONTENT_NOT_EXPOSED"}
+
+# query — success: matched elements on stdout, exit 0
+node dist/ax-bridge query --device booted --label "Sign In"
+# query — error: device not found, exit 1
+# stdout: {"error":"...","code":"DEVICE_RESOLUTION_FAILED"}
+
+# inspect — success: single element detail on stdout, exit 0
+node dist/ax-bridge inspect --device booted --path "0/1/2"
+# inspect — error: empty content root, exit 1
+# stdout: {"error":"...","code":"DEVICE_CONTENT_ROOT_EMPTY"}
+
+# press — success: {"ok":true,"code":"OK",...} on stdout, exit 0
+node dist/ax-bridge press --device booted --path "0/1/2"
+
+# context — success: foreground bundle info on stdout, exit 0
+node dist/ax-bridge context --device booted
+# context — expected bundle mismatch, exit 1
+# stdout: {"error":"...","code":"EXPECTED_BUNDLE_MISMATCH"}
+```
+
+> **Note:** The higher-level `app_*` MCP tools provide the same semantics
+> activation plus richer heuristics (retry, partial-tree promotion, and
+> cross-session device resolution). Use the raw bridge for downstream
+> harnesses that prefer direct CLI access without the MCP layer.
 
 ### Focus-theft protection (`OPENSAFARI_ALLOW_FOCUS_INPUT`)
 

@@ -3,6 +3,8 @@
 A paste-ready CI recipe for the most common commercial Flutter scenario:
 **boot → launch → deep-link → StoreKit purchase → ko-KR alert accept → receipt assert → backend verify**.
 
+> **⚠️ Version pin.** This recipe is **pinned to `opensafari-mcp@0.4.9`** and will not run against `0.5.0+`. The `app_storekit_configure`, `app_storekit_test_session`, and `app_storekit_receipt` tools used below were removed in `0.5.0` (PR #623 on issue #588) because `simctl storekit` is not a real CLI subcommand. For `0.5.0+` consumers driving StoreKit QA via AX, see [`docs/storekit-automation.md`](../storekit-automation.md) which documents the replacement pattern. Remove this recipe when an AX-only ko-KR IAP flow is published.
+
 This recipe uses only tools that ship with `opensafari-mcp@0.4.9`:
 
 - [`app_launch`](../api-reference.md#app_launch) — install/launch the app bundle
@@ -22,7 +24,7 @@ This recipe uses only tools that ship with `opensafari-mcp@0.4.9`:
 | Requirement | Version | Install |
 |---|---|---|
 | macOS runner | any with Xcode Simulator | GitHub `macos-latest` / self-hosted |
-| Xcode | 14 or later (for `simctl storekit`) | Xcode → Settings → Platforms |
+| Xcode | 14 or later (for StoreKit configuration files in the scheme) | Xcode → Settings → Platforms |
 | Node.js | 18+ | `actions/setup-node@v4` |
 | Flutter | any supported | manual install on the runner |
 | `opensafari-mcp` | **`0.4.9` (pinned)** | `npm install -g opensafari-mcp@0.4.9` |
@@ -31,7 +33,7 @@ This recipe uses only tools that ship with `opensafari-mcp@0.4.9`:
 
 Version pin rationale: this recipe targets the StoreKit and `app_alert_handle` localization APIs introduced in `opensafari-mcp@0.4.9` (PRs #614, #607). Bump the pin together with the recipe when newer APIs land.
 
-> **Tool availability note.** `app_launch`, `app_deeplink`, `app_tap_element`, `app_alert_handle`, and the three `app_storekit_*` tools are all MCP tools. This recipe invokes them over the MCP JSON-RPC interface via `opensafari serve`. If your CI already drives OpenSafari through a different transport (stdio, subprocess), swap the `curl` invocations below for the equivalent tool call and keep the argument shapes identical.
+> **Tool availability note.** `app_launch`, `app_deeplink`, `app_tap_element`, and `app_alert_handle` are MCP tools that still ship in `0.5.0+`. The three `app_storekit_*` tools ship **only** in `0.4.9` — they were removed in `0.5.0` (see the banner above). This recipe invokes them over the MCP JSON-RPC interface via `opensafari serve`. If your CI already drives OpenSafari through a different transport (stdio, subprocess), swap the `curl` invocations below for the equivalent tool call and keep the argument shapes identical.
 
 ---
 
@@ -116,8 +118,8 @@ jobs:
             sleep 2
           done
 
-      - name: Build Flutter (profile — keeps VM Service online)
-        run: flutter build ios --simulator --profile --target lib/main_qa.dart
+      - name: Build Flutter (debug — only mode accepted for simulator targets; keeps Tier 0)
+        run: flutter build ios --simulator --debug --target lib/main_qa.dart
 
       - name: Install + launch the fixture
         run: |
@@ -280,7 +282,7 @@ for i in $(seq 1 30); do
 done
 
 # ── Build + install Flutter fixture ────────────────────────────────
-flutter build ios --simulator --profile --target lib/main_qa.dart
+flutter build ios --simulator --debug --target lib/main_qa.dart
 xcrun simctl install "$UDID" build/ios/iphonesimulator/Runner.app
 
 # ── Start opensafari ──────────────────────────────────────────────
@@ -336,7 +338,7 @@ echo "IAP smoke passed — transaction $TX_ID, receipt $(jq -r .bytes receipt.js
 1. **Set locale **before** booting.** Writing `AppleLocale` after a boot does not re-render already-mounted SpringBoard strings. Always: write defaults → shutdown → boot.
 2. **Sheet labels are not stable across iOS minor versions.** iOS 17 shows **구입**; iOS 18 introduced a confirmation sub-sheet titled **확인하려면 이중 클릭하십시오** with the confirm button still labelled **구입**. Match by a **list** of candidate labels: `buttonLabels: ["구입", "Buy"]`. `app_alert_handle` tries them in order and returns the matched label — treat the first string in the list as your preferred match (#589).
 3. **"Ask to Buy" gate.** If a Family Sharing parent flow is active, the sheet becomes **구입 요청하기** and produces a pending transaction that must be approved out-of-band. Disable Ask to Buy at the top of the recipe: `app_storekit_test_session { action: "askToBuy", enabled: false }`.
-4. **Profile builds only.** Run `flutter build ios --simulator --profile`, never `--release`. Release AOT rejects `Runtime.evaluate` with `code 113` and the router falls through to AppleScript, which is blocked under `OPENSAFARI_HEADLESS_ONLY=1`. See [CI Recipes → QA-ready Flutter build](../ci-recipes.md#qa-ready-flutter-build).
+4. **Debug builds on the simulator; `--profile` is physical-device only.** Run `flutter build ios --simulator --debug`, never `--release`. The Flutter toolchain rejects `--profile` for simulator targets with *"Profile mode is not supported for simulators."*, and release AOT rejects `Runtime.evaluate` with `code 113` so the router falls through to AppleScript (which is blocked under `OPENSAFARI_HEADLESS_ONLY=1`). Use `--profile` only for physical-device QA. See [CI Recipes → QA-ready Flutter build](../ci-recipes.md#qa-ready-flutter-build) for the full simulator-vs-device matrix (#630).
 5. **Receipt timing.** The sandbox receipt is written after `app_storekit_test_session { action: "approve" }` returns. If `app_storekit_receipt` comes back with `NO_RECEIPT`, poll with a short backoff (max 5×500 ms) before failing the job — iOS occasionally flushes the receipt lazily on first app resume.
 6. **`OPENSAFARI_DISABLE_STOREKIT=1` must be unset in IAP jobs.** Many repos set it globally to keep generic Safari CI cheap; this recipe does not work with it set.
 

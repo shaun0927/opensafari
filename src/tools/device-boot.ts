@@ -1,7 +1,7 @@
 import { MCPServer } from '../mcp-server';
 import { SimulatorManager } from '../simulator';
 import { SimctlExecutor } from '../simulator/simctl';
-import { getProxyForDevice } from '../simulator/proxy-manager';
+import { getProxyForDevice, stopProxyForDevice } from '../simulator/proxy-manager';
 import { WebKitClient } from '../webkit/client';
 import { addManagedDevice } from '../reliability/zombie-cleanup';
 import { getSessionManager } from '../session-manager';
@@ -60,6 +60,21 @@ export function registerDeviceBootTool(server: MCPServer): void {
         console.error(`[device_boot] Post-boot optimization failed (non-fatal): ${err}`);
       }
 
+      const sm = getSessionManager();
+      const preset = Object.entries(DEVICE_PRESETS).find(([, p]) => p.name === device.name);
+
+      // Register the simulator even if WebKit target discovery fails. Native
+      // tools and diagnostics can still operate on a successfully booted
+      // simulator; only Safari/WebKit tools should remain unavailable.
+      sm.addSimulator(device.udid, {
+        deviceId: device.udid,
+        deviceType: device.name,
+        state: 'booted',
+        viewport: { width: preset?.[1]?.w ?? 390, height: preset?.[1]?.h ?? 844 },
+        bootedAt: Date.now(),
+        lastActivity: Date.now(),
+      });
+
       // Auto-start a per-device WebInspector proxy so parallel sessions
       // each get their own isolated proxy bound to their simulator's socket.
       let proxyStatus: { running: boolean; pid: number | null; port: number | null } = {
@@ -67,57 +82,61 @@ export function registerDeviceBootTool(server: MCPServer): void {
         pid: null,
         port: null,
       };
+
+      const openSafariWithRetry = async (): Promise<void> => {
+        // Retry openUrl — the simulator may report "Booted" before app
+        // launch services are fully ready (LSApplicationWorkspaceErrorDomain 115).
+        let openRetries = 5;
+        while (openRetries > 0) {
+          try {
+            await manager.openUrl(device.udid, 'https://example.com');
+            return;
+          } catch (openErr) {
+            openRetries--;
+            if (openRetries === 0) throw openErr;
+            await new Promise(r => setTimeout(r, 2000));
+          }
+        }
+      };
+
+      const connectWebKit = async (port: number): Promise<WebKitClient> => {
+        // Disconnect any existing client for THIS device to avoid leaking WebSocket connections.
+        const existingClient = sm.getConnection(device.udid);
+        if (existingClient) {
+          try { await existingClient.disconnect(); } catch { /* best-effort */ }
+          sm.removeConnection(device.udid);
+        }
+
+        await openSafariWithRetry();
+        const client = new WebKitClient({ host: 'localhost', port });
+        await client.connect({ retries: 5, retryDelay: 2000 });
+        sm.setConnection(device.udid, client);
+        return client;
+      };
+
       try {
-        const proxy = await getProxyForDevice(device.udid);
+        let proxy = await getProxyForDevice(device.udid);
         proxyStatus = { running: proxy.running, pid: proxy.pid, port: proxy.port };
 
-        // Open Safari so it registers with WebInspector, then connect WebKitClient
         try {
-          const sm = getSessionManager();
-
-          // Disconnect any existing client for THIS device to avoid leaking WebSocket connections
-          if (sm.hasConnection(device.udid)) {
-            const existingClient = sm.getConnection(device.udid);
-            if (existingClient) {
-              try { await existingClient.disconnect(); } catch { /* best-effort */ }
-            }
-            sm.removeConnection(device.udid);
-          }
-
-          // Retry openUrl — the simulator may report "Booted" before app
-          // launch services are fully ready (LSApplicationWorkspaceErrorDomain 115).
-          let openRetries = 5;
-          while (openRetries > 0) {
-            try {
-              await manager.openUrl(device.udid, 'https://example.com');
-              break;
-            } catch (openErr) {
-              openRetries--;
-              if (openRetries === 0) throw openErr;
-              await new Promise(r => setTimeout(r, 2000));
-            }
-          }
-
-          // Connect to WebKit with retries — Safari may need time to register with WebInspector
-          const client = new WebKitClient({ host: 'localhost', port: proxy.port });
-          await client.connect({ retries: 5, retryDelay: 2000 });
-
-          // Register in SessionManager — tracks the connection by deviceId
-          const preset = Object.entries(DEVICE_PRESETS).find(([, p]) => p.name === device.name);
-          sm.addSimulator(device.udid, {
-            deviceId: device.udid,
-            deviceType: device.name,
-            state: 'booted',
-            viewport: { width: preset?.[1]?.w ?? 390, height: preset?.[1]?.h ?? 844 },
-            bootedAt: Date.now(),
-            lastActivity: Date.now(),
-          });
-          sm.setConnection(device.udid, client);
+          // Give slow Safari registrations a short window to appear before the first
+          // connect attempt. Falls through tolerantly so fast paths stay fast.
+          await proxy.waitForTarget({ timeout: 3000 }).catch(() => { /* tolerated */ });
+          await connectWebKit(proxy.port);
         } catch (err) {
-          console.error(`[device_boot] WebKit connection failed (proxy running, tools may not work): ${err}`);
+          console.error(`[device_boot] WebKit connection failed; restarting device proxy once: ${err}`);
+          await stopProxyForDevice(device.udid).catch((stopErr) => {
+            console.error(`[device_boot] Failed to stop stale WebInspector proxy: ${stopErr}`);
+          });
+          proxy = await getProxyForDevice(device.udid);
+          proxyStatus = { running: proxy.running, pid: proxy.pid, port: proxy.port };
+          await proxy.waitForTarget({ timeout: 3000 }).catch(() => { /* tolerated */ });
+          await connectWebKit(proxy.port);
         }
       } catch (err) {
-        console.error(`[device_boot] Failed to start WebInspector proxy: ${err}`);
+        // Keep the booted simulator registered for native-tool fallback, but
+        // make the missing WebKit connection visible through diagnose/QA tools.
+        console.error(`[device_boot] WebKit connection failed (proxy unavailable, Safari tools may not work): ${err}`);
       }
 
       return {

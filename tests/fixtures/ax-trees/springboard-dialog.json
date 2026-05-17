@@ -1,0 +1,74 @@
+{
+  "role": "AXApplication",
+  "label": "SpringBoard",
+  "traits": [],
+  "frame": { "x": 0, "y": 0, "width": 393, "height": 852 },
+  "visible": true,
+  "enabled": true,
+  "focused": false,
+  "path": "0",
+  "children": [
+    {
+      "role": "AXWindow",
+      "traits": [],
+      "frame": { "x": 0, "y": 0, "width": 393, "height": 852 },
+      "visible": true,
+      "enabled": true,
+      "focused": false,
+      "path": "0/0",
+      "children": [
+        {
+          "role": "AXGroup",
+          "traits": [],
+          "frame": { "x": 20, "y": 200, "width": 353, "height": 350 },
+          "visible": true,
+          "enabled": true,
+          "focused": false,
+          "path": "0/0/0",
+          "children": [
+            {
+              "role": "AXStaticText",
+              "label": "Software Update Available",
+              "traits": ["AXHeading"],
+              "frame": { "x": 40, "y": 220, "width": 313, "height": 40 },
+              "visible": true,
+              "enabled": true,
+              "focused": false,
+              "path": "0/0/0/0"
+            },
+            {
+              "role": "AXStaticText",
+              "label": "iOS 17.5 is now available. Update to improve security.",
+              "traits": [],
+              "frame": { "x": 40, "y": 270, "width": 313, "height": 50 },
+              "visible": true,
+              "enabled": true,
+              "focused": false,
+              "path": "0/0/0/1"
+            },
+            {
+              "role": "AXButton",
+              "label": "Continue",
+              "traits": [],
+              "frame": { "x": 40, "y": 340, "width": 313, "height": 44 },
+              "visible": true,
+              "enabled": true,
+              "focused": false,
+              "path": "0/0/0/2"
+            },
+            {
+              "role": "AXButton",
+              "label": "Cancel",
+              "traits": [],
+              "frame": { "x": 40, "y": 394, "width": 313, "height": 44 },
+              "visible": true,
+              "enabled": true,
+              "focused": false,
+              "path": "0/0/0/3"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

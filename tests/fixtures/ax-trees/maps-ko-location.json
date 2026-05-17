@@ -1,0 +1,84 @@
+{
+  "role": "AXApplication",
+  "label": "SpringBoard",
+  "traits": [],
+  "frame": { "x": 0, "y": 0, "width": 393, "height": 852 },
+  "visible": true,
+  "enabled": true,
+  "focused": false,
+  "path": "0",
+  "children": [
+    {
+      "role": "AXWindow",
+      "traits": [],
+      "frame": { "x": 0, "y": 0, "width": 393, "height": 852 },
+      "visible": true,
+      "enabled": true,
+      "focused": false,
+      "path": "0/0",
+      "children": [
+        {
+          "role": "AXSheet",
+          "traits": [],
+          "frame": { "x": 20, "y": 250, "width": 353, "height": 340 },
+          "visible": true,
+          "enabled": true,
+          "focused": false,
+          "path": "0/0/0",
+          "children": [
+            {
+              "role": "AXStaticText",
+              "label": "'지도' 앱이 사용자의 위치를 사용하도록 허용하겠습니까?",
+              "traits": ["AXHeading"],
+              "frame": { "x": 40, "y": 270, "width": 313, "height": 60 },
+              "visible": true,
+              "enabled": true,
+              "focused": false,
+              "path": "0/0/0/0"
+            },
+            {
+              "role": "AXStaticText",
+              "label": "지도 앱을 사용하는 동안 현재 위치를 사용합니다.",
+              "traits": [],
+              "frame": { "x": 40, "y": 340, "width": 313, "height": 40 },
+              "visible": true,
+              "enabled": true,
+              "focused": false,
+              "path": "0/0/0/1"
+            },
+            {
+              "role": "AXButton",
+              "label": "한 번 허용",
+              "traits": [],
+              "frame": { "x": 40, "y": 400, "width": 313, "height": 44 },
+              "visible": true,
+              "enabled": true,
+              "focused": false,
+              "path": "0/0/0/2"
+            },
+            {
+              "role": "AXButton",
+              "label": "앱을 사용하는 동안 허용",
+              "traits": [],
+              "frame": { "x": 40, "y": 454, "width": 313, "height": 44 },
+              "visible": true,
+              "enabled": true,
+              "focused": false,
+              "path": "0/0/0/3"
+            },
+            {
+              "role": "AXButton",
+              "label": "허용 안 함",
+              "traits": [],
+              "frame": { "x": 40, "y": 508, "width": 313, "height": 44 },
+              "visible": true,
+              "enabled": true,
+              "focused": false,
+              "path": "0/0/0/4"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

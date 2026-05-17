@@ -1,66 +1,71 @@
-import * as fs from 'fs/promises';
-import * as os from 'os';
-import * as path from 'path';
-import { randomUUID } from 'crypto';
-import { execFile } from 'child_process';
-import { promisify } from 'util';
-import { SimctlExecutor, SimctlError } from './simctl';
+import { SimctlExecutor, SimctlError, SimulatorStateCache } from './simctl';
 import { SimulatorDevice, SimulatorRuntime } from './types';
-import { DEVICE_PRESETS } from './presets';
-import { DEFAULT_SIMULATOR_BOOT_TIMEOUT_MS, DEFAULT_SIMULATOR_SHUTDOWN_TIMEOUT_MS, DEFAULT_SCREENSHOT_TIMEOUT_MS } from '../config/defaults';
+import {
+  listDevices as catalogListDevices,
+  listRuntimes as catalogListRuntimes,
+  resolveDevice as catalogResolveDevice,
+} from './device-catalog';
+import {
+  boot as lifecycleBoot,
+  shutdown as lifecycleShutdown,
+  deleteDevice as lifecycleDeleteDevice,
+  cloneDevice as lifecycleCloneDevice,
+} from './lifecycle';
+import {
+  launchApp as appManagerLaunchApp,
+  terminateApp as appManagerTerminateApp,
+  activateApp as appManagerActivateApp,
+  listRunningApps as appManagerListRunningApps,
+  resetApp as appManagerResetApp,
+} from './app-manager';
+import {
+  screenshot as uiScreenshot,
+  screenshotBase64 as uiScreenshotBase64,
+  setAppearance as uiSetAppearance,
+  getAppearance as uiGetAppearance,
+  toggleAppearance as uiToggleAppearance,
+  rotate as uiRotate,
+  overrideStatusBar as uiOverrideStatusBar,
+  openUrl as uiOpenUrl,
+  type RotationResult,
+} from './ui-controller';
 
-interface SimctlListResult {
-  devices: Record<string, Array<{
-    udid: string;
-    name: string;
-    state: string;
-    isAvailable: boolean;
-  }>>;
-  runtimes: Array<{
-    identifier: string;
-    version: string;
-    isAvailable: boolean;
-    platform: string;
-  }>;
-}
+// Re-export error classes for backward compatibility — callers should migrate to ./errors
+export {
+  BootTimeoutError,
+  ShutdownTimeoutError,
+  DeviceNotFoundError,
+  DeviceNotBootedError,
+  ScreenshotTimeoutError,
+  AppNotInstalledError,
+  AppLaunchError,
+} from './errors';
 
-export interface RotationResult {
-  success: boolean;
-  method: 'simctl' | 'applescript' | 'none';
-  orientation?: string;
-}
+// Re-export RotationResult from ui-controller for backward compatibility
+export type { RotationResult } from './ui-controller';
+
+/**
+ * TTL for the per-device state cache inside SimulatorManager.
+ * Sized to match the longest polling interval used in the lifecycle module
+ * (1000 ms) so that multiple callers within a single tick share one
+ * `simctl list devices` parse, but the next tick always sees fresh data.
+ */
+const STATE_CACHE_TTL_MS = 900;
 
 export class SimulatorManager {
   private simctl = new SimctlExecutor();
+  /**
+   * Short-lived cache for device states during polling loops.
+   * Invalidated immediately on any lifecycle mutation (boot / shutdown / delete).
+   */
+  private stateCache = new SimulatorStateCache(STATE_CACHE_TTL_MS);
 
   async listDevices(): Promise<SimulatorDevice[]> {
-    const result = await this.simctl.execJson<SimctlListResult>(['list', 'devices']);
-    const devices: SimulatorDevice[] = [];
-
-    for (const [runtimeId, deviceList] of Object.entries(result.devices)) {
-      const version = runtimeId.match(/iOS-(\d+)-(\d+)/);
-      const runtimeVersion = version ? `${version[1]}.${version[2]}` : 'unknown';
-
-      for (const device of deviceList) {
-        if (device.isAvailable) {
-          devices.push({
-            udid: device.udid,
-            name: device.name,
-            state: device.state as SimulatorDevice['state'],
-            isAvailable: device.isAvailable,
-            runtime: runtimeId,
-            runtimeVersion,
-          });
-        }
-      }
-    }
-
-    return devices;
+    return catalogListDevices(this.simctl);
   }
 
   async listRuntimes(): Promise<SimulatorRuntime[]> {
-    const result = await this.simctl.execJson<SimctlListResult>(['list', 'runtimes']);
-    return result.runtimes.filter(r => r.isAvailable);
+    return catalogListRuntimes(this.simctl);
   }
 
   async listBooted(): Promise<SimulatorDevice[]> {
@@ -70,7 +75,84 @@ export class SimulatorManager {
 
   async getDevice(deviceId: string): Promise<SimulatorDevice | null> {
     const devices = await this.listDevices();
-    return devices.find(d => d.udid === deviceId) ?? null;
+    const device = devices.find(d => d.udid === deviceId) ?? null;
+    if (device) {
+      this.stateCache.set(deviceId, device.state);
+    }
+    return device;
+  }
+
+  /**
+   * Return the booted/shutdown state of a single device without always
+   * parsing the full device list. Used exclusively by polling loops.
+   *
+   * Strategy (in order of preference):
+   *   1. Short-lived cache hit — free, shared across concurrent callers within
+   *      the same poll tick.  Skipped when `opts.bypassCache` is true (used by
+   *      shutdown polling so it can observe the transient ShuttingDown state).
+   *   2. Per-UDID `simctl list devices <udid> -j` — narrow pure-read command
+   *      that returns only the JSON for the matching device.  Much cheaper than
+   *      the full device-list parse because CoreSimulator filters server-side.
+   *
+   * The result is placed into the cache so that sibling callers in the same
+   * polling tick benefit from the shared read.
+   *
+   * NOTE: `simctl bootstatus -b` was intentionally NOT used here.  The `-b`
+   * flag is a MUTATING operation (boots the device if not already booted) and
+   * therefore breaks the read-only contract expected by callers.
+   */
+  async getDeviceState(
+    deviceId: string,
+    opts?: { bypassCache?: boolean },
+  ): Promise<SimulatorDevice['state'] | null> {
+    const bypassCache = opts?.bypassCache === true;
+
+    // 1. Cache hit — shared across concurrent callers within the same tick.
+    //    Bypass during shutdown polling so ShuttingDown is always visible.
+    if (!bypassCache) {
+      const cached = this.stateCache.get(deviceId);
+      if (cached) {
+        return cached.state;
+      }
+    }
+
+    // 2. Per-UDID narrow list read — pure, no side-effects.
+    //    `simctl list devices <search> -j` filters by the search term
+    //    (case-insensitive contains match against the UDID string), so the
+    //    returned JSON is much smaller than the full device-list payload.
+    const state = await this.queryDeviceStateByUdid(deviceId);
+    if (state !== null) {
+      this.stateCache.set(deviceId, state);
+    }
+    return state;
+  }
+
+  /**
+   * Run `simctl list devices <udid> -j` and extract the state for the given
+   * UDID. Returns null when the device is not present in the output.
+   *
+   * This is a pure read with no side-effects on the simulator.
+   */
+  private async queryDeviceStateByUdid(deviceId: string): Promise<SimulatorDevice['state'] | null> {
+    interface PartialListResult {
+      devices: Record<string, Array<{ udid: string; state: string }>>;
+    }
+    try {
+      const result = await this.simctl.execJson<PartialListResult>(['list', 'devices', deviceId]);
+      for (const deviceList of Object.values(result.devices)) {
+        const entry = deviceList.find(d => d.udid === deviceId);
+        if (entry) {
+          return entry.state as SimulatorDevice['state'];
+        }
+      }
+      return null;
+    } catch (err) {
+      if (process.env.DEBUG) {
+        const msg = err instanceof SimctlError ? err.message : String(err);
+        console.error(`[SimulatorManager] queryDeviceStateByUdid ${deviceId}: error (${msg.slice(0, 80)})`);
+      }
+      return null;
+    }
   }
 
   /**
@@ -78,33 +160,7 @@ export class SimulatorManager {
    * Tries: exact UDID match → preset name match → fuzzy name match
    */
   async resolveDevice(presetKey: string): Promise<SimulatorDevice> {
-    const devices = await this.listDevices();
-
-    // 1. Exact UDID match
-    const byUdid = devices.find(d => d.udid === presetKey);
-    if (byUdid) return byUdid;
-
-    // 2. Preset name match
-    const preset = DEVICE_PRESETS[presetKey];
-    if (preset) {
-      const exact = devices.find(d => d.name === preset.name);
-      if (exact) return exact;
-    }
-
-    // 3. Case-insensitive substring match
-    const lower = presetKey.toLowerCase();
-    const substring = devices.find(d => d.name.toLowerCase().includes(lower));
-    if (substring) return substring;
-
-    // 4. Fuzzy: split words, match all keywords
-    const keywords = lower.split(/[\s-]+/);
-    const fuzzy = devices.find(d => {
-      const dLower = d.name.toLowerCase();
-      return keywords.every(kw => dLower.includes(kw));
-    });
-    if (fuzzy) return fuzzy;
-
-    throw new DeviceNotFoundError(presetKey, devices.map(d => d.name));
+    return catalogResolveDevice(this.simctl, presetKey);
   }
 
   async checkRuntimes(): Promise<{ installed: SimulatorRuntime[]; issues: string[]; suggestions: string[] }> {
@@ -122,120 +178,39 @@ export class SimulatorManager {
   }
 
   async boot(presetOrId: string, options?: { timeout?: number }): Promise<SimulatorDevice> {
-    const device = await this.resolveDevice(presetOrId);
-
-    // Already booted — return immediately
-    if (device.state === 'Booted') {
-      return device;
-    }
-
-    // Boot
-    await this.simctl.exec(['boot', device.udid]);
-
-    // Poll until booted or timeout
-    const timeout = options?.timeout ?? DEFAULT_SIMULATOR_BOOT_TIMEOUT_MS;
-    const start = Date.now();
-    const pollInterval = 1000;
-
-    while (Date.now() - start < timeout) {
-      const current = await this.getDevice(device.udid);
-      if (current?.state === 'Booted') {
-        return current;
-      }
-      await new Promise(r => setTimeout(r, pollInterval));
-    }
-
-    throw new BootTimeoutError(device.udid, device.name, timeout);
+    return lifecycleBoot(presetOrId, {
+      simctl: this.simctl,
+      lookup: this,
+      bootTimeoutMs: options?.timeout,
+      invalidateCache: udid => this.stateCache.invalidate(udid),
+    });
   }
 
   async shutdown(deviceId: string, options?: { timeout?: number }): Promise<void> {
-    const device = await this.getDevice(deviceId);
-    if (!device || device.state === 'Shutdown') {
-      return; // Already shutdown
-    }
-
-    // Graceful shutdown
-    try {
-      await this.simctl.exec(['shutdown', deviceId]);
-    } catch {
-      // May already be shutting down
-    }
-
-    // Wait for shutdown
-    const timeout = options?.timeout ?? DEFAULT_SIMULATOR_SHUTDOWN_TIMEOUT_MS;
-    const start = Date.now();
-
-    while (Date.now() - start < timeout) {
-      const current = await this.getDevice(deviceId);
-      if (!current || current.state === 'Shutdown') {
-        return;
-      }
-      await new Promise(r => setTimeout(r, 1000));
-    }
-
-    // Retry shutdown
-    try {
-      await this.simctl.exec(['shutdown', deviceId]);
-      await new Promise(r => setTimeout(r, 5000));
-      const current = await this.getDevice(deviceId);
-      if (!current || current.state === 'Shutdown') return;
-    } catch {
-      // Fall through to erase
-    }
-
-    // Nuclear option — erase device (WARNING: deletes all data)
-    console.error(`[SimulatorManager] Force erasing device ${deviceId} after shutdown timeout`);
-    await this.simctl.exec(['erase', deviceId]);
+    return lifecycleShutdown(deviceId, {
+      simctl: this.simctl,
+      lookup: this,
+      shutdownTimeoutMs: options?.timeout,
+      invalidateCache: udid => this.stateCache.invalidate(udid),
+    });
   }
 
   async bootPreset(presetKey: string): Promise<SimulatorDevice> {
     return this.boot(presetKey);
   }
 
+  // Business logic lives in ./ui-controller
   async openUrl(deviceId: string, url: string): Promise<void> {
-    // Validate URL
-    try {
-      new URL(url);
-    } catch {
-      throw new Error(`Invalid URL: ${url}`);
-    }
-
-    // Check device is booted
-    const device = await this.getDevice(deviceId);
-    if (!device || device.state !== 'Booted') {
-      throw new DeviceNotBootedError(deviceId);
-    }
-
-    await this.simctl.exec(['openurl', deviceId, url]);
-    // Brief wait for Safari to start processing
-    await new Promise(r => setTimeout(r, 1000));
+    return uiOpenUrl(deviceId, url, { simctl: this.simctl, lookup: this });
   }
 
+  // Business logic lives in ./ui-controller
   async screenshot(deviceId: string, options?: { format?: 'png' | 'jpeg' }): Promise<Buffer> {
-    const device = await this.getDevice(deviceId);
-    if (!device || device.state !== 'Booted') {
-      throw new DeviceNotBootedError(deviceId);
-    }
-
-    const format = options?.format ?? 'png';
-    const tmpFile = path.join(os.tmpdir(), `opensafari-screenshot-${randomUUID()}.${format}`);
-
-    try {
-      await this.simctl.exec(
-        ['io', deviceId, 'screenshot', `--type=${format}`, tmpFile],
-        { timeout: DEFAULT_SCREENSHOT_TIMEOUT_MS }
-      );
-      const buffer = await fs.readFile(tmpFile);
-      return buffer;
-    } finally {
-      // Cleanup temp file
-      await fs.unlink(tmpFile).catch(() => {});
-    }
+    return uiScreenshot(deviceId, options, { simctl: this.simctl, lookup: this });
   }
 
   async screenshotBase64(deviceId: string, options?: { format?: 'png' | 'jpeg' }): Promise<string> {
-    const buffer = await this.screenshot(deviceId, options);
-    return buffer.toString('base64');
+    return uiScreenshotBase64(deviceId, options, { simctl: this.simctl, lookup: this });
   }
 
   // === App Lifecycle ===
@@ -245,105 +220,31 @@ export class SimulatorManager {
     bundleId: string,
     options?: { args?: string[]; env?: Record<string, string> },
   ): Promise<{ pid: number; bundleId: string; deviceId: string }> {
-    const device = await this.getDevice(deviceId);
-    if (!device || device.state !== 'Booted') {
-      throw new DeviceNotBootedError(deviceId);
-    }
-
-    const cmdArgs = ['launch', deviceId, bundleId];
-    if (options?.args) {
-      cmdArgs.push(...options.args);
-    }
-
-    // simctl passes SIMCTL_CHILD_* env vars to the launched app
-    const childEnv: Record<string, string> = {};
-    if (options?.env) {
-      for (const [key, value] of Object.entries(options.env)) {
-        childEnv[`SIMCTL_CHILD_${key}`] = value;
-      }
-    }
-
-    try {
-      const output = await this.simctl.exec(cmdArgs, { env: childEnv });
-      const pidMatch = output.match(/:\s*(\d+)/);
-      const pid = pidMatch ? parseInt(pidMatch[1], 10) : -1;
-      return { pid, bundleId, deviceId };
-    } catch (err) {
-      if (err instanceof SimctlError) {
-        if (err.message.includes('domain not found') || err.message.includes('not installed')) {
-          throw new AppNotInstalledError(bundleId, deviceId);
-        }
-      }
-      throw new AppLaunchError(bundleId, deviceId, err instanceof Error ? err.message : String(err));
-    }
+    return appManagerLaunchApp(deviceId, bundleId, options, {
+      simctl: this.simctl,
+      lookup: this,
+    });
   }
 
   async terminateApp(deviceId: string, bundleId: string): Promise<{ terminated: boolean; bundleId: string; deviceId: string }> {
-    const device = await this.getDevice(deviceId);
-    if (!device || device.state !== 'Booted') {
-      throw new DeviceNotBootedError(deviceId);
-    }
-
-    try {
-      await this.simctl.exec(['terminate', deviceId, bundleId]);
-      return { terminated: true, bundleId, deviceId };
-    } catch (err) {
-      if (err instanceof SimctlError) {
-        if (err.message.includes('not running') || err.message.includes('Failed to terminate')) {
-          return { terminated: false, bundleId, deviceId };
-        }
-        if (err.message.includes('domain not found') || err.message.includes('not installed')) {
-          throw new AppNotInstalledError(bundleId, deviceId);
-        }
-      }
-      throw err;
-    }
+    return appManagerTerminateApp(deviceId, bundleId, {
+      simctl: this.simctl,
+      lookup: this,
+    });
   }
 
-  async activateApp(deviceId: string, bundleId: string): Promise<{ activated: boolean; bundleId: string; deviceId: string }> {
-    const device = await this.getDevice(deviceId);
-    if (!device || device.state !== 'Booted') {
-      throw new DeviceNotBootedError(deviceId);
-    }
-
-    // simctl launch brings an already-running app to the foreground;
-    // if the app is not running it starts it.
-    try {
-      await this.simctl.exec(['launch', deviceId, bundleId]);
-    } catch (err) {
-      if (err instanceof SimctlError) {
-        if (err.message.includes('domain not found') || err.message.includes('not installed')) {
-          throw new AppNotInstalledError(bundleId, deviceId);
-        }
-      }
-      throw err;
-    }
-    return { activated: true, bundleId, deviceId };
+  async activateApp(deviceId: string, bundleId: string): Promise<{ activated: boolean; bundleId: string; deviceId: string; pid: number }> {
+    return appManagerActivateApp(deviceId, bundleId, {
+      simctl: this.simctl,
+      lookup: this,
+    });
   }
 
   async listRunningApps(deviceId: string): Promise<Array<{ label: string; pid: number }>> {
-    const device = await this.getDevice(deviceId);
-    if (!device || device.state !== 'Booted') {
-      throw new DeviceNotBootedError(deviceId);
-    }
-
-    const output = await this.simctl.exec(['spawn', deviceId, 'launchctl', 'list']);
-    const lines = output.split('\n');
-    const apps: Array<{ label: string; pid: number }> = [];
-
-    for (const line of lines) {
-      const parts = line.split('\t');
-      if (parts.length < 3) continue;
-      const pid = parseInt(parts[0], 10);
-      const label = parts[2];
-      // Filter for UIKitApplication entries (running foreground apps)
-      if (!isNaN(pid) && pid > 0 && label.startsWith('UIKitApplication:')) {
-        const bundleId = label.replace('UIKitApplication:', '').replace(/\[.*\]$/, '');
-        apps.push({ label: bundleId, pid });
-      }
-    }
-
-    return apps;
+    return appManagerListRunningApps(deviceId, {
+      simctl: this.simctl,
+      lookup: this,
+    });
   }
 
   /**
@@ -351,45 +252,10 @@ export class SimulatorManager {
    * Strategy: terminate app, reset privacy permissions, clear app data container.
    */
   async resetApp(deviceId: string, bundleId: string): Promise<{ reset: boolean; bundleId: string; deviceId: string; steps: string[] }> {
-    const device = await this.getDevice(deviceId);
-    if (!device || device.state !== 'Booted') {
-      throw new DeviceNotBootedError(deviceId);
-    }
-
-    const steps: string[] = [];
-
-    // Step 1: Terminate the app if running
-    try {
-      await this.simctl.exec(['terminate', deviceId, bundleId]);
-      steps.push('terminated');
-    } catch {
-      steps.push('terminate_skipped');
-    }
-
-    // Step 2: Reset privacy permissions
-    try {
-      await this.simctl.exec(['privacy', deviceId, 'reset', 'all', bundleId]);
-      steps.push('privacy_reset');
-    } catch {
-      steps.push('privacy_reset_skipped');
-    }
-
-    // Step 3: Uninstall and note (cannot clear data container directly)
-    // simctl has no "clear data" command; the documented strategy is
-    // uninstall + reinstall. We uninstall here; the caller can reinstall.
-    try {
-      await this.simctl.exec(['uninstall', deviceId, bundleId]);
-      steps.push('uninstalled');
-    } catch (err) {
-      if (err instanceof SimctlError) {
-        if (err.message.includes('domain not found') || err.message.includes('not installed')) {
-          throw new AppNotInstalledError(bundleId, deviceId);
-        }
-      }
-      steps.push('uninstall_failed');
-    }
-
-    return { reset: true, bundleId, deviceId, steps };
+    return appManagerResetApp(deviceId, bundleId, {
+      simctl: this.simctl,
+      lookup: this,
+    });
   }
 
   // Expose simctl for direct use by other methods
@@ -397,68 +263,24 @@ export class SimulatorManager {
     return this.simctl;
   }
 
-  // === Appearance (Dark/Light Mode) ===
+  // === Appearance (Dark/Light Mode) — business logic in ./ui-controller ===
 
   async setAppearance(deviceId: string, mode: 'light' | 'dark'): Promise<void> {
-    const device = await this.getDevice(deviceId);
-    if (!device || device.state !== 'Booted') {
-      throw new DeviceNotBootedError(deviceId);
-    }
-    await this.simctl.exec(['ui', deviceId, 'appearance', mode]);
+    return uiSetAppearance(deviceId, mode, { simctl: this.simctl, lookup: this });
   }
 
   async getAppearance(deviceId: string): Promise<'light' | 'dark'> {
-    const device = await this.getDevice(deviceId);
-    if (!device || device.state !== 'Booted') {
-      throw new DeviceNotBootedError(deviceId);
-    }
-    const output = await this.simctl.exec(['ui', deviceId, 'appearance']);
-    return output.trim().toLowerCase() === 'dark' ? 'dark' : 'light';
+    return uiGetAppearance(deviceId, { simctl: this.simctl, lookup: this });
   }
 
   async toggleAppearance(deviceId: string): Promise<'light' | 'dark'> {
-    const current = await this.getAppearance(deviceId);
-    const next = current === 'light' ? 'dark' : 'light';
-    await this.setAppearance(deviceId, next);
-    return next;
+    return uiToggleAppearance(deviceId, { simctl: this.simctl, lookup: this });
   }
 
-  // === Rotation ===
-  // Method A: simctl io setorientation (works in headless/CI)
-  // Method B: AppleScript (requires Simulator.app GUI)
+  // === Rotation — business logic in ./ui-controller ===
 
   async rotate(deviceId: string, direction: 'left' | 'right' = 'left'): Promise<RotationResult> {
-    const device = await this.getDevice(deviceId);
-    if (!device || device.state !== 'Booted') {
-      throw new DeviceNotBootedError(deviceId);
-    }
-
-    const orientation = direction === 'left' ? 'landscapeLeft' : 'landscapeRight';
-
-    // Try simctl first (works in headless/CI)
-    try {
-      const execFileAsync = promisify(execFile);
-      await execFileAsync('xcrun', ['simctl', 'io', deviceId, 'setorientation', orientation], { timeout: 10000 });
-      return { success: true, method: 'simctl', orientation };
-    } catch {
-      console.error('[SimulatorManager] simctl setorientation not available, trying AppleScript');
-    }
-
-    // Fallback to AppleScript (requires GUI)
-    try {
-      const execFileAsync = promisify(execFile);
-      const menuItem = direction === 'left' ? 'Rotate Left' : 'Rotate Right';
-      await execFileAsync('osascript', [
-        '-e', 'tell application "Simulator" to activate',
-        '-e', 'delay 0.5',
-        '-e', `tell application "System Events" to tell process "Simulator" to click menu item "${menuItem}" of menu "Device" of menu bar 1`,
-      ], { timeout: 10000 });
-      return { success: true, method: 'applescript', orientation };
-    } catch {
-      console.error('[SimulatorManager] Rotation via AppleScript also failed — no rotation method available');
-    }
-
-    return { success: false, method: 'none' };
+    return uiRotate(deviceId, direction, { simctl: this.simctl, lookup: this });
   }
 
   // === Device Clone (state persistence alternative) ===
@@ -466,93 +288,17 @@ export class SimulatorManager {
   // simctl clone creates a full device copy with a new UDID.
 
   async cloneDevice(deviceId: string, cloneName: string): Promise<string> {
-    const output = await this.simctl.exec(['clone', deviceId, cloneName]);
-    // simctl clone returns the new device UDID
-    return output.trim();
+    return lifecycleCloneDevice(deviceId, cloneName, { simctl: this.simctl });
   }
 
   async deleteDevice(deviceId: string): Promise<void> {
-    await this.simctl.exec(['delete', deviceId]);
+    await lifecycleDeleteDevice(deviceId, { simctl: this.simctl });
+    this.stateCache.invalidate(deviceId);
   }
 
-  // === Status Bar Override (for deterministic screenshots) ===
+  // === Status Bar Override — business logic in ./ui-controller ===
 
   async overrideStatusBar(deviceId: string): Promise<void> {
-    const device = await this.getDevice(deviceId);
-    if (!device || device.state !== 'Booted') {
-      throw new DeviceNotBootedError(deviceId);
-    }
-    await this.simctl.exec([
-      'status_bar', deviceId, 'override',
-      '--time', '9:41',
-      '--batteryLevel', '100',
-      '--cellularBars', '4',
-    ]);
-  }
-}
-
-export class BootTimeoutError extends Error {
-  constructor(
-    public readonly deviceId: string,
-    public readonly deviceName: string,
-    public readonly timeoutMs: number,
-  ) {
-    super(`Simulator boot timeout: "${deviceName}" (${deviceId}) did not boot within ${timeoutMs}ms`);
-    this.name = 'BootTimeoutError';
-  }
-}
-
-export class ShutdownTimeoutError extends Error {
-  constructor(
-    public readonly deviceId: string,
-    public readonly timeoutMs: number,
-  ) {
-    super(`Simulator shutdown timeout: ${deviceId} did not shutdown within ${timeoutMs}ms`);
-    this.name = 'ShutdownTimeoutError';
-  }
-}
-
-export class DeviceNotFoundError extends Error {
-  constructor(
-    public readonly requested: string,
-    public readonly available: string[],
-  ) {
-    super(`Device not found: "${requested}". Available: ${available.slice(0, 5).join(', ')}${available.length > 5 ? '...' : ''}`);
-    this.name = 'DeviceNotFoundError';
-  }
-}
-
-export class DeviceNotBootedError extends Error {
-  constructor(public readonly deviceId: string) {
-    super(`Device ${deviceId} is not booted. Call boot() first.`);
-    this.name = 'DeviceNotBootedError';
-  }
-}
-
-export class ScreenshotTimeoutError extends Error {
-  constructor(public readonly deviceId: string) {
-    super(`Screenshot capture timed out for device ${deviceId}`);
-    this.name = 'ScreenshotTimeoutError';
-  }
-}
-
-export class AppNotInstalledError extends Error {
-  constructor(
-    public readonly bundleId: string,
-    public readonly deviceId: string,
-  ) {
-    super(`App "${bundleId}" is not installed on device ${deviceId}`);
-    this.name = 'AppNotInstalledError';
-  }
-}
-
-export class AppLaunchError extends Error {
-  constructor(
-    public readonly bundleId: string,
-    public readonly deviceId: string,
-    public readonly reason: string,
-  ) {
-    super(`Failed to launch "${bundleId}" on device ${deviceId}: ${reason}`);
-    this.name = 'AppLaunchError';
+    return uiOverrideStatusBar(deviceId, { simctl: this.simctl, lookup: this });
   }
 }

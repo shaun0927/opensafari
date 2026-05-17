@@ -104,6 +104,59 @@ describe('AccessibilityBridge', () => {
 
       await expect(bridge.dumpTree()).rejects.toThrow('timed out');
     });
+
+    /**
+     * Issue #693 WU3-prep: the dump root carries the device-content-root
+     * size in macOS-points. The wrapper passes the field through verbatim
+     * so the coordinate-tap code path can convert AX frames to iOS-points
+     * before forwarding to `sim-hid-bridge`.
+     */
+    it('passes through deviceContentMacOSPt on the dump root (#693)', async () => {
+      mockExecSuccess(JSON.stringify({
+        role: 'AXGroup',
+        label: null,
+        value: null,
+        identifier: null,
+        traits: [],
+        frame: { x: 0, y: 0, width: 697, height: 1515 },
+        visible: true,
+        enabled: true,
+        focused: false,
+        children: null,
+        path: '',
+        deviceContentMacOSPt: { width: 697, height: 1515 },
+      }));
+
+      const result = await bridge.dumpTree({ deviceId: 'test-udid' });
+
+      expect(result.deviceContentMacOSPt).toEqual({ width: 697, height: 1515 });
+    });
+
+    /**
+     * Issue #693 WU3-prep: the field is optional. Older bridge binaries
+     * that pre-date this PR (or running against `swift` interpreter source
+     * pinned to develop) MUST keep the wrapper surface usable without it.
+     */
+    it('treats deviceContentMacOSPt as optional on legacy bridge output', async () => {
+      mockExecSuccess(JSON.stringify({
+        role: 'AXGroup',
+        label: null,
+        value: null,
+        identifier: null,
+        traits: [],
+        frame: { x: 0, y: 0, width: 393, height: 852 },
+        visible: true,
+        enabled: true,
+        focused: false,
+        children: null,
+        path: '',
+        // no deviceContentMacOSPt
+      }));
+
+      const result = await bridge.dumpTree();
+
+      expect(result.deviceContentMacOSPt).toBeUndefined();
+    });
   });
 
   describe('query', () => {
@@ -189,6 +242,22 @@ describe('AccessibilityBridge', () => {
       expect(args).toContain('--max-results');
       expect(args).toContain('10');
     });
+
+    /**
+     * Issue #693 WU3-prep (gemini PR #695 follow-up): query results carry
+     * `deviceContentMacOSPt` so a caller that found an element via `query`
+     * and then performs a coordinate tap doesn't need a separate `dump`.
+     */
+    it('passes through deviceContentMacOSPt on query results (#693)', async () => {
+      mockExecSuccess(JSON.stringify({
+        ...mockQueryResult,
+        deviceContentMacOSPt: { width: 697, height: 1515 },
+      }));
+
+      const result = await bridge.query({ identifier: 'login-btn' });
+
+      expect(result.deviceContentMacOSPt).toEqual({ width: 697, height: 1515 });
+    });
   });
 
   describe('inspect', () => {
@@ -224,6 +293,184 @@ describe('AccessibilityBridge', () => {
       }));
 
       await expect(bridge.inspect('99/99')).rejects.toThrow('Element not found');
+    });
+
+    /**
+     * Issue #693 WU3-prep (gemini PR #695 follow-up): inspect results carry
+     * `deviceContentMacOSPt` so a caller that navigated to an element via
+     * `inspect` and then performs a coordinate tap doesn't need a separate
+     * `dump` for the conversion factor.
+     */
+    it('passes through deviceContentMacOSPt on inspect results (#693)', async () => {
+      const mockNode = {
+        role: 'AXTextField',
+        label: 'Email',
+        value: 'user@example.com',
+        identifier: 'email-field',
+        traits: [],
+        frame: { x: 20, y: 150, width: 350, height: 44 },
+        visible: true,
+        enabled: true,
+        focused: true,
+        children: null,
+        path: '0/2',
+        deviceContentMacOSPt: { width: 697, height: 1515 },
+      };
+
+      mockExecSuccess(JSON.stringify(mockNode));
+
+      const result = await bridge.inspect('0/2', 'test-udid');
+
+      expect(result.deviceContentMacOSPt).toEqual({ width: 697, height: 1515 });
+    });
+  });
+
+  /**
+   * Issue #693 WU1: the Swift bridge writes its structured ErrorJSON
+   * (`{ error, code }`) to STDOUT on the typed-error path and then
+   * `exit(1)`. Before this fix, the wrapper only inspected `error.stderr`
+   * on a non-zero exit and every typed bridge error collapsed to the
+   * generic `BRIDGE_EXEC_FAILED` / `Command failed: <cmd>` shape so the
+   * caller could not branch on `code`. These tests prove the structured
+   * error now passes through verbatim from either stream.
+   */
+  describe('non-zero exit error parsing (#693 WU1)', () => {
+    function mockExecFailure(opts: { stdout?: string; stderr?: string; message?: string }) {
+      mockExecFile.mockImplementation(
+        (_cmd: string, _args: string[], _opts: unknown, cb?: ExecCallback) => {
+          const err = Object.assign(new Error(opts.message ?? 'Command failed'), {
+            stdout: opts.stdout ?? '',
+            stderr: opts.stderr ?? '',
+          });
+          if (cb) cb(err, { stdout: opts.stdout ?? '', stderr: opts.stderr ?? '' });
+          return { stdout: opts.stdout ?? '', stderr: opts.stderr ?? '' };
+        },
+      );
+    }
+
+    it('parses structured ErrorJSON from STDOUT on non-zero exit (DEVICE_CONTENT_ROOT_EMPTY)', async () => {
+      mockExecFailure({
+        stdout: JSON.stringify({
+          error:
+            'Matched simulator window, but no descendant exposes app-level accessibility semantics.',
+          code: 'DEVICE_CONTENT_ROOT_EMPTY',
+        }),
+        message: 'Command failed',
+      });
+
+      const promise = bridge.dumpTree();
+      await expect(promise).rejects.toBeInstanceOf(AccessibilityBridgeError);
+      try {
+        await promise;
+      } catch (err) {
+        const e = err as AccessibilityBridgeError;
+        expect(e.code).toBe('DEVICE_CONTENT_ROOT_EMPTY');
+        expect(e.message).toContain('no descendant exposes app-level accessibility semantics');
+        expect(e.message).not.toMatch(/^ax-bridge failed/);
+      }
+    });
+
+    it('falls back to STDERR-encoded ErrorJSON when STDOUT is empty', async () => {
+      mockExecFailure({
+        stderr: JSON.stringify({
+          error: 'Simulator.app is not running.',
+          code: 'SIMULATOR_NOT_RUNNING',
+        }),
+      });
+
+      const promise = bridge.dumpTree();
+      await expect(promise).rejects.toBeInstanceOf(AccessibilityBridgeError);
+      try {
+        await promise;
+      } catch (err) {
+        const e = err as AccessibilityBridgeError;
+        expect(e.code).toBe('SIMULATOR_NOT_RUNNING');
+        expect(e.message).toContain('Simulator.app is not running');
+      }
+    });
+
+    it('surfaces both stdout and stderr tails when neither stream parses as ErrorJSON', async () => {
+      mockExecFailure({
+        stdout: 'partial output before crash',
+        stderr: 'swift: dyld: Library not loaded',
+        message: 'Command failed: ax-bridge-native dump',
+      });
+
+      const promise = bridge.dumpTree();
+      await expect(promise).rejects.toBeInstanceOf(AccessibilityBridgeError);
+      try {
+        await promise;
+      } catch (err) {
+        const e = err as AccessibilityBridgeError;
+        expect(e.code).toBe('BRIDGE_EXEC_FAILED');
+        expect(e.message).toContain('stdout: partial output before crash');
+        expect(e.message).toContain('stderr: swift: dyld: Library not loaded');
+      }
+    });
+
+    it('surfaces captured stdout in error message when JSON.parse throws SyntaxError on successful exit', async () => {
+      // Bridge exits 0 but stdout is not valid JSON (e.g. `swiftc` produced
+      // a binary that printed a partial dump before crashing). The previous
+      // implementation discarded the captured streams in this branch
+      // because Node's `SyntaxError` does not carry stdout/stderr.
+      mockExecSuccess('this is not json', 'some warning on stderr');
+
+      const promise = bridge.dumpTree();
+      try {
+        await promise;
+        throw new Error('expected throw');
+      } catch (err) {
+        const e = err as AccessibilityBridgeError;
+        expect(e.code).toBe('BRIDGE_EXEC_FAILED');
+        expect(e.message).toContain('stdout: this is not json');
+        expect(e.message).toContain('stderr: some warning on stderr');
+      }
+    });
+
+    it('truncates oversized single-line stdout in error tails', async () => {
+      const longLine = 'x'.repeat(2000);
+      mockExecFailure({
+        stdout: longLine,
+        stderr: '',
+        message: 'Command failed',
+      });
+
+      const promise = bridge.dumpTree();
+      try {
+        await promise;
+        throw new Error('expected throw');
+      } catch (err) {
+        const e = err as AccessibilityBridgeError;
+        expect(e.code).toBe('BRIDGE_EXEC_FAILED');
+        // Truncated form: 512 chars + ellipsis + `[+1488 chars]` marker.
+        expect(e.message).toContain('…[+1488 chars]');
+        // The full 2000-char line must not survive verbatim.
+        expect(e.message).not.toContain(longLine);
+      }
+    });
+
+    it('still surfaces a typed AX_TIMEOUT for killed processes', async () => {
+      mockExecFile.mockImplementation(
+        (_cmd: string, _args: string[], _opts: unknown, cb?: ExecCallback) => {
+          const err = Object.assign(new Error('killed'), {
+            killed: true,
+            stdout: '',
+            stderr: '',
+          });
+          if (cb) cb(err, { stdout: '', stderr: '' });
+          return { stdout: '', stderr: '' };
+        },
+      );
+
+      const promise = bridge.dumpTree();
+      try {
+        await promise;
+        throw new Error('expected throw');
+      } catch (err) {
+        const e = err as AccessibilityBridgeError;
+        expect(e.code).toBe('AX_TIMEOUT');
+        expect(e.message).toContain('timed out');
+      }
     });
   });
 });

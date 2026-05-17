@@ -1,6 +1,11 @@
 import { MCPServer } from '../mcp-server';
 import { getAccessibilityBridge, ensureSemanticsActive } from '../native';
 import { getSessionManager } from '../session-manager';
+import {
+  activateAndClassify,
+  createContextMismatchError,
+  NativeContextMeta,
+} from './native-app-context';
 
 export function registerAppInspectTool(server: MCPServer): void {
   server.registerTool(
@@ -43,9 +48,26 @@ export function registerAppInspectTool(server: MCPServer): void {
         const bundleId = params.bundle_id as string | undefined;
 
         const bridge = getAccessibilityBridge();
-
-        // Ensure Flutter semantics are activated before inspecting
-        if (deviceId) {
+        let meta: NativeContextMeta = {
+          requestedBundleId: bundleId,
+          deviceId,
+          sourceKind: 'unknown',
+          heuristics: ['not-requested'],
+          activationAttempted: false,
+          activationRetries: 0,
+        };
+        if (bundleId) {
+          const context = await activateAndClassify({
+            bridge,
+            deviceId,
+            bundleId,
+            ensureSemanticsActive: () => ensureSemanticsActive(deviceId, { bundleId }),
+          });
+          meta = context.meta;
+          if (meta.sourceKind !== 'target-app') {
+            throw createContextMismatchError(meta);
+          }
+        } else {
           await ensureSemanticsActive(deviceId, { bundleId });
         }
 
@@ -54,7 +76,10 @@ export function registerAppInspectTool(server: MCPServer): void {
         return {
           content: [{
             type: 'text' as const,
-            text: JSON.stringify(node, null, 2),
+            text: JSON.stringify({
+              ...node,
+              _meta: { context: meta },
+            }, null, 2),
           }],
         };
       } catch (err) {

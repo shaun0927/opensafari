@@ -13,7 +13,7 @@
  *   2. `backendKinds` — the set of backend identifiers we can extract from
  *      the log, regardless of whether they live at the top level or inside
  *      a stringified `args_summary`. The allowed set is
- *      `{'flutter-vm','simhid','webkit'}`.
+ *      `{'ax-press','flutter-vm','pointer-service','simhid','webkit'}`.
  */
 
 import * as fs from 'node:fs';
@@ -29,10 +29,17 @@ import * as fs from 'node:fs';
  * frontmost application. `app-tap-element` stamps `headless: true` on every
  * ax-press result (src/tools/app-tap-element.ts), so the posture check
  * treats it as a first-class headless backend.
+ *
+ * `pointer-service` is the Phase-1 opt-in backend introduced in PR #615 for
+ * Xcode 26+ coordinate taps. It shells out to `sim-hid-bridge tap-ps`, which
+ * routes through `CoreSimulator.framework`'s PointerService IPC with no
+ * foreground dependency on Simulator.app — the PR's live harness (#629) and
+ * the sentinel symbol probe (#621) both attest to the headless posture.
  */
 export const ALLOWED_BACKEND_KINDS: readonly string[] = Object.freeze([
   'ax-press',
   'flutter-vm',
+  'pointer-service',
   'simhid',
   'webkit',
 ]);

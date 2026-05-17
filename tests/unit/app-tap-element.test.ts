@@ -11,8 +11,13 @@ jest.mock('../../src/mcp-server', () => {
 });
 
 import { MCPServer } from '../../src/mcp-server';
-import { registerAppTapElementTool, sanitizeTapTarget } from '../../src/tools/app-tap-element';
+import {
+  registerAppTapElementTool,
+  sanitizeTapTarget,
+  __resetIosPtSizeCacheForTests,
+} from '../../src/tools/app-tap-element';
 import type { AXNode, AXQueryResult } from '../../src/native/ax-types';
+import { DEVICE_PRESETS } from '../../src/simulator/presets';
 
 // ── Mocks ──────────────────────────────────────────────────────────────────
 
@@ -46,6 +51,7 @@ jest.mock('../../src/native/accessibility-bridge', () => ({
 jest.mock('../../src/native/semantics-activator', () => ({
   ensureSemanticsActive: jest.fn().mockResolvedValue(true),
   countNodes: jest.fn().mockReturnValue(10),
+  isLikelyChromeOnlyTree: jest.fn().mockReturnValue(false),
 }));
 
 jest.mock('../../src/tools/native-input-backend', () => ({
@@ -60,6 +66,16 @@ jest.mock('../../src/session-manager', () => ({
   getSessionManager: () => ({
     getSoleDeviceId: () => 'test-device-id',
   }),
+}));
+
+// SimulatorManager is used to look up the iOS-pt size for coordinate conversion.
+// Default: return null (device not in preset table) so pre-existing tests are
+// unaffected. Individual tests override this via mockGetDevice.
+const mockGetDevice = jest.fn().mockResolvedValue(null);
+jest.mock('../../src/simulator', () => ({
+  SimulatorManager: jest.fn().mockImplementation(() => ({
+    getDevice: mockGetDevice,
+  })),
 }));
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -88,6 +104,20 @@ function makeQueryResult(matches: AXNode[], ambiguous = false): AXQueryResult {
   };
 }
 
+function makeNodeTree(node: AXNode): AXNode {
+  return {
+    role: 'AXWindow',
+    label: 'Test App',
+    traits: [],
+    frame: { x: 0, y: 0, width: 375, height: 812 },
+    visible: true,
+    enabled: true,
+    focused: false,
+    path: '',
+    children: [node],
+  };
+}
+
 // ── Test Setup ───────────────────────────────────────────────────────────────
 
 let server: MCPServer;
@@ -106,6 +136,10 @@ beforeAll(() => {
 beforeEach(() => {
   jest.clearAllMocks();
   jest.useRealTimers();
+  // The iOS-pt size cache is module-level so a previous test's resolved
+  // size would otherwise leak into subsequent tests that change the
+  // `mockGetDevice` return value (e.g. preset hit → preset miss).
+  __resetIosPtSizeCacheForTests();
   // Reset the press mock entirely — `clearAllMocks` does not drain the
   // `mockResolvedValueOnce` / `mockRejectedValueOnce` queue, so an
   // overridden once-value from a previous test would otherwise be
@@ -125,6 +159,9 @@ beforeEach(() => {
     message: 'Element does not support AXPress',
     axErrorCode: null,
   });
+  mockDumpTree.mockResolvedValue(makeNodeTree(makeNode()));
+  // Default: device not found in preset table → no coordinate conversion.
+  mockGetDevice.mockResolvedValue(null);
 });
 
 // ── Tests ──────────────────────────────────────────────────────────────────
@@ -271,6 +308,26 @@ describe('app_tap_element', () => {
     expect(body.coordinates).toEqual({ x: 60, y: 45 });
     expect(mockQuery).toHaveBeenCalledWith(
       expect.objectContaining({ text: 'Submit' }),
+      expect.anything(),
+    );
+  });
+
+  it('can tap a multiline label returned from the normalized query path', async () => {
+    const node = makeNode({
+      label: '마이\n탭 4개 중 4번째',
+      identifier: 'my-tab',
+      frame: { x: 10, y: 20, width: 120, height: 40 },
+    });
+    mockQuery.mockResolvedValue(makeQueryResult([node]));
+
+    const result = await handler('session', { label: '마이 탭 4개 중 4번째', timeout: 0 });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(body.status).toBe('tapped');
+    expect(body.element.label).toBe('마이\n탭 4개 중 4번째');
+    expect(mockTap).toHaveBeenCalled();
+    expect(mockQuery).toHaveBeenCalledWith(
+      expect.objectContaining({ label: '마이 탭 4개 중 4번째' }),
       expect.anything(),
     );
   });
@@ -505,6 +562,9 @@ describe('app_tap_element — Tier 1.5 AX press', () => {
   it('routes to AX press when the element advertises the AXPress action', async () => {
     const node = makeNode();
     mockQuery.mockResolvedValue(makeQueryResult([node]));
+    mockDumpTree
+      .mockResolvedValueOnce(makeNodeTree(node))
+      .mockResolvedValueOnce(makeNodeTree({ ...node, focused: true }));
     mockPress.mockResolvedValueOnce({
       ok: true,
       code: 'OK',
@@ -523,6 +583,8 @@ describe('app_tap_element — Tier 1.5 AX press', () => {
     expect(result.isError).toBeUndefined();
     expect(body.status).toBe('tapped');
     expect(body.backend).toBe('ax-press');
+    expect(body.verified).toBe(true);
+    expect(body.effect).toBe('focus_changed');
     expect(body._meta).toMatchObject({
       backendKind: 'ax-press',
       headless: true,
@@ -545,6 +607,35 @@ describe('app_tap_element — Tier 1.5 AX press', () => {
     expect(body.backend).toBe('simctl');
     expect(mockTap).toHaveBeenCalledTimes(1);
     expect(mockPress).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls back to coordinate tap when AX press reports OK but no observable effect is detected', async () => {
+    const node = makeNode();
+    mockQuery.mockResolvedValue(makeQueryResult([node]));
+    mockDumpTree
+      .mockResolvedValueOnce(makeNodeTree(node))
+      .mockResolvedValueOnce(makeNodeTree(node));
+    mockPress.mockResolvedValueOnce({
+      ok: true,
+      code: 'OK',
+      path: '0/1',
+      actions: ['AXPress'],
+      role: 'AXButton',
+      identifier: 'login_btn',
+      label: 'Login',
+      message: null,
+      axErrorCode: null,
+    });
+
+    const result = await handler('session', { label: 'Login', timeout: 0 });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(result.isError).toBe(true);
+    expect(body.error).toBe('TAP_NO_EFFECT');
+    expect(body.backend).toBe('simctl');
+    expect(body.verified).toBe(false);
+    expect(body.effect).toBe('no_observable_change');
+    expect(mockTap).toHaveBeenCalledTimes(1);
   });
 
   it('falls back to coordinate tap when AX press reports PRESS_FAILED', async () => {
@@ -678,6 +769,11 @@ describe('app_tap_element — Tier 1.5 AX press', () => {
   it('surfaces axActions + warning flags in the response envelope', async () => {
     const node = makeNode({ path: '2/3/4' });
     mockQuery.mockResolvedValue(makeQueryResult([node, makeNode(), makeNode()]));
+    // Before tree: node present (so beforeTarget is found). After tree: node
+    // focused=true (different fingerprint) → subtree_changed → verified=true.
+    mockDumpTree
+      .mockResolvedValueOnce(makeNodeTree(node))
+      .mockResolvedValueOnce(makeNodeTree({ ...node, focused: true }));
     mockPress.mockResolvedValueOnce({
       ok: true,
       code: 'OK',
@@ -696,6 +792,377 @@ describe('app_tap_element — Tier 1.5 AX press', () => {
     expect(body._meta.axActions).toEqual(['AXPress', 'AXShowMenu']);
     // Without explicit `index`, 3 matches should trigger implicit-ambiguity warning.
     expect(body.warning).toMatch(/ambiguous: 3 elements matched; pressed index 0/);
+  });
+
+  // ── P1: both-missing case is unverified, coordinate fallback runs ──────────
+
+  it('returns unverified and falls back to coordinate tap when target is absent from both before and after trees (codex P1)', async () => {
+    // The node path '9/9/9' is not present in either tree returned by
+    // dumpTree (both trees contain only the default '0/1' node). With the
+    // old code this would incorrectly return verified=true via
+    // 'target_disappeared'; with the fix it must fall through to the
+    // coordinate tap backend.
+    const node = makeNode({ path: '9/9/9' });
+    mockQuery.mockResolvedValue(makeQueryResult([node]));
+    // Both trees contain only '0/1', not '9/9/9'.
+    mockDumpTree
+      .mockResolvedValueOnce(makeNodeTree(makeNode()))
+      .mockResolvedValueOnce(makeNodeTree(makeNode()));
+    mockPress.mockResolvedValueOnce({
+      ok: true,
+      code: 'OK',
+      path: '9/9/9',
+      actions: ['AXPress'],
+      role: 'AXButton',
+      identifier: 'login_btn',
+      label: 'Login',
+      message: null,
+      axErrorCode: null,
+    });
+
+    const result = await handler('session', { label: 'Login', timeout: 0 });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(result.isError).toBe(true);
+    expect(body.error).toBe('TAP_NO_EFFECT');
+    // Must have fallen back to the coordinate tap, not returned ax-press.
+    expect(body.backend).toBe('simctl');
+    expect(body.verified).toBe(false);
+    expect(body.effect).toBe('no_observable_change');
+    expect(mockTap).toHaveBeenCalledTimes(1);
+  });
+
+  // ── target_appeared: node absent before press, present after ──────────────
+
+  it('returns verified=true with effect="target_appeared" when target is absent before press but present after', async () => {
+    // The target node is not in the "before" tree but appears in the "after"
+    // tree — indicating the tap caused it to be inserted into the AX tree
+    // (e.g. a lazy-loaded or conditionally rendered element).
+    const node = makeNode({ path: '0/1' });
+    mockQuery.mockResolvedValue(makeQueryResult([node]));
+    // Before tree: does NOT contain the target path '0/1'.
+    // After tree: DOES contain the target path '0/1'.
+    const emptyTree: AXNode = {
+      role: 'AXWindow',
+      label: 'Test App',
+      traits: [],
+      frame: { x: 0, y: 0, width: 375, height: 812 },
+      visible: true,
+      enabled: true,
+      focused: false,
+      path: '',
+      children: [],
+    };
+    mockDumpTree
+      .mockResolvedValueOnce(emptyTree)
+      .mockResolvedValueOnce(makeNodeTree(node));
+    mockPress.mockResolvedValueOnce({
+      ok: true,
+      code: 'OK',
+      path: '0/1',
+      actions: ['AXPress'],
+      role: 'AXButton',
+      identifier: 'login_btn',
+      label: 'Login',
+      message: null,
+      axErrorCode: null,
+    });
+
+    const result = await handler('session', { label: 'Login', timeout: 0 });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(result.isError).toBeUndefined();
+    expect(body.status).toBe('tapped');
+    expect(body.backend).toBe('ax-press');
+    expect(body.verified).toBe(true);
+    expect(body.effect).toBe('target_appeared');
+    expect(mockTap).not.toHaveBeenCalled();
+  });
+
+  // ── P2: dumpTree failures are treated as best-effort, fallback still runs ──
+
+  it('falls back to coordinate tap without error when pre-press dumpTree throws (codex P2)', async () => {
+    const node = makeNode();
+    mockQuery.mockResolvedValue(makeQueryResult([node]));
+    mockPress.mockResolvedValueOnce({
+      ok: true,
+      code: 'OK',
+      path: '0/1',
+      actions: ['AXPress'],
+      role: 'AXButton',
+      identifier: 'login_btn',
+      label: 'Login',
+      message: null,
+      axErrorCode: null,
+    });
+    // Pre-press dump throws; post-press dump succeeds but should not matter.
+    mockDumpTree
+      .mockRejectedValueOnce(new Error('AX timeout'))
+      .mockResolvedValueOnce(makeNodeTree(node));
+    const warnSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = await handler('session', { label: 'Login', timeout: 0 });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(result.isError).toBeUndefined();
+    expect(body.backend).toBe('simctl');
+    expect(mockTap).toHaveBeenCalledTimes(1);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringMatching(/pre-press AX tree dump failed/),
+    );
+
+    warnSpy.mockRestore();
+  });
+
+  it('falls back to coordinate tap without error when post-press dumpTree throws (codex P2)', async () => {
+    const node = makeNode();
+    mockQuery.mockResolvedValue(makeQueryResult([node]));
+    mockPress.mockResolvedValueOnce({
+      ok: true,
+      code: 'OK',
+      path: '0/1',
+      actions: ['AXPress'],
+      role: 'AXButton',
+      identifier: 'login_btn',
+      label: 'Login',
+      message: null,
+      axErrorCode: null,
+    });
+    // Pre-press dump succeeds; post-press dump throws.
+    mockDumpTree
+      .mockResolvedValueOnce(makeNodeTree(node))
+      .mockRejectedValueOnce(new Error('AX timeout on large tree'));
+    const warnSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = await handler('session', { label: 'Login', timeout: 0 });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(result.isError).toBe(true);
+    expect(body.error).toBe('TAP_NO_EFFECT');
+    expect(body.backend).toBe('simctl');
+    expect(body.verified).toBe(false);
+    expect(body.effect).toBe('no_observable_change');
+    expect(mockTap).toHaveBeenCalledTimes(1);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringMatching(/post-press AX tree dump failed/),
+    );
+
+    warnSpy.mockRestore();
+  });
+});
+
+describe('app_tap_element — macOS-pt → iOS-pt coordinate conversion (#693 WU3)', () => {
+  it('scales tap coordinates when query result carries deviceContentMacOSPt and device is in preset table', async () => {
+    // iPhone 17 Pro: macOS content area 697×1515, iOS pts 402×874.
+    // AX frame: x=500, y=1000, w=100, h=50 → raw center (550, 1025) in macOS-pts.
+    // Expected after conversion: x ≈ 550*(402/697) ≈ 317.07, y ≈ 1025*(874/1515) ≈ 591.53
+    const node = makeNode({ frame: { x: 500, y: 1000, width: 100, height: 50 } });
+    const queryResultWithMacOSPt = {
+      ...makeQueryResult([node]),
+      deviceContentMacOSPt: { width: 697, height: 1515 },
+    };
+    mockQuery.mockResolvedValue(queryResultWithMacOSPt);
+    // Device lookup returns iPhone 17 Pro — name matches preset 'iphone-17-pro'.
+    mockGetDevice.mockResolvedValue({ name: 'iPhone 17 Pro', udid: 'test-device-id', state: 'Booted', isAvailable: true, runtime: '', runtimeVersion: '' });
+    const warnSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = await handler('session', { label: 'Login', timeout: 0 });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(body.status).toBe('tapped');
+    // Converted coordinates must differ from the raw center (550, 1025).
+    expect(body.coordinates.x).toBeCloseTo(317.07, 0);
+    expect(body.coordinates.y).toBeCloseTo(591.53, 0);
+    // The tap backend must receive the converted coordinates.
+    const tapCall = mockTap.mock.calls[0];
+    expect(tapCall[1]).toBeCloseTo(317.07, 0);
+    expect(tapCall[2]).toBeCloseTo(591.53, 0);
+    // Log entry should mention the conversion.
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringMatching(/macOS-pt→iOS-pt conversion applied/),
+    );
+
+    warnSpy.mockRestore();
+  });
+
+  it('falls back to raw AX coordinates when deviceContentMacOSPt is absent (legacy bridge)', async () => {
+    const node = makeNode({ frame: { x: 100, y: 200, width: 200, height: 44 } });
+    // No deviceContentMacOSPt on query result.
+    mockQuery.mockResolvedValue(makeQueryResult([node]));
+    mockGetDevice.mockResolvedValue({ name: 'iPhone 17 Pro', udid: 'test-device-id', state: 'Booted', isAvailable: true, runtime: '', runtimeVersion: '' });
+
+    const result = await handler('session', { label: 'Login', timeout: 0 });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(body.status).toBe('tapped');
+    // Raw center: 100+200/2=200, 200+44/2=222
+    expect(body.coordinates).toEqual({ x: 200, y: 222 });
+    expect(mockTap).toHaveBeenCalledWith('test-device-id', 200, 222, undefined);
+  });
+
+  it('falls back to raw AX coordinates when device is not in the preset table', async () => {
+    const node = makeNode({ frame: { x: 100, y: 200, width: 200, height: 44 } });
+    const queryResultWithMacOSPt = {
+      ...makeQueryResult([node]),
+      deviceContentMacOSPt: { width: 697, height: 1515 },
+    };
+    mockQuery.mockResolvedValue(queryResultWithMacOSPt);
+    // Device name does not match any preset.
+    mockGetDevice.mockResolvedValue({ name: 'iPhone Unknown Model', udid: 'test-device-id', state: 'Booted', isAvailable: true, runtime: '', runtimeVersion: '' });
+
+    const result = await handler('session', { label: 'Login', timeout: 0 });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(body.status).toBe('tapped');
+    // Raw center unchanged: 200, 222
+    expect(body.coordinates).toEqual({ x: 200, y: 222 });
+  });
+
+  it('falls back to raw AX coordinates when getDevice returns null (simctl failure)', async () => {
+    const node = makeNode({ frame: { x: 100, y: 200, width: 200, height: 44 } });
+    const queryResultWithMacOSPt = {
+      ...makeQueryResult([node]),
+      deviceContentMacOSPt: { width: 697, height: 1515 },
+    };
+    mockQuery.mockResolvedValue(queryResultWithMacOSPt);
+    // getDevice returns null — simctl failure simulated.
+    mockGetDevice.mockResolvedValue(null);
+
+    const result = await handler('session', { label: 'Login', timeout: 0 });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(body.status).toBe('tapped');
+    // Raw center unchanged.
+    expect(body.coordinates).toEqual({ x: 200, y: 222 });
+  });
+});
+
+// ── WU4: multi-device integration (.each) ────────────────────────────────────
+
+describe('app_tap_element — macOS-pt → iOS-pt conversion (#693 WU4 multi-device)', () => {
+  // Representative device sample: iPhone 17 Pro, iPhone 17e (different form
+  // factor / size), and iPad Air (larger aspect ratio).
+  const deviceCases = [
+    {
+      key: 'iphone-17-pro',
+      preset: DEVICE_PRESETS['iphone-17-pro'],
+      // Observed macOS-pt content width from PR #695 dump for iPhone 17 Pro.
+      macOSPtW: 697,
+      macOSPtH: 1515,
+    },
+    {
+      key: 'iphone-17e',
+      preset: DEVICE_PRESETS['iphone-17e'],
+      // Synthetic macOS-pt size for iPhone 17e — same ~1.733× reference scale.
+      macOSPtW: Math.round(DEVICE_PRESETS['iphone-17e'].w * (697 / 402)),
+      macOSPtH: Math.round(DEVICE_PRESETS['iphone-17e'].h * (1515 / 874)),
+    },
+    {
+      key: 'ipad-air',
+      preset: DEVICE_PRESETS['ipad-air'],
+      // Synthetic macOS-pt size for iPad Air 13-inch.
+      macOSPtW: Math.round(DEVICE_PRESETS['ipad-air'].w * (697 / 402)),
+      macOSPtH: Math.round(DEVICE_PRESETS['ipad-air'].h * (1515 / 874)),
+    },
+  ] as const;
+
+  it.each(deviceCases)(
+    'dispatches tap at correct iOS-pt coordinates for $key',
+    async ({ preset, macOSPtW, macOSPtH }) => {
+      // AX frame: 50% through the macOS content area on each axis.
+      const axX = macOSPtW * 0.5;
+      const axY = macOSPtH * 0.5;
+      const node = makeNode({ frame: { x: axX - 10, y: axY - 10, width: 20, height: 20 } });
+      const queryResultWithMacOSPt = {
+        ...makeQueryResult([node]),
+        deviceContentMacOSPt: { width: macOSPtW, height: macOSPtH },
+      };
+      mockQuery.mockResolvedValue(queryResultWithMacOSPt);
+      mockGetDevice.mockResolvedValue({
+        name: preset.name,
+        udid: 'test-device-id',
+        state: 'Booted' as const,
+        isAvailable: true,
+        runtime: '',
+        runtimeVersion: '',
+      });
+      const warnSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+      const result = await handler('session', { label: 'Login', timeout: 0 });
+      const body = JSON.parse(result.content[0].text);
+
+      expect(body.status).toBe('tapped');
+
+      // Expected iOS-pt center: axCenter * (iOSPt / macOSPt) = 50% of iOSPt
+      const expectedX = axX * (preset.w / macOSPtW);
+      const expectedY = axY * (preset.h / macOSPtH);
+      expect(body.coordinates.x).toBeCloseTo(expectedX, 1);
+      expect(body.coordinates.y).toBeCloseTo(expectedY, 1);
+
+      const tapCall = mockTap.mock.calls[0];
+      expect(tapCall[1]).toBeCloseTo(expectedX, 1);
+      expect(tapCall[2]).toBeCloseTo(expectedY, 1);
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringMatching(/macOS-pt→iOS-pt conversion applied/),
+      );
+      warnSpy.mockRestore();
+    },
+  );
+});
+
+// ── WU4: explicit non-conversion regressions ──────────────────────────────────
+
+describe('app_tap_element — explicit non-conversion regressions (#693 WU4)', () => {
+  it('uses raw frame center when deviceContentMacOSPt is undefined (legacy bridge backward compat)', async () => {
+    // Simulates a bridge that does not emit deviceContentMacOSPt — the
+    // legacy path must not apply any scaling whatsoever.
+    const node = makeNode({ frame: { x: 100, y: 200, width: 200, height: 44 } });
+    // makeQueryResult produces a result with no deviceContentMacOSPt field.
+    mockQuery.mockResolvedValue(makeQueryResult([node]));
+    // Even if a valid device is in the preset table, no conversion should run.
+    mockGetDevice.mockResolvedValue({
+      name: 'iPhone 17 Pro',
+      udid: 'test-device-id',
+      state: 'Booted' as const,
+      isAvailable: true,
+      runtime: '',
+      runtimeVersion: '',
+    });
+    const warnSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = await handler('session', { label: 'Login', timeout: 0 });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(body.status).toBe('tapped');
+    // Raw center: 100 + 200/2 = 200, 200 + 44/2 = 222 — must not be scaled.
+    expect(body.coordinates).toEqual({ x: 200, y: 222 });
+    expect(mockTap).toHaveBeenCalledWith('test-device-id', 200, 222, undefined);
+    // Conversion log line must NOT appear.
+    expect(warnSpy).not.toHaveBeenCalledWith(
+      expect.stringMatching(/macOS-pt→iOS-pt conversion applied/),
+    );
+    warnSpy.mockRestore();
+  });
+
+  it('uses raw frame center when iOS-pt size lookup returns null (unknown device)', async () => {
+    // Simulates a bridge that emits deviceContentMacOSPt but the simulator
+    // device name does not match any DEVICE_PRESETS entry — conversion must
+    // be skipped, not produce a wrong scaled result.
+    const node = makeNode({ frame: { x: 100, y: 200, width: 200, height: 44 } });
+    mockQuery.mockResolvedValue({
+      ...makeQueryResult([node]),
+      deviceContentMacOSPt: { width: 697, height: 1515 },
+    });
+    // getDevice returns null — simulates simctl failure or unknown device.
+    mockGetDevice.mockResolvedValue(null);
+
+    const result = await handler('session', { label: 'Login', timeout: 0 });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(body.status).toBe('tapped');
+    expect(body.coordinates).toEqual({ x: 200, y: 222 });
+    expect(mockTap).toHaveBeenCalledWith('test-device-id', 200, 222, undefined);
   });
 });
 

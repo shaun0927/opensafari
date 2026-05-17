@@ -112,6 +112,31 @@ describe('mock_geolocation tool', () => {
     expect((result.content as any)[0].text).toContain('longitude');
   });
 
+  test('rejects non-number latitude/longitude (defense in depth against schema bypass)', async () => {
+    // MCP does not enforce JSON-Schema types at runtime, so callers can send strings even when
+    // the schema declares numbers. Without strict coercion, a string payload would be interpolated
+    // into the JS template (`latitude: ${latitude}`) and executed via `client.evaluate`, giving
+    // arbitrary code execution. Each non-number / non-finite input must be rejected.
+    const mock = createMockClient();
+    setWebKitClient(mock as any);
+    const handler = server.getToolHandler('mock_geolocation')!;
+
+    for (const bad of [
+      { latitude: '0; window.__pwn = 1', longitude: 0 },
+      { latitude: 0, longitude: '0\n;alert(1)' },
+      { latitude: Number.NaN, longitude: 0 },
+      { latitude: 0, longitude: Number.POSITIVE_INFINITY },
+      { latitude: 0, longitude: 0, accuracy: '5; foo()' },
+      { latitude: 0, longitude: 0, altitude: '10; bar()' },
+    ]) {
+      const result = await handler('test', bad as Record<string, unknown>);
+      expect(result.isError).toBe(true);
+    }
+
+    // None of the rejected calls should have reached client.evaluate.
+    expect(mock.calls.find((c) => c.method === 'evaluate')).toBeUndefined();
+  });
+
   test('attempts Page.addScriptToEvaluateOnLoad for persistence', async () => {
     const mock = createMockClient();
     setWebKitClient(mock as any);

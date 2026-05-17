@@ -1,13 +1,17 @@
 import { MCPServer } from '../mcp-server';
 import { SimctlExecutor } from '../simulator/simctl';
 import { resolveDeviceId } from './native-app-helpers';
+import {
+  captureLogsWindow,
+  type CaptureLogsOptions,
+} from '../observability/capture-logs-window';
 
 export function registerAppDeeplinkTool(server: MCPServer): void {
   server.registerTool(
     {
       name: 'app_deeplink',
       description:
-        'Open deep links or universal links in the iOS Simulator. Supports custom URL schemes (myapp://path) and universal links (https://...).',
+        'Open deep links or universal links in the iOS Simulator. Supports custom URL schemes (myapp://path) and universal links (https://...). Optionally returns unified-log entries around the open event via `captureLogs` (see docs/recipes/universal-link-channels.md).',
       inputSchema: {
         type: 'object' as const,
         properties: {
@@ -18,6 +22,19 @@ export function registerAppDeeplinkTool(server: MCPServer): void {
           deviceId: {
             type: 'string',
             description: 'Simulator UDID (uses active device if omitted)',
+          },
+          captureLogs: {
+            type: 'object',
+            description:
+              'If provided, synchronously captures os_log entries around the deep-link open. Collection stops after `silenceMs` with no new matching entry, or `maxDurationMs` elapses.',
+            properties: {
+              bundleId: { type: 'string' },
+              level: { type: 'string', enum: ['default', 'info', 'debug', 'error', 'fault'] },
+              search: { type: 'string' },
+              prerollMs: { type: 'number' },
+              silenceMs: { type: 'number' },
+              maxDurationMs: { type: 'number' },
+            },
           },
         },
         required: ['url'],
@@ -58,13 +75,25 @@ export function registerAppDeeplinkTool(server: MCPServer): void {
 
       try {
         const simctl = new SimctlExecutor();
+        const preOpenAt = Date.now();
         await simctl.exec(['openurl', deviceId, url]);
+
+        const result: Record<string, unknown> = {
+          url,
+          deviceId,
+          openedAt: new Date(preOpenAt).toISOString(),
+        };
+
+        const captureLogsOpts = params.captureLogs as CaptureLogsOptions | undefined;
+        if (captureLogsOpts && typeof captureLogsOpts === 'object') {
+          result.logs = await captureLogsWindow(deviceId, preOpenAt, captureLogsOpts, { simctl });
+        }
 
         return {
           content: [
             {
               type: 'text' as const,
-              text: JSON.stringify({ url, deviceId, openedAt: new Date().toISOString() }),
+              text: JSON.stringify(result),
             },
           ],
         };

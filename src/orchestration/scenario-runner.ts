@@ -1,8 +1,11 @@
 import { SimulatorPool, PooledSimulator } from '../simulator/pool';
+import { ActionTraceRecorder } from '../observability/action-trace';
 
 export interface TestScenario {
   name: string;
   steps: TestStep[];
+  /** Optional JSON trace artifact path for action-level live-validation evidence. */
+  tracePath?: string;
 }
 
 export interface TestStep {
@@ -44,16 +47,34 @@ export class ScenarioRunner {
   async run(scenario: TestScenario): Promise<ScenarioResult> {
     const startTime = Date.now();
     const stepResults: StepResult[] = [];
+    const trace = scenario.tracePath ? new ActionTraceRecorder(scenario.name) : null;
     let allPassed = true;
 
     for (let i = 0; i < scenario.steps.length; i++) {
       const step = scenario.steps[i];
       const result = await this.executeStep(i, step);
+      for (const device of result.devices) {
+        trace?.record({
+          action: `${step.action}:${i}`,
+          status: device.passed ? 'passed' : 'failed',
+          context: step.action === 'navigate' || step.action === 'assert' ? 'webkit' : 'orchestration',
+          deviceId: device.deviceId,
+          startedAtMs: startTime + Math.max(0, Date.now() - startTime - device.timing),
+          endedAtMs: startTime + Math.max(0, Date.now() - startTime),
+          timeoutMs: step.timeout,
+          error: device.error,
+          metadata: { device: device.device, result: device.result },
+        });
+      }
       stepResults.push(result);
       if (!result.passed) {
         allPassed = false;
         // Continue executing remaining steps even on failure
       }
+    }
+
+    if (trace && scenario.tracePath) {
+      await trace.write(scenario.tracePath);
     }
 
     const duration = Date.now() - startTime;

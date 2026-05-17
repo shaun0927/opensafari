@@ -1,0 +1,233 @@
+name: Omofictions-App private-route QA
+
+# Scripted QA lane that closes box 8 of #34. See docs/qa/omofictions-app.md
+# for the full environment contract. Non-runtime — only drives an
+# already-built Omofictions-App artefact through opensafari's MCP bridge.
+#
+# Trigger policy (per #44 Clarification 4):
+#   - workflow_dispatch only until a self-hosted runner with Xcode 26.4 +
+#     simulator is available and 3 consecutive manual-trigger runs have
+#     passed. Nightly schedule is added in a follow-up PR that also flips
+#     the workflow from advisory to required.
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_url:
+        description: 'Signed URL to the Omofictions-App `.app.zip` build artefact.'
+        required: true
+      build_sha:
+        description: 'Expected SHA256 of the downloaded artefact (64 hex chars).'
+        required: true
+      deeplinks_url:
+        description: 'Signed URL to the omofictions_deeplinks_qa.json manifest.'
+        required: true
+      no_act:
+        description: 'Run the QA lane in selector-discovery mode (--no-act).'
+        type: boolean
+        default: false
+  pull_request:
+    # Path-guard job only. It enforces #44 Clarification 5 mechanically on
+    # every PR that touches this workflow or its scripts/docs. The full QA
+    # run never fires on PRs — that would require a build artefact that is
+    # not guaranteed to be available.
+    paths:
+      - '.github/workflows/omofictions-qa.yml'
+      - 'scripts/qa/**'
+      - 'docs/qa/**'
+
+jobs:
+  # -------------------------------------------------------------------------
+  # Scope-boundary path guard.
+  #
+  # Per #44 Clarification 5, a PR that closes #44 (or extends the QA lane)
+  # must touch only docs/qa/**, scripts/qa/**, this workflow, or .gitignore.
+  # If any PR that edits the QA lane also edits src/** or tests/**, the
+  # change crosses the scope boundary and must be broken out into a
+  # separate PR that is reviewed on its own merits.
+  # -------------------------------------------------------------------------
+  path-guard:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Reject runtime-code changes in QA-lane PRs
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          changed=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
+          echo "Changed files in this PR:"
+          echo "$changed"
+          offenders=$(echo "$changed" | grep -E '^(src/|tests/)' || true)
+          if [ -n "$offenders" ]; then
+            echo ""
+            echo "::error::QA-lane PRs must not touch src/** or tests/**."
+            echo "::error::Offending files:"
+            echo "$offenders" | sed 's/^/::error::  /'
+            echo "::error::See docs/qa/omofictions-app.md scope boundary and #44 Clarification 5."
+            exit 1
+          fi
+          echo "Path-guard OK: no runtime code touched."
+
+  # -------------------------------------------------------------------------
+  # Full QA lane — only fires on manual dispatch.
+  #
+  # Runner contract: self-hosted macOS host carrying Xcode 26.4 and an
+  # iPhone 16 / iOS 26.4 simulator. If the 'simulator' label is absent, the
+  # run fails fast — there is no fallback to a github-hosted runner because
+  # macos-14-large is not guaranteed to ship Xcode 26.4 (per #44
+  # Clarification 4).
+  # -------------------------------------------------------------------------
+  qa-lane:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: [self-hosted, macOS, xcode-26.4, simulator]
+    timeout-minutes: 20
+    env:
+      OMOFICTIONS_QA_BUILD_SHA: ${{ inputs.build_sha }}
+      OMOFICTIONS_QA_EMAIL: ${{ secrets.OMOFICTIONS_QA_EMAIL }}
+      OMOFICTIONS_QA_PASSWORD: ${{ secrets.OMOFICTIONS_QA_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve simulator UDID
+        id: sim
+        run: |
+          set -euo pipefail
+          udid=$(xcrun simctl list devices --json \
+            | /usr/bin/python3 -c "
+          import json, sys
+          data = json.load(sys.stdin)
+          for runtime, devices in data.get('devices', {}).items():
+              if 'iOS-26-4' not in runtime:
+                  continue
+              for d in devices:
+                  if d.get('name') == 'iPhone 16' and d.get('isAvailable'):
+                      print(d['udid']); sys.exit(0)
+          sys.exit(1)
+          ")
+          echo "udid=$udid" >> "$GITHUB_OUTPUT"
+          xcrun simctl bootstatus "$udid" -b
+          xcrun simctl storekit clear "$udid" || true
+
+      - name: Download build artefact
+        id: build
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/omofictions"
+          curl --fail --location --silent --show-error \
+            -o "$RUNNER_TEMP/omofictions/build.zip" \
+            "${{ inputs.build_url }}"
+          actual_sha=$(shasum -a 256 "$RUNNER_TEMP/omofictions/build.zip" | awk '{print $1}')
+          expected_sha="${{ inputs.build_sha }}"
+          if [ "$actual_sha" != "$expected_sha" ]; then
+            echo "::error::build SHA256 mismatch (expected=$expected_sha actual=$actual_sha)"
+            exit 1
+          fi
+          unzip -q "$RUNNER_TEMP/omofictions/build.zip" -d "$RUNNER_TEMP/omofictions/unpacked"
+          app_path=$(find "$RUNNER_TEMP/omofictions/unpacked" -maxdepth 3 -name '*.app' | head -n1)
+          if [ -z "$app_path" ]; then
+            echo "::error::no .app bundle found inside build.zip"
+            exit 1
+          fi
+          echo "app_path=$app_path" >> "$GITHUB_OUTPUT"
+
+      - name: Download deeplink manifest
+        id: manifest
+        run: |
+          set -euo pipefail
+          curl --fail --location --silent --show-error \
+            -o "$RUNNER_TEMP/omofictions/deeplinks.json" \
+            "${{ inputs.deeplinks_url }}"
+          echo "path=$RUNNER_TEMP/omofictions/deeplinks.json" >> "$GITHUB_OUTPUT"
+
+      - name: Install and launch app
+        run: |
+          ./scripts/qa/omofictions-setup.sh \
+            --device-id "${{ steps.sim.outputs.udid }}" \
+            --build-path "${{ steps.build.outputs.app_path }}"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install opensafari and start MCP bridge
+        run: |
+          npm ci --force
+          npm run build
+          # Streamable HTTP transport on the default port used by the QA
+          # lane script. Started in the background and given 3 s to bind.
+          OMOFICTIONS_BRIDGE_PORT=57337 node dist/cli/index.js \
+            --transport http --port 57337 &
+          echo $! > "$RUNNER_TEMP/omofictions/bridge.pid"
+          sleep 3
+
+      - name: Run scripted private-route QA lane
+        id: lane
+        run: |
+          set +e
+          node ./scripts/qa/omofictions-private-route.mjs \
+            --device-id "${{ steps.sim.outputs.udid }}" \
+            --deeplinks "${{ steps.manifest.outputs.path }}" \
+            ${{ inputs.no_act == true && '--no-act' || '' }} \
+            > "$RUNNER_TEMP/omofictions/run.log"
+          code=$?
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          cat "$RUNNER_TEMP/omofictions/run.log"
+          exit "$code"
+
+      - name: Capture simulator log
+        if: always()
+        run: |
+          set +e
+          xcrun simctl spawn "${{ steps.sim.outputs.udid }}" \
+            log show --style syslog --last 3m \
+            > "$RUNNER_TEMP/omofictions/simulator-log.txt" || true
+
+      - name: Write device-meta
+        if: always()
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/omofictions/device-meta.json" <<JSON
+          {
+            "udid": "${{ steps.sim.outputs.udid }}",
+            "iosRuntime": "iOS 26.4",
+            "xcodeVersion": "26.4",
+            "opensafariSha": "${{ github.sha }}",
+            "buildSha": "${{ inputs.build_sha }}",
+            "noAct": ${{ inputs.no_act == true }}
+          }
+          JSON
+
+      - name: Stop MCP bridge
+        if: always()
+        run: |
+          pid_file="$RUNNER_TEMP/omofictions/bridge.pid"
+          if [ -f "$pid_file" ]; then
+            kill "$(cat "$pid_file")" 2>/dev/null || true
+          fi
+
+      - name: Package evidence artefact
+        if: always()
+        run: |
+          ts=$(date -u +"%Y-%m-%dT%H-%M-%SZ")
+          mkdir -p "$RUNNER_TEMP/omofictions/screenshots"
+          (
+            cd "$RUNNER_TEMP/omofictions" \
+              && zip -qr "artefact-$ts.zip" \
+                run.log simulator-log.txt device-meta.json screenshots
+          )
+          echo "artefact_path=$RUNNER_TEMP/omofictions/artefact-$ts.zip" >> "$GITHUB_ENV"
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: omofictions-qa-artefact
+          path: ${{ env.artefact_path }}
+          if-no-files-found: error
+          retention-days: 30

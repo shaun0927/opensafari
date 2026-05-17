@@ -14,7 +14,7 @@
  * when the elapsed-ms stream is dominated by failures.
  */
 
-import type { InputBackendKind } from '../tools/native-input-backend';
+import type { InputBackendKind } from '../input/backend';
 import type { InputOperation, InputTelemetryEvent } from './input-telemetry';
 
 /** Max samples retained per `${backendKind}:${operation}` key. */

@@ -3,7 +3,7 @@
  * Decouples the wire protocol (stdio, HTTP) from the MCP protocol logic.
  */
 
-import { MCPResponse } from '../types/mcp';
+import { MCPMessageContext, MCPResponse } from '../types/mcp';
 
 /**
  * Abstraction over the wire protocol (stdio or HTTP).
@@ -16,7 +16,7 @@ export interface MCPTransport {
    * The handler returns a response for requests (those with an id),
    * or null for notifications (no id).
    */
-  onMessage(handler: (msg: Record<string, unknown>) => Promise<MCPResponse | null>): void;
+  onMessage(handler: (msg: Record<string, unknown>, context?: MCPMessageContext) => Promise<MCPResponse | null>): void;
 
   /**
    * Send a JSON-RPC response or notification to the client.
@@ -27,7 +27,7 @@ export interface MCPTransport {
   send(response: MCPResponse): void;
 
   /** Start listening for messages (bind port or attach readline). */
-  start(): void;
+  start(): void | Promise<void>;
 
   /** Graceful shutdown. */
   close(): Promise<void>;
@@ -37,6 +37,10 @@ export type TransportMode = 'stdio' | 'http';
 
 export interface TransportOptions {
   port?: number;
+  host?: string;
+  authToken?: string;
+  insecure?: boolean;
+  allowedOrigins?: string[];
 }
 
 /**
@@ -46,7 +50,7 @@ export async function createTransport(mode: TransportMode, options?: TransportOp
   if (mode === 'http') {
     // Use dynamic import to avoid loading HTTP module when not needed
     const { HTTPTransport } = await import('./http');
-    return new HTTPTransport(options?.port || 3100);
+    return new HTTPTransport(options?.port || 3100, options);
   }
   const { StdioTransport } = await import('./stdio');
   return new StdioTransport();

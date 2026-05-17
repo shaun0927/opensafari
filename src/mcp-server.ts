@@ -14,13 +14,20 @@ import {
   MCPToolDefinition,
   ToolHandler,
   MCPErrorCodes,
+  MCPMessageContext,
 } from './types/mcp';
 import { createTransport, MCPTransport, TransportMode } from './transports';
 import { TOOL_TIERS, getToolTier } from './config/tool-tiers';
 import { BrowserBackend } from './types/browser-backend';
 import { logAuditEntry } from './security/audit-logger';
+import {
+  buildHttpHighRiskToolError,
+  getHighRiskToolMetadata,
+  parseHttpHighRiskToolsEnabled,
+} from './security/high-risk-tools';
 import { getSessionManager } from './session-manager';
 import { getVersion } from './version';
+import { resolveHandler, toolRegistry } from './tools/registry';
 
 // Re-export so callers can use canonical names without knowing the internal alias
 export type { MCPToolDefinition as ToolDefinition, ToolHandler };
@@ -82,7 +89,10 @@ export function setWebKitClient(client: BrowserBackend | null, deviceId?: string
 
 interface RegisteredTool {
   definition: MCPToolDefinition;
-  handler: ToolHandler;
+  /** Eagerly-provided handler (registerTool path). */
+  handler?: ToolHandler;
+  /** When true, handler is resolved lazily from the tool registry on first call. */
+  lazy?: boolean;
   tier: number;
 }
 
@@ -95,6 +105,16 @@ export interface MCPServerOptions {
   transport?: TransportMode;
   /** HTTP port — only relevant when transport === 'http'. */
   port?: number;
+  /** HTTP host — only relevant when transport === 'http'. Defaults to loopback. */
+  host?: string;
+  /** Bearer token required for HTTP /mcp requests. */
+  authToken?: string;
+  /** Explicitly disable HTTP /mcp token auth for local-only insecure use. */
+  httpInsecure?: boolean;
+  /** Extra allowed browser origins for HTTP /mcp CORS. */
+  allowedOrigins?: string[];
+  /** Allow high-risk code execution / credential movement tools over HTTP. */
+  httpHighRiskTools?: boolean;
 }
 
 export class MCPServer {
@@ -102,6 +122,7 @@ export class MCPServer {
   private transport: MCPTransport | null = null;
   private currentTier: number = 2;
   private auditLogEnabled = false;
+  private httpHighRiskToolsEnabled = false;
 
   // ------------------------------------------------------------------
   // Tool registration
@@ -112,6 +133,44 @@ export class MCPServer {
     this.tools.set(definition.name, { definition, handler, tier });
   }
 
+  /**
+   * Register a tool whose handler is loaded lazily from the tool registry on
+   * first invocation.  The schema and tier are available immediately so
+   * tools/list works without triggering any dynamic import.
+   */
+  registerLazyTool(definition: MCPToolDefinition): void {
+    const entry = toolRegistry.get(definition.name);
+    if (!entry) {
+      throw new Error(
+        `Cannot register lazy tool "${definition.name}": ` +
+        `no entry found in toolRegistry. Call defineToolEntry() first.`,
+      );
+    }
+    // Warn if caller-provided definition drifts from the registry's source of truth.
+    if (
+      definition.description !== entry.definition.description ||
+      JSON.stringify(definition.inputSchema) !== JSON.stringify(entry.definition.inputSchema)
+    ) {
+      console.error(
+        `[mcp-server] registerLazyTool: caller definition for "${definition.name}" differs from toolRegistry entry. ` +
+        `Using registry version.`,
+      );
+    }
+    const tier = getToolTier(definition.name);
+    // Use the registry's definition as the single source of truth for schema.
+    this.tools.set(definition.name, { definition: entry.definition, lazy: true, tier });
+  }
+
+  /**
+   * Returns the handler implementation for a registered tool, or
+   * undefined if no tool with that name is registered OR if the tool
+   * is lazy and has not yet been invoked.
+   *
+   * Lazy tools are registered with their schema only; the handler is
+   * resolved on first tools/call. Callers that need the handler before
+   * an invocation should wait for the first tools/call to complete or
+   * use the async path through handleToolsCall.
+   */
   getToolHandler(name: string): ToolHandler | undefined {
     return this.tools.get(name)?.handler;
   }
@@ -126,10 +185,19 @@ export class MCPServer {
 
   async start(options: MCPServerOptions = {}): Promise<void> {
     const mode: TransportMode = options.transport ?? 'stdio';
-    this.transport = await createTransport(mode, { port: options.port });
+    this.httpHighRiskToolsEnabled =
+      options.httpHighRiskTools === true ||
+      parseHttpHighRiskToolsEnabled(process.env.OPENSAFARI_HTTP_ENABLE_HIGH_RISK_TOOLS);
+    this.transport = await createTransport(mode, {
+      port: options.port,
+      host: options.host,
+      authToken: options.authToken,
+      insecure: options.httpInsecure,
+      allowedOrigins: options.allowedOrigins,
+    });
 
-    this.transport.onMessage((msg) => this.handleMessage(msg));
-    this.transport.start();
+    this.transport.onMessage((msg, context) => this.handleMessage(msg, context));
+    await this.transport.start();
 
     console.error(`[OpenSafari] MCP server started (${mode})`);
   }
@@ -164,6 +232,7 @@ export class MCPServer {
 
   private async handleMessage(
     msg: Record<string, unknown>,
+    context: MCPMessageContext = { transport: 'stdio' },
   ): Promise<MCPResponse | null> {
     // Notifications have no id — process but return null (no response)
     const hasId = 'id' in msg && msg.id !== undefined;
@@ -195,10 +264,10 @@ export class MCPServer {
         return this.handleInitialize(request);
 
       case 'tools/list':
-        return this.handleToolsList(request);
+        return this.handleToolsList(request, context);
 
       case 'tools/call':
-        return this.handleToolsCall(request);
+        return this.handleToolsCall(request, context);
 
       default:
         return {
@@ -233,9 +302,10 @@ export class MCPServer {
     };
   }
 
-  private handleToolsList(request: MCPRequest): MCPResponse {
+  private handleToolsList(request: MCPRequest, context: MCPMessageContext): MCPResponse {
     const visibleTools = Array.from(this.tools.values())
       .filter((t) => t.tier <= this.currentTier)
+      .filter((t) => this.shouldAdvertiseTool(t.definition.name, context))
       .map((t) => t.definition);
 
     return {
@@ -245,7 +315,13 @@ export class MCPServer {
     };
   }
 
-  private async handleToolsCall(request: MCPRequest): Promise<MCPResponse> {
+  private shouldAdvertiseTool(name: string, context: MCPMessageContext): boolean {
+    if (context.transport !== 'http') return true;
+    if (this.httpHighRiskToolsEnabled) return true;
+    return getHighRiskToolMetadata(name) === undefined;
+  }
+
+  private async handleToolsCall(request: MCPRequest, context: MCPMessageContext): Promise<MCPResponse> {
     const params = request.params as
       | { name?: string; arguments?: Record<string, unknown> }
       | undefined;
@@ -276,15 +352,63 @@ export class MCPServer {
       };
     }
 
-    // Session ID: use Mcp-Session-Id from context if available; fall back to
-    // a stable placeholder until the HTTP transport propagates it here.
-    const sessionId = (request.params as Record<string, unknown> | undefined)
-      ?._sessionId as string | undefined ?? 'default';
+    const sessionId = context.sessionId ?? 'default';
+    const highRiskTool = getHighRiskToolMetadata(name);
+    const isHighRiskHttp = context.transport === 'http' && highRiskTool !== undefined;
+
+    if (isHighRiskHttp && !this.httpHighRiskToolsEnabled) {
+      logAuditEntry(name, sessionId, args, undefined, 'denied');
+      return {
+        jsonrpc: '2.0',
+        id: request.id,
+        result: {
+          content: [{
+            type: 'text',
+            text: `Error: ${buildHttpHighRiskToolError(name)}`,
+          }],
+          isError: true,
+        },
+      };
+    }
+
+    // Resolve the handler — either eager (already attached) or lazy (registry).
+    let handler: ToolHandler;
+    if (tool.handler) {
+      handler = tool.handler;
+    } else if (tool.lazy) {
+      try {
+        handler = await resolveHandler(name);
+        tool.handler = handler;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (this.auditLogEnabled) {
+          logAuditEntry(name, sessionId, args);
+        }
+        return {
+          jsonrpc: '2.0',
+          id: request.id,
+          error: {
+            code: MCPErrorCodes.INTERNAL_ERROR,
+            message: `Failed to load handler for tool "${name}": ${msg}`,
+          },
+        };
+      }
+    } else {
+      // Should never happen — registerTool always sets handler.
+      return {
+        jsonrpc: '2.0',
+        id: request.id,
+        error: {
+          code: MCPErrorCodes.INTERNAL_ERROR,
+          message: `Internal error: no handler registered for tool "${name}"`,
+        },
+      };
+    }
 
     try {
-      const result: MCPResult = await tool.handler(sessionId, args);
-      if (this.auditLogEnabled) {
-        logAuditEntry(name, sessionId, args);
+      const result: MCPResult = await handler(sessionId, args);
+      if (this.auditLogEnabled || isHighRiskHttp) {
+        logAuditEntry(name, sessionId, args, undefined, result.isError ? 'error' : 'allowed');
       }
       return {
         jsonrpc: '2.0',
@@ -292,8 +416,8 @@ export class MCPServer {
         result,
       };
     } catch (err) {
-      if (this.auditLogEnabled) {
-        logAuditEntry(name, sessionId, args);
+      if (this.auditLogEnabled || isHighRiskHttp) {
+        logAuditEntry(name, sessionId, args, undefined, 'error');
       }
       const message = err instanceof Error ? err.message : String(err);
       return {

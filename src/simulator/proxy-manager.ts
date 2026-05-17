@@ -38,6 +38,8 @@ interface ManagedProxy {
 }
 
 const managed: Map<string, ManagedProxy> = new Map();
+/** In-flight proxy starts keyed by device so concurrent callers share one spawn. */
+const pendingStarts: Map<string, Promise<WebInspectorProxy>> = new Map();
 /** Ports reserved (in-use) by this manager across devices. */
 const reservedPorts: Set<number> = new Set();
 
@@ -95,17 +97,29 @@ export async function getProxyForDevice(deviceId: string): Promise<WebInspectorP
   const existing = managed.get(deviceId);
   if (existing) return existing.proxy;
 
-  const port = allocatePort(deviceId);
-  const proxy = new WebInspectorProxy({ port });
-  try {
-    await proxy.start({ targetUdid: deviceId });
-  } catch (err) {
-    reservedPorts.delete(port);
-    throw err;
-  }
+  const pending = pendingStarts.get(deviceId);
+  if (pending) return pending;
 
-  managed.set(deviceId, { proxy, deviceId, port });
-  return proxy;
+  const startPromise = (async () => {
+    const port = allocatePort(deviceId);
+    const proxy = new WebInspectorProxy({ port });
+    try {
+      await proxy.start({ targetUdid: deviceId });
+    } catch (err) {
+      reservedPorts.delete(port);
+      throw err;
+    }
+
+    managed.set(deviceId, { proxy, deviceId, port });
+    return proxy;
+  })();
+
+  pendingStarts.set(deviceId, startPromise);
+  try {
+    return await startPromise;
+  } finally {
+    pendingStarts.delete(deviceId);
+  }
 }
 
 /** Return the proxy for a device without starting a new one. */
@@ -115,6 +129,14 @@ export function peekProxyForDevice(deviceId: string): WebInspectorProxy | null {
 
 /** Stop and forget a device's proxy. No-op if none exists. */
 export async function stopProxyForDevice(deviceId: string): Promise<void> {
+  const pending = pendingStarts.get(deviceId);
+  if (pending) {
+    // Teardown may race with startup during parallel boot/retry flows. Wait for
+    // the in-flight start to settle so a proxy cannot register itself after a
+    // caller has already requested stop for this device.
+    await pending.catch(() => null);
+  }
+
   const entry = managed.get(deviceId);
   if (!entry) return;
   try {
@@ -128,7 +150,7 @@ export async function stopProxyForDevice(deviceId: string): Promise<void> {
 
 /** Stop every managed proxy. Used on process shutdown / from tests. */
 export async function stopAll(): Promise<void> {
-  const devices = Array.from(managed.keys());
+  const devices = Array.from(new Set([...managed.keys(), ...pendingStarts.keys()]));
   for (const id of devices) {
     await stopProxyForDevice(id);
   }
@@ -144,5 +166,6 @@ export function listManagedProxies(): Array<{ deviceId: string; port: number }> 
 /** Reset state. Test-only — does NOT stop running proxies. */
 export function resetProxyManagerState(): void {
   managed.clear();
+  pendingStarts.clear();
   reservedPorts.clear();
 }

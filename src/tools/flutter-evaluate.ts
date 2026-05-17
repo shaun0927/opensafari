@@ -67,10 +67,9 @@ export function registerFlutterEvaluateTool(server: MCPServer): void {
         }
         const expression = rawExpression;
 
-        // Security audit: log every evaluate call. Truncated to avoid
-        // huge payloads in the transport log.
-        const preview = expression.length > 200 ? `${expression.slice(0, 200)}…` : expression;
-        console.error(`[flutter_evaluate] audit: evaluating expression (len=${expression.length}): ${preview}`);
+        // Security audit: never log the expression body; the MCP audit log
+        // records a redacted argument summary when HTTP high-risk access is enabled.
+        console.error(`[flutter_evaluate] audit: evaluating expression (len=${expression.length})`);
 
         const scope: EvalScope = (params.scope as EvalScope | undefined) ?? 'root';
         if (scope !== 'root' && scope !== 'frame') {

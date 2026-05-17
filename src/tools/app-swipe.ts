@@ -8,6 +8,8 @@
 
 import { MCPServer, getWebKitClient } from '../mcp-server';
 import { resolveDeviceId, getInputBackend, runInputOp } from './native-input-utils';
+import { probeMobileContext } from './app-context';
+import { SimulatorManager } from '../simulator';
 
 /** Default swipe distance in points. */
 const DEFAULT_DISTANCE = 300;
@@ -72,6 +74,21 @@ export function registerAppSwipeNativeTool(server: MCPServer): void {
             type: 'number',
             description: `Swipe duration in seconds (default: ${DEFAULT_DURATION})`,
           },
+          expectedBundle: {
+            type: 'string',
+            description:
+              'Optional bundle identifier expected to remain foreground after the swipe settles.',
+          },
+          verifyContext: {
+            type: 'boolean',
+            description:
+              'When true, run a post-swipe context probe and include it in the response.',
+          },
+          settleMs: {
+            type: 'number',
+            description:
+              'Milliseconds to wait before probing the post-swipe context (default: 1200).',
+          },
           deviceId: {
             type: 'string',
             description: 'Simulator UDID (uses active device if omitted)',
@@ -88,6 +105,10 @@ export function registerAppSwipeNativeTool(server: MCPServer): void {
         const startY = (params.startY as number | undefined) ?? DEFAULT_CENTER_Y;
         const distance = (params.distance as number | undefined) ?? DEFAULT_DISTANCE;
         const duration = (params.duration as number | undefined) ?? DEFAULT_DURATION;
+        const expectedBundle = params.expectedBundle as string | undefined;
+        const verifyContext =
+          params.verifyContext === true || typeof expectedBundle === 'string';
+        const settleMs = (params.settleMs as number | undefined) ?? 1200;
 
         const validDirections: Direction[] = ['up', 'down', 'left', 'right'];
         if (!validDirections.includes(direction)) {
@@ -110,6 +131,34 @@ export function registerAppSwipeNativeTool(server: MCPServer): void {
           backend.swipe(deviceId, startX, startY, endX, endY, duration),
         );
 
+        const manager = new SimulatorManager();
+        let postInputContext;
+        let warning: string | undefined;
+        if (verifyContext) {
+          await new Promise((resolve) => setTimeout(resolve, settleMs));
+          try {
+            const probe = await probeMobileContext({ deviceId, expectedBundle, manager });
+            postInputContext = probe;
+            if (expectedBundle && probe.expectedBundleMatch !== 'matched') {
+              warning = JSON.stringify({
+                code: 'POST_SWIPE_CONTEXT_MISMATCH',
+                message:
+                  `Post-swipe context did not confirm expected bundle ${expectedBundle}. ` +
+                  `surface=${probe.surface}, match=${probe.expectedBundleMatch ?? 'unknown'}.`,
+                context: probe,
+              });
+            }
+          } catch (probeErr) {
+            const reason = probeErr instanceof Error ? probeErr.message : String(probeErr);
+            console.error(`[app_swipe_native] post-swipe context probe failed: ${reason}`);
+            warning = JSON.stringify({
+              code: 'POST_SWIPE_CONTEXT_PROBE_FAILED',
+              message: 'Post-swipe context probe failed.',
+              reason,
+            });
+          }
+        }
+
         return {
           content: [
             {
@@ -124,6 +173,8 @@ export function registerAppSwipeNativeTool(server: MCPServer): void {
                 deviceId,
                 backend: backend.kind,
                 _meta: meta,
+                postInputContext,
+                warning,
               }),
             },
           ],

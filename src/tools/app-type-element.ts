@@ -9,16 +9,83 @@
  * once focused).
  *
  * Works with any app including Flutter — no WebKit/DOM required.
+ *
+ * ## Keyboard-layout limitation (issue #639 Problem 1)
+ *
+ * When `backend: "auto"` (default), text is sent via raw HID keycodes
+ * that assume a US-ABC (QWERTY) software keyboard. If the simulator's
+ * active input source is non-Latin (Korean 2-Set, Japanese Kana, Chinese
+ * Pinyin, …) those keycodes are silently re-composed by the iOS IME into
+ * the corresponding script — producing garbage in the text field.
+ *
+ * There is currently no documented way to switch the simulator's input
+ * source programmatically from the host. Until a native switcher lands,
+ * use `backend: "pasteboard"` which round-trips via the simulator
+ * clipboard (Cmd+V) and is fully keyboard-layout-independent.
+ *
+ * When post-typing readback (`verifyAfterTyping: true`, or the legacy
+ * `verify: true` default) detects divergence AND the detected keyboard
+ * layout is non-Latin, the tool returns `isError: true` with:
+ *
+ *   { code: "TEXT_INPUT_LAYOUT_MISMATCH", expected, actual,
+ *     suggestedBackend: "pasteboard", detectedLayout }
+ *
+ * For Latin layouts where characters are dropped (different failure
+ * mode), see error code `TEXT_INPUT_DROPPED` (PR A / issue #639).
  */
+
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 
 import { MCPServer, getWebKitClient } from '../mcp-server';
 import { getAccessibilityBridge, ensureSemanticsActive } from '../native';
 import type { AXNode, AXQuery } from '../native';
 import { resolveDeviceId, getInputBackend, runInputOp } from './native-input-utils';
 import { tryPress } from './app-tap-element';
+import {
+  typeViaPasteboard,
+  isSecureFieldDescriptor,
+  type PasteNotAppliedError,
+} from './pasteboard-input';
+import { mismatchHint } from './keyboard-layout';
+
+const execFileAsync = promisify(execFile);
 
 const DEFAULT_TIMEOUT_MS = 5000;
 const DEFAULT_FOCUS_DELAY_MS = 150;
+const SUPPORTED_BACKENDS = ['auto', 'pasteboard'] as const;
+type TypeBackendChoice = (typeof SUPPORTED_BACKENDS)[number];
+
+/**
+ * Maximum number of characters of the observed AX value to echo back in
+ * `verify_reason`. The raw value can contain PII (email, password), so we
+ * cap the echo to the first few chars — enough to prove mismatch without
+ * leaking the rest of the field. The expected-text side is truncated
+ * symmetrically.
+ */
+const VERIFY_ECHO_LEN = 24;
+
+/**
+ * Post-typing verification result. Attached to the tool response so callers
+ * can distinguish a real typed value from a silent IME transliteration
+ * (issue #39 Tier 3).
+ */
+interface VerifyResult {
+  verified: boolean | 'unknown';
+  verify_method:
+    | 'ax-value-readback'
+    | 'ax-value-not-readable'
+    | 'skipped-non-simhid'
+    | 'readback-failed';
+  verify_reason?: string;
+  /**
+   * Raw AX-value observed at readback. Populated only when the readback
+   * actually succeeded (`verify_method === 'ax-value-readback'`); used by the
+   * caller to attach structured error payloads (e.g. TEXT_INPUT_LAYOUT_MISMATCH
+   * — issue #639 Problem 1) without re-querying the AX bridge.
+   */
+  observed?: string;
+}
 
 export function registerAppTypeElementTool(server: MCPServer): void {
   server.registerTool(
@@ -61,9 +128,35 @@ export function registerAppTypeElementTool(server: MCPServer): void {
             type: 'number',
             description: `Ms to wait between tap-to-focus and typing (default: ${DEFAULT_FOCUS_DELAY_MS}). Increase for slow keyboards.`,
           },
+          backend: {
+            type: 'string',
+            enum: [...SUPPORTED_BACKENDS],
+            description:
+              'Typing backend. "auto" (default) uses the HID/simhid path — fast, but bound to the simulator\'s active software keyboard layout and silently transliterates through non-Latin keyboards (see #39). "pasteboard" round-trips via the simulator pasteboard + Cmd+V, bypassing the software keyboard entirely — Unicode-safe (CJK, emoji), keyboard-layout-independent.',
+          },
+          restorePasteboard: {
+            type: 'boolean',
+            description:
+              'When backend="pasteboard": restore the original simulator pasteboard after typing (default: true).',
+          },
+          autoAcceptPastePermission: {
+            type: 'boolean',
+            description:
+              'When backend="pasteboard": auto-accept the iOS 16+ paste-permission dialog if it appears (default: true).',
+          },
           deviceId: {
             type: 'string',
             description: 'Simulator UDID (uses active device if omitted)',
+          },
+          verify: {
+            type: 'boolean',
+            description:
+              'Opt out of post-typing readback verification (default: true). When false the tool reports `verified: "unknown"` without reading back the AX value.',
+          },
+          perKeyDelayMs: {
+            type: 'number',
+            description:
+              'When backend resolves to simhid (HID keyboard): inserts an inter-character pause between consecutive key sends. Default 0 (no pause). Required for segmented OTP-style fields (e.g. 6-cell verify-code inputs in Flutter) that drop characters when keys arrive faster than the field can advance focus. Recommended: 80–150 ms for 6-digit OTP inputs.',
           },
         },
         required: ['text'],
@@ -74,6 +167,12 @@ export function registerAppTypeElementTool(server: MCPServer): void {
       const identifier = params.identifier as string | undefined;
       const label = params.label as string | undefined;
       const role = params.role as string | undefined;
+      const backendChoice = ((params.backend as string | undefined) ?? 'auto') as TypeBackendChoice;
+      if (!SUPPORTED_BACKENDS.includes(backendChoice)) {
+        return jsonError(
+          `backend must be one of: ${SUPPORTED_BACKENDS.join(', ')} (got "${backendChoice}")`,
+        );
+      }
 
       if (typeof textToType !== 'string' || textToType.length === 0) {
         return jsonError('text must be a non-empty string');
@@ -89,6 +188,15 @@ export function registerAppTypeElementTool(server: MCPServer): void {
         const index = (params.index as number | undefined) ?? 0;
         const timeout = (params.timeout as number | undefined) ?? DEFAULT_TIMEOUT_MS;
         const focusDelay = (params.focusDelay as number | undefined) ?? DEFAULT_FOCUS_DELAY_MS;
+        const verifyOptIn =
+          typeof params.verify === 'boolean' ? (params.verify as boolean) : true;
+        const perKeyDelayMsRaw = params.perKeyDelayMs;
+        const perKeyDelayMs =
+          typeof perKeyDelayMsRaw === 'number' &&
+          Number.isFinite(perKeyDelayMsRaw) &&
+          perKeyDelayMsRaw > 0
+            ? perKeyDelayMsRaw
+            : 0;
 
         await ensureSemanticsActive(deviceId);
 
@@ -161,6 +269,93 @@ export function registerAppTypeElementTool(server: MCPServer): void {
         }
 
         const backend = await getInputBackend(deviceId, getWebKitClient(deviceId));
+        const elementDescriptor = {
+          role: match.role,
+          label: match.label,
+          identifier: match.identifier,
+          path: match.path,
+        };
+
+        if (backendChoice === 'pasteboard') {
+          // Focus first (via AX press when possible, else coordinate tap).
+          if (!focusedViaAXPress) {
+            await backend.tap(deviceId, centerX, centerY);
+          }
+          if (focusDelay > 0) {
+            await sleep(focusDelay);
+          }
+
+          const restorePasteboard = (params.restorePasteboard as boolean | undefined) ?? true;
+          const autoAcceptPastePermission =
+            (params.autoAcceptPastePermission as boolean | undefined) ?? true;
+
+          let pasteResult;
+          try {
+            // Honour `verify: false` on the pasteboard backend (#760). When
+            // the caller opts out of readback, do not forward `expected` /
+            // `focusedElementPath` — that is what triggers the AX re-inspect
+            // in `typeViaPasteboard`. Previously this opt-out was silently
+            // ignored for pasteboard (only the simhid path honoured it).
+            pasteResult = await typeViaPasteboard(deviceId, textToType, {
+              restorePasteboard,
+              autoAcceptPastePermission,
+              ...(verifyOptIn
+                ? { expected: textToType, focusedElementPath: match.path }
+                : {}),
+            });
+          } catch (err) {
+            if (err instanceof Error && (err as unknown as PasteNotAppliedError).code === 'PASTE_NOT_APPLIED') {
+              const e = err as unknown as PasteNotAppliedError;
+              return {
+                content: [
+                  {
+                    type: 'text' as const,
+                    text: JSON.stringify({
+                      error: 'PASTE_NOT_APPLIED',
+                      code: e.code,
+                      expected: e.expected,
+                      actual: e.actual,
+                      permissionDialogObserved: e.permissionDialogObserved,
+                      element: elementDescriptor,
+                      deviceId,
+                    }),
+                  },
+                ],
+                isError: true,
+              };
+            }
+            throw err;
+          }
+
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: JSON.stringify({
+                  status: 'typed',
+                  element: elementDescriptor,
+                  coordinates: { x: centerX, y: centerY },
+                  length: textToType.length,
+                  backend: 'pasteboard',
+                  focusBackend: focusedViaAXPress ? 'ax-press' : backend.kind,
+                  pasteboardRestored: pasteResult.pasteboardRestored,
+                  permissionDialog: pasteResult.permissionDialog,
+                  permissionDialogMatchedLabel:
+                    pasteResult.permissionDialogMatchedLabel,
+                  elapsedMs: pasteResult.elapsedMs,
+                  deviceId,
+                  // Echoed when readback was skipped because the focused
+                  // element is an `AXSecureTextField` (password) whose AX
+                  // value is OS-masked. Lets callers distinguish "no
+                  // readback because secure field" from "no readback because
+                  // verify opted out" (issue #760).
+                  ...(pasteResult.secureField ? { secureField: true } : {}),
+                }),
+              },
+            ],
+          };
+        }
+
         const { meta } = await runInputOp(backend, deviceId, async () => {
           if (!focusedViaAXPress) {
             await backend.tap(deviceId, centerX, centerY);
@@ -168,31 +363,110 @@ export function registerAppTypeElementTool(server: MCPServer): void {
           if (focusDelay > 0) {
             await sleep(focusDelay);
           }
-          await backend.typeText(deviceId, textToType);
+          await backend.typeText(deviceId, textToType, perKeyDelayMs);
         });
 
-        return {
-          content: [
-            {
-              type: 'text' as const,
-              text: JSON.stringify({
-                status: 'typed',
-                element: {
-                  role: match.role,
-                  label: match.label,
-                  identifier: match.identifier,
-                  path: match.path,
-                },
-                coordinates: { x: centerX, y: centerY },
-                length: textToType.length,
-                backend: backend.kind,
-                focusBackend: focusedViaAXPress ? 'ax-press' : backend.kind,
-                deviceId,
-                _meta: meta,
-              }),
-            },
-          ],
+        // Tier-3 readback verification (issue #39). We only run the readback
+        // when the dispatch tier was `simhid`, because that is the backend
+        // that silently transliterates on non-Latin keyboards. Tiers that
+        // bypass the software keyboard entirely (flutter-vm, webkit) don't
+        // have the transliteration failure mode. Opt out via `verify: false`.
+        const verify = verifyOptIn
+          ? await verifyTypedText(backend.kind, bridge, match.path, textToType, deviceId)
+          : {
+              verified: 'unknown' as const,
+              verify_method: 'skipped-non-simhid' as const,
+              verify_reason: 'verify: false passed by caller',
+            };
+
+        // Best-effort keyboard-layout detection for the diagnostic field.
+        // Never blocks typing; a failed probe produces `null` and the field
+        // is simply omitted.
+        const keyboardLayoutDetected = await detectKeyboardLayout(deviceId);
+
+        const responseBody: Record<string, unknown> = {
+          status: 'typed',
+          element: elementDescriptor,
+          coordinates: { x: centerX, y: centerY },
+          length: textToType.length,
+          backend: backend.kind,
+          focusBackend: focusedViaAXPress ? 'ax-press' : backend.kind,
+          deviceId,
+          verified: verify.verified,
+          verify_method: verify.verify_method,
+          _meta: meta,
         };
+        if (verify.verify_reason) {
+          responseBody.verify_reason = verify.verify_reason;
+        }
+        if (keyboardLayoutDetected) {
+          responseBody.keyboard_layout_detected = keyboardLayoutDetected;
+        }
+
+        // Silent-failure fix: when verification detected a real mismatch,
+        // surface `isError: true` so MCP clients / agents don't treat the
+        // call as a trustworthy "typed" step and proceed to submit garbage.
+        const mismatched = verify.verified === false;
+
+        // When verification observed a mismatch AND the simulator's keyboard
+        // layout is non-Latin, attach a structured TEXT_INPUT_LAYOUT_MISMATCH
+        // payload so callers can programmatically pick the recommended
+        // remediation (issue #639 Problem 1). Latin-layout mismatches use a
+        // different code (TEXT_INPUT_DROPPED — see below) and are intentionally
+        // skipped here.
+        if (mismatched && verify.observed !== undefined) {
+          const hint = mismatchHint(textToType, verify.observed, keyboardLayoutDetected);
+          if (hint) {
+            responseBody.error = hint;
+          } else {
+            // Latin layout (or layout detection unavailable) with a readback
+            // mismatch. Two codex review issues on PR #680 are addressed
+            // here:
+            //
+            // P1 — `expected`/`actual` previously echoed the raw caller
+            // input. That regresses the file's PII protection (a typed
+            // password / token / email would surface in tool responses
+            // and downstream logs). The same `truncate()` helper that
+            // sanitises `verify_reason` and `TEXT_INPUT_LAYOUT_MISMATCH`
+            // is applied here so the payload caps at `VERIFY_ECHO_LEN`
+            // characters per side.
+            //
+            // P2 — every Latin/unknown-layout mismatch was being labelled
+            // `TEXT_INPUT_DROPPED`, even when the divergence was an
+            // insertion (e.g. an auto-format `123` → `123 456`) that
+            // produces an empty `droppedIndices` array. The
+            // `code = TEXT_INPUT_DROPPED` + empty-array combination is
+            // contradictory and would mislead callers that key
+            // remediation off this code. We now check
+            // `computeDroppedIndices(...).length > 0` first; non-empty
+            // → `TEXT_INPUT_DROPPED` (real drop); empty → the neutral
+            // `TEXT_INPUT_MISMATCH` code.
+            const droppedIndices = computeDroppedIndices(textToType, verify.observed);
+            const hasDrops = droppedIndices.length > 0;
+            responseBody.error = hasDrops
+              ? {
+                  code: 'TEXT_INPUT_DROPPED',
+                  expected: truncate(textToType),
+                  actual: truncate(verify.observed),
+                  droppedIndices,
+                }
+              : {
+                  code: 'TEXT_INPUT_MISMATCH',
+                  expected: truncate(textToType),
+                  actual: truncate(verify.observed),
+                };
+          }
+        }
+        const result: {
+          content: Array<{ type: 'text'; text: string }>;
+          isError?: boolean;
+        } = {
+          content: [{ type: 'text' as const, text: JSON.stringify(responseBody) }],
+        };
+        if (mismatched) {
+          result.isError = true;
+        }
+        return result;
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         console.error(`[app_type_element] ${message}`);
@@ -200,6 +474,127 @@ export function registerAppTypeElementTool(server: MCPServer): void {
       }
     },
   );
+}
+
+/**
+ * Post-typing verification. Re-reads the focused element's AX value and
+ * compares it to what the caller asked to type. Silent transliteration on
+ * non-Latin simulator keyboards (issue #39) is the primary failure mode
+ * this catches — the raw HID keycodes sent by simhid produce Jamo/Kana/…
+ * in the Dart/native controller, and the readback will diverge immediately.
+ *
+ * Semantics:
+ *   - `verified: true` — observed AX value contains the expected text as a
+ *     suffix. (Suffix match, not equality, because callers may type into a
+ *     field that already contained text; the typed input is appended.)
+ *   - `verified: false` — observed value is readable but does not contain
+ *     the expected text. The `verify_reason` carries truncated expected /
+ *     observed fragments for triage.
+ *   - `verified: 'unknown'` — the element has no AXValue (e.g. a password
+ *     field whose value is suppressed), readback throws, or the backend
+ *     was not simhid so the check was skipped. Callers should treat this
+ *     as "could not prove the typing succeeded" rather than "it succeeded".
+ */
+async function verifyTypedText(
+  backendKind: string,
+  bridge: ReturnType<typeof getAccessibilityBridge>,
+  elementPath: string,
+  expected: string,
+  deviceId: string,
+): Promise<VerifyResult> {
+  if (backendKind !== 'simhid') {
+    return {
+      verified: 'unknown',
+      verify_method: 'skipped-non-simhid',
+      verify_reason: `backend=${backendKind} bypasses software keyboard; readback verification only applies to simhid`,
+    };
+  }
+  if (!elementPath) {
+    return {
+      verified: 'unknown',
+      verify_method: 'ax-value-not-readable',
+      verify_reason: 'element has no AX path to re-inspect',
+    };
+  }
+  let observed: string | undefined;
+  let isSecureField = false;
+  try {
+    const node = await bridge.inspect(elementPath, deviceId);
+    observed = node.value;
+    // Issue #760: secure text fields (password inputs) return an OS-masked
+    // bullet string as their AXValue regardless of the underlying plaintext.
+    // The readback contract cannot prove what was typed, so flag this case
+    // as inconclusive instead of treating the mask as a divergent value
+    // (which would otherwise escalate to TEXT_INPUT_DROPPED /
+    // TEXT_INPUT_LAYOUT_MISMATCH and surface `isError: true`).
+    // Delegated to `isSecureFieldDescriptor` so the trait-alias corpus is
+    // maintained in one place (`pasteboard-input.ts`).
+    isSecureField = isSecureFieldDescriptor({
+      role: node.role,
+      traits: node.traits,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return {
+      verified: 'unknown',
+      verify_method: 'readback-failed',
+      verify_reason: `AX inspect failed: ${msg}`,
+    };
+  }
+  if (isSecureField) {
+    return {
+      verified: 'unknown',
+      verify_method: 'ax-value-not-readable',
+      verify_reason: 'secure text field — AX value is OS-masked (#760)',
+    };
+  }
+  if (observed === undefined || observed === null) {
+    return {
+      verified: 'unknown',
+      verify_method: 'ax-value-not-readable',
+      verify_reason: 'element exposes no AXValue (e.g. password field)',
+    };
+  }
+  if (observed.endsWith(expected) || observed.includes(expected)) {
+    return { verified: true, verify_method: 'ax-value-readback', observed };
+  }
+  return {
+    verified: false,
+    verify_method: 'ax-value-readback',
+    verify_reason:
+      `observed "${truncate(observed)}" does not contain requested "${truncate(expected)}" — ` +
+      'likely caused by a non-Latin simulator keyboard transliterating the HID input (issue #39)',
+    observed,
+  };
+}
+
+function truncate(s: string): string {
+  if (s.length <= VERIFY_ECHO_LEN) return s;
+  return `${s.slice(0, VERIFY_ECHO_LEN)}…`;
+}
+
+/**
+ * Best-effort lookup of the simulator's installed-keyboards entry. We parse
+ * `defaults read .GlobalPreferences AppleKeyboards` and return the first
+ * entry that carries a `sw=…` token. This is *not* guaranteed to be the
+ * currently active keyboard (per issue #39 addendum §1 iOS 26.4 exposes no
+ * deterministic "active" signal), but it is the single most diagnostic
+ * string a caller can attach to an ambiguous typing report — if the first
+ * entry is `ko_KR@sw=Korean - 2 Set;hw=Automatic` and the readback is Jamo
+ * gibberish, the root cause is obvious at a glance.
+ */
+async function detectKeyboardLayout(deviceId: string): Promise<string | null> {
+  try {
+    const { stdout } = await execFileAsync(
+      'xcrun',
+      ['simctl', 'spawn', deviceId, 'defaults', 'read', '.GlobalPreferences', 'AppleKeyboards'],
+      { timeout: 5000 },
+    );
+    const match = stdout.match(/"([^"]*@[^"]*sw=[^"]+)"/);
+    return match ? match[1] : null;
+  } catch {
+    return null;
+  }
 }
 
 function jsonError(error: string, extra: Record<string, unknown> = {}) {
@@ -211,4 +606,43 @@ function jsonError(error: string, extra: Record<string, unknown> = {}) {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Compute the 0-based indices of characters in `expected` that are absent
+ * (dropped) relative to `actual`.
+ *
+ * Algorithm: greedy forward scan. For each character at position `i` in
+ * `expected`, advance through `actual` from the current cursor looking up to
+ * `LOOKAHEAD` positions ahead. If the character is found within the window,
+ * consume it and move the cursor past it. If not found, the position `i` is
+ * recorded as dropped.
+ *
+ * This is a pragmatic heuristic — not a full Levenshtein alignment — but it
+ * gives correct results for the common case of a field silently skipping one
+ * or more characters while preserving the relative order of the rest
+ * (issue #639 Problem 2).
+ */
+const DROP_LOOKAHEAD = 2;
+
+function computeDroppedIndices(expected: string, actual: string): number[] {
+  const dropped: number[] = [];
+  let cursor = 0; // current position in `actual`
+
+  for (let i = 0; i < expected.length; i++) {
+    const ch = expected[i];
+    let found = false;
+    for (let w = 0; w <= DROP_LOOKAHEAD && cursor + w < actual.length; w++) {
+      if (actual[cursor + w] === ch) {
+        cursor = cursor + w + 1;
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      dropped.push(i);
+    }
+  }
+
+  return dropped;
 }

@@ -34,6 +34,12 @@ export interface EnsureSemanticsOptions {
   timeout?: number;
   /** Minimum node count that signals an active tree (default 5). */
   minNodes?: number;
+  /**
+   * Force a fresh activation attempt even when the existing tree already looks
+   * populated. Useful after route transitions/direct-route launches where the
+   * tree can still be stale-but-populated from a previous screen.
+   */
+  forceRefresh?: boolean;
   /** Bundle ID of the target app — helps Dart VM Service discovery. */
   bundleId?: string;
   /**
@@ -57,6 +63,68 @@ export function countNodes(node: AXNode): number {
   return count;
 }
 
+function flattenTree(node: AXNode, acc: AXNode[] = []): AXNode[] {
+  acc.push(node);
+  for (const child of node.children ?? []) {
+    flattenTree(child, acc);
+  }
+  return acc;
+}
+
+const CHROME_LABELS = new Set([
+  'Action',
+  'Volume Up',
+  'Volume Down',
+  'Sleep/Wake',
+  'Home',
+  'Save Screen',
+  'Rotate',
+  'Capture Pointer',
+  'Capture Keyboard',
+]);
+
+function isChromeValue(value: string): boolean {
+  return /^iPhone\b/.test(value)
+    || /^iPad\b/.test(value)
+    || /^iOS \d/.test(value);
+}
+
+/**
+ * Heuristic guard against simulator-chrome-only trees.
+ *
+ * A tree is considered "chrome-only" when:
+ *   - it has a low node count,
+ *   - it contains no identifiers,
+ *   - it contains no obvious app roles like text fields,
+ *   - every label/value is consistent with Simulator chrome,
+ *   - AND the tree is rooted in Simulator chrome (either the root label
+ *     matches the simulator device pattern like `iPhone 15 Pro -- iOS 17`,
+ *     or at least one node carries a Simulator-chrome label).
+ *
+ * The root-label gate prevents minimal apps that happen to expose chrome-like
+ * labels but run under a non-simulator root from being misclassified.
+ */
+export function isLikelyChromeOnlyTree(node: AXNode): boolean {
+  const nodes = flattenTree(node);
+  if (nodes.length > 20) return false;
+  if (nodes.some((n) => Boolean(n.identifier))) return false;
+  if (nodes.some((n) => /AX(TextField|SecureTextField|TextArea|WebArea)/.test(n.role))) {
+    return false;
+  }
+
+  const meaningfulStrings = nodes.flatMap((n) => [n.label, n.value].filter(Boolean) as string[]);
+  if (meaningfulStrings.length === 0) return false;
+
+  const rootLabel = node.label ?? '';
+  const rootMatchesSimulator = /^(iPhone|iPad).*--/i.test(rootLabel);
+  const anyChromeLabel = nodes.some((n) => (n.label && CHROME_LABELS.has(n.label)));
+  if (!rootMatchesSimulator && !anyChromeLabel) return false;
+
+  return meaningfulStrings.every((value) =>
+    CHROME_LABELS.has(value) || isChromeValue(value),
+  );
+}
+
 /**
  * Attempt to activate Flutter semantics for a given simulator device.
  *
@@ -72,12 +140,13 @@ export async function ensureSemanticsActive(
 ): Promise<boolean> {
   const timeout = options?.timeout ?? DEFAULT_TIMEOUT_MS;
   const minNodes = options?.minNodes ?? MIN_NODE_THRESHOLD;
+  const forceRefresh = options?.forceRefresh ?? false;
   const useVMServiceFallback = options?.useVMServiceFallback ?? true;
   const bridge = getAccessibilityBridge();
   const deadline = Date.now() + timeout;
 
   // A. Quick check — tree already populated?
-  if (await treeIsPopulated(bridge, deviceId, minNodes)) {
+  if (!forceRefresh && await treeIsPopulated(bridge, deviceId, minNodes)) {
     return true;
   }
 
@@ -131,7 +200,7 @@ async function treeIsPopulated(
 ): Promise<boolean> {
   try {
     const tree = await bridge.dumpTree({ deviceId, maxDepth: 4 });
-    return countNodes(tree) >= minNodes;
+    return countNodes(tree) >= minNodes && !isLikelyChromeOnlyTree(tree);
   } catch {
     return false;
   }

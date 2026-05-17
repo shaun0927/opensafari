@@ -5,14 +5,14 @@
  */
 
 import * as readline from 'readline';
-import { MCPResponse, MCPErrorCodes } from '../types/mcp';
+import { MCPMessageContext, MCPResponse, MCPErrorCodes } from '../types/mcp';
 import { MCPTransport } from './index';
 
 export class StdioTransport implements MCPTransport {
   private rl: readline.Interface | null = null;
-  private messageHandler: ((msg: Record<string, unknown>) => Promise<MCPResponse | null>) | null = null;
+  private messageHandler: ((msg: Record<string, unknown>, context?: MCPMessageContext) => Promise<MCPResponse | null>) | null = null;
 
-  onMessage(handler: (msg: Record<string, unknown>) => Promise<MCPResponse | null>): void {
+  onMessage(handler: (msg: Record<string, unknown>, context?: MCPMessageContext) => Promise<MCPResponse | null>): void {
     this.messageHandler = handler;
   }
 
@@ -53,7 +53,7 @@ export class StdioTransport implements MCPTransport {
         return;
       }
 
-      this.messageHandler(parsed)
+      this.messageHandler(parsed, { transport: 'stdio' })
         .then((response) => {
           if (response) {
             this.send(response);

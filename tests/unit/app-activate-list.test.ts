@@ -45,12 +45,12 @@ describe('SimulatorManager — App Activate & List Running', () => {
   describe('activateApp', () => {
     it('activates an app successfully', async () => {
       execJsonMock.mockResolvedValue(bootedDeviceList);
-      execMock.mockResolvedValue('');
+      execMock.mockResolvedValue(`${BUNDLE_ID}: 45678\n`);
 
       const manager = new SimulatorManager();
       const result = await manager.activateApp(DEVICE_ID, BUNDLE_ID);
 
-      expect(result).toEqual({ activated: true, bundleId: BUNDLE_ID, deviceId: DEVICE_ID });
+      expect(result).toEqual({ activated: true, bundleId: BUNDLE_ID, deviceId: DEVICE_ID, pid: 45678 });
       expect(execMock).toHaveBeenCalledWith(['launch', DEVICE_ID, BUNDLE_ID]);
     });
 

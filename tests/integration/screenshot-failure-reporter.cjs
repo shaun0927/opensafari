@@ -16,6 +16,10 @@
  *   - Default: `<repo>/test-output/screenshots/<ISO-timestamp>_<sanitised-test-name>.png`
  *   - Override base directory via the `outputDir` reporter option or the
  *     `OSF_SCREENSHOT_DIR` environment variable.
+ *   - Safe-roots constraint: both `outputDir` and `OSF_SCREENSHOT_DIR` must
+ *     resolve to a path inside `process.cwd()` (repo root) or `os.tmpdir()`.
+ *     Values outside these roots are rejected with a `[screenshot-on-failure]`
+ *     warning on stderr and the default directory is used instead.
  *
  * Why a custom reporter (not afterEach):
  *   - Reusable across every integration suite without per-file boilerplate.
@@ -28,15 +32,69 @@
 
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 const { execFileSync } = require('child_process');
+
+/**
+ * Resolve and validate a raw output-directory value against safe roots.
+ *
+ * @param {string|null|undefined} raw - Raw value from env var or reporter option.
+ * @param {string} cwd - Base directory to resolve relative paths against.
+ * @returns {string} Validated absolute path, or the default if validation fails.
+ */
+function resolveOutputDir(raw, cwd) {
+  const defaultDir = path.resolve(cwd, 'test-output', 'screenshots');
+  if (raw == null || String(raw).trim() === '') return defaultDir;
+  let candidate;
+  try {
+    candidate = path.resolve(cwd, String(raw));
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error(
+      `[screenshot-on-failure] ignoring invalid OSF_SCREENSHOT_DIR (${e.message}); falling back to ${defaultDir}.`,
+    );
+    return defaultDir;
+  }
+  const safeRoots = [path.resolve(cwd), os.tmpdir()];
+  const safe = safeRoots.some(
+    (root) => candidate === root || candidate.startsWith(root + path.sep),
+  );
+  if (!safe) {
+    // eslint-disable-next-line no-console
+    console.error(
+      `[screenshot-on-failure] OSF_SCREENSHOT_DIR resolved to ${candidate} which is outside safe roots ${safeRoots.join(', ')}; falling back to ${defaultDir}.`,
+    );
+    return defaultDir;
+  }
+  return candidate;
+}
 
 class ScreenshotOnFailureReporter {
   constructor(globalConfig, options = {}) {
     const cwd = (globalConfig && globalConfig.rootDir) || process.cwd();
-    this.outputDir =
-      options.outputDir ||
-      process.env.OSF_SCREENSHOT_DIR ||
-      path.resolve(cwd, 'test-output', 'screenshots');
+    const defaultDir = path.resolve(cwd, 'test-output', 'screenshots');
+    // Validate both external sources through the safe-roots guard before use.
+    // The internally-computed default is trusted, but assert it resolves inside
+    // safe roots as a regression guard.
+    const safeRootsForAssertion = [path.resolve(cwd), os.tmpdir()];
+    const defaultSafe = safeRootsForAssertion.some(
+      (root) => defaultDir === root || defaultDir.startsWith(root + path.sep),
+    );
+    if (!defaultSafe) {
+      throw new Error(
+        `[screenshot-on-failure] invariant violation: default outputDir ${defaultDir} is outside safe roots ${safeRootsForAssertion.join(', ')}`,
+      );
+    }
+    // Route both external sources through the safe-roots guard.
+    // options.outputDir takes priority over OSF_SCREENSHOT_DIR; both fall back
+    // to defaultDir on rejection. Empty/null inputs fall through silently.
+    if (options.outputDir != null && String(options.outputDir).trim() !== '') {
+      this.outputDir = resolveOutputDir(options.outputDir, cwd);
+    } else if (process.env.OSF_SCREENSHOT_DIR != null && String(process.env.OSF_SCREENSHOT_DIR).trim() !== '') {
+      this.outputDir = resolveOutputDir(process.env.OSF_SCREENSHOT_DIR, cwd);
+    } else {
+      this.outputDir = defaultDir;
+    }
     this.deviceId = process.env.OSF_DEVICE_ID || null;
     this.forced = process.env.OPENSAFARI_SAVE_FAILURE_SCREENSHOTS === '1';
     // Local opt-in convenience: if the dev asked for failure screenshots but
@@ -120,4 +178,5 @@ class ScreenshotOnFailureReporter {
   }
 }
 
+ScreenshotOnFailureReporter.resolveOutputDir = resolveOutputDir;
 module.exports = ScreenshotOnFailureReporter;

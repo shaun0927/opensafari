@@ -24,6 +24,7 @@ import { registerDismissKeyboardTool } from './dismiss-keyboard';
 import { registerSelectOptionTool } from './select-option';
 import { registerDeviceListTool } from './device-list';
 import { registerDeviceRotateTool } from './device-rotate';
+import { registerDeviceNetworkTools } from './device-network';
 import { registerAppearanceToggleTool } from './appearance-toggle';
 import { registerAppSwitchAppTool } from './app-switch-app';
 import { registerBatchNavigateTool } from './batch-navigate';
@@ -50,6 +51,7 @@ import { registerNetworkInterceptTool } from './network-intercept';
 import { registerNetworkOfflineTool } from './network-offline';
 import { registerHybridQATools } from './hybrid-qa-tools';
 import { registerAppTreeTool } from './app-tree';
+import { registerAppContextTool } from './app-context';
 import { registerAppQueryTool } from './app-query';
 import { registerAppInspectTool } from './app-inspect';
 import { registerAppLaunchTool } from './app-launch';
@@ -67,6 +69,7 @@ import { registerAppCrashReportsTool } from './app-crash-reports';
 import { registerAppRecordVideoTool } from './app-record-video';
 import { registerAppPermissionsTool } from './app-permissions';
 import { registerAppDeeplinkTool } from './app-deeplink';
+import { registerAppNotesPasteAndTapUrlTool } from './app-notes-paste-and-tap-url';
 import { registerAppPushNotificationTool } from './app-push-notification';
 import { registerAppHandleAlertTool } from './app-handle-alert';
 import { registerAppActivateTool } from './app-activate';
@@ -224,10 +227,14 @@ export function registerAllTools(server: MCPServer): void {
   registerNetworkInterceptTool(server);
   registerNetworkOfflineTool(server);
 
+  // Tier 2: Device-level network toggle for native (Flutter/UIKit) traffic — issue #640
+  registerDeviceNetworkTools(server);
+
   // Tier 3: Hybrid QA (Fast Scan + Deep Verify)
   registerHybridQATools(server);
 
   // Tier 2: Native App Inspection
+  registerAppContextTool(server);
   registerAppTreeTool(server);
   registerAppQueryTool(server);
   registerAppInspectTool(server);
@@ -251,6 +258,7 @@ export function registerAllTools(server: MCPServer): void {
   // Tier 2: Native App System Surfaces
   registerAppPermissionsTool(server);
   registerAppDeeplinkTool(server);
+  registerAppNotesPasteAndTapUrlTool(server);
   registerAppPushNotificationTool(server);
   registerAppHandleAlertTool(server);
   registerAppActivateTool(server);

@@ -7,10 +7,42 @@
  */
 
 import { MCPServer, getWebKitClient } from '../mcp-server';
-import { getAccessibilityBridge, ensureSemanticsActive } from '../native';
-import type { AXNode, AXPressResponse } from '../native';
+import {
+  getAccessibilityBridge,
+  ensureSemanticsActive,
+  countNodes,
+  isLikelyChromeOnlyTree,
+} from '../native';
+import type { AXNode, AXPressResponse, AXQueryResult } from '../native';
 import type { AccessibilityBridge } from '../native/accessibility-bridge';
+import { walkTree, fingerprintTree } from '../native/ax-verification';
 import { resolveDeviceId, getInputBackend, runInputOp } from './native-input-utils';
+import { probeMobileContext } from './app-context';
+import {
+  activateAndClassify,
+  createContextMismatchError,
+  NativeContextMeta,
+} from './native-app-context';
+import { SimulatorManager } from '../simulator';
+import { DEVICE_PRESETS } from '../simulator/presets';
+import { convertMacOSPtToIOSPt } from '../utils/coordinate-space';
+import type { Size2D } from '../utils/coordinate-space';
+
+type AXPressVerification = {
+  verified: boolean;
+  effect:
+    | 'target_disappeared'
+    | 'target_appeared'
+    | 'focus_changed'
+    | 'subtree_changed'
+    | 'no_observable_change'
+    | 'verification_unavailable';
+};
+
+type CoordinateTapVerification = {
+  verified: boolean;
+  effect: 'subtree_changed' | 'no_observable_change' | 'verification_unavailable';
+};
 
 export function registerAppTapElementTool(server: MCPServer): void {
   server.registerTool(
@@ -55,6 +87,10 @@ export function registerAppTapElementTool(server: MCPServer): void {
             type: 'string',
             description: 'Simulator UDID (uses active device if omitted)',
           },
+          bundle_id: {
+            type: 'string',
+            description: 'Target app bundle ID. When provided, the tool re-activates the app and rejects mismatched native contexts.',
+          },
         },
         required: [],
       },
@@ -83,11 +119,31 @@ export function registerAppTapElementTool(server: MCPServer): void {
         const index = (params.index as number | undefined) ?? 0;
         const timeout = (params.timeout as number | undefined) ?? 5000;
         const duration = (params.duration as number | undefined) ?? 0;
-
-        // Ensure Flutter semantics are active
-        await ensureSemanticsActive(deviceId);
+        const bundleId = params.bundle_id as string | undefined;
 
         const bridge = getAccessibilityBridge();
+        let contextMeta: NativeContextMeta = {
+          requestedBundleId: bundleId,
+          deviceId,
+          sourceKind: 'unknown',
+          heuristics: ['not-requested'],
+          activationAttempted: false,
+          activationRetries: 0,
+        };
+        if (bundleId) {
+          const context = await activateAndClassify({
+            bridge,
+            deviceId,
+            bundleId,
+            ensureSemanticsActive: () => ensureSemanticsActive(deviceId, { bundleId }),
+          });
+          contextMeta = context.meta;
+          if (contextMeta.sourceKind !== 'target-app') {
+            throw createContextMismatchError(contextMeta);
+          }
+        } else {
+          await ensureSemanticsActive(deviceId, { bundleId });
+        }
         const query = { identifier, label, text, role };
 
         // Wait for element to appear (with timeout). We also track the
@@ -97,6 +153,9 @@ export function registerAppTapElementTool(server: MCPServer): void {
         let match: AXNode | undefined;
         let totalMatches = 0;
         let ambiguous = false;
+        // Capture deviceContentMacOSPt from the last successful query result.
+        // Present only when the bridge is a recent build (#693 WU3-prep).
+        let queryResult: AXQueryResult | undefined;
         if (timeout > 0) {
           const deadline = Date.now() + timeout;
           while (Date.now() < deadline) {
@@ -105,6 +164,7 @@ export function registerAppTapElementTool(server: MCPServer): void {
             ambiguous = result.ambiguous;
             if (result.matches.length > index) {
               match = result.matches[index];
+              queryResult = result;
               break;
             }
             await sleep(300);
@@ -115,6 +175,7 @@ export function registerAppTapElementTool(server: MCPServer): void {
           ambiguous = result.ambiguous;
           if (result.matches.length > index) {
             match = result.matches[index];
+            queryResult = result;
           }
         }
 
@@ -127,6 +188,7 @@ export function registerAppTapElementTool(server: MCPServer): void {
                 query,
                 index,
                 timeout,
+                _meta: { context: contextMeta },
               }),
             }],
             isError: true,
@@ -153,9 +215,19 @@ export function registerAppTapElementTool(server: MCPServer): void {
           };
         }
 
-        // Calculate center of element
-        const rawCenterX = match.frame.x + match.frame.width / 2;
-        const rawCenterY = match.frame.y + match.frame.height / 2;
+        // Calculate center of element in AX-frame space (macOS-screen-points).
+        const axCenterX = match.frame.x + match.frame.width / 2;
+        const axCenterY = match.frame.y + match.frame.height / 2;
+
+        // The macOS-pt → iOS-pt conversion (#693 WU3) is deferred until the
+        // coordinate-dispatch path below. AXPress (the fast path) drives the
+        // tap through the macOS AX API by element path and never consumes
+        // coordinates, so paying for a `simctl list` round-trip on every
+        // successful AXPress tap is pure waste. The lookup also has its
+        // own module-level cache, so repeated dispatches on the same UDID
+        // do not re-pay the simctl cost.
+        const rawCenterX = axCenterX;
+        const rawCenterY = axCenterY;
 
         // Sanitize the tap target. An accessibility tree that reports a
         // `visible: true` element with a frame whose center lands outside
@@ -196,6 +268,8 @@ export function registerAppTapElementTool(server: MCPServer): void {
           );
         }
 
+        let coordinateVerificationBaseline: AXNode | null = null;
+
         // Tier 1.5 — AX press: drive interaction through the macOS AX API
         // instead of synthesising OS-level input. Works on every Xcode
         // version (including Xcode 26+ where SimHID tap/swipe is disabled
@@ -209,21 +283,62 @@ export function registerAppTapElementTool(server: MCPServer): void {
         if (duration === 0 && match.path && !axPressDisabled) {
           const pressResponse = await tryPress(bridge, match.path, deviceId);
           if (pressResponse?.ok) {
-            const response = buildAXPressResponse({
-              match,
-              centerX,
-              centerY,
-              deviceId,
-              totalMatches,
-              indexProvided,
-              index,
-              ambiguous,
-              clampedFrom,
-              pressActions: pressResponse.actions,
-            });
-            return {
-              content: [{ type: 'text' as const, text: JSON.stringify(response) }],
-            };
+            // Dump the pre-press snapshot only after we know the press succeeded —
+            // this avoids a wasted round-trip on PRESS_NOT_ACTIONABLE / PRESS_FAILED.
+            let beforeTree: AXNode | null = null;
+            try {
+              beforeTree = await bridge.dumpTree({ deviceId, maxDepth: 8 });
+            } catch (dumpErr) {
+              const dumpMsg = dumpErr instanceof Error ? dumpErr.message : String(dumpErr);
+              console.error(
+                `[app_tap_element] pre-press AX tree dump failed; verification will be skipped. Reason: ${dumpMsg}`,
+              );
+            }
+            await sleep(250);
+            let afterTree: AXNode | null = null;
+            try {
+              afterTree = await bridge.dumpTree({ deviceId, maxDepth: 8 });
+            } catch (dumpErr) {
+              const dumpMsg = dumpErr instanceof Error ? dumpErr.message : String(dumpErr);
+              console.error(
+                `[app_tap_element] post-press AX tree dump failed; verification will be skipped. Reason: ${dumpMsg}`,
+              );
+            }
+            const verification =
+              beforeTree !== null && afterTree !== null
+                ? verifyAXPressEffect(beforeTree, afterTree, match)
+                : { verified: false, effect: 'verification_unavailable' as const };
+            if (verification.verified) {
+              const response = buildAXPressResponse({
+                match,
+                centerX,
+                centerY,
+                deviceId,
+                totalMatches,
+                indexProvided,
+                index,
+                ambiguous,
+                clampedFrom,
+                pressActions: pressResponse.actions,
+                effect: verification.effect,
+              });
+              response._meta = {
+                ...(response._meta as Record<string, unknown>),
+                context: contextMeta,
+              };
+              return {
+                content: [{ type: 'text' as const, text: JSON.stringify(response) }],
+              };
+            }
+
+            console.error(
+              `[app_tap_element] AXPress returned OK for path ${match.path} ` +
+                `but no observable UI effect was detected (${verification.effect}); ` +
+                `falling back to coordinate tap.`,
+            );
+            coordinateVerificationBaseline = isUsableVerificationBaseline(beforeTree)
+              ? beforeTree
+              : null;
           }
           if (pressResponse && pressResponse.code === 'PRESS_NOT_ACTIONABLE') {
             console.error(
@@ -241,11 +356,63 @@ export function registerAppTapElementTool(server: MCPServer): void {
           }
         }
 
+        if (bundleId && coordinateVerificationBaseline === null) {
+          try {
+            const semanticsActive = await ensureSemanticsActive(deviceId, { bundleId });
+            const baseline = await bridge.dumpTree({ deviceId, maxDepth: 8 });
+            coordinateVerificationBaseline =
+              semanticsActive && isUsableVerificationBaseline(baseline) ? baseline : null;
+          } catch (dumpErr) {
+            const dumpMsg = dumpErr instanceof Error ? dumpErr.message : String(dumpErr);
+            console.error(
+              `[app_tap_element] pre-coordinate AX tree dump failed; verification will be skipped. Reason: ${dumpMsg}`,
+            );
+          }
+        }
+
+        // Convert from macOS-screen-points to iOS-points before dispatching
+        // through the coordinate input backend (#693 WU3). The AX bridge
+        // reports element frames in macOS-pt, but `sim-hid` / `simctl`
+        // consume iOS-pt. When `deviceContentMacOSPt` is missing (legacy
+        // bridge) or the device's iOS-pt size cannot be resolved (unknown
+        // device, simctl failure), the coordinates are forwarded unchanged
+        // — same behavior as before. The lookup is deferred to here (rather
+        // than running before AXPress) so successful AXPress taps avoid the
+        // `simctl list` round-trip entirely.
+        const macOSPtSize = queryResult?.deviceContentMacOSPt;
+        if (macOSPtSize) {
+          const iosPtSize = await getIosPtSizeForDevice(deviceId);
+          if (iosPtSize) {
+            const before = { x: centerX, y: centerY };
+            const converted = convertMacOSPtToIOSPt(before, macOSPtSize, iosPtSize);
+            centerX = converted.x;
+            centerY = converted.y;
+            console.error(
+              `[app_tap_element] macOS-pt→iOS-pt conversion applied: ` +
+                `macOSPt(${before.x.toFixed(2)}, ${before.y.toFixed(2)}) → ` +
+                `iOSPt(${centerX.toFixed(2)}, ${centerY.toFixed(2)}) ` +
+                `scale=(${(iosPtSize.width / macOSPtSize.width).toFixed(4)}, ` +
+                `${(iosPtSize.height / macOSPtSize.height).toFixed(4)})`,
+            );
+          }
+        }
+
         // Tap via input backend
         const backend = await getInputBackend(deviceId, getWebKitClient(deviceId));
         const { meta } = await runInputOp(backend, deviceId, () =>
           backend.tap(deviceId, centerX, centerY, duration > 0 ? duration : undefined),
         );
+        const shouldVerifyCoordinateTap = bundleId || coordinateVerificationBaseline !== null;
+        const verification = shouldVerifyCoordinateTap
+          ? await verifyCoordinateTapEffect(
+            bridge,
+            deviceId,
+            coordinateVerificationBaseline,
+          )
+          : undefined;
+        const postInputContext = bundleId
+          ? await probePostInputContext({ deviceId, expectedBundle: bundleId })
+          : undefined;
 
         // Flag an implicit ambiguous tap: several candidates matched but
         // the caller did not disambiguate via `index`. We still tap the
@@ -272,8 +439,18 @@ export function registerAppTapElementTool(server: MCPServer): void {
           backend: backend.kind,
           deviceId,
           totalMatches,
-          _meta: meta,
+          _meta: {
+            ...meta,
+            context: contextMeta,
+          },
         };
+        if (verification) {
+          response.verified = verification.verified;
+          response.effect = verification.effect;
+        }
+        if (postInputContext) {
+          response.postInputContext = postInputContext.probe;
+        }
         if (clampedFrom) {
           response.clampedFrom = clampedFrom;
         }
@@ -290,6 +467,35 @@ export function registerAppTapElementTool(server: MCPServer): void {
         }
         if (warnings.length > 0) {
           response.warning = warnings.join('; ');
+        }
+        if (postInputContext?.warning) {
+          response.warning = response.warning
+            ? `${response.warning}; ${postInputContext.warning}`
+            : postInputContext.warning;
+        }
+
+        if (verification?.effect === 'verification_unavailable') {
+          response.warning = response.warning
+            ? `${response.warning}; The tap was dispatched but post-action AX verification was unavailable.`
+            : 'The tap was dispatched but post-action AX verification was unavailable.';
+          return {
+            content: [{ type: 'text' as const, text: JSON.stringify(response) }],
+          };
+        }
+
+        if (verification && !verification.verified) {
+          return {
+            content: [{
+              type: 'text' as const,
+              text: JSON.stringify({
+                error: 'TAP_NO_EFFECT',
+                message:
+                  'The tap was dispatched successfully, but no observable AX tree change was detected afterward.',
+                ...response,
+              }),
+            }],
+            isError: true,
+          };
         }
 
         return {
@@ -309,6 +515,56 @@ export function registerAppTapElementTool(server: MCPServer): void {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Look up the iOS-point screen size for a booted simulator by its UDID.
+ *
+ * Resolves: device UDID → device name (from simctl list) → preset entry
+ * (matched by name) → `{ width: w, height: h }`.
+ *
+ * Returns `null` when the device cannot be found, no name matches a preset,
+ * or the simctl call fails — callers treat `null` as "no conversion available"
+ * and fall back to using raw AX-frame coordinates.
+ */
+const iosPtSizeCache = new Map<string, Size2D | null>();
+
+async function getIosPtSizeForDevice(deviceId: string): Promise<Size2D | null> {
+  if (iosPtSizeCache.has(deviceId)) {
+    return iosPtSizeCache.get(deviceId) ?? null;
+  }
+  try {
+    const manager = new SimulatorManager();
+    const device = await manager.getDevice(deviceId);
+    if (!device) {
+      // Transient: simctl could not see the device on this call. A later
+      // dispatch after simctl recovers should retry, so do NOT memoize
+      // this failure (otherwise one transient error permanently disables
+      // coordinate conversion for the UDID until process restart).
+      return null;
+    }
+    const deviceNameLower = device.name.toLowerCase();
+    const preset = Object.values(DEVICE_PRESETS).find(
+      (p) => p.name.toLowerCase() === deviceNameLower,
+    );
+    const result: Size2D | null = preset
+      ? { width: preset.w, height: preset.h }
+      : null;
+    // simctl returned a stable device descriptor — caching the preset
+    // hit-or-miss is safe (the device's name and the preset table are
+    // both static for this process). Transient simctl failures handled
+    // by the early return above remain un-cached.
+    iosPtSizeCache.set(deviceId, result);
+    return result;
+  } catch {
+    // Same rationale as the !device branch — never cache a thrown error.
+    return null;
+  }
+}
+
+/** @internal — test-only hook to reset the per-process iOS-pt size cache. */
+export function __resetIosPtSizeCacheForTests(): void {
+  iosPtSizeCache.clear();
 }
 
 /**
@@ -382,6 +638,144 @@ export async function tryPress(
   }
 }
 
+function findNodeByPath(node: AXNode, path: string): AXNode | null {
+  let match: AXNode | null = null;
+  walkTree(node, (current) => {
+    if (!match && current.path === path) {
+      match = current;
+    }
+  });
+  return match;
+}
+
+export function verifyAXPressEffect(
+  beforeTree: AXNode,
+  afterTree: AXNode,
+  target: AXNode,
+): AXPressVerification {
+  const beforeTarget = findNodeByPath(beforeTree, target.path);
+  const afterTarget = findNodeByPath(afterTree, target.path);
+
+  if (!afterTarget) {
+    // Only treat disappearance as a verified effect when the target was
+    // actually present before the press. If it was absent from both trees
+    // (e.g. deep node truncated by maxDepth: 8), we have no evidence the
+    // press did anything — return unverified so the caller falls back to
+    // the coordinate path.
+    if (!beforeTarget) {
+      return { verified: false, effect: 'no_observable_change' };
+    }
+    return { verified: true, effect: 'target_disappeared' };
+  }
+
+  // The target was absent before the press but is now present — treat this
+  // as a verified appearance effect (e.g. a lazy-loaded or conditionally
+  // rendered element that the tap caused to be inserted into the AX tree).
+  if (!beforeTarget && afterTarget) {
+    return { verified: true, effect: 'target_appeared' };
+  }
+
+  if (!!beforeTarget?.focused !== !!afterTarget.focused) {
+    return { verified: true, effect: 'focus_changed' };
+  }
+
+  if (fingerprintTree(beforeTree) !== fingerprintTree(afterTree)) {
+    return { verified: true, effect: 'subtree_changed' };
+  }
+
+  return { verified: false, effect: 'no_observable_change' };
+}
+
+const VERIFY_POLL_INTERVAL_MS = 150;
+const VERIFY_POLL_TIMEOUT_MS = 1200;
+
+async function verifyCoordinateTapEffect(
+  bridge: AccessibilityBridge,
+  deviceId: string,
+  beforeTree: AXNode | null,
+): Promise<CoordinateTapVerification> {
+  if (!beforeTree) {
+    return { verified: false, effect: 'verification_unavailable' };
+  }
+
+  const beforeFingerprint = fingerprintTree(beforeTree);
+  const deadline = Date.now() + VERIFY_POLL_TIMEOUT_MS;
+  const maxIterations = Math.ceil(VERIFY_POLL_TIMEOUT_MS / VERIFY_POLL_INTERVAL_MS) + 1;
+  let iteration = 0;
+
+  try {
+    while (Date.now() < deadline && iteration < maxIterations) {
+      iteration += 1;
+      await sleep(VERIFY_POLL_INTERVAL_MS);
+      const afterTree = await bridge.dumpTree({ deviceId, maxDepth: 8 });
+      if (beforeFingerprint !== fingerprintTree(afterTree)) {
+        return { verified: true, effect: 'subtree_changed' };
+      }
+    }
+    return { verified: false, effect: 'no_observable_change' };
+  } catch {
+    return { verified: false, effect: 'verification_unavailable' };
+  }
+}
+
+function isUsableVerificationBaseline(tree: AXNode | null): tree is AXNode {
+  return tree !== null && countNodes(tree) >= 5 && !isLikelyChromeOnlyTree(tree);
+}
+
+async function probePostInputContext(args: {
+  deviceId: string;
+  expectedBundle: string;
+}): Promise<{
+  probe: Awaited<ReturnType<typeof probeMobileContext>>;
+  warning?: string;
+}> {
+  try {
+    const probe = await probeMobileContext({
+      deviceId: args.deviceId,
+      expectedBundle: args.expectedBundle,
+      manager: new SimulatorManager(),
+    });
+    const warning =
+      probe.expectedBundleMatch !== 'matched'
+        ? JSON.stringify({
+          code: 'POST_TAP_CONTEXT_MISMATCH',
+          message:
+            `Post-tap context did not confirm expected bundle ${args.expectedBundle}. ` +
+            `surface=${probe.surface}, match=${probe.expectedBundleMatch ?? 'unknown'}.`,
+          context: probe,
+        })
+        : undefined;
+    return { probe, warning };
+  } catch (probeErr) {
+    const reason = probeErr instanceof Error ? probeErr.message : String(probeErr);
+    console.error(`[app_tap_element] post-tap context probe failed: ${reason}`);
+    return {
+      probe: {
+        deviceId: args.deviceId,
+        surface: 'unknown',
+        contextVerified: false,
+        expectedBundle: args.expectedBundle,
+        expectedBundleMatch: 'unknown',
+        expectedBundleMatchConfidence: 'unknown',
+        reason: 'Post-tap context probe failed.',
+        warnings: [reason],
+        runningApps: [],
+        visibleSummary: {
+          buttonLabels: [],
+          staticTexts: [],
+          textFieldLabels: [],
+          nodeCount: 0,
+        },
+      },
+      warning: JSON.stringify({
+        code: 'POST_TAP_CONTEXT_PROBE_FAILED',
+        message: 'Post-tap context probe failed.',
+        reason,
+      }),
+    };
+  }
+}
+
 /**
  * Build the MCP response envelope for a successful AX press — shape matches
  * the coordinate-tap response so callers do not need to branch on `backend`
@@ -398,6 +792,7 @@ export function buildAXPressResponse(args: {
   ambiguous: boolean;
   clampedFrom?: { x: number; y: number };
   pressActions: string[];
+  effect: AXPressVerification['effect'];
 }): Record<string, unknown> {
   const {
     match,
@@ -410,6 +805,7 @@ export function buildAXPressResponse(args: {
     ambiguous,
     clampedFrom,
     pressActions,
+    effect,
   } = args;
   const response: Record<string, unknown> = {
     status: 'tapped',
@@ -423,6 +819,8 @@ export function buildAXPressResponse(args: {
     backend: 'ax-press',
     deviceId,
     totalMatches,
+    verified: true,
+    effect,
     _meta: {
       backendKind: 'ax-press',
       headless: true,

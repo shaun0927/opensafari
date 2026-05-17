@@ -22,7 +22,7 @@ explicit, enable capacity planning, and provide a stable contract that CI can ve
 | `previousSnapshots` (allocation baselines) | [`src/tools/flutter-memory-profile.ts:63`](../src/tools/flutter-memory-profile.ts#L63) | LRU, `MAX_DEVICES` (16) entries | 128 KB / device |
 | `proxies` (network proxy state) | [`src/tools/flutter-network.ts:42`](../src/tools/flutter-network.ts#L42) | FIFO, `MAX_ENTRIES` (1000) entries per device; removed on `handleStop()` | 1 MB / device |
 | `trackers` (rebuild tracking) | [`src/tools/flutter-track-rebuilds.ts:51`](../src/tools/flutter-track-rebuilds.ts#L51) | `MAX_EVENTS_PER_TRACKER` (10,000) events; removed on stop | 2 MB / device |
-| `flutterClientCache` | [`src/tools/native-input-backend.ts:670`](../src/tools/native-input-backend.ts#L670) | Per bundleId+deviceId; negative entries expire after `NEGATIVE_CACHE_TTL_MS` (30 s) | 64 KB / entry |
+| `flutterClientCache` | [`src/input/flutter-resolver.ts:32`](../src/input/flutter-resolver.ts#L32) | Per bundleId+deviceId; negative entries expire after `NEGATIVE_CACHE_TTL_MS` (30 s) | 64 KB / entry |
 | `pools` (tab manager) | [`src/tools/tab-manager.ts:25`](../src/tools/tab-manager.ts#L25) | Per device; removed on `disposeDevice()` | 256 KB / pool |
 | `peakRssBytes` / `sampleCount` (memory tracker) | [`src/metrics/memory-tracker.ts:55`](../src/metrics/memory-tracker.ts#L55) | Process lifetime (scalar integers) | < 1 KB |
 

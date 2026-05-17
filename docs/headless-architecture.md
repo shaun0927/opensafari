@@ -224,6 +224,134 @@ element-scoped also cleanly preserves `app_tap({x, y})`'s contract:
 coordinate-only callers continue down the existing Tier 0 → 1 → 2 → 3
 → 4 chain.
 
+Raw-bridge consumers can now query the same foreground diagnostics without
+going through MCP:
+
+- `dist/ax-bridge context --device <udid> [--expect-bundle <bundle>]`
+- `dist/sim-hid-bridge context <udid> [--expect-bundle <bundle>]`
+- `dist/sim-hid-bridge tap|swipe ... --expect-bundle <bundle> [--require-match true]`
+
+The raw SimHID wrapper appends post-input `classification`, `verified`,
+`frontmost`, and `expectedBundleMatched` fields so downstream QA can separate a
+clean in-app dispatch from simulator-chrome or SpringBoard outcomes.
+
+#### Raw SimHID CLI reference
+
+This subsection is the single source of truth for the `dist/sim-hid-bridge`
+wrapper contract. It is mirrored out of `cli/sim-hid-bridge.ts` (wrapper argv
+parsing) and `src/tools/raw-mobile-context.ts` (response shape and
+classification union). Downstream QA authors should not have to read TypeScript
+to script against the CLI.
+
+##### CLI synopsis
+
+```bash
+# Foreground-context probe. No HID dispatch; only reads the AX tree.
+dist/sim-hid-bridge context <udid> \
+  [--expect-bundle <bundle-id>] \
+  [--require-match true|false] \
+  [--settle-ms <n>]                         # default 1200
+```
+
+```bash
+# Tap. Forwarded to the native bridge, then the wrapper probes foreground
+# context and appends classification/verified/frontmost/etc.
+dist/sim-hid-bridge <udid> tap <x> <y> [duration] \
+  [--expect-bundle <bundle-id>] \
+  [--require-match true|false] \
+  [--settle-ms <n>]                         # default 1200
+```
+
+```bash
+# Swipe. Same post-input enrichment as tap.
+dist/sim-hid-bridge <udid> swipe <x1> <y1> <x2> <y2> [duration] \
+  [--expect-bundle <bundle-id>] \
+  [--require-match true|false] \
+  [--settle-ms <n>]                         # default 1200
+```
+
+```bash
+# Framework + private-symbol probe. Not subject to wrapper flags.
+dist/sim-hid-bridge diag [udid]
+```
+
+##### Wrapper flags
+
+These flags are parsed by the TypeScript wrapper (`parseWrapperFlags` in
+`cli/sim-hid-bridge.ts`). Any other argv is passed through verbatim to the
+native binary.
+
+| Flag | Type | Default | Applies to | Description |
+|---|---|---|---|---|
+| `--expect-bundle` | `string` (bundle identifier) | — (unset) | `context`, `tap`, `swipe` | Bundle ID the caller expects to be frontmost after the action. Fed to `ax-bridge context --expect-bundle` so the classifier can mark `expectedBundleMatched` as `true`/`false` instead of leaving it `undefined`. |
+| `--require-match` | `true` \| `false` (string) | `false` | `context`, `tap`, `swipe` | When `true` **and** `expectedBundleMatched === false`, the wrapper exits non-zero with `code: "EXPECTED_BUNDLE_MISMATCH"` instead of returning the enriched JSON as success. Used by CI lanes that want a hard failure when the simulator drifts to SpringBoard or Simulator chrome. |
+| `--settle-ms` | `integer` (milliseconds, `≥ 0`) | `1200` | `context`, `tap`, `swipe` | How long the wrapper waits before probing foreground context. Value is applied as a plain `setTimeout`; a non-positive / unparseable value falls back to the 1200ms default. See **§ Settle-window rationale** for tuning guidance. |
+
+##### Response shape
+
+The `context`, `tap`, and `swipe` subcommands emit a JSON object whose
+foreground-diagnostics half is a `RawMobileContextResult`
+(`src/tools/raw-mobile-context.ts:27-41`). For `tap`/`swipe` the native
+bridge's fields (`ok`, `dispatch`, …) are merged on top; the table below lists
+only the context half that this wrapper is responsible for.
+
+| Field | Type | Nullable? | Meaning |
+|---|---|---|---|
+| `deviceId` | `string` | no | UDID of the simulator the probe targeted. Echoes the argv UDID. |
+| `frontmost` | `{ bundleId?: string }` | no | Wrapper object for the inferred foreground bundle. Empty object `{}` when no bundle could be inferred; `bundleId` is populated when the AX probe or `runningApps` heuristic produced a single candidate. |
+| `contextVerified` | `boolean` | no | `true` when the AX probe itself produced a confident foreground reading (not a fallback). Does not consider `--expect-bundle`. |
+| `expectedBundle` | `string` | yes | Echoes the `--expect-bundle` argv value. Omitted (undefined) when the flag was not supplied. |
+| `expectedBundleMatched` | `boolean` | yes | `true` if the probe confirmed the expected bundle is frontmost, `false` if it confirmed a mismatch, `undefined` (omitted) if the probe was inconclusive or `--expect-bundle` was not supplied. |
+| `classification` | `RawMobileClassification` (string enum) | no | One of the seven values documented in **§ Classification values**. Always present; `FOREGROUND_CONTEXT_UNAVAILABLE` is the fallback. |
+| `verified` | `boolean` | no | Convenience mirror of the "the caller can trust `classification` as proof the action landed in the expected app" judgement. See **§ Classification values** for the per-variant value. |
+| `reason` | `string` | no | Human-readable rationale for `classification`. Propagated from the underlying `MobileContextProbe`. |
+| `warnings` | `string[]` | no | Non-fatal issues (missing AX root, ax-bridge fallback fired, etc.). Empty array when clean. Always present. |
+| `runningApps` | `RunningAppInfo[]` | no | Foreground app list observed at probe time, filtered of system chrome. Empty array is valid. |
+| `visibleSummary` | `MobileContextProbe['visibleSummary']` | no | Compact summary of visible AX labels used to seed classification. Structure is stable but opaque to CLI consumers; inspect as-is for debugging. |
+
+##### Classification values
+
+Emission logic lives in `probeToRawMobileContext`
+(`src/tools/raw-mobile-context.ts:43-106`). Every union member of
+`RawMobileClassification` (`src/tools/raw-mobile-context.ts:18-25`) appears
+below exactly once.
+
+| Value | `verified` | Emitted when | Example |
+|---|---|---|---|
+| `TARGET_BUNDLE_CONFIRMED` | `true` | `surface === 'app_content'` AND the probe resolved the frontmost bundle to the value passed via `--expect-bundle`. | `context $UDID --expect-bundle com.omofictions.app` against a foregrounded `com.omofictions.app`. |
+| `EXPECTED_BUNDLE_MISMATCH` | `false` | `surface === 'app_content'` AND `--expect-bundle` was supplied AND the probe confirmed a different bundle is frontmost (not merely unknown). | `context $UDID --expect-bundle com.omofictions.app` while Settings is foregrounded. |
+| `SPRINGBOARD_FOREGROUND` | `true` | The probe detected a SpringBoard-like surface (home screen, app switcher). `verified: true` — SpringBoard is an authoritative surface even though it is not the target app. | `context $UDID` immediately after `app_terminate`. |
+| `SIMULATOR_CHROME_FOREGROUND` | `false` | The probe detected the Simulator.app chrome itself (window frame, menu bar) rather than an iOS foreground app — typically because input routed to the host instead of the guest. | `context $UDID` after a tap that missed the guest viewport. |
+| `APP_CONTENT_FOREGROUND` | inherits `contextVerified` when `--expect-bundle` is unset; `false` otherwise | `surface === 'app_content'` AND a single non-system bundle was inferred, **but** the caller's expectation was not satisfied (no `--expect-bundle` supplied, or expectation is indeterminate). | `context $UDID` against a foregrounded app without `--expect-bundle`. |
+| `APP_CONTENT_UNVERIFIED` | inherits `contextVerified` when `--expect-bundle` is unset; `false` otherwise | `surface === 'app_content'` but the probe could not pin down a single frontmost bundle (zero or multiple candidates survived filtering). | `context $UDID` during a cold-launch splash with no AX-visible app identity. |
+| `FOREGROUND_CONTEXT_UNAVAILABLE` | `false` | `surface` was `'empty'` or `'unknown'` — the AX root was missing or unreadable. Also used as the wrapper-level fallback when `ax-bridge` errored. Inspect `warnings` for the specific failure mode. | `context $UDID` against a locked device, or immediately after boot before SpringBoard finished rendering. |
+| `TRANSITIONAL_STATE_TIMEOUT` | `false` | Promoted by the sim-hid-bridge wrapper when `--expect-bundle <b>` is supplied, `<b>` is present in `runningApps`, and the AX tree stays empty across two settle windows (`--max-settle-retries ≥ 1`). Distinguishes "expected app is running but its UI is still loading" (retryable) from `FOREGROUND_CONTEXT_UNAVAILABLE` ("no AX data at all", abort). Gated by `--max-settle-retries <0|1|2|3>` (default `1`); set `0` to restore the pre-issue single-probe behavior. | `context $UDID --expect-bundle com.example.app` during a long-lived cold-launch spinner where `com.example.app` is running but its first frame has not rendered yet. |
+
+##### Settle-window rationale
+
+`--settle-ms` defaults to **1200ms**. That value is a compromise: short enough
+that a healthy tight-loop test does not pay seconds of idle wait per dispatch,
+long enough that a cold AX tree has time to settle on typical hardware. Tune
+it when the default does not fit the scenario:
+
+- **Cold-launch of a heavy app → raise to `--settle-ms 2500`.** First-launch
+  AX population for apps that build a large view tree (Flutter shells, Unity
+  viewports) routinely exceeds 1200ms. Without the bump, the probe fires while
+  the root is still empty and classification collapses to
+  `APP_CONTENT_UNVERIFIED` or `FOREGROUND_CONTEXT_UNAVAILABLE`, even though a
+  human would read the screen as "the app is up."
+- **Tight retry loop on a prewarmed app → lower to `--settle-ms 400`.** When
+  the app is already foregrounded and the AX tree is stable, 1200ms per tap
+  is wall-clock waste — a suite that sends 50 taps loses a full minute to the
+  default. 400ms is enough to let a single-frame UI update propagate while
+  keeping the loop honest.
+- **Black-spinner diagnosis → raise to `--settle-ms 5000` and inspect
+  `warnings`.** When a tap "looks successful" but the next screenshot is
+  black, the usual cause is input routing to Simulator chrome instead of the
+  guest. Raising the settle gives the post-input context probe room to detect
+  `SIMULATOR_CHROME_FOREGROUND` or `FOREGROUND_CONTEXT_UNAVAILABLE` reliably
+  instead of racing past it; the populated `warnings` array then names the
+  specific failure mode.
 Selection contract:
 
 - Enabled for `app_tap_element` / `app_type_element` by default.
@@ -246,7 +374,11 @@ Selection contract:
 Response shape includes `_meta.backendKind === 'ax-press'`,
 `_meta.headless === true`, and `_meta.axActions` listing every action the
 element advertised — useful for diagnosing why a press landed where it
-did.
+did. When `ax-press` cannot prove a post-action effect and the tool falls back
+to a coordinate backend, `app_tap_element` now preserves the same verified
+interaction contract as `app_tap`: transport-only success is downgraded to
+`verified: false` / `effect: "verification_unavailable"` or surfaced as
+`TAP_NO_EFFECT` when the UI fingerprint stays unchanged after the tap.
 
 Status: **Production** (Tier 1.5). Shipped in
 [#552](https://github.com/shaun0927/opensafari/issues/552). This is the
@@ -437,7 +569,93 @@ See [Memory Budget](memory-budget.md) for the per-cache retention budget and evi
 
 ---
 
-## 9. References
+## 9. Batching API (#705)
+
+### Motivation
+
+Every call to `SimulatorKitHIDInputBackend` spawns a short-lived
+`sim-hid-bridge` child process (~10–50 ms OS overhead per spawn on a typical
+macOS host). When a test workflow sends many taps in rapid succession —
+filling a PIN pad, navigating a multi-step carousel, clicking through a
+sequence of buttons — each `tap()` call pays that spawn cost independently.
+
+The batching API introduced in issue #705 provides an explicit way to
+express that a set of taps forms a logical unit, enabling callers to avoid
+repeated `getInputBackend()` resolution overhead and laying the groundwork
+for a future single-spawn batch subcommand in the Swift bridge.
+
+### `supportsBatching()` capability flag
+
+Every `InputBackend` implementation exposes:
+
+```typescript
+supportsBatching(): boolean;
+```
+
+Callers **must** check this before calling `tapBatch()`. The method is
+absent on backends that return `false`.
+
+### `tapBatch(deviceId, events[])` optional method
+
+Available only on backends where `supportsBatching()` returns `true`.
+
+```typescript
+interface BatchTapEvent {
+  x: number;
+  y: number;
+  duration?: number; // long-press duration in seconds
+}
+
+tapBatch?(deviceId: string, events: BatchTapEvent[]): Promise<void>;
+```
+
+Events are dispatched in order. If any event fails the batch stops and
+rejects with that error — already-dispatched events are NOT rolled back
+(HID injection is fire-and-forget at the OS level).
+
+### Backend support matrix
+
+| Backend | `supportsBatching()` | `tapBatch` available | Reason |
+|---------|---------------------|----------------------|--------|
+| `SimulatorKitHIDInputBackend` | `true` | Yes | Compiled bridge binary; each spawn is the dominant cost |
+| `SimctlInputBackend` | `false` | No | Each invocation opens a separate Xcode IPC channel — no spawn reduction possible |
+| `WebKitInputBackend` | `false` | No | In-process JS injection over an open WebSocket — no spawn overhead |
+| `FlutterVMInputBackend` | `false` | No | `evaluate` over WebSocket — no spawn overhead |
+| `AppleScriptInputBackend` | `false` | No | Opt-in focus-stealing path; per-tap activation cost is inherent to the backend design |
+| `PointerServiceInputBackend` | `false` | No | Phase 1 experimental; batching deferred to Phase 2 of #590 |
+
+### Usage pattern
+
+```typescript
+const backend = await getInputBackend(deviceId);
+
+if (backend.supportsBatching() && backend.tapBatch) {
+  // Preferred for repeated taps on a stable simhid backend
+  await backend.tapBatch(deviceId, [
+    { x: 100, y: 200 },
+    { x: 150, y: 250 },
+    { x: 200, y: 300 },
+  ]);
+} else {
+  // Fallback: per-call dispatch for backends without batching support
+  for (const { x, y } of taps) {
+    await backend.tap(deviceId, x, y);
+  }
+}
+```
+
+### AppleScript activation caching (opt-in path only)
+
+`AppleScriptInputBackend` caches the last Simulator activation timestamp with
+a 2 s TTL. Consecutive operations within the same burst (e.g. typing a PIN
+digit by digit via `keypress` in a loop) skip the `osascript activate`
+call and 150 ms settle delay when Simulator is believed to still be
+frontmost. This optimisation is scoped to the opt-in focus-stealing path
+and does **not** affect any headless tier.
+
+---
+
+## 10. References
 
 ### Related source files
 
@@ -473,3 +691,4 @@ See [Memory Budget](memory-budget.md) for the per-cache retention budget and evi
 | [#496](https://github.com/shaun0927/opensafari/issues/496) | This document |
 | [#537](https://github.com/shaun0927/opensafari/pull/537) | Disable SimHID tap/swipe routing on Xcode 26+ while the Apple regression is open |
 | [#552](https://github.com/shaun0927/opensafari/issues/552) | `AccessibilityPressInputBackend` (Tier 1.5) — headless element-targeted tap/focus on Xcode 26+ |
+| [#705](https://github.com/shaun0927/opensafari/issues/705) | Reduce process-spawn overhead in native input routing — batching API (`supportsBatching` / `tapBatch`) on `SimulatorKitHIDInputBackend`; activation caching on `AppleScriptInputBackend` (opt-in path only) |
