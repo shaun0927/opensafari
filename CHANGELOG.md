@@ -4,13 +4,69 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-### Added
+## [0.6.1] - 2026-05-17
 
-- **`TRANSITIONAL_STATE_TIMEOUT` classification + `--max-settle-retries` flag for `dist/sim-hid-bridge`** (#46). The wrapper now distinguishes "expected app is running but its UI is still loading" from "no AX data at all": when `--expect-bundle <b>` is supplied and the first settle window returns `FOREGROUND_CONTEXT_UNAVAILABLE` while `<b>` is in `runningApps`, the wrapper performs one bounded re-probe (another `settleMs` window) and promotes to `TRANSITIONAL_STATE_TIMEOUT` if the tree is still empty. The re-probe is capped by `--max-settle-retries <0|1|2|3>` (default `1`); set `0` to restore the pre-issue single-probe behavior byte-for-byte. The surface classifier in `src/tools/raw-mobile-context.ts` stays surface-scoped and never emits the new variant itself — promotion is a wrapper-layer concern.
+**OpenSafari 0.6.1 is a *catch-up release* that lands every change accumulated on `develop` since 0.5.0 onto `main` and npm.** `v0.6.0` was tagged on 2026-05-16 but never merged to `main` and never published to the npm registry (`npm view opensafari-mcp versions` confirms `0.5.0` was the latest published until this release). Rather than ship a separate 0.6.0 → 0.6.1 pair, 0.6.1 rolls the entire 0.6.0 body forward together with one targeted pasteboard fix uncovered after the 0.6.0 tag. This is a feature-and-fix release; there are no breaking changes since 0.5.0.
+
+**Headline fix (post-0.6.0)**:
+
+- **`app_type_element` pasteboard backend now works on `AXSecureTextField` (password) elements (#760, #761)**. The readback contract introduced for #639 PR C compared `endsWith`/`includes` against the focused element's AX value, but iOS masks the value of any secure text field with bullet characters (`••••…`) regardless of plaintext content, so every successful password paste was rejected as `PASTE_NOT_APPLIED`. The same OS-mask divergence on the simhid path was escalating into `TEXT_INPUT_DROPPED` / `TEXT_INPUT_LAYOUT_MISMATCH` with `isError: true`. After this release the verifier detects secure fields by role (`AXSecureTextField`) or trait (`AXSecureTextField`, `secure text field`) and returns silently — the readback contract is inconclusive by design for this element class. The pasteboard backend also now honours the documented `verify: false` parameter symmetrically with the simhid path (it was previously a silent no-op for pasteboard).
+
+**Headline change (rolled forward from 0.6.0)**:
+
+- **`ax-bridge` recursive scored content-root search (#40, follow-up to #4)**. Replaces the single-pass immediate-child content-root heuristic with a recursive, deterministic, integer-scored search, closing the silent-empty-content bug that blocked the "Functional success" section of #4 on Xcode 26.4 / iOS 26.4. The raw bridge now refuses to return a chrome-only tree: when no subtree exposes any app-level accessibility semantics, it emits a typed `DEVICE_CONTENT_ROOT_EMPTY` error with exit code 1 instead of silently falling back to the bare `AXWindow`. Full per-rubric scoring (iOSContentGroup +10 / fits expected rect +8 / app-semantics descendants +5 capped at +25 / toolbar or menu bar −10 / zero descendants −5) plus chrome denylist now live in both `src/native/ax-bridge.swift` and the TypeScript reference scorer `src/native/ax-bridge-content-root.ts`; the two implementations are kept in lock-step by 6 fixture unit tests in `tests/unit/ax-bridge-content-root.test.ts`.
 
 ### Fixed
 
+- **`app_type_element` AXSecureTextField paste verification (#760, #761)** — see headline above. `assertPasteApplied` accepts an optional `{ role, traits }` descriptor and returns silently when the descriptor signals a secure text field; `typeViaPasteboard` forwards the inspected node's role/traits into the assert and adds `secureField?: true` to `PasteboardTypeResult`. The tool layer echoes `secureField: true` in the success response so callers can distinguish "no readback because secure field" from "no readback because verify opted out". `verifyTypedText` on the simhid path detects the same signal and returns `{ verified: 'unknown', verify_method: 'ax-value-not-readable' }` instead of escalating to a structured input-error code. Unit coverage: 10 new cases in `tests/unit/pasteboard-input.test.ts`, 2 new cases in `tests/unit/app-type-element.test.ts` (inside the Tier-3 readback describe), both passing alongside the existing 2632 unit tests.
 - **PointerService Phase 1 swipe semantics clarified (#649)**. `src/tools/pointer-service-input-backend.ts` previously claimed that a swipe failure under `OPENSAFARI_ENABLE_POINTERSERVICE=1` would "surface via the tier chain when we bubble back up". That is not the runtime behaviour: `getInputBackend` caches `PointerServiceInputBackend` as the selected backend, so `swipe()` hard-errors with `HeadlessInputUnavailableError` on Xcode 26+ and does NOT re-enter the tier chain. The comment has been rewritten to match the shipped code and to direct callers to the two working escape hatches (leave the env flag unset, or use an element-targeted swipe). No runtime behaviour changed.
+- **Boot / lifecycle / network reliability batch (#752, #753, #754, #755, #756, #757)**. `device_boot` now keeps boot diagnostics reliable when WebKit is late (#756, #757); zombie cleanup no longer spins indefinitely on stale locks (#754, #755); network interception is scoped to MCP sessions and preserves XHR restore semantics under session intercepts (#752, #753); the proxy lifecycle remains stable under parallel startup; Flutter VM resolution remains stable under parallel input.
+- **`fix(dom-input)`: always dispatch input event (#726)**. Multiple iterations addressing review feedback — always fire key events with conditional value write, guard `appendChar` before keyboard dispatch.
+- **`fix(simulator)`: trailing-bracket strip + bundleId regex + simctl rotate route (#708 series)**. `launchctl` label normalization now strips all trailing bracket groups; `bundleId` regex tightened and not-installed detection centralized; `simctl rotate` routed through `deps.simctl.exec`; shutdown stays best-effort after nuclear erase.
+- **`fix(webkit)`**: direct host.emit in EventBridge transport forwarding; `clearCookies` effective on `document.cookie` fallback; throwing protocol-event handler routed through `transport:error`; circular dep resolved, unimplemented `timeoutMs` removed, viewport query unified; RFC 6265 domain matching for `getCookies` filter; `enabledDomainsPerTarget` cleanup on RPC failure.
+
+### Added
+
+- **`TRANSITIONAL_STATE_TIMEOUT` classification + `--max-settle-retries` flag for `dist/sim-hid-bridge`** (#46). The wrapper now distinguishes "expected app is running but its UI is still loading" from "no AX data at all": when `--expect-bundle <b>` is supplied and the first settle window returns `FOREGROUND_CONTEXT_UNAVAILABLE` while `<b>` is in `runningApps`, the wrapper performs one bounded re-probe (another `settleMs` window) and promotes to `TRANSITIONAL_STATE_TIMEOUT` if the tree is still empty. Capped by `--max-settle-retries <0|1|2|3>` (default `1`); set `0` to restore the pre-issue single-probe behaviour byte-for-byte. The surface classifier in `src/tools/raw-mobile-context.ts` stays surface-scoped and never emits the new variant itself — promotion is a wrapper-layer concern.
+- **`feat(tap)`: scale AX frame coords from macOS-pt to iOS-pt (#693 WU3, #720)** plus dump-root size emission (#693 WU3-prep, #695) and structured ErrorJSON STDOUT from the ax-bridge wrapper (#693 WU1, #694). Closes the long-standing tap-coordinate offset on retina simulators by carrying the macOS-pt → iOS-pt scale factor through the wrapper and applying it at coordinate dispatch. Regression coverage in `tests/unit/coord-regression.test.ts` (#722).
+- **`feat(ax-bridge)`: `--debug` flag emits machine-readable stderr (#660)** plus walker candidate diagnostics. Bare-flag coercion restricted to debug/verbose (#660). Gated ko-KR push-permission live suite added (#660, #692). `localized-button-matcher` gains an extension seam for app-specific labels (#639 follow-up).
+
+### Refactored — major decomposition batch
+
+The 0.6.0 cycle landed three large internal decompositions to support the simulator-chrome and reliability work. All public surfaces (tool names, schemas, response shapes) are preserved.
+
+- **WebKit module split (#706 1/5–5/5)**: error classes (1/5), protocol transport (2/5), target session manager (3/5), browser command implementations (4/5), typed event adapters + finalized facade (5/5). `WebKitClient` is now a thin facade over focused submodules; the public import surface is unchanged. Multiple post-merge fixes preserved behaviour contracts flagged in review.
+- **Simulator module split (#708 1/4–4/4)**: errors + device catalog (1/4), lifecycle (2/4), app manager (3/4), UI controller + finalized facade (4/4). Hardens `simctl` JSON parsing and the fuzzy device resolver.
+- **Input layer split (#707 a/b)**: backends and resolver into focused modules (a); remaining backends consolidated into `src/input/` (b). DOM-input script builders centralized for webkit + native input (#709). Migrated paths now enforce `no-explicit-any` via lint override (#710 b).
+- **Protocol typing (#710 a/b)**: typed DTOs + fixture builders for the WebKit RDP boundary (a); typed RDP guards with `console.type` fallback restored.
+
+### Performance
+
+- **CLI lazy-load (#700 a, #729; #700 b, #728)**: command implementations and MCP handler implementations are now lazy-loaded behind static schemas; cold-start measurably faster, especially in `audit` and `serve` flows.
+- **WebKit fast paths (#702 a/b, #725)**: new `evaluateValue` helper, screenshot fast path, batched navigation-state read, deduplicated domain enables.
+- **Native-input batching (#705, #723)**: reduces process spawns via a batching capability on the simctl backend.
+- **Proxy readiness (#701, #727)**: split process readiness from target readiness so the proxy can serve target traffic the instant the target is reachable, without waiting for the proxy to settle on its own port.
+- **Simulator boot polling (#703, #724)**: bootstatus-aware polling with shared state cache; eliminates redundant `simctl bootstatus` probes when multiple tools observe boot in parallel.
+- **Web Inspector socket discovery (#704, #719)**: cached with staged backoff; first-call cost paid once per simulator boot.
+
+### Security
+
+- **HTTP MCP transport hardening (#714)** plus follow-ups: tighter `/mcp` auth + insecure-mode posture, hardened HTTP auth comparison, high-risk tool gating in HTTP mode (with blocked-tool hiding), expanded high-risk gate to JS+VM bypass surfaces, `mock_geolocation` gated as HTTP high-risk and non-finite numerics rejected. All HTTP-only — STDIO transport unaffected.
+- **Auth profile persistence hardening (#716)** with follow-up review feedback applied. `tests/unit/auth-manager-persistence.test.ts` bounds the atomic temp filename to a fixed-length hash prefix.
+- **Audit log retention hardening (#711, #717)**.
+- **CI: separate runtime and dev dependency audits (#712, #718)** so dev-only vulnerabilities do not block runtime audit policy.
+
+### CI / DX
+
+- Lint enforces `no-explicit-any` on migrated webkit-rdp paths (#710 b); migrated-path override ordered after the tests glob to avoid suppressing the rule in test code (#741 follow-up).
+- Audit policy for runtime vs dev dependencies separated.
+
+### Migration notes
+
+- **No tool-name or schema changes since 0.5.0.** All `app_*`, `webkit_*`, and bridge tools keep their parameter shapes and response envelopes.
+- **`app_type_element` response shape gains an optional `secureField: true` field** on the pasteboard backend when the focused element is an `AXSecureTextField`. Existing callers that ignore unknown response fields are unaffected.
+- **The `verify: false` parameter on `app_type_element` is now honoured on both backends** (`auto`/`simhid` and `pasteboard`). Callers that were relying on the previous silent-no-op on pasteboard should review their flows — readback skip is now actually applied.
+- **HTTP MCP transport** tightens defaults; STDIO transport (the default) is unaffected. Review the security section above if you operate a forked HTTP deployment.
 
 ## [0.6.0] - 2026-04-20
 
