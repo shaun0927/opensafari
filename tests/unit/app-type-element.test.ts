@@ -697,6 +697,67 @@ describe('app_type_element — Tier 3 readback verification (issue #39)', () => 
     expect(body.error.expected).not.toBe(long);
   });
 
+  // Issue #760 — secure text fields (password inputs) return an OS-masked
+  // AXValue (bullet chars) regardless of the underlying plaintext. The
+  // verifier must report `verified: 'unknown'` for this element class
+  // instead of escalating to TEXT_INPUT_DROPPED / TEXT_INPUT_LAYOUT_MISMATCH
+  // and surfacing `isError: true`, otherwise every password paste is
+  // rejected as a typing failure.
+  it('reports verified: "unknown" on AXSecureTextField (mask cannot be compared) (#760)', async () => {
+    mockBackendKind = 'simhid';
+    const node = mkNode({ path: '0/7', role: 'AXTextField' });
+    mockQuery.mockResolvedValue(makeQueryResult([node]));
+    mockInspect.mockResolvedValueOnce({
+      ...node,
+      // iOS exposes the role as AXTextField with AXSecureTextField as a
+      // trait; some surfaces expose the lower-case alias. Either signal
+      // must trigger the skip.
+      role: 'AXTextField',
+      traits: ['AXSecureTextField', 'secure text field'],
+      value: '••••••••••••••••',
+    });
+
+    const result = await handler('session', {
+      identifier: 'password-field',
+      text: '0ZPGw9^sxpJHx2$h',
+      timeout: 0,
+      focusDelay: 0,
+    });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(result.isError).toBeUndefined();
+    expect(body.verified).toBe('unknown');
+    expect(body.verify_method).toBe('ax-value-not-readable');
+    expect(body.verify_reason).toContain('secure');
+    // Must NOT escalate to a structured input error — secure-field masking
+    // is inconclusive, not a divergence.
+    expect(body.error).toBeUndefined();
+  });
+
+  it('treats role === AXSecureTextField as a secure field even when traits are empty (#760)', async () => {
+    mockBackendKind = 'simhid';
+    const node = mkNode({ path: '0/8', role: 'AXSecureTextField' });
+    mockQuery.mockResolvedValue(makeQueryResult([node]));
+    mockInspect.mockResolvedValueOnce({
+      ...node,
+      role: 'AXSecureTextField',
+      traits: [],
+      value: '••••••••',
+    });
+
+    const result = await handler('session', {
+      identifier: 'password-field',
+      text: 'hunter2!',
+      timeout: 0,
+      focusDelay: 0,
+    });
+    const body = JSON.parse(result.content[0].text);
+
+    expect(result.isError).toBeUndefined();
+    expect(body.verified).toBe('unknown');
+    expect(body.verify_method).toBe('ax-value-not-readable');
+  });
+
   // Codex P2 review on PR #680 — when the divergence is an insertion
   // (e.g. auto-format inserts a space) rather than a drop, the payload
   // would have carried `code: TEXT_INPUT_DROPPED` with empty

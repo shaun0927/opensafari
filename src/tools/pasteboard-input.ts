@@ -53,6 +53,41 @@ export interface PasteNotAppliedError {
 }
 
 /**
+ * Element descriptor passed into `assertPasteApplied` so the verifier can
+ * recognise contexts where the post-paste AX value is OS-suppressed and the
+ * `endsWith`/`includes` check cannot distinguish "paste succeeded" from
+ * "paste failed". The only such context today is `AXSecureTextField`
+ * (password input), whose AXValue is always replaced with bullet characters
+ * regardless of the underlying plaintext.
+ */
+export interface PasteFocusedElementDescriptor {
+  role?: string;
+  traits?: string[];
+}
+
+/**
+ * Returns true when the focused element exposes a secure-text-field signal.
+ * iOS masks the AXValue of these fields with bullet characters, so any
+ * readback comparison against the expected plaintext will always diverge —
+ * the readback contract is inconclusive by design for this element class.
+ *
+ * Accepted signals (role takes precedence over traits):
+ *   - `role === 'AXSecureTextField'`
+ *   - `traits` contains `'AXSecureTextField'` or `'secure text field'`
+ */
+export function isSecureFieldDescriptor(
+  descriptor: PasteFocusedElementDescriptor | undefined,
+): boolean {
+  if (!descriptor) return false;
+  if (descriptor.role === 'AXSecureTextField') return true;
+  const traits = descriptor.traits;
+  if (!traits) return false;
+  return (
+    traits.includes('AXSecureTextField') || traits.includes('secure text field')
+  );
+}
+
+/**
  * Compares the post-paste AX value against the expected payload and throws a
  * structured `PASTE_NOT_APPLIED` error when the paste did not land. Pure
  * function so the readback contract can be unit-tested without mocking the
@@ -65,13 +100,22 @@ export interface PasteNotAppliedError {
  * `actual === undefined` (bridge readback failed) is treated as inconclusive
  * and does NOT throw — we cannot distinguish "paste failed" from "bridge
  * unavailable" in that case.
+ *
+ * `options.role` / `options.traits` (issue #760) — when the focused element is
+ * a secure text field (password input), iOS masks the AXValue with bullet
+ * characters and any plaintext comparison will always diverge. We treat the
+ * readback as inconclusive for that element class and skip the throw rather
+ * than rejecting every successful password paste. Pass the inspected node's
+ * `role` and `traits` so the verifier can detect this case.
  */
 export function assertPasteApplied(
   actual: string | undefined,
   expected: string,
   permissionDialogObserved: boolean,
+  options?: PasteFocusedElementDescriptor,
 ): void {
   if (actual === undefined || actual === null) return;
+  if (isSecureFieldDescriptor(options)) return;
   const applied = actual.endsWith(expected) || actual.includes(expected);
   if (applied) return;
   const err: PasteNotAppliedError = {
@@ -90,6 +134,13 @@ export interface PasteboardTypeResult {
   permissionDialog: PermissionDialogOutcome;
   permissionDialogMatchedLabel?: string;
   elapsedMs: number;
+  /**
+   * True when readback verification was skipped because the focused element
+   * advertised a secure-text-field signal (`AXSecureTextField` role or trait).
+   * Surfaced so callers can distinguish "no readback because secure field"
+   * from "no readback because verify opted out" (issue #760).
+   */
+  secureField?: boolean;
 }
 
 export interface PasteboardTypeOptions {
@@ -187,17 +238,21 @@ export async function typeViaPasteboard(
   // Readback verification: if the caller supplied the expected payload and an
   // element path, re-read the AX value and confirm the paste landed.
   const { expected, focusedElementPath } = options;
+  let secureField = false;
   if (expected !== undefined && focusedElementPath) {
     const bridge = getAccessibilityBridge();
     let actual: string | undefined;
+    let descriptor: PasteFocusedElementDescriptor | undefined;
     try {
       const node = await bridge.inspect(focusedElementPath, deviceId);
       actual = node.value;
+      descriptor = { role: node.role, traits: node.traits };
     } catch {
       // Bridge error — treat as unknown; do not surface PASTE_NOT_APPLIED
       // because we cannot distinguish "paste failed" from "bridge unavailable".
     }
-    assertPasteApplied(actual, expected, permissionDialogObserved);
+    secureField = isSecureFieldDescriptor(descriptor);
+    assertPasteApplied(actual, expected, permissionDialogObserved, descriptor);
   }
 
   return {
@@ -207,6 +262,7 @@ export async function typeViaPasteboard(
     permissionDialog,
     permissionDialogMatchedLabel,
     elapsedMs: Date.now() - startedAt,
+    ...(secureField ? { secureField: true } : {}),
   };
 }
 
