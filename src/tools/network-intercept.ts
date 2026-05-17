@@ -1,29 +1,21 @@
 import { MCPServer, getWebKitClient } from '../mcp-server';
 import {
-  NetworkInterceptor,
   type InterceptorClient,
   type InterceptRule,
 } from '../network-interceptor';
+import {
+  getNetworkInterceptorForSession,
+  networkInterceptor,
+  removeNetworkInterceptorForSession,
+  resetNetworkInterceptorsForTest,
+} from './network-intercept-cache';
 
-const DEFAULT_INTERCEPTOR_SCOPE = '__default__';
-const interceptorsBySession = new Map<string, NetworkInterceptor>();
-
-export function getNetworkInterceptorForSession(sessionId?: string): NetworkInterceptor {
-  const key = sessionId || DEFAULT_INTERCEPTOR_SCOPE;
-  let interceptor = interceptorsBySession.get(key);
-  if (!interceptor) {
-    interceptor = new NetworkInterceptor();
-    interceptorsBySession.set(key, interceptor);
-  }
-  return interceptor;
-}
-
-export function resetNetworkInterceptorsForTest(): void {
-  interceptorsBySession.clear();
-}
-
-/** Legacy singleton for callers that are not yet session-aware. */
-export const networkInterceptor = getNetworkInterceptorForSession(DEFAULT_INTERCEPTOR_SCOPE);
+export {
+  getNetworkInterceptorForSession,
+  networkInterceptor,
+  removeNetworkInterceptorForSession,
+  resetNetworkInterceptorsForTest,
+};
 
 function resolveClient(deviceId: unknown): InterceptorClient | null {
   return getWebKitClient(typeof deviceId === 'string' ? deviceId : undefined);
