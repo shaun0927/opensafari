@@ -287,11 +287,17 @@ export function registerAppTypeElementTool(server: MCPServer): void {
 
           let pasteResult;
           try {
+            // Honour `verify: false` on the pasteboard backend (#760). When
+            // the caller opts out of readback, do not forward `expected` /
+            // `focusedElementPath` — that is what triggers the AX re-inspect
+            // in `typeViaPasteboard`. Previously this opt-out was silently
+            // ignored for pasteboard (only the simhid path honoured it).
             pasteResult = await typeViaPasteboard(deviceId, textToType, {
               restorePasteboard,
               autoAcceptPastePermission,
-              expected: textToType,
-              focusedElementPath: match.path,
+              ...(verifyOptIn
+                ? { expected: textToType, focusedElementPath: match.path }
+                : {}),
             });
           } catch (err) {
             if (err instanceof Error && (err as unknown as PasteNotAppliedError).code === 'PASTE_NOT_APPLIED') {
@@ -334,6 +340,12 @@ export function registerAppTypeElementTool(server: MCPServer): void {
                     pasteResult.permissionDialogMatchedLabel,
                   elapsedMs: pasteResult.elapsedMs,
                   deviceId,
+                  // Echoed when readback was skipped because the focused
+                  // element is an `AXSecureTextField` (password) whose AX
+                  // value is OS-masked. Lets callers distinguish "no
+                  // readback because secure field" from "no readback because
+                  // verify opted out" (issue #760).
+                  ...(pasteResult.secureField ? { secureField: true } : {}),
                 }),
               },
             ],
@@ -501,15 +513,34 @@ async function verifyTypedText(
     };
   }
   let observed: string | undefined;
+  let isSecureField = false;
   try {
     const node = await bridge.inspect(elementPath, deviceId);
     observed = node.value;
+    // Issue #760: secure text fields (password inputs) return an OS-masked
+    // bullet string as their AXValue regardless of the underlying plaintext.
+    // The readback contract cannot prove what was typed, so flag this case
+    // as inconclusive instead of treating the mask as a divergent value
+    // (which would otherwise escalate to TEXT_INPUT_DROPPED /
+    // TEXT_INPUT_LAYOUT_MISMATCH and surface `isError: true`).
+    isSecureField =
+      node.role === 'AXSecureTextField' ||
+      (Array.isArray(node.traits) &&
+        (node.traits.includes('AXSecureTextField') ||
+          node.traits.includes('secure text field')));
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return {
       verified: 'unknown',
       verify_method: 'readback-failed',
       verify_reason: `AX inspect failed: ${msg}`,
+    };
+  }
+  if (isSecureField) {
+    return {
+      verified: 'unknown',
+      verify_method: 'ax-value-not-readable',
+      verify_reason: 'secure text field — AX value is OS-masked (#760)',
     };
   }
   if (observed === undefined || observed === null) {
