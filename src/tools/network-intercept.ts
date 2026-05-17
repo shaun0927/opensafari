@@ -6,20 +6,36 @@ import {
 } from '../network-interceptor';
 
 const DEFAULT_INTERCEPTOR_SCOPE = '__default__';
-const interceptorsBySession = new Map<string, NetworkInterceptor>();
+const DEFAULT_DEVICE_SCOPE = '__default-device__';
+// Keyed by `<sessionId>|<deviceId>` so a single MCP session that targets
+// multiple simulators keeps independent interceptor state per device.
+// Without the device dimension, toggling network_intercept / network_offline
+// on device B mutates the same state used for device A — a cross-device
+// state bleed that masks "interception disabled" while leaving stale JS
+// hooks active on the sibling device (Codex review on PR #762).
+const interceptorsByKey = new Map<string, NetworkInterceptor>();
 
-export function getNetworkInterceptorForSession(sessionId?: string): NetworkInterceptor {
-  const key = sessionId || DEFAULT_INTERCEPTOR_SCOPE;
-  let interceptor = interceptorsBySession.get(key);
+function makeInterceptorKey(sessionId: string | undefined, deviceId: string | undefined): string {
+  const s = sessionId || DEFAULT_INTERCEPTOR_SCOPE;
+  const d = deviceId || DEFAULT_DEVICE_SCOPE;
+  return `${s}|${d}`;
+}
+
+export function getNetworkInterceptorForSession(
+  sessionId?: string,
+  deviceId?: string,
+): NetworkInterceptor {
+  const key = makeInterceptorKey(sessionId, deviceId);
+  let interceptor = interceptorsByKey.get(key);
   if (!interceptor) {
     interceptor = new NetworkInterceptor();
-    interceptorsBySession.set(key, interceptor);
+    interceptorsByKey.set(key, interceptor);
   }
   return interceptor;
 }
 
 export function resetNetworkInterceptorsForTest(): void {
-  interceptorsBySession.clear();
+  interceptorsByKey.clear();
 }
 
 /** Legacy singleton for callers that are not yet session-aware. */
@@ -29,13 +45,28 @@ function resolveClient(deviceId: unknown): InterceptorClient | null {
   return getWebKitClient(typeof deviceId === 'string' ? deviceId : undefined);
 }
 
-function mapRule(params: Record<string, unknown>): Omit<InterceptRule, 'id'> {
+/**
+ * @internal Exported so the schema-validation contract can be unit-tested
+ * directly without standing up the full MCP tool handler.
+ */
+export function mapRule(params: Record<string, unknown>): Omit<InterceptRule, 'id'> {
   const urlPattern = params.urlPattern as string | undefined;
   if (!urlPattern) {
     throw new Error('urlPattern is required when clear is not set');
   }
 
-  const action = ((params.action as string) || 'block') as 'block' | 'modify';
+  // Validate explicitly: the JSON Schema declares `enum: ['block', 'modify']`
+  // but MCP runtime schema enforcement is not guaranteed for every client, so
+  // a typo like `"blok"` would otherwise be silently coerced to "mock" by the
+  // fallthrough below (Codex review on PR #762). Reject unknown values up
+  // front instead of rewriting requests in ways callers won't expect.
+  const rawAction = params.action;
+  if (rawAction !== undefined && rawAction !== 'block' && rawAction !== 'modify') {
+    throw new Error(
+      `action must be "block" or "modify" (got ${JSON.stringify(rawAction)})`,
+    );
+  }
+  const action = (rawAction as 'block' | 'modify' | undefined) ?? 'block';
   if (action === 'block') return { urlPattern, action: 'block' };
 
   const statusCode = typeof params.statusCode === 'number' ? params.statusCode : 200;
@@ -95,7 +126,8 @@ export function registerNetworkInterceptTool(server: MCPServer): void {
         return { content: [{ type: 'text' as const, text: 'Error: Safari not connected' }], isError: true };
       }
 
-      const interceptor = getNetworkInterceptorForSession(sessionId);
+      const deviceId = typeof params.device_id === 'string' ? params.device_id : undefined;
+      const interceptor = getNetworkInterceptorForSession(sessionId, deviceId);
       if (params.clear === true) {
         await interceptor.disable(client);
         return { content: [{ type: 'text' as const, text: 'All intercept rules cleared' }] };
