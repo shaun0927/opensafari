@@ -46,6 +46,9 @@ export const NON_RECOVERABLE_ERROR_CODES: ReadonlySet<string> = new Set([
   'AX_PERMISSION_DENIED',
 ]);
 
+/** Typed final error when a Flutter target never rematerialises native semantics. */
+export const FLUTTER_SEMANTICS_INACTIVE = 'FLUTTER_SEMANTICS_INACTIVE';
+
 /** Default backoff schedule used between retries (ms). */
 export const DEFAULT_BACKOFF_MS: readonly number[] = [200, 500, 1200];
 /** Default retry budget. */
@@ -122,6 +125,31 @@ function resolveBackoff(
 ): number {
   const source = schedule && schedule.length > 0 ? schedule : DEFAULT_BACKOFF_MS;
   return source[Math.min(gapIndex, source.length - 1)] ?? 0;
+}
+
+function shouldPromoteFlutterSemanticsInactive(
+  err: AccessibilityBridgeError,
+  options: DumpTreeWithRecoveryOptions,
+  stages: readonly AxBridgeRecoveryStage[],
+): boolean {
+  return Boolean(options.bundleId) &&
+    err.code === 'DEVICE_CONTENT_ROOT_EMPTY' &&
+    stages.some((stage) =>
+      stage.action === 'reactivate' &&
+      stage.outcome === 'error' &&
+      stage.errorCode === 'REACTIVATE_RETURNED_FALSE',
+    );
+}
+
+function promoteFlutterSemanticsInactive(
+  err: AccessibilityBridgeError,
+  options: DumpTreeWithRecoveryOptions,
+): AccessibilityBridgeError {
+  return new AccessibilityBridgeError(
+    `Flutter semantics remained inactive for bundle ${options.bundleId} after ax-bridge recovery; ` +
+      `the native accessibility tree stayed empty after simulator reactivation. Original error: ${err.message}`,
+    FLUTTER_SEMANTICS_INACTIVE,
+  );
 }
 
 /**
@@ -250,13 +278,16 @@ export async function dumpTreeWithRecovery(
     'ax-bridge dump failed with no recoverable error recorded',
     'UNKNOWN',
   );
-  attachRecoveryReport(finalError, {
+  const surfacedError = shouldPromoteFlutterSemanticsInactive(finalError, options, stages)
+    ? promoteFlutterSemanticsInactive(finalError, options)
+    : finalError;
+  attachRecoveryReport(surfacedError, {
     attempts: attempt,
     recovered: false,
     stages,
-    lastErrorCode: finalError.code,
+    lastErrorCode: surfacedError.code,
   });
-  throw finalError;
+  throw surfacedError;
 }
 
 /** Extend the thrown error with the diagnostics report without breaking existing `catch` blocks. */
