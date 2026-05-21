@@ -23,6 +23,7 @@ import {
   rememberVMServiceUrl,
   forgetVMServiceUrl,
 } from './vm-service-discovery';
+import { flutterCircuitBreakers } from './flutter-circuit-breakers';
 import {
   DEFAULT_FLUTTER_VM_REQUEST_TIMEOUT_MS,
   DEFAULT_FLUTTER_VM_HEAVY_TIMEOUT_MS,
@@ -213,10 +214,12 @@ export class FlutterVMClient {
     }
 
     // Re-apply any user-requested event streams that survived a reconnect.
+    // Bypass the circuit breaker — this is infrastructure for the reconnect
+    // itself; failing here would leave us connected but eventless.
     for (const streamId of this.subscribedStreams) {
       if (streamId === 'Isolate') continue; // handled above
       try {
-        await this.callMethod('streamListen', { streamId });
+        await this.callMethod('streamListen', { streamId }, { bypassCircuitBreaker: true });
       } catch {
         // Best-effort; caller may re-subscribe
       }
@@ -284,10 +287,28 @@ export class FlutterVMClient {
   async callMethod(
     method: string,
     params?: Record<string, unknown>,
-    options?: { timeoutMs?: number },
+    options?: { timeoutMs?: number; bypassCircuitBreaker?: boolean },
   ): Promise<Record<string, unknown>> {
     if (!this.isConnected()) {
       throw new FlutterVMError('Not connected to VM Service', 'NOT_CONNECTED');
+    }
+
+    // Per-device circuit breaker: short-circuit when a recent burst of
+    // failures tripped the breaker open, so we don't pile another 10-30 s
+    // request timeout on top of an already failing VM Service. The
+    // heartbeat ping and internal lifecycle calls bypass the breaker to
+    // avoid a feedback loop and to allow the breaker's half-open probe
+    // path to succeed via the lighter `getVersion` heartbeat.
+    const deviceId = this.state?.deviceId;
+    const useBreaker = !options?.bypassCircuitBreaker && deviceId;
+    if (useBreaker) {
+      const breaker = flutterCircuitBreakers().get(deviceId);
+      if (!breaker.isAvailable()) {
+        throw new FlutterVMError(
+          `Circuit breaker open for device ${deviceId}; backing off ${method}`,
+          'CIRCUIT_OPEN',
+        );
+      }
     }
 
     const timeoutMs = options?.timeoutMs
@@ -301,7 +322,7 @@ export class FlutterVMClient {
       params,
     };
 
-    return new Promise((resolve, reject) => {
+    return new Promise<Record<string, unknown>>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new FlutterVMError(
@@ -312,7 +333,20 @@ export class FlutterVMClient {
 
       this.pending.set(id, { resolve, reject, timer, method });
       this.ws!.send(JSON.stringify(request));
-    });
+    }).then(
+      (value) => {
+        if (useBreaker) flutterCircuitBreakers().get(deviceId).recordSuccess();
+        return value;
+      },
+      (err) => {
+        if (useBreaker) {
+          flutterCircuitBreakers()
+            .get(deviceId)
+            .recordFailure(err instanceof Error ? err : new Error(String(err)));
+        }
+        throw err;
+      },
+    );
   }
 
   /**
@@ -786,7 +820,7 @@ export class FlutterVMClient {
       // returns ~50 bytes). Failure here means the socket is half-open or
       // the proxy died — trigger the reconnect path the same way `close`
       // would.
-      this.callMethod('getVersion', undefined, { timeoutMs: 5000 }).catch(() => {
+      this.callMethod('getVersion', undefined, { timeoutMs: 5000, bypassCircuitBreaker: true }).catch(() => {
         if (this.wantOpen && !this.reconnecting && this.lastConnectOptions) {
           forgetVMServiceUrl(this.lastConnectOptions.deviceId);
           try {
@@ -870,9 +904,10 @@ export class FlutterVMClient {
 
   private async subscribeIsolateLifecycle(): Promise<void> {
     // Idempotent: VM Service rejects duplicate `streamListen` with a
-    // 103 error which we can safely ignore.
+    // 103 error which we can safely ignore. Bypass the breaker — this is
+    // an infrastructure subscription, not a user-visible op.
     try {
-      await this.callMethod('streamListen', { streamId: 'Isolate' });
+      await this.callMethod('streamListen', { streamId: 'Isolate' }, { bypassCircuitBreaker: true });
       this.subscribedStreams.add('Isolate');
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
