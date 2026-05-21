@@ -127,6 +127,7 @@ import { registerAppTypeElementTool } from './app-type-element';
 import { registerAppWaitForNativeTool } from './app-wait-for';
 import { registerAppAssertElementTool } from './app-assert-element';
 import { registerDiagnoseTool } from './diagnose';
+import { registerAppGotoScreenTool } from './app-goto-screen';
 
 export { setWorkflowEngine } from './orchestration-tools';
 export { setBarrier } from './barrier-tools';
@@ -333,4 +334,5 @@ export function registerAllTools(server: MCPServer): void {
 
   // Tier 1: Diagnostics
   registerDiagnoseTool(server);
+  registerAppGotoScreenTool(server);
 }
