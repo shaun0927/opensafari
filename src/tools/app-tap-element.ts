@@ -91,6 +91,12 @@ export function registerAppTapElementTool(server: MCPServer): void {
             type: 'string',
             description: 'Target app bundle ID. When provided, the tool re-activates the app and rejects mismatched native contexts.',
           },
+          labelAliases: {
+            type: 'array',
+            items: { type: 'string' },
+            description:
+              'Additional label strings to try in order when the primary `label`/`text`/`identifier` query does not match. Useful for cross-locale variants ("Sign in" / "로그인" / "Anmelden") or synonyms ("Continue" / "Next"). Each alias is tried as a label-substring match.',
+          },
         },
         required: [],
       },
@@ -179,6 +185,26 @@ export function registerAppTapElementTool(server: MCPServer): void {
           }
         }
 
+        // PR16: when the primary query missed, try each alias in turn as
+        // a label-substring match. This lets one tool call survive locale
+        // drift ("Sign in" / "로그인" / "Anmelden") without rebuilding
+        // the call from scratch.
+        const labelAliases = Array.isArray(params.labelAliases)
+          ? (params.labelAliases as unknown[]).filter((s): s is string => typeof s === 'string')
+          : [];
+        if (!match && labelAliases.length > 0) {
+          for (const alias of labelAliases) {
+            const aliasResult = await bridge.query({ label: alias }, { deviceId });
+            if (aliasResult.matches.length > index) {
+              match = aliasResult.matches[index];
+              queryResult = aliasResult;
+              totalMatches = aliasResult.matches.length;
+              ambiguous = aliasResult.ambiguous;
+              break;
+            }
+          }
+        }
+
         if (!match) {
           return {
             content: [{
@@ -186,6 +212,7 @@ export function registerAppTapElementTool(server: MCPServer): void {
               text: JSON.stringify({
                 error: 'Element not found',
                 query,
+                labelAliases: labelAliases.length > 0 ? labelAliases : undefined,
                 index,
                 timeout,
                 _meta: { context: contextMeta },
