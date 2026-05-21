@@ -79,6 +79,7 @@ import { registerAppAlertHandleTool } from './app-alert-handle';
 import { registerAppPushTool } from './app-push';
 import { registerAppScrollNativeTool } from './app-scroll-native';
 import { registerAppDismissKeyboardTool } from './app-dismiss-keyboard';
+import { registerAppDismissOverlayTool } from './app-dismiss-overlay';
 import { registerAppAssertTool } from './app-assert';
 import { registerAppWebviewConnectTool } from './app-webview-connect';
 import { registerSetActiveContextTool } from './set-active-context';
@@ -268,6 +269,7 @@ export function registerAllTools(server: MCPServer): void {
   registerAppScrollNativeTool(server);
   // Tier 2: Native App Interaction
   registerAppDismissKeyboardTool(server);
+  registerAppDismissOverlayTool(server);
   // Tier 2: Native Assertions (CI-friendly)
   registerAppAssertTool(server);
   // Tier 2: Hybrid context switching
