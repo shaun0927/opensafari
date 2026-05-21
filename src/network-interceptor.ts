@@ -110,6 +110,40 @@ export class NetworkInterceptor {
     await this.inject(client);
   }
 
+  /**
+   * Re-inject the interceptor after a page navigation has wiped the JS
+   * context. Callers should hook this into the browser backend's
+   * "page loaded" event (WebKit `Page.loadEventFired` / `Page.frameNavigated`).
+   * Safe to call when disabled — it's a no-op and returns false.
+   */
+  async reinject(client: InterceptorClient): Promise<boolean> {
+    if (!this._enabled) return false;
+    await this.inject(client);
+    return true;
+  }
+
+  /**
+   * Subscribe the interceptor to a page-load event source so it
+   * automatically re-injects after every navigation. Returns the
+   * unsubscribe function so the caller can detach when tearing down a
+   * session. We accept a thin wiring shim rather than importing
+   * WebKitClient directly so this module stays test-friendly and usable
+   * from non-WebKit backends in the future.
+   */
+  installReinjectionHook(
+    client: InterceptorClient,
+    subscribe: (onLoad: () => void) => (() => void) | void,
+  ): () => void {
+    const unsubscribe = subscribe(() => {
+      void this.reinject(client).catch((err) => {
+        console.error(
+          `[NetworkInterceptor] auto-reinject failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      });
+    });
+    return typeof unsubscribe === 'function' ? unsubscribe : () => undefined;
+  }
+
   private async inject(client: InterceptorClient): Promise<void> {
     const rulesJson = JSON.stringify(this.listRules());
     const offlineFlag = this._offline ? 'true' : 'false';
