@@ -50,7 +50,15 @@ describe('SimulatorManager — App Activate & List Running', () => {
       const manager = new SimulatorManager();
       const result = await manager.activateApp(DEVICE_ID, BUNDLE_ID);
 
-      expect(result).toEqual({ activated: true, bundleId: BUNDLE_ID, deviceId: DEVICE_ID, pid: 45678 });
+      // PR6 adds the `alreadyRunning` flag — false on the fallback launch path
+      // (the launchctl probe in this test is mocked to return a non-UIKitApplication string).
+      expect(result).toEqual({
+        activated: true,
+        alreadyRunning: false,
+        bundleId: BUNDLE_ID,
+        deviceId: DEVICE_ID,
+        pid: 45678,
+      });
       expect(execMock).toHaveBeenCalledWith(['launch', DEVICE_ID, BUNDLE_ID]);
     });
 
