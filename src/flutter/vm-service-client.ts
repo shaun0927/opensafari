@@ -13,14 +13,52 @@ import type {
   VMInfo,
   FlutterConnectionState,
   FlutterConnectOptions,
+  FlutterVMClientOptions,
   DartVersion,
 } from './flutter-types';
-import { discoverVMServiceUrl, httpToWsUrl, isValidVMServiceUrl } from './vm-service-discovery';
+import {
+  discoverVMServiceUrl,
+  httpToWsUrl,
+  isValidVMServiceUrl,
+  rememberVMServiceUrl,
+  forgetVMServiceUrl,
+} from './vm-service-discovery';
+import {
+  DEFAULT_FLUTTER_VM_REQUEST_TIMEOUT_MS,
+  DEFAULT_FLUTTER_VM_HEAVY_TIMEOUT_MS,
+  DEFAULT_FLUTTER_VM_CONNECT_TIMEOUT_MS,
+  DEFAULT_FLUTTER_VM_HEARTBEAT_INTERVAL_MS,
+  DEFAULT_FLUTTER_VM_RECONNECT_MAX_ATTEMPTS,
+  DEFAULT_FLUTTER_VM_RECONNECT_BASE_DELAY_MS,
+  DEFAULT_FLUTTER_VM_RECONNECT_MAX_DELAY_MS,
+} from '../config/defaults';
 
-const DEFAULT_REQUEST_TIMEOUT_MS = 10000;
-const DEFAULT_CONNECT_TIMEOUT_MS = 5000;
+/** Backwards-compatible alias preserved for any external callers that
+ *  imported the old constant before the config-defaults consolidation. */
+const DEFAULT_REQUEST_TIMEOUT_MS = DEFAULT_FLUTTER_VM_REQUEST_TIMEOUT_MS;
+const DEFAULT_CONNECT_TIMEOUT_MS = DEFAULT_FLUTTER_VM_CONNECT_TIMEOUT_MS;
 
 type EventCallback = (event: VMServiceEvent['params']['event']) => void;
+
+/** Methods that may legitimately take longer than the default 10 s timeout
+ *  (large widget tree dumps, hot-reload, hot-restart, evaluate, etc.). When
+ *  the caller does not pass an explicit timeoutMs, these get the heavy
+ *  timeout instead of the default. */
+const HEAVY_METHODS = new Set<string>([
+  'reloadSources',
+  'evaluate',
+  'evaluateInFrame',
+]);
+const HEAVY_EXT_PREFIXES = [
+  'ext.flutter.inspector.',
+  'ext.flutter.hotRestart',
+  'ext.flutter.reassemble',
+];
+
+function isHeavyMethod(method: string): boolean {
+  if (HEAVY_METHODS.has(method)) return true;
+  return HEAVY_EXT_PREFIXES.some((p) => method.startsWith(p));
+}
 
 /**
  * Parse a Dart VM `version` string (e.g. "3.11.3 (stable) ... on \"ios_arm64\"")
@@ -49,9 +87,40 @@ export class FlutterVMClient {
     resolve: (value: Record<string, unknown>) => void;
     reject: (error: Error) => void;
     timer: ReturnType<typeof setTimeout>;
+    method: string;
   }>();
   private eventListeners = new Map<string, Set<EventCallback>>();
   private state: FlutterConnectionState | null = null;
+  /** Streams the caller explicitly subscribed to via `streamListen`. Replayed
+   *  after a successful reconnect so user-level event subscriptions survive
+   *  transient WebSocket drops. */
+  private subscribedStreams = new Set<string>();
+  /** Last successful `connect()` arguments, captured so `attemptReconnect`
+   *  can rebuild the session without forcing the caller to retry manually. */
+  private lastConnectOptions: FlutterConnectOptions | null = null;
+  /** True from `connect()` start until `disconnect()` — the heartbeat and
+   *  the close-handler use this to decide whether a close was intentional. */
+  private wantOpen = false;
+  /** True while `attemptReconnect` is in flight; prevents overlapping retries
+   *  triggered by both the heartbeat and the WS close handler. */
+  private reconnecting = false;
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  private readonly options: Required<FlutterVMClientOptions>;
+  /** Listeners notified when a reconnect succeeds (used by external modules
+   *  that need to re-register breakpoints/inspector overlays). */
+  private reconnectListeners = new Set<() => void>();
+
+  constructor(options?: FlutterVMClientOptions) {
+    this.options = {
+      requestTimeoutMs: options?.requestTimeoutMs ?? DEFAULT_FLUTTER_VM_REQUEST_TIMEOUT_MS,
+      heavyRequestTimeoutMs: options?.heavyRequestTimeoutMs ?? DEFAULT_FLUTTER_VM_HEAVY_TIMEOUT_MS,
+      connectTimeoutMs: options?.connectTimeoutMs ?? DEFAULT_FLUTTER_VM_CONNECT_TIMEOUT_MS,
+      heartbeatIntervalMs: options?.heartbeatIntervalMs ?? DEFAULT_FLUTTER_VM_HEARTBEAT_INTERVAL_MS,
+      reconnectMaxAttempts: options?.reconnectMaxAttempts ?? DEFAULT_FLUTTER_VM_RECONNECT_MAX_ATTEMPTS,
+      reconnectBaseDelayMs: options?.reconnectBaseDelayMs ?? DEFAULT_FLUTTER_VM_RECONNECT_BASE_DELAY_MS,
+      reconnectMaxDelayMs: options?.reconnectMaxDelayMs ?? DEFAULT_FLUTTER_VM_RECONNECT_MAX_DELAY_MS,
+    };
+  }
 
   /** Get the current connection state */
   getState(): FlutterConnectionState | null {
@@ -63,11 +132,24 @@ export class FlutterVMClient {
     return this.ws !== null && this.ws.readyState === WebSocket.OPEN;
   }
 
+  /** Subscribe to reconnect-success notifications. Returns an unsubscribe
+   *  function. Used by tools that hold isolate-scoped state (breakpoints,
+   *  inspector selection) to rebuild it after the socket flapped. */
+  onReconnected(listener: () => void): () => void {
+    this.reconnectListeners.add(listener);
+    return () => {
+      this.reconnectListeners.delete(listener);
+    };
+  }
+
   /**
    * Connect to a Flutter app's Dart VM Service.
    * Auto-discovers the URL if not provided explicitly.
    */
   async connect(options: FlutterConnectOptions): Promise<FlutterConnectionState> {
+    this.lastConnectOptions = options;
+    this.wantOpen = true;
+
     // Discover or validate URL
     let httpUrl = options.vmServiceUrl;
 
@@ -114,6 +196,37 @@ export class FlutterVMClient {
       dartVersion,
     };
 
+    // Remember the URL so future `flutter_connect` calls in this MCP session
+    // can skip the expensive log scan.
+    rememberVMServiceUrl(options.deviceId, httpUrl);
+
+    // Subscribe to the Isolate stream so stale `mainIsolateId` after a
+    // hot-restart or background isolate exit gets corrected automatically.
+    // Failures here are non-fatal: the connection is still usable, we just
+    // lose the auto-update behaviour.
+    try {
+      await this.subscribeIsolateLifecycle();
+    } catch (err) {
+      console.error(
+        `[FlutterVMClient] Isolate stream subscription failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
+    // Re-apply any user-requested event streams that survived a reconnect.
+    for (const streamId of this.subscribedStreams) {
+      if (streamId === 'Isolate') continue; // handled above
+      try {
+        await this.callMethod('streamListen', { streamId });
+      } catch {
+        // Best-effort; caller may re-subscribe
+      }
+    }
+
+    // Application-level heartbeat — cheap `getVersion` call every N seconds.
+    // Catches half-open sockets where TCP keepalive hasn't fired yet
+    // (common when ios-webkit-debug-proxy restarts under us).
+    this.startHeartbeat();
+
     return this.state;
   }
 
@@ -136,6 +249,10 @@ export class FlutterVMClient {
 
   /** Disconnect from the VM Service */
   async disconnect(): Promise<void> {
+    this.wantOpen = false;
+    this.reconnecting = false;
+    this.stopHeartbeat();
+
     if (this.ws) {
       // Reject all pending requests
       for (const [id, entry] of this.pending) {
@@ -151,15 +268,30 @@ export class FlutterVMClient {
       this.state.connected = false;
     }
     this.eventListeners.clear();
+    this.subscribedStreams.clear();
+    this.reconnectListeners.clear();
   }
 
   /**
    * Send a JSON-RPC request and wait for the response.
+   *
+   * @param method  VM Service / `ext.flutter.*` method name
+   * @param params  JSON-RPC params object
+   * @param options.timeoutMs Override the default timeout. Heavy methods
+   *   (widget tree, hot reload, evaluate, *.inspector.*) get a longer
+   *   default automatically — pass an explicit value to force.
    */
-  async callMethod(method: string, params?: Record<string, unknown>): Promise<Record<string, unknown>> {
+  async callMethod(
+    method: string,
+    params?: Record<string, unknown>,
+    options?: { timeoutMs?: number },
+  ): Promise<Record<string, unknown>> {
     if (!this.isConnected()) {
       throw new FlutterVMError('Not connected to VM Service', 'NOT_CONNECTED');
     }
+
+    const timeoutMs = options?.timeoutMs
+      ?? (isHeavyMethod(method) ? this.options.heavyRequestTimeoutMs : this.options.requestTimeoutMs);
 
     const id = String(++this.requestId);
     const request: VMServiceRequest = {
@@ -173,12 +305,12 @@ export class FlutterVMClient {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new FlutterVMError(
-          `Request timeout: ${method} (${DEFAULT_REQUEST_TIMEOUT_MS}ms)`,
+          `Request timeout: ${method} (${timeoutMs}ms)`,
           'REQUEST_TIMEOUT',
         ));
-      }, DEFAULT_REQUEST_TIMEOUT_MS);
+      }, timeoutMs);
 
-      this.pending.set(id, { resolve, reject, timer });
+      this.pending.set(id, { resolve, reject, timer, method });
       this.ws!.send(JSON.stringify(request));
     });
   }
@@ -570,6 +702,7 @@ export class FlutterVMClient {
   /** Subscribe to a VM Service event stream */
   async streamListen(streamId: string): Promise<void> {
     await this.callMethod('streamListen', { streamId });
+    this.subscribedStreams.add(streamId);
   }
 
   /** Register a callback for events on a stream */
@@ -594,7 +727,7 @@ export class FlutterVMClient {
           `WebSocket connection timeout: ${wsUrl}`,
           'CONNECT_TIMEOUT',
         ));
-      }, DEFAULT_CONNECT_TIMEOUT_MS);
+      }, this.options.connectTimeoutMs);
 
       this.ws = new WebSocket(wsUrl);
 
@@ -615,11 +748,151 @@ export class FlutterVMClient {
         if (this.state) {
           this.state.connected = false;
         }
+        // Reject any in-flight requests so callers don't hang waiting for
+        // a response on a dead socket. They'll surface as `DISCONNECTED`,
+        // which the auto-retry layer (PR2) can act on.
+        for (const [id, entry] of this.pending) {
+          clearTimeout(entry.timer);
+          entry.reject(new FlutterVMError('Connection closed', 'DISCONNECTED'));
+          this.pending.delete(id);
+        }
+        // Schedule a reconnect when the close was not intentional. Skip when
+        // the user called `disconnect()` (wantOpen=false), when another
+        // attempt is already running, or when there are no captured
+        // connect options (only `connect()` populates them).
+        if (this.wantOpen && !this.reconnecting && this.lastConnectOptions) {
+          // Cached URL is presumed stale on close — drop it so the next
+          // `discoverVMServiceUrl` does a fresh scan.
+          forgetVMServiceUrl(this.lastConnectOptions.deviceId);
+          void this.attemptReconnect();
+        }
       });
 
       this.ws.on('message', (data) => {
         this.handleMessage(data.toString());
       });
+    });
+  }
+
+  // ── Heartbeat ───────────────────────────────────────────────────────────
+
+  private startHeartbeat(): void {
+    this.stopHeartbeat();
+    const interval = this.options.heartbeatIntervalMs;
+    if (interval <= 0) return;
+    this.heartbeatTimer = setInterval(() => {
+      if (!this.isConnected()) return;
+      // `getVersion` is the cheapest VM Service call (no isolate, no params,
+      // returns ~50 bytes). Failure here means the socket is half-open or
+      // the proxy died — trigger the reconnect path the same way `close`
+      // would.
+      this.callMethod('getVersion', undefined, { timeoutMs: 5000 }).catch(() => {
+        if (this.wantOpen && !this.reconnecting && this.lastConnectOptions) {
+          forgetVMServiceUrl(this.lastConnectOptions.deviceId);
+          try {
+            this.ws?.terminate?.();
+          } catch {
+            // ignore — the `close` handler will fire next tick anyway
+          }
+          void this.attemptReconnect();
+        }
+      });
+    }, interval);
+    // Unref so a stalled heartbeat doesn't keep Node alive at shutdown.
+    this.heartbeatTimer.unref?.();
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
+  }
+
+  // ── Reconnect ───────────────────────────────────────────────────────────
+
+  private async attemptReconnect(): Promise<void> {
+    if (this.reconnecting) return;
+    if (!this.wantOpen) return;
+    if (!this.lastConnectOptions) return;
+
+    this.reconnecting = true;
+    this.stopHeartbeat();
+
+    const opts = this.lastConnectOptions;
+    const max = this.options.reconnectMaxAttempts;
+    const base = this.options.reconnectBaseDelayMs;
+    const cap = this.options.reconnectMaxDelayMs;
+
+    for (let attempt = 1; attempt <= max; attempt++) {
+      const backoff = Math.min(base * Math.pow(2, attempt - 1), cap);
+      const jitter = backoff * 0.2 * (2 * Math.random() - 1);
+      const delay = Math.max(0, Math.round(backoff + jitter));
+      console.error(
+        `[FlutterVMClient] Reconnect attempt ${attempt}/${max} in ${delay}ms`,
+      );
+      await new Promise((r) => setTimeout(r, delay));
+
+      if (!this.wantOpen) {
+        this.reconnecting = false;
+        return;
+      }
+
+      try {
+        // Force re-discovery on the first reattempt since the cached URL
+        // already failed; subsequent attempts let the cache help in case
+        // a new VM Service came up at the same port.
+        await this.connect({ ...opts, vmServiceUrl: undefined });
+        console.error('[FlutterVMClient] Reconnected successfully');
+        this.reconnecting = false;
+        for (const listener of this.reconnectListeners) {
+          try {
+            listener();
+          } catch {
+            // listener errors must not break the reconnect loop
+          }
+        }
+        return;
+      } catch (err) {
+        console.error(
+          `[FlutterVMClient] Reconnect attempt ${attempt} failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+
+    this.reconnecting = false;
+    console.error(
+      `[FlutterVMClient] Failed to reconnect after ${max} attempts`,
+    );
+  }
+
+  // ── Isolate lifecycle ───────────────────────────────────────────────────
+
+  private async subscribeIsolateLifecycle(): Promise<void> {
+    // Idempotent: VM Service rejects duplicate `streamListen` with a
+    // 103 error which we can safely ignore.
+    try {
+      await this.callMethod('streamListen', { streamId: 'Isolate' });
+      this.subscribedStreams.add('Isolate');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!/code:\s*103/.test(msg)) throw err;
+    }
+    this.eventListeners.set('Isolate', this.eventListeners.get('Isolate') ?? new Set());
+    this.eventListeners.get('Isolate')!.add((event) => {
+      const kind = event?.kind;
+      if (!kind || !this.state) return;
+      const isolate = (event as { isolate?: { id?: string; name?: string } }).isolate;
+      if (kind === 'IsolateRunnable' && isolate?.id && (isolate.name === 'main' || !this.state.mainIsolateId)) {
+        // A new main isolate became runnable (typical after hot-restart) —
+        // adopt it so the next service-extension call lands on the live
+        // isolate instead of a dead one.
+        this.state.mainIsolateId = isolate.id;
+      } else if (kind === 'IsolateExit' && isolate?.id === this.state.mainIsolateId) {
+        // The main isolate exited. Clear the cached id so service-extension
+        // calls fail fast with NO_ISOLATE instead of RPC error 106 later.
+        this.state.mainIsolateId = undefined;
+      }
     });
   }
 
