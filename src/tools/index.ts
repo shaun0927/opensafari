@@ -101,6 +101,7 @@ import {
   registerFlutterCallServiceExtensionTool,
 } from './flutter-service-extensions';
 import { registerFlutterEvaluateTool } from './flutter-evaluate';
+import { registerFlutterGetRouteTool } from './flutter-get-route';
 import {
   registerFlutterRootWidgetTool,
   registerFlutterInspectSelectionTool,
@@ -305,6 +306,7 @@ export function registerAllTools(server: MCPServer): void {
   registerFlutterCallServiceExtensionTool(server);
   // Tier 2: Flutter Expression Evaluation (issue #434)
   registerFlutterEvaluateTool(server);
+  registerFlutterGetRouteTool(server);
   // Tier 2: Flutter Inspector (issue #436)
   registerFlutterRootWidgetTool(server);
   registerFlutterInspectSelectionTool(server);
