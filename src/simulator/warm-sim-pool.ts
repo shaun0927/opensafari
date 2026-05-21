@@ -88,15 +88,27 @@ export class WarmSimPool {
    * Pre-acquire clones so that the pool reaches the requested warm
    * target for `preset`. Called explicitly at startup or lazily on
    * first `acquire`. Resolves once all clones have been booted.
+   *
+   * `options.seedFrom` overrides the master UDID for THIS warmUp call
+   * only — useful when bootstrapping a "logged-in golden device" pool
+   * where every acquire returns a clone of the golden snapshot. If
+   * persistent seeding is desired across replenish, use `useGoldenDevice`.
    */
-  async warmUp(preset: string, count?: number): Promise<void> {
+  async warmUp(
+    preset: string,
+    count?: number,
+    options?: { seedFrom?: string },
+  ): Promise<void> {
     const target = count ?? this.targetFor(preset);
     this.warmTargets.set(preset, target);
     const missing = target - this.warmCountFor(preset);
     if (missing <= 0) return;
 
+    const acquireOpts = options?.seedFrom
+      ? { masterUdid: options.seedFrom }
+      : undefined;
     const results = await Promise.allSettled(
-      Array.from({ length: missing }, () => this.base.acquire(preset)),
+      Array.from({ length: missing }, () => this.base.acquire(preset, acquireOpts)),
     );
     const bucket = this.ready.get(preset) ?? [];
     for (const r of results) {
@@ -107,6 +119,28 @@ export class WarmSimPool {
       }
     }
     this.ready.set(preset, bucket);
+  }
+
+  /**
+   * Bind a preset to a "golden" master device UDID so every subsequent
+   * acquire/replenish clones from that source instead of the preset's
+   * default device. Pass null to clear the override and return to the
+   * preset lookup behaviour.
+   *
+   * Typical usage: boot a sim, install the app, log in, shut it down,
+   * then call `useGoldenDevice('iphone-16', <udid>)`. The warm pool will
+   * hand out clones that boot already-signed-in, avoiding the per-test
+   * login tax for Flutter apps that can't easily be seeded via
+   * NativeAuthManager (e.g. apps with biometric-locked keychains the
+   * keychain export can't capture).
+   */
+  useGoldenDevice(preset: string, udid: string | null): void {
+    this.base.setMaster(preset, udid);
+  }
+
+  /** Inspect the currently bound golden device UDID for `preset`, or null. */
+  getGoldenDevice(preset: string): string | null {
+    return this.base.getMaster(preset);
   }
 
   /**
