@@ -6,10 +6,11 @@
  * reliable automation after navigation, animations, or async data loading.
  */
 
-import { MCPServer } from '../mcp-server';
+import { MCPServer, getWebKitClient } from '../mcp-server';
 import { getAccessibilityBridge, ensureSemanticsActive } from '../native';
 import type { AXNode } from '../native';
 import { getSessionManager } from '../session-manager';
+import { getInputBackend } from './native-input-utils';
 import {
   activateAndClassify,
   createContextMismatchError,
@@ -124,6 +125,11 @@ export function registerAppWaitForNativeTool(server: MCPServer): void {
           bundle_id: {
             type: 'string',
             description: 'Target app bundle ID. When provided, the tool re-activates the app and rejects mismatched native contexts.',
+          },
+          scroll_while_waiting: {
+            type: 'boolean',
+            description:
+              'When true, perform a small upward swipe between polls so an off-screen target in a scrollable ancestor is brought into view. Default false to preserve existing behaviour.',
           },
         },
         required: [],
@@ -244,6 +250,21 @@ export function registerAppWaitForNativeTool(server: MCPServer): void {
           // Don't sleep past deadline
           const remaining = deadline - Date.now();
           if (remaining <= 0) break;
+
+          // Optionally scroll the viewport between polls so an off-screen
+          // target in a scrollable ancestor (ListView, infinite list, etc.)
+          // is gradually brought into view instead of being timed out
+          // before it ever paints. Best-effort: a failed swipe doesn't
+          // break the wait loop.
+          if (params.scroll_while_waiting === true) {
+            try {
+              const backend = await getInputBackend(deviceId, getWebKitClient(deviceId));
+              await backend.swipe(deviceId, 200, 600, 200, 200, 0.2);
+            } catch {
+              // ignore — wait loop continues without scrolling
+            }
+          }
+
           await sleep(Math.min(interval, remaining));
         }
 

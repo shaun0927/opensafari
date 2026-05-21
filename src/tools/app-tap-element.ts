@@ -91,6 +91,15 @@ export function registerAppTapElementTool(server: MCPServer): void {
             type: 'string',
             description: 'Target app bundle ID. When provided, the tool re-activates the app and rejects mismatched native contexts.',
           },
+          autoScroll: {
+            type: 'boolean',
+            description:
+              'When true, if the element matches the query but is offscreen / invisible, swipe up to bring it into view and re-query, up to autoScrollMaxAttempts times. Default false to preserve the historical fail-fast contract.',
+          },
+          autoScrollMaxAttempts: {
+            type: 'number',
+            description: 'Maximum scroll-and-retry attempts when autoScroll is true. Default 6.',
+          },
         },
         required: [],
       },
@@ -193,6 +202,50 @@ export function registerAppTapElementTool(server: MCPServer): void {
             }],
             isError: true,
           };
+        }
+
+        // Auto-scroll-to-find (PR13): when the element is matched but
+        // off-screen, try swiping up to reveal it and re-query. We swipe
+        // when match.visible is false OR the frame has zero size (the AX
+        // tree often reports zero-size for nodes pinned outside the
+        // viewport). Direction defaults to "up" (drags content upward,
+        // revealing lower entries) because the common LLM workflow is
+        // "scroll a list to find an item further down".
+        const autoScroll = Boolean(params.autoScroll);
+        const autoScrollMax = Math.max(1, Number(params.autoScrollMaxAttempts) || 6);
+        if (
+          autoScroll &&
+          match &&
+          (!match.visible || match.frame.width <= 0 || match.frame.height <= 0)
+        ) {
+          try {
+            const backend = await getInputBackend(deviceId, getWebKitClient(deviceId));
+            for (let attempt = 0; attempt < autoScrollMax; attempt++) {
+              // Drag content upward — startY > endY scrolls toward the
+              // bottom of the list. Using device-agnostic coordinates that
+              // land inside both compact and Pro Max-sized viewports.
+              await backend.swipe(deviceId, 200, 600, 200, 200, 0.25);
+              await sleep(250);
+              const reResult = await bridge.query(query, { deviceId });
+              totalMatches = reResult.matches.length;
+              ambiguous = reResult.ambiguous;
+              if (reResult.matches.length > index) {
+                match = reResult.matches[index];
+                queryResult = reResult;
+                if (
+                  match.visible &&
+                  match.frame.width > 0 &&
+                  match.frame.height > 0
+                ) {
+                  break;
+                }
+              }
+            }
+          } catch (err) {
+            // Auto-scroll best-effort — log and fall through to the
+            // existing invisibility error if we still don't have it.
+            console.error(`[app_tap_element] autoScroll failed: ${err instanceof Error ? err.message : String(err)}`);
+          }
         }
 
         // Validate element is visible and has nonzero size
