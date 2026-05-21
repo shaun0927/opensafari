@@ -72,6 +72,39 @@ export async function createServer(options?: {
 }): Promise<MCPServer> {
   const server = new MCPServer();
   registerAllTools(server);
+
+  // Rehydrate the in-memory SessionManager from any simulators that were
+  // booted before this server started. Without this, an MCP client
+  // reconnect leaves SessionManager empty and the LLM tries to re-boot
+  // the simulator it's already talking to. Best-effort: missing simctl,
+  // permissions issues, or weird states fall through without aborting
+  // server startup.
+  try {
+    // Late-bound imports so this module can stay free of a static
+    // dependency on the simulator/* sources at module-load time (helps
+    // smaller `import { ... } from '.'` bundles).
+    const { getSessionManager } = await import('./session-manager');
+    const { getDefaultSimulatorManager } = await import('./simulator');
+    const { DEVICE_PRESETS } = await import('./simulator/presets');
+    const presetLookup = (name: string) => {
+      const entry = Object.values(DEVICE_PRESETS).find((p) => p.name === name);
+      return entry ? { w: entry.w, h: entry.h } : undefined;
+    };
+    const result = await getSessionManager().rehydrateFromSimctl(
+      getDefaultSimulatorManager(),
+      { presetLookup },
+    );
+    if (result.rehydrated.length > 0) {
+      console.error(
+        `[OpenSafari] Rehydrated ${result.rehydrated.length} simulator(s) from simctl: ${result.rehydrated.join(', ')}`,
+      );
+    }
+  } catch (err) {
+    console.error(
+      `[OpenSafari] SessionManager rehydrate skipped: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+
   if (options?.allTools) {
     server.setTier(3);
   } else if (process.env.OPENSAFARI_TOOL_TIER) {
