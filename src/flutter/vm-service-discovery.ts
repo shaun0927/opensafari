@@ -6,6 +6,7 @@
  * to the system log at launch time.
  */
 
+import http from 'http';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 
@@ -15,6 +16,62 @@ const VM_SERVICE_URL_PATTERN = /https?:\/\/127\.0\.0\.1:\d+\/[a-zA-Z0-9_-]+=\//;
 const DEFAULT_TIMEOUT_MS = 10000;
 const VM_SERVICE_URL_ENV = 'OPENSAFARI_VM_SERVICE_URL';
 const VM_SERVICE_WS_URL_ENV = 'OPENSAFARI_VM_SERVICE_WS_URL';
+
+/**
+ * Per-device cache of the most recent VM Service URL that successfully
+ * completed a `connect()` handshake. Used as a hot path so subsequent
+ * `flutter_connect` calls within the same simulator session can skip the
+ * expensive `simctl spawn log show` scan (~1-3s) as long as the URL still
+ * responds to a cheap HTTP probe.
+ */
+const urlCache = new Map<string, string>();
+
+export function rememberVMServiceUrl(deviceId: string, httpUrl: string): void {
+  if (!isValidVMServiceUrl(httpUrl)) return;
+  urlCache.set(deviceId, httpUrl);
+}
+
+export function forgetVMServiceUrl(deviceId: string): void {
+  urlCache.delete(deviceId);
+}
+
+export function getCachedVMServiceUrl(deviceId: string): string | undefined {
+  return urlCache.get(deviceId);
+}
+
+/**
+ * Quick HEAD/GET probe against the cached VM Service URL. The Dart VM Service
+ * HTTP root returns a 200 with `application/json` (`{}`) when the auth token
+ * matches and the isolate is alive. Returns true within ~200 ms when the URL
+ * is still serving, false on any error.
+ */
+export function probeVMServiceUrl(httpUrl: string, timeoutMs = 750): Promise<boolean> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      resolve(ok);
+    };
+
+    try {
+      const req = http.get(httpUrl, { timeout: timeoutMs }, (res) => {
+        // Dart VM Service replies 200 with empty JSON on the root.
+        // Any 2xx/3xx confirms the port is alive and the token still matches.
+        const status = res.statusCode ?? 0;
+        res.resume();
+        finish(status >= 200 && status < 400);
+      });
+      req.on('timeout', () => {
+        req.destroy();
+        finish(false);
+      });
+      req.on('error', () => finish(false));
+    } catch {
+      finish(false);
+    }
+  });
+}
 
 /**
  * Discover the Dart VM Service URL from simulator logs.
@@ -29,12 +86,31 @@ const VM_SERVICE_WS_URL_ENV = 'OPENSAFARI_VM_SERVICE_WS_URL';
  */
 export async function discoverVMServiceUrl(
   deviceId: string,
-  options?: { bundleId?: string; timeout?: number },
+  options?: { bundleId?: string; timeout?: number; skipCache?: boolean },
 ): Promise<string | null> {
   const timeout = options?.timeout ?? DEFAULT_TIMEOUT_MS;
   const envOverride = getEnvOverrideUrl();
   if (envOverride) {
     return envOverride;
+  }
+
+  // Hot path: if a prior connect succeeded for this device, try that URL
+  // first via a cheap HTTP probe. Saves the 1-3 s `simctl log show` scan
+  // when the VM Service is still up — common when the WebSocket dropped due
+  // to a transient ios-webkit-debug-proxy restart or a simulator sleep/wake.
+  if (!options?.skipCache) {
+    const cached = urlCache.get(deviceId);
+    if (cached && isValidVMServiceUrl(cached)) {
+      try {
+        if (await probeVMServiceUrl(cached)) {
+          return cached;
+        }
+      } catch {
+        // probe failed — fall through to fresh discovery
+      }
+      // stale: drop so a parallel caller doesn't probe again
+      urlCache.delete(deviceId);
+    }
   }
 
   // Strategy: Search recent logs for observatory URL

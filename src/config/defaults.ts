@@ -27,6 +27,16 @@ export const DEFAULT_SCREENSHOT_TIMEOUT_MS = 10000;
 // Evaluate
 export const DEFAULT_EVALUATE_TIMEOUT_MS = 15000;
 
+// Flutter VM Service (Dart VM Service WebSocket)
+export const DEFAULT_FLUTTER_VM_REQUEST_TIMEOUT_MS = 10000;
+/** Long-running ext.flutter / inspector calls — widget tree, reload, evaluate. */
+export const DEFAULT_FLUTTER_VM_HEAVY_TIMEOUT_MS = 60000;
+export const DEFAULT_FLUTTER_VM_CONNECT_TIMEOUT_MS = 5000;
+export const DEFAULT_FLUTTER_VM_HEARTBEAT_INTERVAL_MS = 30000;
+export const DEFAULT_FLUTTER_VM_RECONNECT_MAX_ATTEMPTS = 5;
+export const DEFAULT_FLUTTER_VM_RECONNECT_BASE_DELAY_MS = 1000;
+export const DEFAULT_FLUTTER_VM_RECONNECT_MAX_DELAY_MS = 16000;
+
 // QA Detectors
 export const DEFAULT_DETECTOR_TIMEOUT_MS = 5000;
 export const DEFAULT_TOUCH_TARGET_MIN_SIZE = 44;
