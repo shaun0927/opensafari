@@ -33,10 +33,6 @@ import {
   DEFAULT_FLUTTER_VM_RECONNECT_MAX_DELAY_MS,
 } from '../config/defaults';
 
-/** Backwards-compatible alias preserved for any external callers that
- *  imported the old constant before the config-defaults consolidation. */
-const DEFAULT_REQUEST_TIMEOUT_MS = DEFAULT_FLUTTER_VM_REQUEST_TIMEOUT_MS;
-const DEFAULT_CONNECT_TIMEOUT_MS = DEFAULT_FLUTTER_VM_CONNECT_TIMEOUT_MS;
 
 type EventCallback = (event: VMServiceEvent['params']['event']) => void;
 
