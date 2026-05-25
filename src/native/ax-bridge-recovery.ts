@@ -59,7 +59,7 @@ export const DEFAULT_REACTIVATE_TIMEOUT_MS = 2500;
 export interface AxBridgeRecoveryStage {
   /** 1-indexed attempt number associated with this stage. */
   attempt: number;
-  action: 'dump' | 'reactivate' | 'sleep';
+  action: 'dump' | 'query' | 'press' | 'reactivate' | 'sleep';
   /** `Date.now()` when the stage began. */
   startedAt: number;
   durationMs: number;
@@ -296,4 +296,183 @@ function attachRecoveryReport(
   report: AxBridgeRecoveryReport,
 ): void {
   (err as AccessibilityBridgeError & { recovery?: AxBridgeRecoveryReport }).recovery = report;
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// PR11: generalised recovery wrapper + query / press variants
+// ────────────────────────────────────────────────────────────────────────
+
+/** Subset of dumpTreeWithRecovery's options that applies to ANY ax-bridge
+ *  call — used by `queryWithRecovery` / `pressWithRecovery` so they can
+ *  honour the same retry policy without dragging in `AXDumpOptions`. */
+export interface AxOperationRecoveryOptions {
+  deviceId?: string;
+  bundleId?: string;
+  maxAttempts?: number;
+  backoffMs?: number[];
+  reactivateOnRetry?: boolean;
+  reactivate?: (
+    deviceId: string,
+    opts: { forceRefresh: true; timeout: number; bundleId?: string },
+  ) => Promise<boolean>;
+  sleep?: (ms: number) => Promise<void>;
+}
+
+/**
+ * Generic recovery loop for AX operations other than `dumpTree`. Mirrors
+ * the policy of `dumpTreeWithRecovery` but takes the call to retry as a
+ * lambda — `attempt` is the 1-indexed attempt number, useful when the
+ * caller wants to log or vary behaviour on the first vs later attempts.
+ *
+ * Recovery is identical to dump: recoverable codes trigger backoff +
+ * optional `ensureSemanticsActive({ forceRefresh: true })`, non-
+ * recoverable codes surface immediately, and the final error gets a
+ * `.recovery` report attached.
+ */
+export async function runAxOperationWithRecovery<T>(
+  operation: (attempt: number) => Promise<T>,
+  options: AxOperationRecoveryOptions,
+  actionLabel: 'query' | 'press' = 'query',
+): Promise<{ result: T; recovery: AxBridgeRecoveryReport }> {
+  const maxAttempts = Math.max(1, options.maxAttempts ?? DEFAULT_MAX_ATTEMPTS);
+  const reactivateOnRetry = options.reactivateOnRetry ?? true;
+  const sleep = options.sleep ?? defaultSleep;
+  const reactivate = options.reactivate ?? ensureSemanticsActive;
+
+  const stages: AxBridgeRecoveryStage[] = [];
+  let attempt = 0;
+  let lastError: AccessibilityBridgeError | undefined;
+
+  while (attempt < maxAttempts) {
+    attempt += 1;
+
+    const opStart = Date.now();
+    try {
+      const result = await operation(attempt);
+      stages.push({
+        attempt,
+        action: actionLabel,
+        startedAt: opStart,
+        durationMs: Date.now() - opStart,
+        outcome: 'ok',
+      });
+      return {
+        result,
+        recovery: { attempts: attempt, recovered: true, stages },
+      };
+    } catch (err) {
+      const durationMs = Date.now() - opStart;
+      const code = err instanceof AccessibilityBridgeError ? err.code : 'UNKNOWN';
+      stages.push({
+        attempt,
+        action: actionLabel,
+        startedAt: opStart,
+        durationMs,
+        outcome: 'error',
+        errorCode: code,
+      });
+
+      if (!isRecoverableError(err)) {
+        const wrapped = err instanceof AccessibilityBridgeError
+          ? err
+          : new AccessibilityBridgeError(
+            err instanceof Error ? err.message : String(err),
+            'UNKNOWN',
+          );
+        attachRecoveryReport(wrapped, {
+          attempts: attempt,
+          recovered: false,
+          stages,
+          lastErrorCode: wrapped.code,
+        });
+        throw wrapped;
+      }
+
+      lastError = err;
+      if (attempt >= maxAttempts) break;
+
+      const backoff = resolveBackoff(options.backoffMs, attempt - 1);
+      if (backoff > 0) {
+        const sleepStart = Date.now();
+        await sleep(backoff);
+        stages.push({
+          attempt,
+          action: 'sleep',
+          startedAt: sleepStart,
+          durationMs: Date.now() - sleepStart,
+          outcome: 'ok',
+        });
+      }
+
+      if (reactivateOnRetry && options.deviceId) {
+        const reactStart = Date.now();
+        try {
+          const reactivated = await reactivate(options.deviceId, {
+            forceRefresh: true,
+            timeout: DEFAULT_REACTIVATE_TIMEOUT_MS,
+            bundleId: options.bundleId,
+          });
+          stages.push({
+            attempt,
+            action: 'reactivate',
+            startedAt: reactStart,
+            durationMs: Date.now() - reactStart,
+            outcome: reactivated ? 'ok' : 'error',
+            errorCode: reactivated ? undefined : 'REACTIVATE_RETURNED_FALSE',
+          });
+        } catch (rErr) {
+          stages.push({
+            attempt,
+            action: 'reactivate',
+            startedAt: reactStart,
+            durationMs: Date.now() - reactStart,
+            outcome: 'error',
+            errorCode: rErr instanceof AccessibilityBridgeError ? rErr.code : 'REACTIVATE_THREW',
+          });
+        }
+      }
+    }
+  }
+
+  const finalError = lastError ?? new AccessibilityBridgeError(
+    `ax operation '${actionLabel}' failed after ${attempt} attempts`,
+    'UNKNOWN',
+  );
+  attachRecoveryReport(finalError, {
+    attempts: attempt,
+    recovered: false,
+    stages,
+    lastErrorCode: finalError.code,
+  });
+  throw finalError;
+}
+
+/** Wraps `AccessibilityBridge.query()` with the same recovery policy as
+ *  `dumpTreeWithRecovery`. Use this from alert handler / tap-element /
+ *  inspect paths so a single `AX_TIMEOUT` or `DEVICE_CONTENT_ROOT_EMPTY`
+ *  doesn't fail an entire flow when an `ensureSemanticsActive` retry
+ *  would have fixed it. */
+export async function queryWithRecovery<TQuery, TResult>(
+  bridge: { query: (q: TQuery, opts?: { deviceId?: string }) => Promise<TResult> },
+  query: TQuery,
+  options: AxOperationRecoveryOptions,
+): Promise<{ result: TResult; recovery: AxBridgeRecoveryReport }> {
+  return runAxOperationWithRecovery(
+    () => bridge.query(query, { deviceId: options.deviceId }),
+    options,
+    'query',
+  );
+}
+
+/** Wraps `AccessibilityBridge.press()` with the same recovery policy. */
+export async function pressWithRecovery<TResult>(
+  bridge: { press: (path: string, deviceId?: string) => Promise<TResult> },
+  elementPath: string,
+  options: AxOperationRecoveryOptions,
+): Promise<{ result: TResult; recovery: AxBridgeRecoveryReport }> {
+  return runAxOperationWithRecovery(
+    () => bridge.press(elementPath, options.deviceId),
+    options,
+    'press',
+  );
 }

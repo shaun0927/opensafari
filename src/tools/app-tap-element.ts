@@ -97,6 +97,11 @@ export function registerAppTapElementTool(server: MCPServer): void {
             description:
               'Additional label strings to try in order when the primary `label`/`text`/`identifier` query does not match. Useful for cross-locale variants ("Sign in" / "로그인" / "Anmelden") or synonyms ("Continue" / "Next"). Each alias is tried as a label-substring match.',
           },
+          tryAllFields: {
+            type: 'boolean',
+            description:
+              'When the primary identifier/label/text/role query misses, retry with a relaxed `text` substring built from all provided query fields. Catches the common case where the desired string lives in `value` rather than `label`. Default false.',
+          },
         },
         required: [],
       },
@@ -185,13 +190,30 @@ export function registerAppTapElementTool(server: MCPServer): void {
           }
         }
 
-        // PR16: when the primary query missed, try each alias in turn as
-        // a label-substring match. This lets one tool call survive locale
-        // drift ("Sign in" / "로그인" / "Anmelden") without rebuilding
-        // the call from scratch.
         const labelAliases = Array.isArray(params.labelAliases)
           ? (params.labelAliases as unknown[]).filter((s): s is string => typeof s === 'string')
           : [];
+
+        // Relaxed-field fallback. When the user opts in, retry the query with
+        // a `text` substring built from whichever query fields the caller
+        // supplied. AX bridges sometimes expose the visible string in `value`
+        // rather than `label` (e.g. text fields and badges).
+        if (!match && params.tryAllFields === true) {
+          const fallbackText = [identifier, label, text].filter(Boolean).join(' ').trim();
+          if (fallbackText.length > 0) {
+            const relaxedResult = await bridge.query({ text: fallbackText, role }, { deviceId });
+            if (relaxedResult.matches.length > index) {
+              match = relaxedResult.matches[index];
+              queryResult = relaxedResult;
+              totalMatches = relaxedResult.matches.length;
+              ambiguous = relaxedResult.ambiguous;
+            }
+          }
+        }
+
+        // Alias fallback runs after relaxed-field matching so callers can
+        // provide locale/synonym variants without losing the stricter role
+        // preservation offered by tryAllFields.
         if (!match && labelAliases.length > 0) {
           for (const alias of labelAliases) {
             const aliasResult = await bridge.query({ label: alias }, { deviceId });
