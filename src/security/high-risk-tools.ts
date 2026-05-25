@@ -59,6 +59,14 @@ export const HIGH_RISK_MCP_TOOLS: Readonly<Record<string, HighRiskToolMetadata>>
     category: 'credential-movement',
     requiredCapability: HTTP_HIGH_RISK_TOOL_CAPABILITY,
   },
+  auth_save_native: {
+    category: 'credential-movement',
+    requiredCapability: HTTP_HIGH_RISK_TOOL_CAPABILITY,
+  },
+  auth_restore_native: {
+    category: 'credential-movement',
+    requiredCapability: HTTP_HIGH_RISK_TOOL_CAPABILITY,
+  },
   cookies: {
     category: 'credential-movement',
     requiredCapability: HTTP_HIGH_RISK_TOOL_CAPABILITY,
@@ -67,6 +75,33 @@ export const HIGH_RISK_MCP_TOOLS: Readonly<Record<string, HighRiskToolMetadata>>
 
 export function getHighRiskToolMetadata(toolName: string): HighRiskToolMetadata | undefined {
   return HIGH_RISK_MCP_TOOLS[toolName];
+}
+
+function hasNonEmptyString(value: unknown): boolean {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+/**
+ * Some tools are broadly safe but gain credential movement behavior when a
+ * specific optional argument is present. Keep them visible over HTTP, but gate
+ * the dangerous call shape with the same capability as always-high-risk tools.
+ */
+export function getHighRiskToolMetadataForCall(
+  toolName: string,
+  args: Record<string, unknown>,
+): HighRiskToolMetadata | undefined {
+  const direct = getHighRiskToolMetadata(toolName);
+  if (direct) return direct;
+
+  if (toolName === 'app_launch' && hasNonEmptyString(args.authProfile)) {
+    return { category: 'credential-movement', requiredCapability: HTTP_HIGH_RISK_TOOL_CAPABILITY };
+  }
+
+  if (toolName === 'app_reset' && hasNonEmptyString(args.snapshotAuthProfile)) {
+    return { category: 'credential-movement', requiredCapability: HTTP_HIGH_RISK_TOOL_CAPABILITY };
+  }
+
+  return undefined;
 }
 
 export function parseHttpHighRiskToolsEnabled(value: string | undefined): boolean {
