@@ -21,33 +21,35 @@ import * as path from 'path';
 
 const execFileAsync = promisify(execFile);
 
-// First invocation of `sim-hid-bridge` on a CI runner pays for cold
-// dyld-cache + private-framework load (~5 s on macos-14 / macos-latest
-// since the tap-digitizer probe added IOKit `dlopen` and extra symbol
-// resolution), which exceeds Jest's 5 s default. `runBridge` already
-// caps each exec at 15 s, so 30 s gives comfortable headroom.
+// First invocation of `sim-hid-bridge` on a GitHub-hosted macOS runner
+// pays for dyld-cache, Swift/private-framework load, and occasionally a
+// slow CoreSimulator fake-UDID lookup.  macos-15 has exceeded 45 s on the
+// first framework-load probe while later probes in the same job passed, so
+// the sentinel keeps a generous budget while still failing deterministically
+// on real private-API break responses (exit 78 + structured JSON).
 //
 // `jest.setTimeout` is declared at file scope on purpose: when called
 // inside a `describe()` block it does NOT reliably override the per-test
-// default in current Jest releases (jestjs/jest#11543), which is what
-// failed CI run 24455101294 hit ("Exceeded timeout of 5000 ms" even
-// though the suite-level value was 30 s). Per-test third-argument
-// timeouts on the long-running cases below provide a belt-and-suspenders
-// guarantee against future Jest scoping changes.
-jest.setTimeout(45_000);
+// default in current Jest releases (jestjs/jest#11543). Per-test
+// third-argument timeouts on the long-running cases below provide a
+// belt-and-suspenders guarantee against future Jest scoping changes.
+jest.setTimeout(90_000);
 
-const SLOW_BRIDGE_TIMEOUT_MS = 45_000;
+const SLOW_BRIDGE_TIMEOUT_MS = 90_000;
 
 /** Locate the sim-hid-bridge binary or .swift source. */
 function findBridge(): string | null {
   const candidates = [
-    // Prefer Swift source for the sentinel: on GitHub's macos-15 arm64 runners
-    // the compiled helper occasionally exits with a generic code 1 for the
-    // fake-UDID probe, while the interpreter path still returns the structured
-    // framework/symbol diagnostics that this sentinel actually cares about.
+    // Prefer the native Swift binary emitted by `npm run build`: the
+    // interpreter path can spend the whole first-probe budget compiling on
+    // macos-15 before it even reaches the private-framework checks. The
+    // sentinel assertions below already tolerate the historical generic
+    // fake-UDID exit code while preserving hard failures for exit 78 private
+    // API break responses.
+    path.resolve(__dirname, '..', '..', 'dist', 'sim-hid-bridge-native'),
+    path.resolve(__dirname, '..', '..', 'dist', 'sim-hid-bridge'),
     path.resolve(__dirname, '..', '..', 'dist', 'sim-hid-bridge.swift'),
     path.resolve(__dirname, '..', '..', 'src', 'native', 'sim-hid-bridge.swift'),
-    path.resolve(__dirname, '..', '..', 'dist', 'sim-hid-bridge'),
   ];
   for (const c of candidates) {
     if (existsSync(c)) return c;
