@@ -369,6 +369,43 @@ export function registerAppAlertHandleTool(server: MCPServer): void {
             }
           }
 
+          // PR23: escalation. Before declaring ALERT_HANDLE_NO_EFFECT,
+          // try a keyboard fallback — most iOS alerts respond to Return
+          // (default button) or Escape (cancel). The AX press already
+          // ran, so this is a free second attempt that often unsticks
+          // alerts whose press accessibility action is no-op'd by the
+          // app (common with Flutter dialogs that don't wire up the
+          // AXPress action).
+          let escalated = false;
+          if (!verification.verified) {
+            try {
+              const inputBackend = await getInputBackend(deviceId);
+              await inputBackend.sendKey(deviceId, 'Return');
+              await new Promise((resolve) => setTimeout(resolve, 200));
+              const escTree = await bridge.dumpTree({ deviceId, maxDepth: 8 });
+              const escVerification = verifyAlertEffect(tree, escTree, matchedNode);
+              if (escVerification.verified) {
+                verification = escVerification;
+                afterTree = escTree;
+                escalated = true;
+              } else {
+                // Last resort: Escape (dismisses most modal sheets).
+                await inputBackend.sendKey(deviceId, 'Escape');
+                await new Promise((resolve) => setTimeout(resolve, 200));
+                const esc2Tree = await bridge.dumpTree({ deviceId, maxDepth: 8 });
+                const esc2Verification = verifyAlertEffect(tree, esc2Tree, matchedNode);
+                if (esc2Verification.verified) {
+                  verification = esc2Verification;
+                  afterTree = esc2Tree;
+                  escalated = true;
+                }
+              }
+            } catch {
+              // input backend unavailable or sendKey failed — fall
+              // through to the existing no-effect error path.
+            }
+          }
+
           if (!verification.verified) {
             return {
               content: [
@@ -384,6 +421,7 @@ export function registerAppAlertHandleTool(server: MCPServer): void {
                     verified: false,
                     effect: verification.effect,
                     visibleLabelsAfter: verification.visibleLabelsAfter,
+                    escalated: false,
                     _meta: {
                       _telemetry: [
                         {
@@ -398,6 +436,11 @@ export function registerAppAlertHandleTool(server: MCPServer): void {
               ],
               isError: true,
             };
+          }
+          // verification verified, possibly via escalation — mark it
+          // so callers can attribute success to the keyboard fallback.
+          if (escalated) {
+            (verification as AlertVerification & { escalated?: 'keyboard' }).escalated = 'keyboard';
           }
 
           return {
