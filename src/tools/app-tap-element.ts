@@ -100,6 +100,11 @@ export function registerAppTapElementTool(server: MCPServer): void {
             type: 'number',
             description: 'Maximum scroll-and-retry attempts when autoScroll is true. Default 6.',
           },
+          tryAllFields: {
+            type: 'boolean',
+            description:
+              'When the primary identifier/label/text/role query misses, retry with a relaxed `text` substring built from all provided query fields. Catches the common case where the desired string lives in `value` rather than `label`. Default false.',
+          },
         },
         required: [],
       },
@@ -185,6 +190,25 @@ export function registerAppTapElementTool(server: MCPServer): void {
           if (result.matches.length > index) {
             match = result.matches[index];
             queryResult = result;
+          }
+        }
+
+        // PR22: relaxed-field fallback. When the user opts in, retry the
+        // query with a `text` substring built from whichever query
+        // fields the caller supplied. AX bridges sometimes expose the
+        // visible string in `value` rather than `label` (e.g. text
+        // fields and badges), and this retry finds them without forcing
+        // the caller to re-issue the call with `text:` set.
+        if (!match && params.tryAllFields === true) {
+          const fallbackText = [identifier, label, text].filter(Boolean).join(' ').trim();
+          if (fallbackText.length > 0) {
+            const relaxedResult = await bridge.query({ text: fallbackText, role }, { deviceId });
+            if (relaxedResult.matches.length > index) {
+              match = relaxedResult.matches[index];
+              queryResult = relaxedResult;
+              totalMatches = relaxedResult.matches.length;
+              ambiguous = relaxedResult.ambiguous;
+            }
           }
         }
 
