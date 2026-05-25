@@ -184,3 +184,50 @@ export function registerAppCrashReportsTool(server: MCPServer): void {
     },
   );
 }
+
+/**
+ * PR25: detect crash reports that landed in DiagnosticReports AFTER a
+ * reference timestamp. Designed for "run high-risk op (launch / tap /
+ * type) → record start ts → call this; if anything matches, that op
+ * almost certainly crashed the app and the caller should retry once
+ * instead of returning a useless success".
+ *
+ * Filtering rules:
+ *   - mtime > sinceMs        — only reports newer than the op start.
+ *   - extension is .ips/.crash.
+ *   - When `processName` is supplied (the bundle's process portion of
+ *     the file name is a useful proxy), reports must contain it as a
+ *     filename prefix. When omitted, any fresh report is returned.
+ *
+ * Returns an empty array on any read failure (no DiagnosticReports dir,
+ * permissions, etc.) — the caller decides whether to surface that.
+ */
+export async function findFreshCrashes(
+  processName: string | undefined,
+  sinceMs: number,
+): Promise<Array<{ filename: string; mtimeMs: number }>> {
+  const out: Array<{ filename: string; mtimeMs: number }> = [];
+  let entries: string[];
+  try {
+    entries = await fs.readdir(DIAGNOSTIC_REPORTS_DIR);
+  } catch {
+    return out;
+  }
+  for (const entry of entries) {
+    const ext = path.extname(entry).toLowerCase();
+    if (!CRASH_EXTENSIONS.has(ext)) continue;
+    if (processName) {
+      const stem = entry.replace(/\.(ips|crash)$/, '').split('_')[0];
+      if (stem !== processName) continue;
+    }
+    try {
+      const stat = await fs.stat(path.join(DIAGNOSTIC_REPORTS_DIR, entry));
+      if (stat.mtimeMs > sinceMs) {
+        out.push({ filename: entry, mtimeMs: stat.mtimeMs });
+      }
+    } catch {
+      // unreadable file — skip
+    }
+  }
+  return out;
+}

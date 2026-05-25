@@ -36,6 +36,7 @@ import { registerCompareDevicesTool } from './compare-devices';
 import { registerQADetectorTools } from './qa-detectors';
 import { registerQAAuditTools } from './qa-audit';
 import { registerAuthTools } from './auth';
+import { registerAuthOtpFetchTool } from './auth-otp-fetch';
 import { registerMockGeolocationTool } from './mock-geolocation';
 import { registerNetworkThrottleTool } from './network-throttle';
 import { registerErrorLogTool } from './error-log';
@@ -128,6 +129,7 @@ import { registerAppTypeElementTool } from './app-type-element';
 import { registerAppWaitForNativeTool } from './app-wait-for';
 import { registerAppAssertElementTool } from './app-assert-element';
 import { registerDiagnoseTool } from './diagnose';
+import { registerAppGotoScreenTool } from './app-goto-screen';
 
 export { setWorkflowEngine } from './orchestration-tools';
 export { setBarrier } from './barrier-tools';
@@ -207,6 +209,7 @@ export function registerAllTools(server: MCPServer): void {
 
   // Tier 3: Auth Persistence
   registerAuthTools(server);
+  registerAuthOtpFetchTool(server);
 
   // Tier 2: Native App — System Surfaces
   registerAppOpenUrlTool(server);
@@ -335,4 +338,5 @@ export function registerAllTools(server: MCPServer): void {
 
   // Tier 1: Diagnostics
   registerDiagnoseTool(server);
+  registerAppGotoScreenTool(server);
 }
