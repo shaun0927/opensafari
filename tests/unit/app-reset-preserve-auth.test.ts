@@ -21,6 +21,10 @@ jest.mock('../../src/simulator', () => ({
     listBooted: mockListBooted,
     resetApp: mockResetApp,
   })),
+  getDefaultSimulatorManager: jest.fn(() => ({
+    listBooted: mockListBooted,
+    resetApp: mockResetApp,
+  })),
 }));
 
 jest.mock('../../src/session-manager', () => ({
