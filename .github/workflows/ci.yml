@@ -56,7 +56,9 @@ jobs:
           cache: 'npm'
       # `--force` is required on Linux because package.json restricts `os` to darwin;
       # plain `npm ci` would exit with EBADPLATFORM. Matches the lint/build jobs above.
-      - run: npm ci --force
+      # Avoid package prepare/build during audit install on Linux: native Swift
+      # bridges are macOS-only and are covered by build/test jobs separately.
+      - run: npm ci --force --ignore-scripts
       - name: Runtime dependency audit (blocking)
         run: npm run audit:prod
       - name: Dev dependency hygiene audit (warning only)
