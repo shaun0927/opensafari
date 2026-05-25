@@ -36,6 +36,7 @@ import { registerCompareDevicesTool } from './compare-devices';
 import { registerQADetectorTools } from './qa-detectors';
 import { registerQAAuditTools } from './qa-audit';
 import { registerAuthTools } from './auth';
+import { registerAuthOtpFetchTool } from './auth-otp-fetch';
 import { registerMockGeolocationTool } from './mock-geolocation';
 import { registerNetworkThrottleTool } from './network-throttle';
 import { registerErrorLogTool } from './error-log';
@@ -207,6 +208,7 @@ export function registerAllTools(server: MCPServer): void {
 
   // Tier 3: Auth Persistence
   registerAuthTools(server);
+  registerAuthOtpFetchTool(server);
 
   // Tier 2: Native App — System Surfaces
   registerAppOpenUrlTool(server);
