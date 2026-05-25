@@ -126,6 +126,7 @@ import { registerAppTapElementTool } from './app-tap-element';
 import { registerAppTypeElementTool } from './app-type-element';
 import { registerAppWaitForNativeTool } from './app-wait-for';
 import { registerAppAssertElementTool } from './app-assert-element';
+import { registerAppPopUntilTool } from './app-pop-until';
 import { registerDiagnoseTool } from './diagnose';
 
 export { setWorkflowEngine } from './orchestration-tools';
@@ -330,6 +331,7 @@ export function registerAllTools(server: MCPServer): void {
   // Tier 2: Native App — Semantic Wait & Assert (Flutter-compatible)
   registerAppWaitForNativeTool(server);
   registerAppAssertElementTool(server);
+  registerAppPopUntilTool(server);
 
   // Tier 1: Diagnostics
   registerDiagnoseTool(server);
