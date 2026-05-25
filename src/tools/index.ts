@@ -69,6 +69,7 @@ import { registerAppCrashReportsTool } from './app-crash-reports';
 import { registerAppRecordVideoTool } from './app-record-video';
 import { registerAppPermissionsTool } from './app-permissions';
 import { registerAppDeeplinkTool } from './app-deeplink';
+import { registerAppListRoutesTool } from './app-list-routes';
 import { registerAppNotesPasteAndTapUrlTool } from './app-notes-paste-and-tap-url';
 import { registerAppPushNotificationTool } from './app-push-notification';
 import { registerAppHandleAlertTool } from './app-handle-alert';
@@ -259,6 +260,7 @@ export function registerAllTools(server: MCPServer): void {
   // Tier 2: Native App System Surfaces
   registerAppPermissionsTool(server);
   registerAppDeeplinkTool(server);
+  registerAppListRoutesTool(server);
   registerAppNotesPasteAndTapUrlTool(server);
   registerAppPushNotificationTool(server);
   registerAppHandleAlertTool(server);
