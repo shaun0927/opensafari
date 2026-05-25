@@ -10,23 +10,119 @@
  *   auto          — try Escape first, then a top-left scrim tap, then a
  *                   downward swipe; surface which strategy worked
  *
- * The tool fires the gesture; the caller verifies the dismissal succeeded
- * via app_assert / wait_for. We intentionally don't dump the AX tree
- * before firing — that would tie this helper to the bridge's recoverable
- * error budget and defeat the "fast unblock" purpose. Coordinates are
- * device-agnostic and land inside every iPhone/iPad form factor.
+ * By default the tool remains a fast gesture helper. Callers that need
+ * semantic proof can pass `waitForGone` or `waitForVisible`; the tool will
+ * poll the AX tree after dispatch and report a verified postcondition.
  */
 
 import { MCPServer, getWebKitClient } from '../mcp-server';
 import { getSessionManager } from '../session-manager';
+import { getAccessibilityBridge } from '../native';
 import { getInputBackend } from './native-input-utils';
 
 const MODES = ['auto', 'drawer', 'bottom_sheet', 'dialog'] as const;
 type OverlayMode = (typeof MODES)[number];
 
+type VerificationKind = 'gone' | 'visible';
+
+interface OverlayVerificationSpec {
+  identifier?: string;
+  label?: string;
+  text?: string;
+  role?: string;
+  timeoutMs?: number;
+  intervalMs?: number;
+}
+
+interface OverlayVerificationResult {
+  requested: boolean;
+  kind?: VerificationKind;
+  verified?: boolean;
+  query?: Record<string, unknown>;
+  elapsedMs?: number;
+  polls?: number;
+  finalMatchCount?: number;
+  strict?: boolean;
+  error?: string;
+}
+
+const DEFAULT_VERIFY_TIMEOUT_MS = 3_000;
+const DEFAULT_VERIFY_INTERVAL_MS = 250;
+
 async function resolveDeviceId(explicit?: string): Promise<string | null> {
   if (explicit) return explicit;
   return getSessionManager().getSoleDeviceId();
+}
+
+function parseVerification(params: Record<string, unknown>):
+  | { kind: VerificationKind; spec: OverlayVerificationSpec; strict: boolean }
+  | null {
+  const gone = params.waitForGone as OverlayVerificationSpec | undefined;
+  const visible = params.waitForVisible as OverlayVerificationSpec | undefined;
+  if (gone && visible) {
+    throw new Error('Specify only one of waitForGone or waitForVisible');
+  }
+  const spec = gone ?? visible;
+  if (!spec) return null;
+  if (!spec.identifier && !spec.label && !spec.text && !spec.role) {
+    throw new Error('Verification requires at least one of identifier, label, text, or role');
+  }
+  return {
+    kind: gone ? 'gone' : 'visible',
+    spec,
+    strict: params.verifyStrict !== false,
+  };
+}
+
+async function verifyPostcondition(
+  deviceId: string,
+  kind: VerificationKind,
+  spec: OverlayVerificationSpec,
+): Promise<OverlayVerificationResult> {
+  const bridge = getAccessibilityBridge();
+  const query = {
+    identifier: spec.identifier,
+    label: spec.label,
+    text: spec.text,
+    role: spec.role,
+  };
+  const timeoutMs = Math.max(0, Math.floor(spec.timeoutMs ?? DEFAULT_VERIFY_TIMEOUT_MS));
+  const intervalMs = Math.max(50, Math.floor(spec.intervalMs ?? DEFAULT_VERIFY_INTERVAL_MS));
+  const start = Date.now();
+  const deadline = start + timeoutMs;
+  let polls = 0;
+  let finalMatchCount = 0;
+
+  while (Date.now() <= deadline) {
+    polls++;
+    const result = await bridge.query(query, { deviceId });
+    finalMatchCount = result.matches.length;
+    const verified = kind === 'gone' ? finalMatchCount === 0 : finalMatchCount > 0;
+    if (verified) {
+      return {
+        requested: true,
+        kind,
+        verified: true,
+        query,
+        elapsedMs: Date.now() - start,
+        polls,
+        finalMatchCount,
+      };
+    }
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
+    await new Promise((resolve) => setTimeout(resolve, Math.min(intervalMs, remaining)));
+  }
+
+  return {
+    requested: true,
+    kind,
+    verified: false,
+    query,
+    elapsedMs: Date.now() - start,
+    polls,
+    finalMatchCount,
+  };
 }
 
 export function registerAppDismissOverlayTool(server: MCPServer): void {
@@ -34,7 +130,7 @@ export function registerAppDismissOverlayTool(server: MCPServer): void {
     {
       name: 'app_dismiss_overlay',
       description:
-        'Dismiss a Flutter / UIKit overlay (drawer, bottom sheet, dialog) using the standard gesture for that overlay class. Use mode="auto" when unsure — the tool will try Escape, scrim tap, and a downward swipe in order and report which worked. Caller should verify dismissal via app_assert / app_wait_for.',
+        'Dismiss a Flutter / UIKit overlay (drawer, bottom sheet, dialog) using the standard gesture for that overlay class. Use mode="auto" when unsure — the tool will try Escape, scrim tap, and a downward swipe in order. Pass waitForGone or waitForVisible to verify a postcondition.',
       inputSchema: {
         type: 'object' as const,
         properties: {
@@ -44,6 +140,34 @@ export function registerAppDismissOverlayTool(server: MCPServer): void {
             description: 'Overlay kind. Default "auto".',
           },
           deviceId: { type: 'string', description: 'Simulator UDID' },
+          waitForGone: {
+            type: 'object',
+            description: 'Optional AX postcondition. Verification succeeds once no node matches this query.',
+            properties: {
+              identifier: { type: 'string' },
+              label: { type: 'string' },
+              text: { type: 'string' },
+              role: { type: 'string' },
+              timeoutMs: { type: 'number' },
+              intervalMs: { type: 'number' },
+            },
+          },
+          waitForVisible: {
+            type: 'object',
+            description: 'Optional AX postcondition. Verification succeeds once at least one node matches this query.',
+            properties: {
+              identifier: { type: 'string' },
+              label: { type: 'string' },
+              text: { type: 'string' },
+              role: { type: 'string' },
+              timeoutMs: { type: 'number' },
+              intervalMs: { type: 'number' },
+            },
+          },
+          verifyStrict: {
+            type: 'boolean',
+            description: 'When false, a failed optional postcondition is reported as verified=false without setting isError. Default true when a postcondition is supplied.',
+          },
         },
         required: [],
       },
@@ -65,6 +189,22 @@ export function registerAppDismissOverlayTool(server: MCPServer): void {
           content: [{
             type: 'text' as const,
             text: JSON.stringify({ error: 'DEVICE_NOT_BOOTED' }),
+          }],
+          isError: true,
+        };
+      }
+
+      let verificationRequest: ReturnType<typeof parseVerification>;
+      try {
+        verificationRequest = parseVerification(params);
+      } catch (err) {
+        return {
+          content: [{
+            type: 'text' as const,
+            text: JSON.stringify({
+              error: 'INVALID_VERIFICATION',
+              message: err instanceof Error ? err.message : String(err),
+            }),
           }],
           isError: true,
         };
@@ -107,20 +247,49 @@ export function registerAppDismissOverlayTool(server: MCPServer): void {
         } else if (mode === 'drawer') {
           await trySwipeFromRight();
         } else {
-          // auto: Escape → scrim tap → swipe down. We always fire all three
-          // in sequence rather than checking effects between, because the
-          // AX-tree check would dominate latency. Verification belongs to
-          // the caller.
+          // auto: Escape → scrim tap → swipe down. Without a caller-provided
+          // postcondition this stays a fast unblock helper; with one, the AX
+          // verification below turns dispatch success into semantic evidence.
           await tryEscape().catch(() => undefined);
           await tryScrimTap().catch(() => undefined);
           await trySwipeDown().catch(() => undefined);
         }
 
+        let verification: OverlayVerificationResult = { requested: false };
+        if (verificationRequest) {
+          try {
+            verification = await verifyPostcondition(
+              deviceId,
+              verificationRequest.kind,
+              verificationRequest.spec,
+            );
+          } catch (err) {
+            verification = {
+              requested: true,
+              kind: verificationRequest.kind,
+              verified: false,
+              strict: verificationRequest.strict,
+              error: err instanceof Error ? err.message : String(err),
+            };
+          }
+          verification.strict = verificationRequest.strict;
+        }
+
+        const verified = verification.requested ? verification.verified === true : null;
+        const body = {
+          dismissed: !verification.requested || verification.verified === true,
+          mode,
+          strategiesTried,
+          deviceId,
+          verified,
+          verification,
+        };
         return {
           content: [{
             type: 'text' as const,
-            text: JSON.stringify({ dismissed: true, mode, strategiesTried, deviceId }),
+            text: JSON.stringify(body),
           }],
+          isError: verification.requested && verification.verified !== true && verification.strict ? true : undefined,
         };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
