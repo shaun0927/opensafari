@@ -21,6 +21,8 @@ import { removeNetworkInterceptorForSession } from './tools/network-intercept-ca
 import { TOOL_TIERS, getToolTier } from './config/tool-tiers';
 import { BrowserBackend } from './types/browser-backend';
 import { logAuditEntry } from './security/audit-logger';
+import { ErrorCode } from './errors/codes';
+import { toMcpErrorResponse } from './errors/structured-error';
 import {
   buildHttpHighRiskToolError,
   getHighRiskToolMetadata,
@@ -425,14 +427,13 @@ export class MCPServer {
       if (this.auditLogEnabled || isHighRiskHttp) {
         logAuditEntry(name, sessionId, args, undefined, 'error');
       }
-      const message = err instanceof Error ? err.message : String(err);
       return {
         jsonrpc: '2.0',
         id: request.id,
-        result: {
-          content: [{ type: 'text', text: `Error: ${message}` }],
-          isError: true,
-        },
+        result: toMcpErrorResponse(err, ErrorCode.APP_STATE_UNKNOWN, {
+          tool: name,
+          sessionId,
+        }) as MCPResult,
       };
     }
   }

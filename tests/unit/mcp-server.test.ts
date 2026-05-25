@@ -1,5 +1,7 @@
 import http from 'http';
 import { MCPServer } from '../../src/mcp-server';
+import { ErrorCode } from '../../src/errors/codes';
+import { StructuredErrorException } from '../../src/errors/structured-error';
 import { toolRegistry, defineToolEntry } from '../../src/tools/registry';
 import * as auditLogger from '../../src/security/audit-logger';
 
@@ -59,6 +61,10 @@ describe('MCPServer — JSON-RPC protocol', () => {
       { name: 'fail', description: 'Always fails', inputSchema: { type: 'object' as const, properties: {}, required: [] } },
       async () => { throw new Error('intentional failure'); },
     );
+    server.registerTool(
+      { name: 'structured_fail', description: 'Fails with structured metadata', inputSchema: { type: 'object' as const, properties: {}, required: [] } },
+      async () => { throw StructuredErrorException.fromCode(ErrorCode.APP_NOT_INSTALLED, 'missing test bundle'); },
+    );
     server.setTier(3);
     await server.start({ transport: 'http', port: PORT, httpInsecure: true });
   });
@@ -94,6 +100,7 @@ describe('MCPServer — JSON-RPC protocol', () => {
     const names = tools.map((t) => t.name);
     expect(names).toContain('echo');
     expect(names).toContain('fail');
+    expect(names).toContain('structured_fail');
   });
 
   test('tools/list respects tier filtering', async () => {
@@ -138,7 +145,7 @@ describe('MCPServer — JSON-RPC protocol', () => {
     expect(error.message).toContain('requires params.name');
   });
 
-  test('tools/call handler exception returns error result', async () => {
+  test('tools/call handler exception returns structured fallback error result', async () => {
     const res = await mcpPost(PORT, {
       jsonrpc: '2.0', id: 7, method: 'tools/call',
       params: { name: 'fail', arguments: {} },
@@ -146,7 +153,32 @@ describe('MCPServer — JSON-RPC protocol', () => {
     const result = res.body.result as Record<string, unknown>;
     expect(result.isError).toBe(true);
     const content = result.content as Array<Record<string, unknown>>;
-    expect(content[0].text).toContain('intentional failure');
+    const body = JSON.parse(content[0].text as string) as Record<string, unknown>;
+    expect(body).toMatchObject({
+      error: 'APP_STATE_UNKNOWN',
+      message: 'intentional failure',
+      recoverable: true,
+      tool: 'fail',
+    });
+    expect(typeof body.suggestion).toBe('string');
+  });
+
+  test('tools/call preserves StructuredErrorException metadata', async () => {
+    const res = await mcpPost(PORT, {
+      jsonrpc: '2.0', id: 701, method: 'tools/call',
+      params: { name: 'structured_fail', arguments: {} },
+    });
+    const result = res.body.result as Record<string, unknown>;
+    expect(result.isError).toBe(true);
+    const content = result.content as Array<Record<string, unknown>>;
+    const body = JSON.parse(content[0].text as string) as Record<string, unknown>;
+    expect(body).toMatchObject({
+      error: 'APP_NOT_INSTALLED',
+      message: 'missing test bundle',
+      recoverable: false,
+      suggestion: 'Install the app on the simulator first (e.g. simctl install)',
+      tool: 'structured_fail',
+    });
   });
 
   // ── error cases ──
