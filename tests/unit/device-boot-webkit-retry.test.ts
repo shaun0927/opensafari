@@ -18,6 +18,11 @@ jest.mock('../../src/simulator', () => ({
     boot,
     openUrl,
   })),
+  getDefaultSimulatorManager: jest.fn(() => ({
+    listBooted,
+    boot,
+    openUrl,
+  })),
 }));
 
 jest.mock('../../src/simulator/simctl', () => ({
