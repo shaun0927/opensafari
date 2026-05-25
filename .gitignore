@@ -31,6 +31,9 @@ npm-debug.log*
 # OMC state
 .omc/
 
+# Claude Code runtime artifacts
+.claude/scheduled_tasks.lock
+
 # Temp files
 /tmp/
 *.tmp

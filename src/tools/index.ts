@@ -70,6 +70,7 @@ import { registerAppCrashReportsTool } from './app-crash-reports';
 import { registerAppRecordVideoTool } from './app-record-video';
 import { registerAppPermissionsTool } from './app-permissions';
 import { registerAppDeeplinkTool } from './app-deeplink';
+import { registerAppListRoutesTool } from './app-list-routes';
 import { registerAppNotesPasteAndTapUrlTool } from './app-notes-paste-and-tap-url';
 import { registerAppPushNotificationTool } from './app-push-notification';
 import { registerAppHandleAlertTool } from './app-handle-alert';
@@ -102,6 +103,7 @@ import {
   registerFlutterCallServiceExtensionTool,
 } from './flutter-service-extensions';
 import { registerFlutterEvaluateTool } from './flutter-evaluate';
+import { registerFlutterGetRouteTool } from './flutter-get-route';
 import {
   registerFlutterRootWidgetTool,
   registerFlutterInspectSelectionTool,
@@ -127,6 +129,7 @@ import { registerAppTapElementTool } from './app-tap-element';
 import { registerAppTypeElementTool } from './app-type-element';
 import { registerAppWaitForNativeTool } from './app-wait-for';
 import { registerAppAssertElementTool } from './app-assert-element';
+import { registerAppPopUntilTool } from './app-pop-until';
 import { registerDiagnoseTool } from './diagnose';
 import { registerAppGotoScreenTool } from './app-goto-screen';
 
@@ -261,6 +264,7 @@ export function registerAllTools(server: MCPServer): void {
   // Tier 2: Native App System Surfaces
   registerAppPermissionsTool(server);
   registerAppDeeplinkTool(server);
+  registerAppListRoutesTool(server);
   registerAppNotesPasteAndTapUrlTool(server);
   registerAppPushNotificationTool(server);
   registerAppHandleAlertTool(server);
@@ -308,6 +312,7 @@ export function registerAllTools(server: MCPServer): void {
   registerFlutterCallServiceExtensionTool(server);
   // Tier 2: Flutter Expression Evaluation (issue #434)
   registerFlutterEvaluateTool(server);
+  registerFlutterGetRouteTool(server);
   // Tier 2: Flutter Inspector (issue #436)
   registerFlutterRootWidgetTool(server);
   registerFlutterInspectSelectionTool(server);
@@ -333,6 +338,7 @@ export function registerAllTools(server: MCPServer): void {
   // Tier 2: Native App — Semantic Wait & Assert (Flutter-compatible)
   registerAppWaitForNativeTool(server);
   registerAppAssertElementTool(server);
+  registerAppPopUntilTool(server);
 
   // Tier 1: Diagnostics
   registerDiagnoseTool(server);

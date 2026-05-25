@@ -100,6 +100,13 @@ export function registerAppTapElementTool(server: MCPServer): void {
             type: 'number',
             description: 'Maximum scroll-and-retry attempts when autoScroll is true. Default 6.',
           },
+          labelAliases: {
+            type: 'array',
+            items: { type: 'string' },
+            description:
+              'Additional label strings to try in order when the primary `label`/`text`/`identifier` query does not match. Useful for cross-locale variants ("Sign in" / "로그인" / "Anmelden") or synonyms ("Continue" / "Next"). Each alias is tried as a label-substring match.',
+
+          },
           tryAllFields: {
             type: 'boolean',
             description:
@@ -193,12 +200,14 @@ export function registerAppTapElementTool(server: MCPServer): void {
           }
         }
 
-        // PR22: relaxed-field fallback. When the user opts in, retry the
-        // query with a `text` substring built from whichever query
-        // fields the caller supplied. AX bridges sometimes expose the
-        // visible string in `value` rather than `label` (e.g. text
-        // fields and badges), and this retry finds them without forcing
-        // the caller to re-issue the call with `text:` set.
+        const labelAliases = Array.isArray(params.labelAliases)
+          ? (params.labelAliases as unknown[]).filter((s): s is string => typeof s === 'string')
+          : [];
+
+        // Relaxed-field fallback. When the user opts in, retry the query with
+        // a `text` substring built from whichever query fields the caller
+        // supplied. AX bridges sometimes expose the visible string in `value`
+        // rather than `label` (e.g. text fields and badges).
         if (!match && params.tryAllFields === true) {
           const fallbackText = [identifier, label, text].filter(Boolean).join(' ').trim();
           if (fallbackText.length > 0) {
@@ -212,6 +221,22 @@ export function registerAppTapElementTool(server: MCPServer): void {
           }
         }
 
+        // Alias fallback runs after relaxed-field matching so callers can
+        // provide locale/synonym variants without losing the stricter role
+        // preservation offered by tryAllFields.
+        if (!match && labelAliases.length > 0) {
+          for (const alias of labelAliases) {
+            const aliasResult = await bridge.query({ label: alias }, { deviceId });
+            if (aliasResult.matches.length > index) {
+              match = aliasResult.matches[index];
+              queryResult = aliasResult;
+              totalMatches = aliasResult.matches.length;
+              ambiguous = aliasResult.ambiguous;
+              break;
+            }
+          }
+        }
+
         if (!match) {
           return {
             content: [{
@@ -219,6 +244,7 @@ export function registerAppTapElementTool(server: MCPServer): void {
               text: JSON.stringify({
                 error: 'Element not found',
                 query,
+                labelAliases: labelAliases.length > 0 ? labelAliases : undefined,
                 index,
                 timeout,
                 _meta: { context: contextMeta },

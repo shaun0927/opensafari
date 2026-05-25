@@ -299,9 +299,79 @@ function isProcessAlive(pid: number): boolean {
  */
 export async function cleanupZombieProcesses(knownDeviceIds?: Set<string>): Promise<number> {
   if (knownDeviceIds) {
-    return cleanupOrphanedSimulators(knownDeviceIds);
+    const sims = await cleanupOrphanedSimulators(knownDeviceIds);
+    const proxies = await cleanupOrphanedProxies().catch(() => 0);
+    return sims + proxies;
   }
   return detectOrphanedProcesses();
+}
+
+/**
+ * Find and SIGKILL `ios_webkit_debug_proxy` processes whose listening
+ * port is not currently owned by this process via `proxy-manager`.
+ *
+ * Without this, an MCP server crash leaves the proxy running and bound to
+ * its port. The next `device_boot` allocates a fresh port, but the
+ * orphaned proxy still answers on its old port — confusing diagnostics
+ * and exhausting the port range. The existing `cleanupZombieProcesses`
+ * only knew about CoreSimulator.
+ *
+ * Returns the number of proxies killed. Failures during `kill` are
+ * tolerated — pgrep / kill differences across macOS versions mean some
+ * orphans may persist until the next sweep.
+ */
+export async function cleanupOrphanedProxies(): Promise<number> {
+  let killed = 0;
+  let active: Set<number>;
+  try {
+    // Late-bind to avoid an import cycle: zombie-cleanup is loaded before
+    // simulator/proxy-manager during bootstrap.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const proxyMod = require('../simulator/proxy-manager') as {
+      listManagedProxies: () => Array<{ deviceId: string; port: number }>;
+    };
+    active = new Set(proxyMod.listManagedProxies().map((p) => p.port));
+  } catch {
+    active = new Set();
+  }
+
+  let pgrepOut: string;
+  try {
+    const { stdout } = await execFileAsync('pgrep', ['-fl', 'ios_webkit_debug_proxy']);
+    pgrepOut = stdout;
+  } catch {
+    return 0; // pgrep exits 1 when no matches — totally fine
+  }
+
+  // pgrep -fl lines: "<pid> <full-command>". Extract the `-c <port>`
+  // argument when present. ios_webkit_debug_proxy can be launched with
+  // `-c null:<port>,:<port>` or `-c :<port>` patterns; we accept any port
+  // number that follows the `:` so we don't miss launch styles.
+  for (const line of pgrepOut.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const m = trimmed.match(/^(\d+)\s+(.*)$/);
+    if (!m) continue;
+    const pid = Number(m[1]);
+    const cmd = m[2];
+    // Find every ":<port>" in the command — at minimum the inspector
+    // socket port. The first port is typically the bound HTTP port we
+    // care about.
+    const portMatch = cmd.match(/(?<![:\d])(?::)(\d{4,5})\b/);
+    if (!portMatch) continue;
+    const port = Number(portMatch[1]);
+    if (active.has(port)) continue;
+    try {
+      process.kill(pid, 'SIGKILL');
+      killed += 1;
+      console.error(
+        `[ZombieCleanup] Killed orphan ios_webkit_debug_proxy pid=${pid} port=${port}`,
+      );
+    } catch {
+      // process already gone or owned by another user
+    }
+  }
+  return killed;
 }
 
 /**
