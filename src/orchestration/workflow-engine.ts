@@ -31,6 +31,18 @@ export interface WorkerEntry {
   error?: string;
   lastUpdate?: string;
   lastUpdateAt?: number;
+  /** PR21: 1-indexed count of how many times the worker has been
+   *  dispatched. Starts at 1 on initial dispatch; `retryWorker()`
+   *  increments. */
+  attempts?: number;
+  /** PR21: optional retry budget. When `attempts < maxAttempts`, a
+   *  failed worker is eligible for `retryWorker()` instead of being
+   *  closed out as `failed`. Default 1 (no retry) preserves existing
+   *  behaviour. */
+  maxAttempts?: number;
+  /** PR21: log of `{ at, error, attempt }` for each failed attempt so
+   *  diagnostics survive the retry rollback. */
+  attemptHistory?: Array<{ attempt: number; at: number; error: string }>;
 }
 
 export interface WorkflowState {
@@ -301,7 +313,12 @@ export class SimulatorWorkflowEngine extends EventEmitter {
     }
   }
 
-  async failWorker(workflowId: string, workerName: string, error: string): Promise<void> {
+  async failWorker(
+    workflowId: string,
+    workerName: string,
+    error: string,
+    options?: { allowRetry?: boolean },
+  ): Promise<{ retryable: boolean; attempts: number; maxAttempts: number }> {
     await this.completionLock.acquire();
     try {
       const state = this.workflows.get(workflowId);
@@ -309,12 +326,59 @@ export class SimulatorWorkflowEngine extends EventEmitter {
       const worker = state.workers.find(w => w.name === workerName);
       if (!worker) throw new Error(`Worker not found: ${workerName}`);
 
+      const attempts = worker.attempts ?? 1;
+      const maxAttempts = worker.maxAttempts ?? 1;
+
+      // PR21: append a history entry so diagnostics survive retries.
+      const history = worker.attemptHistory ?? [];
+      history.push({ attempt: attempts, at: Date.now(), error });
+      worker.attemptHistory = history;
+
+      const retryable = options?.allowRetry !== false && attempts < maxAttempts;
+      if (retryable) {
+        // Reset the worker for the next attempt. Do NOT call
+        // checkWorkflowCompletion — the workflow is still in flight.
+        worker.status = 'pending';
+        worker.error = undefined;
+        worker.completedAt = undefined;
+        this.persistWorkflow(state);
+        return { retryable: true, attempts, maxAttempts };
+      }
+
       worker.status = 'failed';
       worker.error = error;
       worker.completedAt = Date.now();
 
       this.checkWorkflowCompletion(state);
       this.persistWorkflow(state);
+      return { retryable: false, attempts, maxAttempts };
+    } finally {
+      this.completionLock.release();
+    }
+  }
+
+  /**
+   * Re-dispatch a worker that was reset by `failWorker(..., { allowRetry: true })`.
+   * Bumps `attempts`, flips status back to `active`, and refreshes timestamps.
+   *
+   * Returns the new attempt number so the caller can record / log it.
+   */
+  async retryWorker(workflowId: string, workerName: string): Promise<number> {
+    await this.completionLock.acquire();
+    try {
+      const state = this.workflows.get(workflowId);
+      if (!state) throw new Error(`Workflow not found: ${workflowId}`);
+      const worker = state.workers.find(w => w.name === workerName);
+      if (!worker) throw new Error(`Worker not found: ${workerName}`);
+
+      const nextAttempt = (worker.attempts ?? 1) + 1;
+      worker.attempts = nextAttempt;
+      worker.status = 'active';
+      worker.startedAt = Date.now();
+      worker.lastUpdate = `retry attempt ${nextAttempt}`;
+      worker.lastUpdateAt = Date.now();
+      this.persistWorkflow(state);
+      return nextAttempt;
     } finally {
       this.completionLock.release();
     }
