@@ -1,4 +1,5 @@
 export { SimulatorManager, DeviceNotFoundError, BootTimeoutError, ShutdownTimeoutError, DeviceNotBootedError, ScreenshotTimeoutError, AppNotInstalledError, AppLaunchError } from './manager';
+export { getDefaultSimulatorManager, resetDefaultSimulatorManagerForTests } from './default-manager';
 export type { RotationResult } from './manager';
 export { SimctlExecutor, SimctlError } from './simctl';
 export { DEVICE_PRESETS, resolvePreset } from './presets';

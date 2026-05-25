@@ -265,14 +265,45 @@ describe('app-manager.terminateApp', () => {
 // ── activateApp ───────────────────────────────────────────────────────────────
 
 describe('app-manager.activateApp', () => {
-  it('activates app and returns pid', async () => {
+  it('activates app and returns pid (not yet running)', async () => {
+    // makeSimctl returns the same body for every call — the launchctl
+    // probe parses "BUNDLE_ID: 42" as zero UIKitApplication entries, so
+    // the fallback launch path runs and the real pid parse happens there.
     const simctl = makeSimctl(async () => `${BUNDLE_ID}: 42\n`);
     const lookup = makeLookup(makeDevice());
 
     const result = await activateApp(DEVICE_ID, BUNDLE_ID, { simctl, lookup });
 
-    expect(result).toEqual({ activated: true, bundleId: BUNDLE_ID, deviceId: DEVICE_ID, pid: 42 });
+    expect(result).toEqual({
+      activated: true,
+      alreadyRunning: false,
+      bundleId: BUNDLE_ID,
+      deviceId: DEVICE_ID,
+      pid: 42,
+    });
     expect(simctl.exec).toHaveBeenCalledWith(['launch', DEVICE_ID, BUNDLE_ID]);
+  });
+
+  it('skips simctl launch when app is already running (non-destructive activate)', async () => {
+    const launchctlOutput = [
+      'PID\tSTATUS\tLABEL',
+      `99\t0\tUIKitApplication:${BUNDLE_ID}[0x1]`,
+    ].join('\n');
+    const simctl = makeSimctl(async () => launchctlOutput);
+    const lookup = makeLookup(makeDevice());
+
+    const result = await activateApp(DEVICE_ID, BUNDLE_ID, { simctl, lookup });
+
+    expect(result).toEqual({
+      activated: true,
+      alreadyRunning: true,
+      bundleId: BUNDLE_ID,
+      deviceId: DEVICE_ID,
+      pid: 99,
+    });
+    // No `launch` call should have been issued — only the launchctl probe.
+    expect(simctl.exec).not.toHaveBeenCalledWith(['launch', DEVICE_ID, BUNDLE_ID]);
+    expect(simctl.exec).toHaveBeenCalledWith(['spawn', DEVICE_ID, 'launchctl', 'list']);
   });
 
   it('throws DeviceNotBootedError for shutdown device', async () => {

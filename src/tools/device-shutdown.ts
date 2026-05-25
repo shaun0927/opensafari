@@ -1,5 +1,5 @@
 import { MCPServer } from '../mcp-server';
-import { SimulatorManager } from '../simulator';
+import { getDefaultSimulatorManager } from '../simulator';
 import { stopProxyForDevice } from '../simulator/proxy-manager';
 import { getSessionManager } from '../session-manager';
 import { disposeDevice } from './tab-manager';
@@ -20,7 +20,7 @@ export function registerDeviceShutdownTool(server: MCPServer): void {
       },
     },
     async (_sessionId: string, params: Record<string, unknown>) => {
-      const manager = new SimulatorManager();
+      const manager = getDefaultSimulatorManager();
       const sm = getSessionManager();
       const booted = await manager.listBooted();
       const deviceId = (params.deviceId as string) ?? sm.getSoleDeviceId() ?? booted[0]?.udid;
