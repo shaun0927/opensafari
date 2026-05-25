@@ -24,6 +24,7 @@ import { logAuditEntry } from './security/audit-logger';
 import {
   buildHttpHighRiskToolError,
   getHighRiskToolMetadata,
+  getHighRiskToolMetadataForCall,
   parseHttpHighRiskToolsEnabled,
 } from './security/high-risk-tools';
 import { getSessionManager } from './session-manager';
@@ -358,7 +359,7 @@ export class MCPServer {
     }
 
     const sessionId = context.sessionId ?? 'default';
-    const highRiskTool = getHighRiskToolMetadata(name);
+    const highRiskTool = getHighRiskToolMetadataForCall(name, args);
     const isHighRiskHttp = context.transport === 'http' && highRiskTool !== undefined;
 
     if (isHighRiskHttp && !this.httpHighRiskToolsEnabled) {

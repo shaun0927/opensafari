@@ -205,6 +205,78 @@ describe('HTTP high-risk MCP tool gate', () => {
     expect(auditLines[0]).not.toContain('secret-cookie');
   });
 
+
+  test('HTTP gates native auth movement tools and conditional auth arguments', async () => {
+    const server = new MCPServer();
+    const calls: string[] = [];
+    for (const name of ['auth_save_native', 'auth_restore_native', 'app_launch', 'app_reset']) {
+      server.registerTool(
+        {
+          name,
+          description: `${name} fixture`,
+          inputSchema: { type: 'object' as const, properties: {}, required: [] },
+        },
+        async (_sessionId, params) => {
+          calls.push(`${name}:${JSON.stringify(params)}`);
+          return { content: [{ type: 'text' as const, text: 'ok' }] };
+        },
+      );
+    }
+
+    const save = await handleMessage(server, {
+      jsonrpc: '2.0',
+      id: 20,
+      method: 'tools/call',
+      params: { name: 'auth_save_native', arguments: { profile: 'qa' } },
+    }, { transport: 'http', sessionId: 'native-auth' });
+    expect((save?.result as Record<string, unknown>).isError).toBe(true);
+
+    const restore = await handleMessage(server, {
+      jsonrpc: '2.0',
+      id: 21,
+      method: 'tools/call',
+      params: { name: 'auth_restore_native', arguments: { profile: 'qa' } },
+    }, { transport: 'http', sessionId: 'native-auth' });
+    expect((restore?.result as Record<string, unknown>).isError).toBe(true);
+
+    const plainLaunch = await handleMessage(server, {
+      jsonrpc: '2.0',
+      id: 22,
+      method: 'tools/call',
+      params: { name: 'app_launch', arguments: { bundleId: 'com.example.app' } },
+    }, { transport: 'http', sessionId: 'native-auth' });
+    expect((plainLaunch?.result as Record<string, unknown>).isError).toBeUndefined();
+
+    const seededLaunch = await handleMessage(server, {
+      jsonrpc: '2.0',
+      id: 23,
+      method: 'tools/call',
+      params: { name: 'app_launch', arguments: { bundleId: 'com.example.app', authProfile: 'qa' } },
+    }, { transport: 'http', sessionId: 'native-auth' });
+    expect((seededLaunch?.result as Record<string, unknown>).isError).toBe(true);
+
+    const plainReset = await handleMessage(server, {
+      jsonrpc: '2.0',
+      id: 24,
+      method: 'tools/call',
+      params: { name: 'app_reset', arguments: { bundleId: 'com.example.app' } },
+    }, { transport: 'http', sessionId: 'native-auth' });
+    expect((plainReset?.result as Record<string, unknown>).isError).toBeUndefined();
+
+    const snapshotReset = await handleMessage(server, {
+      jsonrpc: '2.0',
+      id: 25,
+      method: 'tools/call',
+      params: { name: 'app_reset', arguments: { bundleId: 'com.example.app', snapshotAuthProfile: 'qa' } },
+    }, { transport: 'http', sessionId: 'native-auth' });
+    expect((snapshotReset?.result as Record<string, unknown>).isError).toBe(true);
+
+    expect(calls).toEqual([
+      'app_launch:{"bundleId":"com.example.app"}',
+      'app_reset:{"bundleId":"com.example.app"}',
+    ]);
+  });
+
   test('HTTP audit status is error when a high-risk tool returns isError', async () => {
     const server = new MCPServer();
     server.registerTool(
