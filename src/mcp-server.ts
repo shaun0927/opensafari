@@ -433,7 +433,7 @@ export class MCPServer {
         result: toMcpErrorResponse(err, ErrorCode.APP_STATE_UNKNOWN, {
           tool: name,
           sessionId,
-        }) as MCPResult,
+        }),
       };
     }
   }
