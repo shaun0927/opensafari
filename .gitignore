@@ -42,3 +42,6 @@ npm-debug.log*
 
 # Generated verification reports
 scripts/.verify-issue-10-healthy.report.json
+
+# Claude Code runtime artifacts
+.claude/scheduled_tasks.lock

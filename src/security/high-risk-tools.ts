@@ -67,8 +67,11 @@ export const HIGH_RISK_MCP_TOOLS: Readonly<Record<string, HighRiskToolMetadata>>
     category: 'credential-movement',
     requiredCapability: HTTP_HIGH_RISK_TOOL_CAPABILITY,
   },
+  app_biometric: {
+    category: 'credential-movement',
+    requiredCapability: HTTP_HIGH_RISK_TOOL_CAPABILITY,
+  },
   auth_otp_fetch: {
-
     category: 'credential-movement',
     requiredCapability: HTTP_HIGH_RISK_TOOL_CAPABILITY,
   },

@@ -1,5 +1,5 @@
 import { MCPServer } from '../mcp-server';
-import { SimulatorManager } from '../simulator';
+import { getDefaultSimulatorManager } from '../simulator';
 import { getSessionManager } from '../session-manager';
 
 export function registerAppTerminateTool(server: MCPServer): void {
@@ -24,7 +24,7 @@ export function registerAppTerminateTool(server: MCPServer): void {
     },
     async (_sessionId: string, params: Record<string, unknown>) => {
       const sm = getSessionManager();
-      const manager = new SimulatorManager();
+      const manager = getDefaultSimulatorManager();
       const booted = await manager.listBooted();
       const deviceId = (params.deviceId as string) ?? sm.getSoleDeviceId() ?? booted[0]?.udid;
 

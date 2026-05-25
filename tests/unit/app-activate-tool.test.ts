@@ -1,6 +1,6 @@
 import { MCPServer } from '../../src/mcp-server';
 import { registerAppActivateTool } from '../../src/tools/app-activate';
-import { SimulatorManager } from '../../src/simulator';
+import { SimulatorManager, getDefaultSimulatorManager } from '../../src/simulator';
 import { getSessionManager } from '../../src/session-manager';
 import { probeMobileContext } from '../../src/tools/app-context';
 
@@ -23,11 +23,13 @@ const mockProbeMobileContext = jest.fn().mockResolvedValue({
   visibleSummary: { buttonLabels: [], staticTexts: [], textFieldLabels: [], nodeCount: 6 },
 });
 
+const sharedManager = {
+  listBooted: jest.fn().mockResolvedValue([{ udid: 'TEST-UDID-1234' }]),
+  activateApp: mockActivateApp,
+};
 jest.mock('../../src/simulator', () => ({
-  SimulatorManager: jest.fn().mockImplementation(() => ({
-    listBooted: jest.fn().mockResolvedValue([{ udid: 'TEST-UDID-1234' }]),
-    activateApp: mockActivateApp,
-  })),
+  SimulatorManager: jest.fn().mockImplementation(() => sharedManager),
+  getDefaultSimulatorManager: jest.fn(() => sharedManager),
 }));
 
 jest.mock('../../src/session-manager', () => ({
@@ -126,10 +128,14 @@ describe('app_activate tool', () => {
 
   test('returns error when no device booted', async () => {
     mockedGetSessionManager.mockReturnValueOnce({ getSoleDeviceId: () => null } as ReturnType<typeof getSessionManager>);
-    MockedSimulatorManager.mockImplementationOnce(() => ({
+    // PR6: app-activate now resolves via getDefaultSimulatorManager() rather
+    // than `new SimulatorManager()`, so override that accessor instead.
+    const emptyManager = {
       listBooted: jest.fn().mockResolvedValue([]),
       activateApp: mockActivateApp,
-    }) as unknown as SimulatorManager);
+    } as unknown as SimulatorManager;
+    jest.mocked(getDefaultSimulatorManager).mockReturnValueOnce(emptyManager);
+    MockedSimulatorManager.mockImplementationOnce(() => emptyManager);
 
     const handler = server.getToolHandler('app_activate')!;
     const result = await handler('test', { bundleId: 'com.example.app' });

@@ -1,7 +1,7 @@
 import { MCPServer } from '../mcp-server';
-import { SimulatorManager } from '../simulator';
+import { getDefaultSimulatorManager } from '../simulator';
 import { SimctlExecutor } from '../simulator/simctl';
-import { getProxyForDevice, stopProxyForDevice } from '../simulator/proxy-manager';
+import { getProxyForDevice, stopProxyForDevice, peekProxyForDevice } from '../simulator/proxy-manager';
 import { WebKitClient } from '../webkit/client';
 import { addManagedDevice } from '../reliability/zombie-cleanup';
 import { getSessionManager } from '../session-manager';
@@ -23,14 +23,47 @@ export function registerDeviceBootTool(server: MCPServer): void {
       },
     },
     async (_sessionId: string, params: Record<string, unknown>) => {
-      const manager = new SimulatorManager();
+      const manager = getDefaultSimulatorManager();
 
       // Enforce max-simulator concurrency limit before attempting boot
       const maxSims = parseInt(process.env.OPENSAFARI_MAX_SIMULATORS ?? '', 10) || DEFAULT_MAX_SIMULATORS;
       const booted = await manager.listBooted();
-      const alreadyBooted = booted.some(
-        (d) => d.name === (params.device as string) || d.udid === (params.device as string),
+      const target = params.device as string;
+      const alreadyBootedDevice = booted.find(
+        (d) => d.name === target || d.udid === target,
       );
+      const alreadyBooted = Boolean(alreadyBootedDevice);
+
+      // Fast path: device is already booted AND we still have a healthy
+      // WebKitClient + proxy for it from a prior call. Skip the entire
+      // boot/openSafari/connectWebKit sequence — repeating it tears down
+      // an otherwise-good WebSocket and races against any Flutter VM
+      // service that's still using the proxy. Without this, every
+      // `device_boot` call paid a ~2-5 s tax on already-healthy sims.
+      if (alreadyBootedDevice) {
+        const sm = getSessionManager();
+        const existingClient = sm.getConnection(alreadyBootedDevice.udid);
+        const existingProxy = peekProxyForDevice(alreadyBootedDevice.udid);
+        if (existingClient && existingClient.isConnected() && existingProxy?.running) {
+          return {
+            content: [{
+              type: 'text' as const,
+              text: JSON.stringify({
+                udid: alreadyBootedDevice.udid,
+                name: alreadyBootedDevice.name,
+                state: alreadyBootedDevice.state,
+                alreadyBootedAndHealthy: true,
+                proxy: {
+                  running: existingProxy.running,
+                  pid: existingProxy.pid,
+                  port: existingProxy.port,
+                },
+              }),
+            }],
+          };
+        }
+      }
+
       if (!alreadyBooted && booted.length >= maxSims) {
         return {
           content: [{

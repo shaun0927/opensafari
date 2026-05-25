@@ -1,8 +1,10 @@
 import { MCPServer } from '../mcp-server';
-import { SimulatorManager } from '../simulator';
+import { getDefaultSimulatorManager } from '../simulator';
 import { stopProxyForDevice } from '../simulator/proxy-manager';
 import { getSessionManager } from '../session-manager';
 import { disposeDevice } from './tab-manager';
+import { removeFlutterVMClient } from '../flutter';
+import { forgetVMServiceUrl } from '../flutter/vm-service-discovery';
 
 export function registerDeviceShutdownTool(server: MCPServer): void {
   server.registerTool(
@@ -18,7 +20,7 @@ export function registerDeviceShutdownTool(server: MCPServer): void {
       },
     },
     async (_sessionId: string, params: Record<string, unknown>) => {
-      const manager = new SimulatorManager();
+      const manager = getDefaultSimulatorManager();
       const sm = getSessionManager();
       const booted = await manager.listBooted();
       const deviceId = (params.deviceId as string) ?? sm.getSoleDeviceId() ?? booted[0]?.udid;
@@ -45,6 +47,17 @@ export function registerDeviceShutdownTool(server: MCPServer): void {
           }
         }
       }
+      // Tear down any Flutter VM Service client for this device. Without
+      // this, the singleton in `flutter/vm-service-client.ts` keeps stale
+      // `state` (connected=false plus an outdated mainIsolateId) that the
+      // next `flutter_connect` against the same UDID would inherit.
+      try {
+        removeFlutterVMClient(deviceId);
+        forgetVMServiceUrl(deviceId);
+      } catch (err) {
+        console.error(`[device_shutdown] Flutter VM client cleanup failed: ${err}`);
+      }
+
       // Remove simulator from SessionManager (also clears connection, updates active device)
       sm.removeSimulator(deviceId);
 

@@ -8,10 +8,30 @@ export interface AlertLabel {
 }
 
 export const ACCEPT_LABELS: Record<AlertLocale, string[]> = {
-  en: ['Allow', 'OK', 'Allow Once', 'Allow While Using App', 'Allow All', 'Continue', 'Yes', 'Open Settings', 'Enable'],
-  ko: ['허용', '확인', '한 번 허용', '앱을 사용하는 동안 허용', '계속', '설정 열기', '켜기'],
-  ja: ['許可', 'OK', '常に許可', '一度だけ許可', '続ける', '設定を開く'],
-  'zh-Hans': ['允许', '好', '始终允许', '仅允许一次', '继续', '打开设置'],
+  en: [
+    'Allow', 'OK', 'Allow Once', 'Allow While Using App', 'Allow All', 'Continue', 'Yes',
+    'Open Settings', 'Enable',
+    // Biometric / passcode prompts surfaced by LAContext + flutter_secure_storage.
+    // Apple sometimes adds the sensor name to the button label; include all
+    // common variants so app_alert_handle can dismiss them without needing
+    // the simctl ui biometric path (the tool exists for in-app prompts but
+    // the system-level "Continue" sheet has its own accept verb).
+    'Use Face ID', 'Use Touch ID', 'Use Passcode',
+    'Continue with Face ID', 'Continue with Touch ID',
+    'Enable Face ID', 'Enable Touch ID',
+  ],
+  ko: [
+    '허용', '확인', '한 번 허용', '앱을 사용하는 동안 허용', '계속', '설정 열기', '켜기',
+    'Face ID 사용', 'Touch ID 사용', '암호 사용',
+  ],
+  ja: [
+    '許可', 'OK', '常に許可', '一度だけ許可', '続ける', '設定を開く',
+    'Face IDを使用', 'Touch IDを使用', 'パスコードを使用',
+  ],
+  'zh-Hans': [
+    '允许', '好', '始终允许', '仅允许一次', '继续', '打开设置',
+    '使用面容 ID', '使用触控 ID', '使用密码',
+  ],
 };
 
 export const DISMISS_LABELS: Record<AlertLocale, string[]> = {

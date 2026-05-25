@@ -216,6 +216,63 @@ export class SessionManager extends EventEmitter {
     this.emit('worker:removed', { name });
   }
 
+  /**
+   * Re-discover already-booted simulators after an MCP client reconnects.
+   *
+   * The SessionManager state is in-memory only. When the MCP transport
+   * drops and reconnects (e.g. CLI restart, IDE reload, process recycle)
+   * the maps come back empty even though `simctl list booted` still
+   * reports the same UDIDs. Tools then think "no device booted" and the
+   * LLM either re-runs `device_boot` (wasting 20 s + risking a fresh
+   * cold-boot) or fails outright.
+   *
+   * Rehydration walks the live `simctl list devices -j` snapshot and
+   * re-registers each booted device with the SessionManager. WebKit /
+   * Flutter VM connections are NOT re-established here — those need a
+   * proxy and an open Safari target, which `device_boot`'s fast path
+   * (PR7) already handles cleanly. We just rebuild the lightweight
+   * SimulatorInfo entries so `getSoleDeviceId()` and `listSimulators()`
+   * work on the very next tool call.
+   *
+   * Idempotent — safe to call multiple times. The caller passes the
+   * lookup interface so this module doesn't have to import simulator
+   * code (avoids a circular dependency).
+   */
+  async rehydrateFromSimctl(
+    lookup: { listBooted: () => Promise<Array<{ udid: string; name: string }>> },
+    options?: { presetLookup?: (deviceType: string) => { w: number; h: number } | undefined },
+  ): Promise<{ rehydrated: string[]; skipped: string[] }> {
+    const rehydrated: string[] = [];
+    const skipped: string[] = [];
+    let booted: Array<{ udid: string; name: string }> = [];
+    try {
+      booted = await lookup.listBooted();
+    } catch (err) {
+      console.error(
+        `[SessionManager] rehydrateFromSimctl failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return { rehydrated, skipped };
+    }
+    for (const device of booted) {
+      if (this.simulators.has(device.udid)) {
+        skipped.push(device.udid);
+        continue;
+      }
+      const viewport = options?.presetLookup?.(device.name) ?? { w: 390, h: 844 };
+      this.addSimulator(device.udid, {
+        deviceId: device.udid,
+        deviceType: device.name,
+        state: 'booted',
+        viewport: { width: viewport.w, height: viewport.h },
+        // bootedAt is unknowable post-reconnect; use now as a lower bound.
+        bootedAt: Date.now(),
+        lastActivity: Date.now(),
+      });
+      rehydrated.push(device.udid);
+    }
+    return { rehydrated, skipped };
+  }
+
   // Cleanup
   async shutdown(): Promise<void> {
     for (const session of this.tabSessions.values()) {

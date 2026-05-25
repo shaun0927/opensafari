@@ -119,8 +119,15 @@ export async function terminateApp(
 
 /**
  * Activate (bring to foreground) an app on a booted simulator.
- * simctl launch brings an already-running app to the foreground;
- * if the app is not running it starts it.
+ *
+ * Strategy: first ask launchctl whether the bundle is already running.
+ * If so, return `{ activated: true, alreadyRunning: true, pid }` without
+ * issuing `simctl launch` again — that command, on some iOS versions,
+ * spawns a fresh process which (a) kills the Flutter VM Service socket
+ * and (b) burns ~300 ms per call. Only fall back to `simctl launch`
+ * (which both brings to foreground AND starts the app if not running)
+ * when the bundle is truly off.
+ *
  * Throws DeviceNotBootedError if the device is not booted.
  * Throws AppNotInstalledError if the bundle is not installed.
  */
@@ -128,17 +135,31 @@ export async function activateApp(
   deviceId: string,
   bundleId: string,
   deps: { simctl: AppManagerSimctl; lookup: AppManagerDeviceLookup },
-): Promise<{ activated: boolean; bundleId: string; deviceId: string; pid: number }> {
+): Promise<{ activated: boolean; bundleId: string; deviceId: string; pid: number; alreadyRunning: boolean }> {
   const device = await deps.lookup.getDevice(deviceId);
   if (!device || device.state !== 'Booted') {
     throw new DeviceNotBootedError(deviceId);
+  }
+
+  // Cheap probe: list running apps and skip `simctl launch` when the
+  // bundle is already up. Failures here are non-fatal — fall through to
+  // the safe `simctl launch` path so behaviour matches the pre-PR6
+  // contract on simulators where launchctl differs.
+  try {
+    const running = await listRunningApps(deviceId, deps);
+    const hit = running.find((r) => r.label === bundleId);
+    if (hit) {
+      return { activated: true, alreadyRunning: true, bundleId, deviceId, pid: hit.pid };
+    }
+  } catch {
+    // ignore — fall through
   }
 
   try {
     const output = await deps.simctl.exec(['launch', deviceId, bundleId]);
     const pidMatch = output.match(/:\s*(\d+)/);
     const pid = pidMatch ? parseInt(pidMatch[1], 10) : -1;
-    return { activated: true, bundleId, deviceId, pid };
+    return { activated: true, alreadyRunning: false, bundleId, deviceId, pid };
   } catch (err) {
     if (err instanceof SimctlError) {
       if (isAppNotInstalledError(err)) {

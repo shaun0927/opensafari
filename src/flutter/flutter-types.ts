@@ -101,3 +101,21 @@ export interface FlutterConnectOptions {
   /** Discovery timeout in ms (default: 10000) */
   timeout?: number;
 }
+
+/** Tunables for a `FlutterVMClient` instance. */
+export interface FlutterVMClientOptions {
+  /** Default per-request timeout (ms). Overridable per `callMethod` call. */
+  requestTimeoutMs?: number;
+  /** Heavy-operation timeout for widget tree / hot-reload / evaluate. */
+  heavyRequestTimeoutMs?: number;
+  /** WebSocket open timeout. */
+  connectTimeoutMs?: number;
+  /** Application-level heartbeat interval (ms). 0 disables heartbeat. */
+  heartbeatIntervalMs?: number;
+  /** Max reconnect attempts after an unexpected close. */
+  reconnectMaxAttempts?: number;
+  /** Base delay (ms) for exponential reconnect backoff. */
+  reconnectBaseDelayMs?: number;
+  /** Cap (ms) for reconnect backoff. */
+  reconnectMaxDelayMs?: number;
+}
