@@ -26,6 +26,37 @@ export enum ErrorCode {
   // errs on the side of aborting rather than typing through a possibly
   // non-Latin IME.
   KEYBOARD_LAYOUT_DETECTION_FAILED = 'KEYBOARD_LAYOUT_DETECTION_FAILED',
+
+  // ── #797 catalog expansion ────────────────────────────────────────────────
+  // Caller-side parameter problems. Emit these instead of ad-hoc
+  // {error: 'INVALID_X'} envelopes so the MCP client can branch on a
+  // stable taxonomy.
+  INVALID_INPUT = 'INVALID_INPUT',
+  MISSING_REQUIRED_PARAM = 'MISSING_REQUIRED_PARAM',
+  INVALID_URL = 'INVALID_URL',
+
+  // Session/device resolution problems. Recoverable — the agent can
+  // boot a device or pass an explicit deviceId.
+  DEVICE_NOT_BOOTED = 'DEVICE_NOT_BOOTED',
+  SESSION_NOT_FOUND = 'SESSION_NOT_FOUND',
+  BACKEND_NOT_CONNECTED = 'BACKEND_NOT_CONNECTED',
+
+  // Flutter VM service problems.
+  FLUTTER_VM_NOT_CONNECTED = 'FLUTTER_VM_NOT_CONNECTED',
+  FLUTTER_EVAL_FAILED = 'FLUTTER_EVAL_FAILED',
+
+  // Gesture/overlay/keyboard helpers.
+  OVERLAY_DISMISS_FAILED = 'OVERLAY_DISMISS_FAILED',
+  KEYBOARD_DISMISS_FAILED = 'KEYBOARD_DISMISS_FAILED',
+
+  // Alert / permission helpers.
+  ALERT_NO_EFFECT = 'ALERT_NO_EFFECT',
+  PERMISSION_RESET_DENIED = 'PERMISSION_RESET_DENIED',
+
+  // app_pop_until — fallback ladder outcomes (#801).
+  POP_UNTIL_EXHAUSTED = 'POP_UNTIL_EXHAUSTED',
+  POP_UNTIL_NO_FALLBACK_AVAILABLE = 'POP_UNTIL_NO_FALLBACK_AVAILABLE',
+  MISSING_POSTCONDITION = 'MISSING_POSTCONDITION',
 }
 
 export interface StructuredError {
@@ -63,5 +94,82 @@ export const ERROR_CATALOG: Record<ErrorCode, Omit<StructuredError, 'message'>> 
     recoverable: true,
     suggestion:
       'Run scripts/dev/probe-keyboard-layout.ts against the booted UDID to capture the raw preference signals, then file a report so the detector can be widened.',
+  },
+
+  // ── #797 catalog expansion ────────────────────────────────────────────────
+  [ErrorCode.INVALID_INPUT]: {
+    code: ErrorCode.INVALID_INPUT,
+    recoverable: true,
+    suggestion: 'Check the parameter shape, enum, or range against the tool input schema and retry.',
+  },
+  [ErrorCode.MISSING_REQUIRED_PARAM]: {
+    code: ErrorCode.MISSING_REQUIRED_PARAM,
+    recoverable: true,
+    suggestion: 'Supply the parameter listed in the message and retry.',
+  },
+  [ErrorCode.INVALID_URL]: {
+    code: ErrorCode.INVALID_URL,
+    recoverable: true,
+    suggestion: 'URLs must include a scheme (e.g. https:// or myapp://).',
+  },
+  [ErrorCode.DEVICE_NOT_BOOTED]: {
+    code: ErrorCode.DEVICE_NOT_BOOTED,
+    recoverable: true,
+    suggestion: 'Boot a simulator (device_boot) or pass deviceId explicitly.',
+  },
+  [ErrorCode.SESSION_NOT_FOUND]: {
+    code: ErrorCode.SESSION_NOT_FOUND,
+    recoverable: true,
+    suggestion: 'Re-open the MCP session or pass an explicit deviceId.',
+  },
+  [ErrorCode.BACKEND_NOT_CONNECTED]: {
+    code: ErrorCode.BACKEND_NOT_CONNECTED,
+    recoverable: true,
+    suggestion: 'Connect the required backend (e.g. safari navigate, flutter_connect) before retrying.',
+  },
+  [ErrorCode.FLUTTER_VM_NOT_CONNECTED]: {
+    code: ErrorCode.FLUTTER_VM_NOT_CONNECTED,
+    recoverable: true,
+    suggestion: 'Call flutter_connect first. Release builds without VM service should use the native fallback path.',
+  },
+  [ErrorCode.FLUTTER_EVAL_FAILED]: {
+    code: ErrorCode.FLUTTER_EVAL_FAILED,
+    recoverable: true,
+    suggestion: 'VM Service evaluate threw. Inspect the message; check that the requested isolate is paused or selected.',
+  },
+  [ErrorCode.OVERLAY_DISMISS_FAILED]: {
+    code: ErrorCode.OVERLAY_DISMISS_FAILED,
+    recoverable: true,
+    suggestion: 'Try a different mode (drawer / bottom_sheet / dialog), or supply waitForGone to verify the postcondition explicitly.',
+  },
+  [ErrorCode.KEYBOARD_DISMISS_FAILED]: {
+    code: ErrorCode.KEYBOARD_DISMISS_FAILED,
+    recoverable: true,
+    suggestion: 'Send Escape, tap outside the input, or call app_dismiss_keyboard with force=true.',
+  },
+  [ErrorCode.ALERT_NO_EFFECT]: {
+    code: ErrorCode.ALERT_NO_EFFECT,
+    recoverable: true,
+    suggestion: 'The targeted alert/permission sheet was not dismissed. Re-query the AX tree to confirm an alert is visible.',
+  },
+  [ErrorCode.PERMISSION_RESET_DENIED]: {
+    code: ErrorCode.PERMISSION_RESET_DENIED,
+    recoverable: false,
+    suggestion: 'Grant Full Disk Access to the host process (System Settings → Privacy & Security → Full Disk Access) so simctl privacy can manage TCC.',
+  },
+  [ErrorCode.POP_UNTIL_EXHAUSTED]: {
+    code: ErrorCode.POP_UNTIL_EXHAUSTED,
+    recoverable: true,
+    suggestion: 'All fallback strategies were attempted without satisfying the postcondition. Inspect attempts[] and consider a longer timeout or a more specific postcondition.',
+  },
+  [ErrorCode.POP_UNTIL_NO_FALLBACK_AVAILABLE]: {
+    code: ErrorCode.POP_UNTIL_NO_FALLBACK_AVAILABLE,
+    recoverable: false,
+    suggestion: 'No native fallback could be selected (no AX bridge, no input backend, or screen geometry unavailable). Connect Flutter VM service or boot a different simulator.',
+  },
+  [ErrorCode.MISSING_POSTCONDITION]: {
+    code: ErrorCode.MISSING_POSTCONDITION,
+    recoverable: true,
+    suggestion: 'In native (non-VM) contexts, app_pop_until requires a postcondition (route or AX query) so success can be verified.',
   },
 };
