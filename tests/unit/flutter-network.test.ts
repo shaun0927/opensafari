@@ -108,7 +108,8 @@ describe('flutter_network', () => {
     const result = await handler('s', { action: 'start', port: 18893 });
     const body = JSON.parse(result.content[0].text);
 
-    expect(body.error).toContain('already running');
+    expect(body.error).toBe('APP_STATE_UNKNOWN');
+    expect(body.message).toContain('already running');
 
     await handler('s', { action: 'stop' });
   });
@@ -128,7 +129,8 @@ describe('flutter_network', () => {
 
     expect(result.isError).toBe(true);
     const body = JSON.parse(result.content[0].text);
-    expect(body.error).toMatch(/throttle_ms|negative/i);
+    expect(body.error).toBe('APP_STATE_UNKNOWN');
+    expect(body.message).toMatch(/throttle_ms|negative/i);
   });
 
   it('updates throttle via throttle action', async () => {

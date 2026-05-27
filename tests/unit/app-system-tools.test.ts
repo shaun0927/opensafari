@@ -122,7 +122,7 @@ describe('app_permissions tool', () => {
       bundleId: 'com.example.app',
     });
     expect(result.isError).toBe(true);
-    expect((result.content as any)[0].text).toContain('invalid permission');
+    { const body = JSON.parse((result.content as any)[0].text); expect(body.error).toBe('INVALID_INPUT'); expect(body.message.toLowerCase()).toContain('invalid permission'); }
   });
 
   test('rejects invalid action', async () => {
@@ -133,7 +133,7 @@ describe('app_permissions tool', () => {
       bundleId: 'com.example.app',
     });
     expect(result.isError).toBe(true);
-    expect((result.content as any)[0].text).toContain('invalid action');
+    { const body = JSON.parse((result.content as any)[0].text); expect(body.error).toBe('INVALID_INPUT'); expect(body.message.toLowerCase()).toContain('invalid action'); }
   });
 
   test('uses explicit deviceId when provided', async () => {

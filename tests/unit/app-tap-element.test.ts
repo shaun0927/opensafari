@@ -221,7 +221,8 @@ describe('app_tap_element', () => {
 
     expect(result.isError).toBe(true);
     const body = JSON.parse(result.content[0].text);
-    expect(body.error).toContain('At least one query parameter');
+    expect(body.error).toBe('MISSING_REQUIRED_PARAM');
+    expect(body.message).toContain('At least one query parameter');
   });
 
   it('returns error when element not found', async () => {
@@ -231,7 +232,8 @@ describe('app_tap_element', () => {
 
     expect(result.isError).toBe(true);
     const body = JSON.parse(result.content[0].text);
-    expect(body.error).toBe('Element not found');
+    expect(body.error).toBe('APP_STATE_UNKNOWN');
+    expect(body.message).toBe('Element not found');
   });
 
   it('returns error when element is not visible', async () => {
@@ -242,7 +244,8 @@ describe('app_tap_element', () => {
 
     expect(result.isError).toBe(true);
     const body = JSON.parse(result.content[0].text);
-    expect(body.error).toContain('not visible');
+    expect(body.error).toBe('NATIVE_GESTURE_FAILED');
+    expect(body.message).toContain('not visible');
   });
 
   it('supports long press via duration parameter', async () => {
@@ -396,7 +399,8 @@ describe('app_tap_element', () => {
 
     expect(result.isError).toBe(true);
     const body = JSON.parse(result.content[0].text);
-    expect(body.error).toContain('At least one query parameter');
+    expect(body.error).toBe('MISSING_REQUIRED_PARAM');
+    expect(body.message).toContain('At least one query parameter');
   });
 
   it('empty label falls back to other non-empty query params', async () => {
@@ -548,7 +552,8 @@ describe('app_tap_element', () => {
     const body = JSON.parse(result.content[0].text);
 
     expect(result.isError).toBe(true);
-    expect(body.error).toMatch(/finite/);
+    expect(body.error).toBe('NATIVE_GESTURE_FAILED');
+    expect(body.message).toMatch(/finite/);
     // Infinity does not round-trip through JSON (→ null), so we just
     // confirm the element payload is surfaced with a width that is
     // no longer a usable finite number.
@@ -631,7 +636,8 @@ describe('app_tap_element — Tier 1.5 AX press', () => {
     const body = JSON.parse(result.content[0].text);
 
     expect(result.isError).toBe(true);
-    expect(body.error).toBe('TAP_NO_EFFECT');
+    expect(body.error).toBe('NATIVE_GESTURE_FAILED');
+    expect(body.message).toContain('no observable AX tree change');
     expect(body.backend).toBe('simctl');
     expect(body.verified).toBe(false);
     expect(body.effect).toBe('no_observable_change');
@@ -762,7 +768,8 @@ describe('app_tap_element — Tier 1.5 AX press', () => {
     // Permission denied is a setup problem the user must fix — silently
     // falling back to coordinate tap would mask that.
     expect(result.isError).toBe(true);
-    expect(body.error).toMatch(/permission/i);
+    expect(body.error).toBe('APP_STATE_UNKNOWN');
+    expect(body.message).toMatch(/permission/i);
     expect(mockTap).not.toHaveBeenCalled();
   });
 
@@ -824,7 +831,8 @@ describe('app_tap_element — Tier 1.5 AX press', () => {
     const body = JSON.parse(result.content[0].text);
 
     expect(result.isError).toBe(true);
-    expect(body.error).toBe('TAP_NO_EFFECT');
+    expect(body.error).toBe('NATIVE_GESTURE_FAILED');
+    expect(body.message).toContain('no observable AX tree change');
     // Must have fallen back to the coordinate tap, not returned ax-press.
     expect(body.backend).toBe('simctl');
     expect(body.verified).toBe(false);
@@ -938,7 +946,8 @@ describe('app_tap_element — Tier 1.5 AX press', () => {
     const body = JSON.parse(result.content[0].text);
 
     expect(result.isError).toBe(true);
-    expect(body.error).toBe('TAP_NO_EFFECT');
+    expect(body.error).toBe('NATIVE_GESTURE_FAILED');
+    expect(body.message).toContain('no observable AX tree change');
     expect(body.backend).toBe('simctl');
     expect(body.verified).toBe(false);
     expect(body.effect).toBe('no_observable_change');

@@ -88,7 +88,8 @@ describe('app_activate tool', () => {
     const result = await handler('test', { bundleId: 'com.example.app' });
     expect(result.isError).toBe(true);
     const text = JSON.parse((result.content as any)[0].text);
-    expect(text.error).toBe('EXPECTED_BUNDLE_MISMATCH');
+    expect(text.error).toBe('APP_STATE_UNKNOWN');
+    expect(text.message).toContain('foreground context')
     expect(text.context.surface).toBe('simulator_chrome');
   });
 

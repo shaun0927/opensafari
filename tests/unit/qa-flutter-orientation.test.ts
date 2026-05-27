@@ -231,6 +231,7 @@ describe('qa_flutter_orientation', () => {
     const body = JSON.parse(result.content[0].text);
 
     expect(result.isError).toBe(true);
-    expect(body.error).toBe('Simulator not running');
+    expect(body.error).toBe('APP_STATE_UNKNOWN');
+    expect(body.message).toBe('Simulator not running');
   });
 });
