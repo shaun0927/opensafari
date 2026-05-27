@@ -1,6 +1,7 @@
 import { MCPServer } from '../mcp-server';
 import { SimctlExecutor } from '../simulator/simctl';
 import { resolveDeviceId } from './native-app-helpers';
+import { ErrorCode, respondWithStructuredError } from '../errors';
 import {
   captureLogsWindow,
   type CaptureLogsOptions,
@@ -55,33 +56,25 @@ export function registerAppDeeplinkTool(server: MCPServer): void {
       const url = params.url as string;
 
       if (!url) {
-        return {
-          content: [{ type: 'text' as const, text: 'Error: url is required' }],
-          isError: true,
-        };
+        return respondWithStructuredError(ErrorCode.MISSING_REQUIRED_PARAM, 'url is required');
       }
 
       // Basic URL validation — must contain a scheme
       if (!url.includes('://')) {
-        return {
-          content: [
-            {
-              type: 'text' as const,
-              text: 'Error: invalid URL — must include a scheme (e.g. https:// or myapp://)',
-            },
-          ],
-          isError: true,
-        };
+        return respondWithStructuredError(
+          ErrorCode.INVALID_URL,
+          'invalid URL — must include a scheme (e.g. https:// or myapp://)',
+        );
       }
 
       let deviceId: string;
       try {
         deviceId = resolveDeviceId(params);
       } catch (err) {
-        return {
-          content: [{ type: 'text' as const, text: `Error: ${(err as Error).message}` }],
-          isError: true,
-        };
+        return respondWithStructuredError(
+          ErrorCode.DEVICE_NOT_BOOTED,
+          (err as Error).message,
+        );
       }
 
       try {
@@ -109,15 +102,11 @@ export function registerAppDeeplinkTool(server: MCPServer): void {
           const verification = await pollForRoute(deviceId, expectRoute, timeoutMs);
           result.expectRoute = verification;
           if (!verification.matched) {
-            return {
-              content: [
-                {
-                  type: 'text' as const,
-                  text: JSON.stringify({ ...result, error: 'EXPECTED_ROUTE_MISMATCH' }),
-                },
-              ],
-              isError: true,
-            };
+            return respondWithStructuredError(
+              ErrorCode.APP_STATE_UNKNOWN,
+              'Expected route not reached after deeplink',
+              { ...result },
+            );
           }
         }
 
@@ -130,15 +119,11 @@ export function registerAppDeeplinkTool(server: MCPServer): void {
           ],
         };
       } catch (err) {
-        return {
-          content: [
-            {
-              type: 'text' as const,
-              text: `Error: failed to open URL "${url}": ${(err as Error).message}`,
-            },
-          ],
-          isError: true,
-        };
+        return respondWithStructuredError(
+          ErrorCode.FLUTTER_EVAL_FAILED,
+          `failed to open URL "${url}": ${(err as Error).message}`,
+          { url },
+        );
       }
     },
   );

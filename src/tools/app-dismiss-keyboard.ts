@@ -4,6 +4,7 @@ import { SimulatorManager } from '../simulator';
 import { DEVICE_PRESETS } from '../simulator/presets';
 import { getInputBackend } from './native-input-backend';
 import { runInputOp } from './native-input-utils';
+import { ErrorCode, respondWithStructuredError } from '../errors';
 
 /**
  * PR24: compute a safe defocus tap coordinate from the device preset
@@ -58,13 +59,7 @@ export function registerAppDismissKeyboardTool(server: MCPServer): void {
         (await manager.listBooted())[0]?.udid;
 
       if (!deviceId) {
-        return {
-          content: [{
-            type: 'text' as const,
-            text: JSON.stringify({ error: 'No booted simulator found', code: 'DEVICE_NOT_BOOTED' }),
-          }],
-          isError: true,
-        };
+        return respondWithStructuredError(ErrorCode.DEVICE_NOT_BOOTED, 'No booted simulator found');
       }
 
       const backend = await getInputBackend(deviceId);
@@ -109,13 +104,7 @@ export function registerAppDismissKeyboardTool(server: MCPServer): void {
       }
 
       // Both methods failed
-      return {
-        content: [{
-          type: 'text' as const,
-          text: JSON.stringify({ error: 'Failed to dismiss keyboard', code: 'KEYBOARD_DISMISS_FAILED', deviceId }),
-        }],
-        isError: true,
-      };
+      return respondWithStructuredError(ErrorCode.KEYBOARD_DISMISS_FAILED, 'Failed to dismiss keyboard', { deviceId });
     },
   );
 }

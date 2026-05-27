@@ -13,6 +13,7 @@ import {
   countNodes,
   isLikelyChromeOnlyTree,
 } from '../native';
+import { ErrorCode, respondWithStructuredError } from '../errors';
 import type { AXNode, AXPressResponse, AXQueryResult } from '../native';
 import type { AccessibilityBridge } from '../native/accessibility-bridge';
 import { walkTree, fingerprintTree } from '../native/ax-verification';
@@ -123,15 +124,10 @@ export function registerAppTapElementTool(server: MCPServer): void {
       const role = params.role as string | undefined;
 
       if (!identifier && !label && !text && !role) {
-        return {
-          content: [{
-            type: 'text' as const,
-            text: JSON.stringify({
-              error: 'At least one query parameter (identifier, label, text, or role) is required',
-            }),
-          }],
-          isError: true,
-        };
+        return respondWithStructuredError(
+          ErrorCode.MISSING_REQUIRED_PARAM,
+          'At least one query parameter (identifier, label, text, or role) is required',
+        );
       }
 
       try {
@@ -238,20 +234,17 @@ export function registerAppTapElementTool(server: MCPServer): void {
         }
 
         if (!match) {
-          return {
-            content: [{
-              type: 'text' as const,
-              text: JSON.stringify({
-                error: 'Element not found',
-                query,
-                labelAliases: labelAliases.length > 0 ? labelAliases : undefined,
-                index,
-                timeout,
-                _meta: { context: contextMeta },
-              }),
-            }],
-            isError: true,
-          };
+          return respondWithStructuredError(
+            ErrorCode.APP_STATE_UNKNOWN,
+            'Element not found',
+            {
+              query,
+              labelAliases: labelAliases.length > 0 ? labelAliases : undefined,
+              index,
+              timeout,
+              _meta: { context: contextMeta },
+            },
+          );
         }
 
         // Auto-scroll-to-find (PR13): when the element is matched but
@@ -300,22 +293,19 @@ export function registerAppTapElementTool(server: MCPServer): void {
 
         // Validate element is visible and has nonzero size
         if (!match.visible || match.frame.width <= 0 || match.frame.height <= 0) {
-          return {
-            content: [{
-              type: 'text' as const,
-              text: JSON.stringify({
-                error: 'Element found but not visible or has zero size',
-                element: {
-                  role: match.role,
-                  label: match.label,
-                  identifier: match.identifier,
-                  frame: match.frame,
-                  visible: match.visible,
-                },
-              }),
-            }],
-            isError: true,
-          };
+          return respondWithStructuredError(
+            ErrorCode.NATIVE_GESTURE_FAILED,
+            'Element found but not visible or has zero size',
+            {
+              element: {
+                role: match.role,
+                label: match.label,
+                identifier: match.identifier,
+                frame: match.frame,
+                visible: match.visible,
+              },
+            },
+          );
         }
 
         // Calculate center of element in AX-frame space (macOS-screen-points).
@@ -346,21 +336,18 @@ export function registerAppTapElementTool(server: MCPServer): void {
           ({ x: centerX, y: centerY, clampedFrom } = sanitizeTapTarget(rawCenterX, rawCenterY));
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
-          return {
-            content: [{
-              type: 'text' as const,
-              text: JSON.stringify({
-                error: message,
-                element: {
-                  role: match.role,
-                  label: match.label,
-                  identifier: match.identifier,
-                  frame: match.frame,
-                },
-              }),
-            }],
-            isError: true,
-          };
+          return respondWithStructuredError(
+            ErrorCode.NATIVE_GESTURE_FAILED,
+            message,
+            {
+              element: {
+                role: match.role,
+                label: match.label,
+                identifier: match.identifier,
+                frame: match.frame,
+              },
+            },
+          );
         }
 
         if (clampedFrom) {
@@ -587,18 +574,11 @@ export function registerAppTapElementTool(server: MCPServer): void {
         }
 
         if (verification && !verification.verified) {
-          return {
-            content: [{
-              type: 'text' as const,
-              text: JSON.stringify({
-                error: 'TAP_NO_EFFECT',
-                message:
-                  'The tap was dispatched successfully, but no observable AX tree change was detected afterward.',
-                ...response,
-              }),
-            }],
-            isError: true,
-          };
+          return respondWithStructuredError(
+            ErrorCode.NATIVE_GESTURE_FAILED,
+            'The tap was dispatched successfully, but no observable AX tree change was detected afterward.',
+            { ...response },
+          );
         }
 
         return {
@@ -607,10 +587,7 @@ export function registerAppTapElementTool(server: MCPServer): void {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         console.error(`[app_tap_element] ${message}`);
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({ error: message }) }],
-          isError: true,
-        };
+        return respondWithStructuredError(ErrorCode.APP_STATE_UNKNOWN, message);
       }
     },
   );
