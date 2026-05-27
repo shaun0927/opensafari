@@ -8,6 +8,7 @@
  */
 
 import * as fs from 'fs/promises';
+import * as fsSync from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
@@ -20,7 +21,7 @@ jest.mock('child_process', () => {
       if (args[0] === 'simctl' && args[1] === 'io' && args[3] === 'screenshot') {
         const outPath = args[4];
         // Write a tiny placeholder so fs.stat succeeds.
-        require('fs').writeFileSync(outPath, 'PNG');
+        fsSync.writeFileSync(outPath, 'PNG');
         cb(null, { stdout: '', stderr: '' });
         return;
       }

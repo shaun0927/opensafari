@@ -35,8 +35,6 @@ describe('app_pop_until parsePostcondition (#801 PR1)', () => {
 });
 
 describe('app_pop_until VM path verifyRoutePostcondition (#801 PR1)', () => {
-  const { verifyRoutePostcondition } = __forTests;
-
   it('returns verified=true when ModalRoute name matches', async () => {
     // We can exercise the VM helper directly with a stubbed flutter client.
     // The helper resolves the client via getFlutterVMClient, so we wire a
@@ -88,8 +86,6 @@ describe('app_pop_until VM path verifyRoutePostcondition (#801 PR1)', () => {
 });
 
 describe('app_pop_until VM path verifyAxPostcondition (#801 PR1)', () => {
-  const { verifyAxPostcondition } = __forTests;
-
   it('reports verified=true on first non-empty AX match', async () => {
     jest.resetModules();
     jest.doMock('../../src/native', () => ({
