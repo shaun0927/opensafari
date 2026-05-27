@@ -8,10 +8,6 @@
  * real simulator.
  */
 
-import { __forTests } from '../../src/tools/app-pop-until';
-
-const { findBackAffordance, dispatchNativeBack, runNativeFallback } = __forTests;
-
 function mockBridge(matchesByQuery: Array<{ q: Record<string, unknown>; matches: unknown[] }>) {
   return {
     query: jest.fn(async (q: Record<string, unknown>) => {
