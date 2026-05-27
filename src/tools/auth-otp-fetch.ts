@@ -20,6 +20,7 @@
  */
 
 import { MCPServer } from '../mcp-server';
+import { ErrorCode, respondWithStructuredError } from '../errors';
 
 const PROVIDERS = ['mailhog', 'webhook', 'custom'] as const;
 type Provider = (typeof PROVIDERS)[number];
@@ -140,17 +141,11 @@ export function registerAuthOtpFetchTool(server: MCPServer): void {
     async (_sessionId: string, params: Record<string, unknown>) => {
       const provider = params.provider as Provider | undefined;
       if (!provider || !PROVIDERS.includes(provider)) {
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({ error: 'INVALID_PROVIDER', allowed: PROVIDERS }) }],
-          isError: true,
-        };
+        return respondWithStructuredError(ErrorCode.INVALID_INPUT, 'Invalid provider', { allowed: PROVIDERS });
       }
       const baseUrl = params.baseUrl as string | undefined;
       if (!baseUrl) {
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({ error: 'MISSING_BASE_URL' }) }],
-          isError: true,
-        };
+        return respondWithStructuredError(ErrorCode.MISSING_REQUIRED_PARAM, 'baseUrl is required');
       }
       const codePattern = (params.codePattern as string | undefined) ?? DEFAULT_CODE_PATTERN;
       const recipient = params.recipient as string | undefined;
@@ -168,13 +163,7 @@ export function registerAuthOtpFetchTool(server: MCPServer): void {
         };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        return {
-          content: [{
-            type: 'text' as const,
-            text: JSON.stringify({ error: 'OTP_FETCH_FAILED', provider, message }),
-          }],
-          isError: true,
-        };
+        return respondWithStructuredError(ErrorCode.APP_STATE_UNKNOWN, message, { provider });
       }
     },
   );

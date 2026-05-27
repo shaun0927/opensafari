@@ -1,6 +1,7 @@
 import { MCPServer } from '../mcp-server';
 import { SimulatorManager } from '../simulator';
 import { getSessionManager } from '../session-manager';
+import { ErrorCode, respondWithStructuredError } from '../errors';
 
 export function registerAppListRunningTool(server: MCPServer): void {
   server.registerTool(
@@ -25,10 +26,10 @@ export function registerAppListRunningTool(server: MCPServer): void {
       const deviceId = (params.deviceId as string) ?? sm.getSoleDeviceId() ?? booted[0]?.udid;
 
       if (!deviceId) {
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({ error: 'DEVICE_NOT_BOOTED', message: 'No booted simulator found. Call device_boot first.' }) }],
-          isError: true,
-        };
+        return respondWithStructuredError(
+          ErrorCode.DEVICE_NOT_BOOTED,
+          'No booted simulator found. Call device_boot first.',
+        );
       }
 
       const apps = await manager.listRunningApps(deviceId);

@@ -1,5 +1,6 @@
 import { MCPServer } from '../mcp-server';
 import { ScenarioRunner, TestScenario } from '../orchestration/scenario-runner';
+import { ErrorCode, respondWithStructuredError } from '../errors';
 
 let runner: ScenarioRunner | null = null;
 
@@ -7,8 +8,8 @@ export function setScenarioRunner(r: ScenarioRunner): void {
   runner = r;
 }
 
-function errorResult(msg: string) {
-  return { content: [{ type: 'text' as const, text: `Error: ${msg}` }], isError: true as const };
+function errorResult(msg: string, code = ErrorCode.APP_STATE_UNKNOWN) {
+  return respondWithStructuredError(code, msg);
 }
 
 function jsonResult(data: unknown) {
@@ -54,7 +55,7 @@ export function registerScenarioTools(server: MCPServer): void {
     async (_sessionId: string, params: Record<string, unknown>) => {
       if (!runner) return errorResult('Scenario runner not initialized — boot a simulator pool first');
       if (!Array.isArray(params.steps)) {
-        return { content: [{ type: 'text', text: JSON.stringify({ error: 'steps must be an array' }) }], isError: true };
+        return respondWithStructuredError(ErrorCode.INVALID_INPUT, 'steps must be an array');
       }
       const scenario: TestScenario = {
         name: params.name as string,

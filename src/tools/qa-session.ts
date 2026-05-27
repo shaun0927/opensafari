@@ -13,6 +13,7 @@ import { MCPServer, getWebKitClient } from '../mcp-server';
 import { WebKitClient } from '../webkit/client';
 import { resolveDeviceId } from './native-input-utils';
 import { openSession, closeSession, listSessions } from './tab-manager';
+import { ErrorCode, respondWithStructuredError } from '../errors';
 
 export function registerQaSessionCreateTool(server: MCPServer): void {
   server.registerTool(
@@ -41,27 +42,15 @@ export function registerQaSessionCreateTool(server: MCPServer): void {
         const url = params.url as string;
 
         if (typeof url !== 'string' || url.length === 0) {
-          return {
-            content: [{
-              type: 'text' as const,
-              text: JSON.stringify({ error: 'url must be a non-empty string' }),
-            }],
-            isError: true,
-          };
+          return respondWithStructuredError(ErrorCode.INVALID_INPUT, 'url must be a non-empty string');
         }
 
         const client = getWebKitClient(deviceId);
         if (!client) {
-          return {
-            content: [{
-              type: 'text' as const,
-              text: JSON.stringify({
-                error: 'NO_WEBKIT_CLIENT',
-                message: `No WebKit connection for device ${deviceId}. Call device_boot first.`,
-              }),
-            }],
-            isError: true,
-          };
+          return respondWithStructuredError(
+            ErrorCode.BACKEND_NOT_CONNECTED,
+            `No WebKit connection for device ${deviceId}. Call device_boot first.`,
+          );
         }
 
         const info = await openSession(deviceId, url, client as WebKitClient);
@@ -81,10 +70,7 @@ export function registerQaSessionCreateTool(server: MCPServer): void {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         console.error(`[qa_session_create] ${message}`);
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({ error: message }) }],
-          isError: true,
-        };
+        return respondWithStructuredError(ErrorCode.APP_STATE_UNKNOWN, message);
       }
     },
   );
@@ -111,13 +97,7 @@ export function registerQaSessionDestroyTool(server: MCPServer): void {
       try {
         const qaSessionId = params.sessionId as string;
         if (typeof qaSessionId !== 'string' || qaSessionId.length === 0) {
-          return {
-            content: [{
-              type: 'text' as const,
-              text: JSON.stringify({ error: 'sessionId must be a non-empty string' }),
-            }],
-            isError: true,
-          };
+          return respondWithStructuredError(ErrorCode.INVALID_INPUT, 'sessionId must be a non-empty string');
         }
 
         const closed = await closeSession(qaSessionId);
@@ -135,10 +115,7 @@ export function registerQaSessionDestroyTool(server: MCPServer): void {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         console.error(`[qa_session_destroy] ${message}`);
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({ error: message }) }],
-          isError: true,
-        };
+        return respondWithStructuredError(ErrorCode.APP_STATE_UNKNOWN, message);
       }
     },
   );
@@ -183,10 +160,7 @@ export function registerQaSessionListTool(server: MCPServer): void {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         console.error(`[qa_session_list] ${message}`);
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({ error: message }) }],
-          isError: true,
-        };
+        return respondWithStructuredError(ErrorCode.APP_STATE_UNKNOWN, message);
       }
     },
   );

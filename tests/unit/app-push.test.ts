@@ -98,6 +98,6 @@ describe('app_push tool', () => {
     });
     expect(result.isError).toBe(true);
     const text = JSON.parse((result.content as any)[0].text);
-    expect(text.error).toBe('INVALID_PAYLOAD');
+    expect(text.error).toBe('INVALID_INPUT');
   });
 });

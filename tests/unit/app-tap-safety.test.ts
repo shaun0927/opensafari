@@ -232,7 +232,7 @@ describe('app_tap — device-frame bounds guard (#644 WU2)', () => {
     const body = JSON.parse(result.content[0].text);
 
     expect(result.isError).toBe(true);
-    expect(body.error).toBe('TAP_OUT_OF_BOUNDS');
+    expect(body.error).toBe('INVALID_INPUT');
     expect(body.sideEffect).toBe('out_of_bounds');
     expect(body.reason).toBe('home_indicator_band');
     expect(body.dispatched).toBe(false);
@@ -283,7 +283,7 @@ describe('app_tap — post-tap foreground verification (#644 WU3)', () => {
     const body = JSON.parse(result.content[0].text);
 
     expect(result.isError).toBe(true);
-    expect(body.error).toBe('APP_BACKGROUNDED');
+    expect(body.error).toBe('APP_STATE_UNKNOWN');
     expect(body.sideEffect).toBe('app_backgrounded');
     expect(body.foregroundBefore).toBe('target-app');
     expect(body.foregroundAfter).toBe('springboard');
@@ -501,7 +501,7 @@ describe('app_tap — autoReactivate (#644 WU5)', () => {
     const body = JSON.parse(result.content[0].text);
 
     expect(result.isError).toBe(true);
-    expect(body.error).toBe('APP_BACKGROUNDED');
+    expect(body.error).toBe('APP_STATE_UNKNOWN');
     expect(body.recovered).toBe(true);
     expect(mockActivateApp).toHaveBeenCalledWith('test-device-id', 'com.example.target');
     jest.useRealTimers();

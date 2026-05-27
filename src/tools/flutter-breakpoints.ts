@@ -26,6 +26,7 @@ import { MCPServer } from '../mcp-server';
 import { getFlutterVMClient, FlutterVMError } from '../flutter';
 import { getSessionManager } from '../session-manager';
 import type { VMServiceEvent } from '../flutter/flutter-types';
+import { ErrorCode, respondWithStructuredError } from '../errors';
 
 type FlutterEvent = VMServiceEvent['params']['event'];
 
@@ -301,10 +302,7 @@ export function registerFlutterSetBreakpointTool(server: MCPServer): void {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         console.error(`[flutter_set_breakpoint] ${message}`);
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({ error: message }) }],
-          isError: true,
-        };
+        return respondWithStructuredError(ErrorCode.FLUTTER_VM_NOT_CONNECTED, message);
       }
     },
   );
@@ -348,10 +346,7 @@ export function registerFlutterRemoveBreakpointTool(server: MCPServer): void {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         console.error(`[flutter_remove_breakpoint] ${message}`);
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({ error: message }) }],
-          isError: true,
-        };
+        return respondWithStructuredError(ErrorCode.FLUTTER_VM_NOT_CONNECTED, message);
       }
     },
   );
@@ -408,10 +403,7 @@ export function registerFlutterResumeTool(server: MCPServer): void {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         console.error(`[flutter_resume] ${message}`);
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({ error: message }) }],
-          isError: true,
-        };
+        return respondWithStructuredError(ErrorCode.FLUTTER_VM_NOT_CONNECTED, message);
       }
     },
   );
@@ -467,10 +459,7 @@ export function registerFlutterGetStackTool(server: MCPServer): void {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         console.error(`[flutter_get_stack] ${message}`);
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({ error: message }) }],
-          isError: true,
-        };
+        return respondWithStructuredError(ErrorCode.FLUTTER_VM_NOT_CONNECTED, message);
       }
     },
   );
@@ -578,10 +567,7 @@ export function registerFlutterWaitForPauseTool(server: MCPServer): void {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         console.error(`[flutter_wait_for_pause] ${message}`);
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({ error: message }) }],
-          isError: true,
-        };
+        return respondWithStructuredError(ErrorCode.FLUTTER_VM_NOT_CONNECTED, message);
       }
     },
   );

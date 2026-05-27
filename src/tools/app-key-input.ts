@@ -7,6 +7,7 @@
 
 import { MCPServer, getWebKitClient } from '../mcp-server';
 import { resolveDeviceId, getInputBackend, runInputOp, KEY_MAP } from './native-input-utils';
+import { ErrorCode, respondWithStructuredError } from '../errors';
 
 export function registerAppKeyInputTool(server: MCPServer): void {
   server.registerTool(
@@ -36,17 +37,11 @@ export function registerAppKeyInputTool(server: MCPServer): void {
 
         const keyCode = KEY_MAP[key];
         if (!keyCode) {
-          return {
-            content: [
-              {
-                type: 'text' as const,
-                text: JSON.stringify({
-                  error: `Unknown key "${key}". Supported keys: ${Object.keys(KEY_MAP).join(', ')}`,
-                }),
-              },
-            ],
-            isError: true,
-          };
+          return respondWithStructuredError(
+            ErrorCode.INVALID_INPUT,
+            `Unknown key "${key}". Supported keys: ${Object.keys(KEY_MAP).join(', ')}`,
+            { supportedKeys: Object.keys(KEY_MAP) },
+          );
         }
 
         const backend = await getInputBackend(deviceId, getWebKitClient(deviceId));
@@ -72,10 +67,7 @@ export function registerAppKeyInputTool(server: MCPServer): void {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         console.error(`[app_key_input] ${message}`);
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({ error: message }) }],
-          isError: true,
-        };
+        return respondWithStructuredError(ErrorCode.APP_STATE_UNKNOWN, message);
       }
     },
   );

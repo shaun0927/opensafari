@@ -246,7 +246,7 @@ describe('app_alert_handle tool', () => {
     const result = await handler('test', { action: 'close' });
     expect(result.isError).toBe(true);
     const text = parseResult(result as { content: Array<{ type: string; text: string }> });
-    expect(text.error).toBe('INVALID_ACTION');
+    expect(text.error).toBe('INVALID_INPUT');
     expect(text.message).toContain('"close"');
   });
 
@@ -255,7 +255,7 @@ describe('app_alert_handle tool', () => {
     const result = await handler('test', {});
     expect(result.isError).toBe(true);
     const text = parseResult(result as { content: Array<{ type: string; text: string }> });
-    expect(text.error).toBe('MISSING_PARAMS');
+    expect(text.error).toBe('MISSING_REQUIRED_PARAM');
   });
 
   test('returns error when no device is booted', async () => {
@@ -288,7 +288,7 @@ describe('app_alert_handle tool', () => {
 
     expect(result.isError).toBe(true);
     const text = parseResult(result as { content: Array<{ type: string; text: string }> });
-    expect(text.error).toBe('ALERT_HANDLE_FAILED');
+    expect(text.error).toBe('ALERT_NO_EFFECT');
     expect(text.message).toContain('Failed to accept alert');
   });
 
@@ -365,7 +365,7 @@ describe('app_alert_handle tool', () => {
 
     expect(result.isError).toBe(true);
     const text = parseResult(result as { content: Array<{ type: string; text: string }> });
-    expect(text.error).toBe('NO_MATCHING_BUTTON');
+    expect(text.error).toBe('ALERT_NO_EFFECT');
     expect(text.visibleLabels).toContain('Continue');
     expect(text.visibleLabels).toContain('Go Back');
   });
@@ -380,7 +380,7 @@ describe('app_alert_handle tool', () => {
 
     expect(result.isError).toBe(true);
     const text = parseResult(result as { content: Array<{ type: string; text: string }> });
-    expect(text.error).toBe('NO_MATCHING_BUTTON');
+    expect(text.error).toBe('ALERT_NO_EFFECT');
     expect(text.visibleLabels).toContain('취소');
     expect(text.visibleLabels).toContain('계속');
     expect(text.visibleLabels).not.toContain('Home');
@@ -418,7 +418,7 @@ describe('app_alert_handle tool', () => {
 
     expect(result.isError).toBe(true);
     const text = parseResult(result as { content: Array<{ type: string; text: string }> });
-    expect(text.error).toBe('ALERT_HANDLE_FAILED');
+    expect(text.error).toBe('ALERT_NO_EFFECT');
   });
 
   test('returns ALERT_HANDLE_NO_EFFECT when the same alert button is still present after AX press', async () => {
@@ -444,7 +444,7 @@ describe('app_alert_handle tool', () => {
 
     expect(result.isError).toBe(true);
     const text = parseResult(result as { content: Array<{ type: string; text: string }> });
-    expect(text.error).toBe('ALERT_HANDLE_NO_EFFECT');
+    expect(text.error).toBe('ALERT_NO_EFFECT');
     expect(text.verified).toBe(false);
     expect(text.effect).toBe('no_observable_change');
   });

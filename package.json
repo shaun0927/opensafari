@@ -38,6 +38,7 @@
     "audit:all": "npm audit",
     "audit:all:json": "npm audit --json",
     "verify:issue-10-healthy": "ts-node --transpile-only --skip-project -O '{\"module\":\"commonjs\",\"moduleResolution\":\"node\",\"target\":\"ES2022\",\"esModuleInterop\":true,\"strict\":true}' scripts/verify-issue-10-healthy.ts",
+    "check:error-envelopes": "ts-node --transpile-only --skip-project -O '{\"module\":\"commonjs\",\"moduleResolution\":\"node\",\"target\":\"ES2022\",\"esModuleInterop\":true,\"strict\":true}' scripts/dev/check-error-envelopes.ts",
     "lint": "eslint 'src/**/*.ts' 'cli/**/*.ts' 'tests/**/*.ts'",
     "lint:fix": "eslint --fix 'src/**/*.ts' 'cli/**/*.ts' 'tests/**/*.ts'",
     "prepare": "npm run build",

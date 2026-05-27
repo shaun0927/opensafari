@@ -3,6 +3,7 @@ import {
   type InterceptorClient,
   type InterceptRule,
 } from '../network-interceptor';
+import { ErrorCode, respondWithStructuredError } from '../errors';
 import {
   getNetworkInterceptorForSession,
   networkInterceptor,
@@ -99,7 +100,7 @@ export function registerNetworkInterceptTool(server: MCPServer): void {
     async (sessionId: string, params: Record<string, unknown>) => {
       const client = resolveClient(params.device_id);
       if (!client) {
-        return { content: [{ type: 'text' as const, text: 'Error: Safari not connected' }], isError: true };
+        return respondWithStructuredError(ErrorCode.BACKEND_NOT_CONNECTED, 'Safari not connected');
       }
 
       const deviceId = typeof params.device_id === 'string' ? params.device_id : undefined;
@@ -113,10 +114,7 @@ export function registerNetworkInterceptTool(server: MCPServer): void {
       try {
         rule = interceptor.addRule(mapRule(params));
       } catch (err) {
-        return {
-          content: [{ type: 'text' as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }],
-          isError: true,
-        };
+        return respondWithStructuredError(ErrorCode.INVALID_INPUT, err instanceof Error ? err.message : String(err));
       }
 
       await interceptor.enable(client);

@@ -1,6 +1,7 @@
 import { MCPServer } from '../mcp-server';
 import { SimctlExecutor } from '../simulator/simctl';
 import { resolveDeviceId } from './native-app-helpers';
+import { ErrorCode, respondWithStructuredError } from '../errors';
 
 /** Map user-facing permission names to simctl privacy service names */
 const PERMISSION_MAP: Record<string, string> = {
@@ -61,45 +62,23 @@ export function registerAppPermissionsTool(server: MCPServer): void {
       const bundleId = params.bundleId as string;
 
       if (!VALID_ACTIONS.includes(action as typeof VALID_ACTIONS[number])) {
-        return {
-          content: [
-            {
-              type: 'text' as const,
-              text: `Error: invalid action "${action}". Must be one of: ${VALID_ACTIONS.join(', ')}`,
-            },
-          ],
-          isError: true,
-        };
+        return respondWithStructuredError(ErrorCode.INVALID_INPUT, `Invalid action "${action}". Must be one of: ${VALID_ACTIONS.join(', ')}`);
       }
 
       const service = PERMISSION_MAP[permission];
       if (!service) {
-        return {
-          content: [
-            {
-              type: 'text' as const,
-              text: `Error: invalid permission "${permission}". Must be one of: ${VALID_PERMISSIONS.join(', ')}`,
-            },
-          ],
-          isError: true,
-        };
+        return respondWithStructuredError(ErrorCode.INVALID_INPUT, `Invalid permission "${permission}". Must be one of: ${VALID_PERMISSIONS.join(', ')}`);
       }
 
       if (!bundleId) {
-        return {
-          content: [{ type: 'text' as const, text: 'Error: bundleId is required' }],
-          isError: true,
-        };
+        return respondWithStructuredError(ErrorCode.MISSING_REQUIRED_PARAM, 'bundleId is required');
       }
 
       let deviceId: string;
       try {
         deviceId = resolveDeviceId(params);
       } catch (err) {
-        return {
-          content: [{ type: 'text' as const, text: `Error: ${(err as Error).message}` }],
-          isError: true,
-        };
+        return respondWithStructuredError(ErrorCode.DEVICE_NOT_BOOTED, (err as Error).message);
       }
 
       try {
@@ -115,15 +94,10 @@ export function registerAppPermissionsTool(server: MCPServer): void {
           ],
         };
       } catch (err) {
-        return {
-          content: [
-            {
-              type: 'text' as const,
-              text: `Error: failed to ${action} ${permission} for ${bundleId}: ${(err as Error).message}`,
-            },
-          ],
-          isError: true,
-        };
+        return respondWithStructuredError(
+          action === 'reset' ? ErrorCode.PERMISSION_RESET_DENIED : ErrorCode.APP_STATE_UNKNOWN,
+          `Failed to ${action} ${permission} for ${bundleId}: ${(err as Error).message}`,
+        );
       }
     },
   );

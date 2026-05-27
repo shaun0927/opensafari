@@ -6,6 +6,7 @@ import { MCPServer } from '../mcp-server';
 import { SimulatorManager } from '../simulator';
 import { getSessionManager } from '../session-manager';
 import { SimctlExecutor } from '../simulator/simctl';
+import { ErrorCode, respondWithStructuredError } from '../errors';
 
 export function registerAppPushTool(server: MCPServer): void {
   const simctl = new SimctlExecutor();
@@ -40,20 +41,14 @@ export function registerAppPushTool(server: MCPServer): void {
       const deviceId = (params.deviceId as string) ?? sm.getSoleDeviceId() ?? booted[0]?.udid;
 
       if (!deviceId) {
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({ error: 'DEVICE_NOT_BOOTED', message: 'No booted simulator found. Call device_boot first.' }) }],
-          isError: true,
-        };
+        return respondWithStructuredError(ErrorCode.DEVICE_NOT_BOOTED, 'No booted simulator found. Call device_boot first.');
       }
 
       const bundleId = params.bundleId as string;
       const payload = params.payload as Record<string, unknown>;
 
       if (!payload || typeof payload !== 'object') {
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({ error: 'INVALID_PAYLOAD', message: 'Payload must be a JSON object with APNS structure' }) }],
-          isError: true,
-        };
+        return respondWithStructuredError(ErrorCode.INVALID_INPUT, 'Payload must be a JSON object with APNS structure');
       }
 
       // Write payload to temp file

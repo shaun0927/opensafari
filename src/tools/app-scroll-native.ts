@@ -13,6 +13,7 @@ import { SimulatorManager } from '../simulator';
 import { getSessionManager } from '../session-manager';
 import { getInputBackend } from './native-input-backend';
 import { runInputOp } from './native-input-utils';
+import { ErrorCode, respondWithStructuredError } from '../errors';
 
 /** Default scroll amount in points. */
 const DEFAULT_AMOUNT = 300;
@@ -89,17 +90,7 @@ export function registerAppScrollNativeTool(server: MCPServer): void {
 
         const validDirections: Direction[] = ['up', 'down', 'left', 'right'];
         if (!validDirections.includes(direction)) {
-          return {
-            content: [
-              {
-                type: 'text' as const,
-                text: JSON.stringify({
-                  error: `Invalid direction "${direction}". Must be one of: ${validDirections.join(', ')}`,
-                }),
-              },
-            ],
-            isError: true,
-          };
+          return respondWithStructuredError(ErrorCode.INVALID_INPUT, `Invalid direction "${direction}". Must be one of: ${validDirections.join(', ')}`);
         }
 
         const sm = getSessionManager();
@@ -111,19 +102,7 @@ export function registerAppScrollNativeTool(server: MCPServer): void {
           booted[0]?.udid;
 
         if (!deviceId) {
-          return {
-            content: [
-              {
-                type: 'text' as const,
-                text: JSON.stringify({
-                  error: 'DEVICE_NOT_FOUND',
-                  message:
-                    'No device specified and no booted simulator found. Call device_boot first.',
-                }),
-              },
-            ],
-            isError: true,
-          };
+          return respondWithStructuredError(ErrorCode.DEVICE_NOT_BOOTED, 'No device specified and no booted simulator found. Call device_boot first.');
         }
 
         const { endX, endY } = calculateScrollEndpoint(x, y, direction, amount);
@@ -152,12 +131,7 @@ export function registerAppScrollNativeTool(server: MCPServer): void {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         console.error(`[app_scroll_native] ${message}`);
-        return {
-          content: [
-            { type: 'text' as const, text: JSON.stringify({ error: message }) },
-          ],
-          isError: true,
-        };
+        return respondWithStructuredError(ErrorCode.APP_STATE_UNKNOWN, message);
       }
     },
   );
