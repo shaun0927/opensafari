@@ -34,8 +34,9 @@ screen state before reporting success.
     timeoutMs?: number,    // default 3000
     intervalMs?: number,   // default 250
   },
-  maxAttempts?: number,            // bounds fallback ladder attempts (PR2)
-  interAttemptDelayMs?: number,    // default 250 (PR2)
+  maxAttempts?: number,            // bounds native fallback ladder attempts
+  interAttemptDelayMs?: number,    // default 250
+  forceFallback?: boolean,         // skip the VM path even when connected
 }
 ```
 
@@ -49,10 +50,10 @@ work in both VM and native contexts.
 ```ts
 {
   ok: boolean,                   // true iff postcondition verified (or no postcondition)
-  status: 'ok' | string,
-  popped?: number,               // only when until === 'count'
+  status: 'ok' | 'unverified' | string,
+  popped?: number,               // count of successful dispatches for until === 'count'
   target: PopUntil,              // echoed input
-  strategy: 'flutter_vm',        // PR2 adds: 'native_back' | 'edge_swipe' | ...
+  strategy: 'flutter_vm' | 'native_back' | 'edge_swipe' | 'escape_key',
   attempts: [{
     n: number,
     action: string,              // e.g. 'flutter_vm.popUntil'
@@ -85,10 +86,11 @@ recoverable failure.
 | `INVALID_INPUT` | `until` enum / `count` shape invalid, or `postcondition` has no signal field | Fix input and retry |
 | `MISSING_REQUIRED_PARAM` | `name` missing for `until: 'route'` | Supply `name` |
 | `DEVICE_NOT_BOOTED` | No booted simulator and no explicit `device_id` | Boot a device |
-| `FLUTTER_VM_NOT_CONNECTED` | VM Service unreachable (release build, etc.) | Call `flutter_connect`, or wait for #801 PR2 native fallback |
+| `FLUTTER_VM_NOT_CONNECTED` | VM Service unreachable (release build, etc.) | Native fallback runs automatically; emitted only when fallback also bails |
 | `FLUTTER_EVAL_FAILED` | VM evaluate threw or `opensafari_pop:no_root`/`no_navigator` | Inspect attempts[0].detail; re-run `app_context` to confirm UI is mounted |
-| `POP_UNTIL_EXHAUSTED` *(PR2)* | All fallback strategies tried without satisfying postcondition | Inspect attempts[], consider longer timeout |
-| `MISSING_POSTCONDITION` *(PR2)* | Native fallback ladder requires a postcondition | Supply one |
+| `POP_UNTIL_EXHAUSTED` | All native fallback strategies tried without satisfying postcondition | Inspect attempts[], consider a longer `timeoutMs` or a more specific postcondition |
+| `POP_UNTIL_NO_FALLBACK_AVAILABLE` | No native input backend selectable (e.g. SimulatorKit HID + PointerService both unavailable) | Connect Flutter VM or boot a different simulator |
+| `MISSING_POSTCONDITION` | Native fallback for `until: 'first' \| 'route'` requires a postcondition (route or AX query) | Supply one |
 
 ## Examples
 
