@@ -8,7 +8,7 @@
 
 import { __forTests } from '../../src/tools/app-pop-until';
 
-const { parsePostcondition } = __forTests;
+const { parsePostcondition, buildRoutePostconditionExpression } = __forTests;
 
 describe('app_pop_until parsePostcondition (#801 PR1)', () => {
   it('returns null when no postcondition is supplied', () => {
@@ -66,6 +66,14 @@ describe('app_pop_until VM path verifyRoutePostcondition (#801 PR1)', () => {
     expect(verdict.kind).toBe('route');
     expect((verdict.polls ?? 0)).toBeGreaterThanOrEqual(1);
     jest.dontMock('../../src/flutter');
+  });
+
+
+  it('uses the route tree-walk marker rather than ModalRoute.of(rootElement)', () => {
+    const expr = buildRoutePostconditionExpression('/home');
+    expect(expr).toContain('_ModalScopeStatus');
+    expect(expr).toContain('visit(root)');
+    expect(expr).not.toContain('ModalRoute.of(root)');
   });
 
   it('surfaces VM evaluate errors in the last error field', async () => {
