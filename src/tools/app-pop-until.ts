@@ -220,6 +220,39 @@ async function verifyAxPostcondition(
   };
 }
 
+function buildRoutePostconditionExpression(routeName: string): string {
+  const escaped = routeName.replace(/'/g, "\\'");
+  return `
+(() {
+  try {
+    final binding = WidgetsBinding.instance;
+    final root = binding.rootElement;
+    if (root == null) return 'opensafari_route:no_root';
+
+    String? name;
+    void visit(Element el) {
+      if (name != null) return;
+      final type = el.widget.runtimeType.toString();
+      if (type == '_ModalScopeStatus') {
+        final s = el.toString();
+        final match = RegExp(r'name:\\s*"([^"]+)"').firstMatch(s)
+            ?? RegExp(r"name:\\s*'([^']+)'").firstMatch(s)
+            ?? RegExp(r'RouteSettings\\("([^"]+)"').firstMatch(s);
+        if (match != null) name = match.group(1);
+      }
+      el.visitChildren(visit);
+    }
+    visit(root);
+
+    if (name == '${escaped}') return 'opensafari_route:ok';
+    return 'opensafari_route:mismatch:' + (name ?? 'null').toString();
+  } catch (e) {
+    return 'opensafari_route:error:' + e.toString().replaceAll(':', '_');
+  }
+})()
+`.replace(/\s+/g, ' ').trim();
+}
+
 async function verifyRoutePostcondition(
   deviceId: string,
   routeName: string,
@@ -231,24 +264,7 @@ async function verifyRoutePostcondition(
   const deadline = start + Math.max(0, Math.floor(budgetMs));
   let polls = 0;
   let lastError: string | undefined;
-  // Dart expression reads ModalRoute.of(root) settings.name; falls back
-  // to navigator.currentRouteName via observers when unavailable.
-  const escaped = routeName.replace(/'/g, "\\'");
-  const expr = `
-(() {
-  try {
-    final binding = WidgetsBinding.instance;
-    final root = binding.rootElement;
-    if (root == null) return 'opensafari_route:no_root';
-    final modal = ModalRoute.of(root);
-    final name = modal?.settings.name;
-    if (name == '${escaped}') return 'opensafari_route:ok';
-    return 'opensafari_route:mismatch:' + (name ?? 'null').toString();
-  } catch (e) {
-    return 'opensafari_route:error:' + e.toString().replaceAll(':', '_');
-  }
-})()
-`.replace(/\s+/g, ' ').trim();
+  const expr = buildRoutePostconditionExpression(routeName);
   while (Date.now() <= deadline) {
     polls++;
     try {
@@ -485,4 +501,5 @@ export const __forTests = {
   parsePostcondition,
   verifyAxPostcondition,
   verifyRoutePostcondition,
+  buildRoutePostconditionExpression,
 };
