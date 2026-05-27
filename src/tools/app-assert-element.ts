@@ -15,6 +15,7 @@ import {
   createContextMismatchError,
   NativeContextMeta,
 } from './native-app-context';
+import { ErrorCode, respondWithStructuredError } from '../errors';
 
 type AssertCondition = 'exists' | 'not_exists' | 'visible' | 'enabled' | 'disabled' | 'has_text';
 
@@ -77,15 +78,7 @@ export function registerAppAssertElementTool(server: MCPServer): void {
       const role = params.role as string | undefined;
 
       if (!identifier && !label && !text && !role) {
-        return {
-          content: [{
-            type: 'text' as const,
-            text: JSON.stringify({
-              error: 'At least one query parameter (identifier, label, text, or role) is required',
-            }),
-          }],
-          isError: true,
-        };
+        return respondWithStructuredError(ErrorCode.INVALID_INPUT, 'At least one query parameter (identifier, label, text, or role) is required');
       }
 
       try {
@@ -105,15 +98,7 @@ export function registerAppAssertElementTool(server: MCPServer): void {
         const query = { identifier, label, text, role };
 
         if (condition === 'has_text' && !expectedText) {
-          return {
-            content: [{
-              type: 'text' as const,
-              text: JSON.stringify({
-                error: 'expected_text is required when assert is "has_text"',
-              }),
-            }],
-            isError: true,
-          };
+          return respondWithStructuredError(ErrorCode.INVALID_INPUT, 'expected_text is required when assert is "has_text"');
         }
 
         const bridge = getAccessibilityBridge();
@@ -217,10 +202,7 @@ export function registerAppAssertElementTool(server: MCPServer): void {
       } catch (err) {
         const errorMessage = err instanceof Error ? err.message : String(err);
         console.error(`[app_assert_element] ${errorMessage}`);
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({ error: errorMessage }) }],
-          isError: true,
-        };
+        return respondWithStructuredError(ErrorCode.APP_STATE_UNKNOWN, errorMessage);
       }
     },
   );

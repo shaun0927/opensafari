@@ -34,6 +34,7 @@ import { probeMobileContext } from './app-context';
 import { SimulatorManager } from '../simulator';
 import { classifyNativeContext } from './native-app-context';
 import { DEFAULT_HOME_INDICATOR_GUARD_PX, frameFromAXRoot, validateRawTapBounds, type DeviceFrame } from './tap-bounds';
+import { ErrorCode, respondWithStructuredError } from '../errors';
 
 type CoordinateTapVerification = {
   verified: boolean;
@@ -132,15 +133,7 @@ export function registerAppTapTool(server: MCPServer): void {
           (params.homeIndicatorGuardPx as number | undefined) ?? DEFAULT_HOME_INDICATOR_GUARD_PX;
 
         if (!Number.isFinite(x) || !Number.isFinite(y)) {
-          return {
-            content: [
-              {
-                type: 'text' as const,
-                text: JSON.stringify({ error: 'x and y must be finite numbers' }),
-              },
-            ],
-            isError: true,
-          };
+          return respondWithStructuredError(ErrorCode.INVALID_INPUT, 'x and y must be finite numbers');
         }
 
         const bridge = getAccessibilityBridge();
@@ -377,20 +370,11 @@ export function registerAppTapTool(server: MCPServer): void {
 
         if (!verification.verified) {
           base.verified = false;
-          return {
-            content: [
-              {
-                type: 'text' as const,
-                text: JSON.stringify({
-                  ...base,
-                  error: 'TAP_NO_EFFECT',
-                  message:
-                    'The tap was dispatched successfully, but no observable AX tree change was detected afterward.',
-                }),
-              },
-            ],
-            isError: true,
-          };
+          return respondWithStructuredError(
+            ErrorCode.APP_STATE_UNKNOWN,
+            'The tap was dispatched successfully, but no observable AX tree change was detected afterward.',
+            { ...base },
+          );
         }
 
         base.verified = true;
@@ -401,10 +385,7 @@ export function registerAppTapTool(server: MCPServer): void {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         console.error(`[app_tap] ${message}`);
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({ error: message }) }],
-          isError: true,
-        };
+        return respondWithStructuredError(ErrorCode.APP_STATE_UNKNOWN, message);
       }
     },
   );
@@ -418,50 +399,36 @@ function buildOutOfBoundsResponse(args: {
   deviceFrame: DeviceFrame | null;
   foregroundBefore: string;
 }) {
-  return {
-    content: [
-      {
-        type: 'text' as const,
-        text: JSON.stringify({
-          error: 'TAP_OUT_OF_BOUNDS',
-          message: args.boundsRejection.detail,
-          sideEffect: 'out_of_bounds',
-          reason: args.boundsRejection.reason,
-          x: args.x,
-          y: args.y,
-          deviceId: args.deviceId,
-          deviceFrame: args.deviceFrame,
-          foregroundBefore: args.foregroundBefore,
-          verified: false,
-          dispatched: false,
-        }),
-      },
-    ],
-    isError: true,
-  };
+  return respondWithStructuredError(
+    ErrorCode.INVALID_INPUT,
+    args.boundsRejection.detail,
+    {
+      sideEffect: 'out_of_bounds',
+      reason: args.boundsRejection.reason,
+      x: args.x,
+      y: args.y,
+      deviceId: args.deviceId,
+      deviceFrame: args.deviceFrame,
+      foregroundBefore: args.foregroundBefore,
+      verified: false,
+      dispatched: false,
+    },
+  );
 }
 
 function buildBackgroundedResponse(
   base: Record<string, unknown>,
   args: { recovered: boolean; expectedBundle?: string },
 ) {
-  return {
-    content: [
-      {
-        type: 'text' as const,
-        text: JSON.stringify({
-          ...base,
-          error: 'APP_BACKGROUNDED',
-          message:
-            'The tap dispatched successfully but the app left the foreground (SpringBoard or simulator chrome is now visible). ' +
-            'This usually means the coordinate was interpreted as a home-gesture swipe.',
-          recovered: args.recovered,
-          ...(args.expectedBundle ? { expectedBundle: args.expectedBundle } : {}),
-        }),
-      },
-    ],
-    isError: true,
-  };
+  return respondWithStructuredError(
+    ErrorCode.APP_STATE_UNKNOWN,
+    'The tap dispatched successfully but the app left the foreground (SpringBoard or simulator chrome is now visible). This usually means the coordinate was interpreted as a home-gesture swipe.',
+    {
+      ...base,
+      recovered: args.recovered,
+      ...(args.expectedBundle ? { expectedBundle: args.expectedBundle } : {}),
+    },
+  );
 }
 
 function resolveDeviceFrame(tree: AXNode | null): DeviceFrame | null {

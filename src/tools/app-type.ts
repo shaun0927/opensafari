@@ -7,6 +7,7 @@
 
 import { MCPServer, getWebKitClient } from '../mcp-server';
 import { resolveDeviceId, getInputBackend, runInputOp } from './native-input-utils';
+import { ErrorCode, respondWithStructuredError } from '../errors';
 
 export function registerAppTypeTextTool(server: MCPServer): void {
   server.registerTool(
@@ -35,15 +36,7 @@ export function registerAppTypeTextTool(server: MCPServer): void {
         const text = params.text as string;
 
         if (typeof text !== 'string' || text.length === 0) {
-          return {
-            content: [
-              {
-                type: 'text' as const,
-                text: JSON.stringify({ error: 'text must be a non-empty string' }),
-              },
-            ],
-            isError: true,
-          };
+          return respondWithStructuredError(ErrorCode.INVALID_INPUT, 'text must be a non-empty string');
         }
 
         const backend = await getInputBackend(deviceId, getWebKitClient(deviceId));
@@ -68,10 +61,7 @@ export function registerAppTypeTextTool(server: MCPServer): void {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         console.error(`[app_type_text] ${message}`);
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({ error: message }) }],
-          isError: true,
-        };
+        return respondWithStructuredError(ErrorCode.APP_STATE_UNKNOWN, message);
       }
     },
   );

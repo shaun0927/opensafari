@@ -6,6 +6,7 @@
 
 import { MCPServer, getWebKitClient } from '../mcp-server';
 import { resolveDeviceId, getInputBackend, runInputOp } from './native-input-utils';
+import { ErrorCode, respondWithStructuredError } from '../errors';
 
 /** Delay between the two taps (ms). 50 ms matches typical double-tap cadence. */
 const INTER_TAP_DELAY_MS = 50;
@@ -40,15 +41,7 @@ export function registerAppDoubleTapTool(server: MCPServer): void {
         const y = params.y as number;
 
         if (!Number.isFinite(x) || !Number.isFinite(y)) {
-          return {
-            content: [
-              {
-                type: 'text' as const,
-                text: JSON.stringify({ error: 'x and y must be finite numbers' }),
-              },
-            ],
-            isError: true,
-          };
+          return respondWithStructuredError(ErrorCode.INVALID_INPUT, 'x and y must be finite numbers');
         }
 
         const backend = await getInputBackend(deviceId, getWebKitClient(deviceId));
@@ -79,10 +72,7 @@ export function registerAppDoubleTapTool(server: MCPServer): void {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         console.error(`[app_double_tap] ${message}`);
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({ error: message }) }],
-          isError: true,
-        };
+        return respondWithStructuredError(ErrorCode.APP_STATE_UNKNOWN, message);
       }
     },
   );

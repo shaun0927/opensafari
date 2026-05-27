@@ -1,6 +1,7 @@
 import { MCPServer } from '../mcp-server';
 import { SimctlExecutor } from '../simulator/simctl';
 import { resolveDeviceId } from './native-app-utils';
+import { ErrorCode, respondWithStructuredError } from '../errors';
 import {
   captureLogsWindow,
   type CaptureLogsOptions,
@@ -70,10 +71,7 @@ export function registerAppOpenUrlTool(server: MCPServer): void {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         console.error(`[app_open_url] Error: ${message}`);
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({ error: message }) }],
-          isError: true,
-        };
+        return respondWithStructuredError(ErrorCode.APP_STATE_UNKNOWN, message);
       }
     },
   );

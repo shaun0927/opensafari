@@ -10,6 +10,7 @@ import { MCPServer, getWebKitClient } from '../mcp-server';
 import { resolveDeviceId, getInputBackend, runInputOp } from './native-input-utils';
 import { probeMobileContext } from './app-context';
 import { SimulatorManager } from '../simulator';
+import { ErrorCode, respondWithStructuredError } from '../errors';
 
 /** Default swipe distance in points. */
 const DEFAULT_DISTANCE = 300;
@@ -112,17 +113,7 @@ export function registerAppSwipeNativeTool(server: MCPServer): void {
 
         const validDirections: Direction[] = ['up', 'down', 'left', 'right'];
         if (!validDirections.includes(direction)) {
-          return {
-            content: [
-              {
-                type: 'text' as const,
-                text: JSON.stringify({
-                  error: `Invalid direction "${direction}". Must be one of: ${validDirections.join(', ')}`,
-                }),
-              },
-            ],
-            isError: true,
-          };
+          return respondWithStructuredError(ErrorCode.INVALID_INPUT, `Invalid direction "${direction}". Must be one of: ${validDirections.join(', ')}`);
         }
 
         const { endX, endY } = calculateEndpoint(startX, startY, direction, distance);
@@ -182,10 +173,7 @@ export function registerAppSwipeNativeTool(server: MCPServer): void {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         console.error(`[app_swipe_native] ${message}`);
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({ error: message }) }],
-          isError: true,
-        };
+        return respondWithStructuredError(ErrorCode.APP_STATE_UNKNOWN, message);
       }
     },
   );
