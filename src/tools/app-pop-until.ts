@@ -168,6 +168,28 @@ function parsePostcondition(raw: unknown): PostconditionSpec | null {
   return spec;
 }
 
+function hasAxPostconditionSignal(spec: PostconditionSpec | null): spec is PostconditionSpec {
+  return !!(spec?.identifier || spec?.label || spec?.text || spec?.role);
+}
+
+function nativePostconditionForVmState(
+  spec: PostconditionSpec | null,
+  vmConnected: boolean,
+): { postSpec: PostconditionSpec | null; error?: string } {
+  if (!spec) return { postSpec: null };
+  if (vmConnected || !spec.route) return { postSpec: spec };
+  if (!hasAxPostconditionSignal(spec)) {
+    return {
+      postSpec: null,
+      error:
+        'Native fallback without Flutter VM cannot verify a route-only postcondition; provide identifier, label, text, or role.',
+    };
+  }
+  const axSpec = { ...spec };
+  delete axSpec.route;
+  return { postSpec: axSpec };
+}
+
 async function verifyAxPostcondition(
   deviceId: string,
   spec: PostconditionSpec,
@@ -721,18 +743,23 @@ export function registerAppPopUntilTool(server: MCPServer): void {
       }
 
       // ── Native fallback path ────────────────────────────────────────────
-      // Native fallback for until=first/route REQUIRES a postcondition —
-      // without it we have no signal that "we landed on the right screen".
-      if (target.until !== 'count' && !postSpec) {
+      const nativePost = nativePostconditionForVmState(postSpec, vmConnected);
+
+      // Native fallback for until=first/route REQUIRES a verifiable
+      // postcondition — without it we have no signal that "we landed on
+      // the right screen". Route-only verification still requires VM; in
+      // non-VM contexts callers must provide an AX signal.
+      if (target.until !== 'count' && (!nativePost.postSpec || nativePost.error)) {
         return respondWithStructuredError(
           ErrorCode.MISSING_POSTCONDITION,
-          'Native fallback for until=first/route requires a postcondition (route or AX query).',
+          nativePost.error
+            ?? 'Native fallback for until=first/route requires a postcondition (route or AX query).',
           {
             target,
             vmConnected,
             hint: vmConnected
               ? 'forceFallback was true; supply a postcondition or remove forceFallback.'
-              : 'Connect Flutter VM via flutter_connect, or supply a postcondition for AX verification.',
+              : 'Connect Flutter VM via flutter_connect, or supply identifier, label, text, or role for AX verification.',
           },
         );
       }
@@ -741,7 +768,7 @@ export function registerAppPopUntilTool(server: MCPServer): void {
       // postcondition so the ladder driver short-circuits after `count`
       // successful dispatches.
       const effectivePost: PostconditionSpec =
-        postSpec ?? { identifier: '__opensafari_pop_until_count_synthetic__' };
+        nativePost.postSpec ?? { identifier: '__opensafari_pop_until_count_synthetic__' };
       const result = await runNativeFallback({
         deviceId,
         target,
@@ -797,6 +824,8 @@ export const __forTests = {
   buildExpression,
   parsePopResult,
   parsePostcondition,
+  hasAxPostconditionSignal,
+  nativePostconditionForVmState,
   verifyAxPostcondition,
   verifyRoutePostcondition,
   buildRoutePostconditionExpression,
