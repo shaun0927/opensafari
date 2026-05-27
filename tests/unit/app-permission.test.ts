@@ -72,7 +72,7 @@ describe('app_permission tools', () => {
       const result = await handler('test', { permission: 'bluetooth', action: 'grant', bundleId: 'com.example.app' });
       expect(result.isError).toBe(true);
       const text = JSON.parse((result.content as ToolContent[])[0].text);
-      expect(text.error).toBe('INVALID_PERMISSION');
+      expect(text.error).toBe('INVALID_INPUT');
     });
 
     test('rejects invalid action', async () => {
@@ -80,7 +80,7 @@ describe('app_permission tools', () => {
       const result = await handler('test', { permission: 'camera', action: 'delete', bundleId: 'com.example.app' });
       expect(result.isError).toBe(true);
       const text = JSON.parse((result.content as ToolContent[])[0].text);
-      expect(text.error).toBe('INVALID_ACTION');
+      expect(text.error).toBe('INVALID_INPUT');
     });
   });
 

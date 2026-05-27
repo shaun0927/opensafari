@@ -148,7 +148,8 @@ describe('app_context tool', () => {
 
     expect(result.isError).toBe(true);
     const body = JSON.parse(result.content[0].text);
-    expect(body.error).toBe('EXPECTED_BUNDLE_MISMATCH');
+    expect(body.error).toBe('APP_STATE_UNKNOWN');
+    expect(body.message).toContain('Expected bundle')
     expect(body.surface).toBe('springboard_like');
   });
 });

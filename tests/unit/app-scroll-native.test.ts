@@ -147,7 +147,7 @@ describe('app_scroll_native', () => {
     const result = await toolHandler('s1', { direction: 'up' }) as { isError: boolean; content: { text: string }[] };
     expect(result.isError).toBe(true);
     const body = JSON.parse(result.content[0].text);
-    expect(body.error).toBe('DEVICE_NOT_FOUND');
+    expect(body.error).toBe('DEVICE_NOT_BOOTED');
   });
 
   // --- Error: invalid direction ---
@@ -156,7 +156,8 @@ describe('app_scroll_native', () => {
     const result = await toolHandler('s1', { direction: 'diagonal' }) as { isError: boolean; content: { text: string }[] };
     expect(result.isError).toBe(true);
     const body = JSON.parse(result.content[0].text);
-    expect(body.error).toContain('Invalid direction');
+    expect(body.error).toBe('INVALID_INPUT');
+    expect(body.message).toContain('Invalid direction');
   });
 
   // --- Error: simctl failure ---
@@ -166,7 +167,8 @@ describe('app_scroll_native', () => {
     const result = await toolHandler('s1', { direction: 'up' }) as { isError: boolean; content: { text: string }[] };
     expect(result.isError).toBe(true);
     const body = JSON.parse(result.content[0].text);
-    expect(body.error).toContain('simctl io failed');
+    expect(body.error).toBe('APP_STATE_UNKNOWN');
+    expect(body.message).toContain('simctl io failed');
   });
 });
 

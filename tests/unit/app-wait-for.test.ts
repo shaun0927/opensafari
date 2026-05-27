@@ -154,7 +154,8 @@ describe('app_wait_for', () => {
     const body = JSON.parse(result.content[0].text);
 
     expect(result.isError).toBe(true);
-    expect(body.error).toBe('Timeout waiting for element');
+    expect(body.error).toBe('APP_STATE_UNKNOWN');
+    expect(body.message).toBe('Timeout waiting for element');
     expect(body.timeout).toBe(500);
 
     jest.useRealTimers();
@@ -346,7 +347,8 @@ describe('app_assert_element', () => {
     const body = JSON.parse(result.content[0].text);
 
     expect(result.isError).toBe(true);
-    expect(body.error).toContain('expected_text is required');
+    expect(body.error).toBe('INVALID_INPUT');
+    expect(body.message).toContain('expected_text is required');
   });
 
   it('includes custom message in result', async () => {
