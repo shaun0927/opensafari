@@ -16,9 +16,10 @@
  * MCP tool response shape ready to return from a handler.
  */
 
+import type { MCPResult } from '../types/mcp';
 import { ErrorCode, ERROR_CATALOG, type StructuredError } from './codes';
 
-export interface McpToolErrorResponse {
+export interface McpToolErrorResponse extends MCPResult {
   content: Array<{ type: 'text'; text: string }>;
   isError: true;
 }
@@ -60,11 +61,11 @@ export class StructuredErrorException extends Error implements StructuredError {
       content: [{
         type: 'text',
         text: JSON.stringify({
+          ...(extra ?? {}),
           error: this.code,
           message: this.message,
           recoverable: this.recoverable,
           suggestion: this.suggestion,
-          ...(extra ?? {}),
         }),
       }],
       isError: true,
