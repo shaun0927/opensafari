@@ -168,6 +168,28 @@ function parsePostcondition(raw: unknown): PostconditionSpec | null {
   return spec;
 }
 
+function hasAxPostconditionSignal(spec: PostconditionSpec | null): spec is PostconditionSpec {
+  return !!(spec?.identifier || spec?.label || spec?.text || spec?.role);
+}
+
+function nativePostconditionForVmState(
+  spec: PostconditionSpec | null,
+  vmConnected: boolean,
+): { postSpec: PostconditionSpec | null; error?: string } {
+  if (!spec) return { postSpec: null };
+  if (vmConnected || !spec.route) return { postSpec: spec };
+  if (!hasAxPostconditionSignal(spec)) {
+    return {
+      postSpec: null,
+      error:
+        'Native fallback without Flutter VM cannot verify a route-only postcondition; provide identifier, label, text, or role.',
+    };
+  }
+  const axSpec = { ...spec };
+  delete axSpec.route;
+  return { postSpec: axSpec };
+}
+
 async function verifyAxPostcondition(
   deviceId: string,
   spec: PostconditionSpec,
@@ -231,6 +253,39 @@ async function verifyAxPostcondition(
   };
 }
 
+function buildRoutePostconditionExpression(routeName: string): string {
+  const escaped = routeName.replace(/'/g, "\\'");
+  return `
+(() {
+  try {
+    final binding = WidgetsBinding.instance;
+    final root = binding.rootElement;
+    if (root == null) return 'opensafari_route:no_root';
+
+    String? name;
+    void visit(Element el) {
+      if (name != null) return;
+      final type = el.widget.runtimeType.toString();
+      if (type == '_ModalScopeStatus') {
+        final s = el.toString();
+        final match = RegExp(r'name:\\s*"([^"]+)"').firstMatch(s)
+            ?? RegExp(r"name:\\s*'([^']+)'").firstMatch(s)
+            ?? RegExp(r'RouteSettings\\("([^"]+)"').firstMatch(s);
+        if (match != null) name = match.group(1);
+      }
+      el.visitChildren(visit);
+    }
+    visit(root);
+
+    if (name == '${escaped}') return 'opensafari_route:ok';
+    return 'opensafari_route:mismatch:' + (name ?? 'null').toString();
+  } catch (e) {
+    return 'opensafari_route:error:' + e.toString().replaceAll(':', '_');
+  }
+})()
+`.replace(/\s+/g, ' ').trim();
+}
+
 async function verifyRoutePostcondition(
   deviceId: string,
   routeName: string,
@@ -242,22 +297,7 @@ async function verifyRoutePostcondition(
   const deadline = start + Math.max(0, Math.floor(budgetMs));
   let polls = 0;
   let lastError: string | undefined;
-  const escaped = routeName.replace(/'/g, "\\'");
-  const expr = `
-(() {
-  try {
-    final binding = WidgetsBinding.instance;
-    final root = binding.rootElement;
-    if (root == null) return 'opensafari_route:no_root';
-    final modal = ModalRoute.of(root);
-    final name = modal?.settings.name;
-    if (name == '${escaped}') return 'opensafari_route:ok';
-    return 'opensafari_route:mismatch:' + (name ?? 'null').toString();
-  } catch (e) {
-    return 'opensafari_route:error:' + e.toString().replaceAll(':', '_');
-  }
-})()
-`.replace(/\s+/g, ' ').trim();
+  const expr = buildRoutePostconditionExpression(routeName);
   while (Date.now() <= deadline) {
     polls++;
     try {
@@ -703,18 +743,23 @@ export function registerAppPopUntilTool(server: MCPServer): void {
       }
 
       // ── Native fallback path ────────────────────────────────────────────
-      // Native fallback for until=first/route REQUIRES a postcondition —
-      // without it we have no signal that "we landed on the right screen".
-      if (target.until !== 'count' && !postSpec) {
+      const nativePost = nativePostconditionForVmState(postSpec, vmConnected);
+
+      // Native fallback for until=first/route REQUIRES a verifiable
+      // postcondition — without it we have no signal that "we landed on
+      // the right screen". Route-only verification still requires VM; in
+      // non-VM contexts callers must provide an AX signal.
+      if (target.until !== 'count' && (!nativePost.postSpec || nativePost.error)) {
         return respondWithStructuredError(
           ErrorCode.MISSING_POSTCONDITION,
-          'Native fallback for until=first/route requires a postcondition (route or AX query).',
+          nativePost.error
+            ?? 'Native fallback for until=first/route requires a postcondition (route or AX query).',
           {
             target,
             vmConnected,
             hint: vmConnected
               ? 'forceFallback was true; supply a postcondition or remove forceFallback.'
-              : 'Connect Flutter VM via flutter_connect, or supply a postcondition for AX verification.',
+              : 'Connect Flutter VM via flutter_connect, or supply identifier, label, text, or role for AX verification.',
           },
         );
       }
@@ -723,7 +768,7 @@ export function registerAppPopUntilTool(server: MCPServer): void {
       // postcondition so the ladder driver short-circuits after `count`
       // successful dispatches.
       const effectivePost: PostconditionSpec =
-        postSpec ?? { identifier: '__opensafari_pop_until_count_synthetic__' };
+        nativePost.postSpec ?? { identifier: '__opensafari_pop_until_count_synthetic__' };
       const result = await runNativeFallback({
         deviceId,
         target,
@@ -779,8 +824,11 @@ export const __forTests = {
   buildExpression,
   parsePopResult,
   parsePostcondition,
+  hasAxPostconditionSignal,
+  nativePostconditionForVmState,
   verifyAxPostcondition,
   verifyRoutePostcondition,
+  buildRoutePostconditionExpression,
   dispatchNativeBack,
   findBackAffordance,
   runNativeFallback,

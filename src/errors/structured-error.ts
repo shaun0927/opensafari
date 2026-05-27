@@ -61,11 +61,11 @@ export class StructuredErrorException extends Error implements StructuredError {
       content: [{
         type: 'text',
         text: JSON.stringify({
+          ...(extra ?? {}),
           error: this.code,
           message: this.message,
           recoverable: this.recoverable,
           suggestion: this.suggestion,
-          ...(extra ?? {}),
         }),
       }],
       isError: true,
