@@ -20,6 +20,10 @@ import { getSessionManager } from '../session-manager';
 import { getAccessibilityBridge } from '../native';
 import { getInputBackend } from './native-input-utils';
 import { ErrorCode, respondWithStructuredError } from '../errors';
+import {
+  wrapHandlerForBundle,
+  COLLECT_DEBUG_BUNDLE_ON_FAILURE_SCHEMA,
+} from './debug-bundle-attach';
 
 const MODES = ['auto', 'drawer', 'bottom_sheet', 'dialog'] as const;
 type OverlayMode = (typeof MODES)[number];
@@ -169,11 +173,12 @@ export function registerAppDismissOverlayTool(server: MCPServer): void {
             type: 'boolean',
             description: 'When false, a failed optional postcondition is reported as verified=false without setting isError. Default true when a postcondition is supplied.',
           },
+          collectDebugBundleOnFailure: COLLECT_DEBUG_BUNDLE_ON_FAILURE_SCHEMA,
         },
         required: [],
       },
     },
-    async (_sessionId: string, params: Record<string, unknown>) => {
+    wrapHandlerForBundle('app_dismiss_overlay', async (_sessionId: string, params: Record<string, unknown>) => {
       const mode = ((params.mode as string | undefined) ?? 'auto') as OverlayMode;
       if (!MODES.includes(mode)) {
         return respondWithStructuredError(ErrorCode.INVALID_INPUT, 'Invalid mode', { allowed: MODES });
@@ -278,6 +283,6 @@ export function registerAppDismissOverlayTool(server: MCPServer): void {
         const message = err instanceof Error ? err.message : String(err);
         return respondWithStructuredError(ErrorCode.OVERLAY_DISMISS_FAILED, message, { mode });
       }
-    },
+    }),
   );
 }

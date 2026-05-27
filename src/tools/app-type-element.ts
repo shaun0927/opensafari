@@ -39,6 +39,10 @@ import { promisify } from 'util';
 
 import { MCPServer, getWebKitClient } from '../mcp-server';
 import { ErrorCode, respondWithStructuredError } from '../errors';
+import {
+  wrapHandlerForBundle,
+  COLLECT_DEBUG_BUNDLE_ON_FAILURE_SCHEMA,
+} from './debug-bundle-attach';
 import { getAccessibilityBridge, ensureSemanticsActive } from '../native';
 import type { AXNode, AXQuery } from '../native';
 import { resolveDeviceId, getInputBackend, runInputOp } from './native-input-utils';
@@ -159,11 +163,12 @@ export function registerAppTypeElementTool(server: MCPServer): void {
             description:
               'When backend resolves to simhid (HID keyboard): inserts an inter-character pause between consecutive key sends. Default 0 (no pause). Required for segmented OTP-style fields (e.g. 6-cell verify-code inputs in Flutter) that drop characters when keys arrive faster than the field can advance focus. Recommended: 80–150 ms for 6-digit OTP inputs.',
           },
+          collectDebugBundleOnFailure: COLLECT_DEBUG_BUNDLE_ON_FAILURE_SCHEMA,
         },
         required: ['text'],
       },
     },
-    async (_sessionId: string, params: Record<string, unknown>) => {
+    wrapHandlerForBundle('app_type_element', async (_sessionId: string, params: Record<string, unknown>) => {
       const textToType = params.text as string | undefined;
       const identifier = params.identifier as string | undefined;
       const label = params.label as string | undefined;
@@ -474,7 +479,7 @@ export function registerAppTypeElementTool(server: MCPServer): void {
         console.error(`[app_type_element] ${message}`);
         return respondWithStructuredError(ErrorCode.APP_STATE_UNKNOWN, message);
       }
-    },
+    }),
   );
 }
 

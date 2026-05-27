@@ -14,6 +14,10 @@ import {
   isLikelyChromeOnlyTree,
 } from '../native';
 import { ErrorCode, respondWithStructuredError } from '../errors';
+import {
+  wrapHandlerForBundle,
+  COLLECT_DEBUG_BUNDLE_ON_FAILURE_SCHEMA,
+} from './debug-bundle-attach';
 import type { AXNode, AXPressResponse, AXQueryResult } from '../native';
 import type { AccessibilityBridge } from '../native/accessibility-bridge';
 import { walkTree, fingerprintTree } from '../native/ax-verification';
@@ -113,11 +117,12 @@ export function registerAppTapElementTool(server: MCPServer): void {
             description:
               'When the primary identifier/label/text/role query misses, retry with a relaxed `text` substring built from all provided query fields. Catches the common case where the desired string lives in `value` rather than `label`. Default false.',
           },
+          collectDebugBundleOnFailure: COLLECT_DEBUG_BUNDLE_ON_FAILURE_SCHEMA,
         },
         required: [],
       },
     },
-    async (_sessionId: string, params: Record<string, unknown>) => {
+    wrapHandlerForBundle('app_tap_element', async (_sessionId: string, params: Record<string, unknown>) => {
       const identifier = params.identifier as string | undefined;
       const label = params.label as string | undefined;
       const text = params.text as string | undefined;
@@ -589,7 +594,7 @@ export function registerAppTapElementTool(server: MCPServer): void {
         console.error(`[app_tap_element] ${message}`);
         return respondWithStructuredError(ErrorCode.APP_STATE_UNKNOWN, message);
       }
-    },
+    }),
   );
 }
 

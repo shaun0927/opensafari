@@ -27,6 +27,10 @@ import { getSessionManager } from '../session-manager';
 import { SimulatorManager } from '../simulator';
 import { getAccessibilityBridge, ensureSemanticsActive } from '../native';
 import { ErrorCode, respondWithStructuredError } from '../errors';
+import {
+  wrapHandlerForBundle,
+  COLLECT_DEBUG_BUNDLE_ON_FAILURE_SCHEMA,
+} from './debug-bundle-attach';
 
 const execFileAsync = promisify(execFile);
 
@@ -106,11 +110,12 @@ export function registerAppGotoScreenTool(server: MCPServer): void {
           },
           bundleId: { type: 'string', description: 'Target app bundle ID (forces ensureSemanticsActive scope)' },
           deviceId: { type: 'string' },
+          collectDebugBundleOnFailure: COLLECT_DEBUG_BUNDLE_ON_FAILURE_SCHEMA,
         },
         required: ['url'],
       },
     },
-    async (_sessionId: string, params: Record<string, unknown>) => {
+    wrapHandlerForBundle('app_goto_screen', async (_sessionId: string, params: Record<string, unknown>) => {
       const url = params.url as string | undefined;
       if (!url || !url.includes('://')) {
         return respondWithStructuredError(ErrorCode.INVALID_URL, 'url must include a scheme');
@@ -170,6 +175,6 @@ export function registerAppGotoScreenTool(server: MCPServer): void {
         }],
         isError: !verdict.matched,
       };
-    },
+    }),
   );
 }

@@ -37,6 +37,10 @@ import {
   ErrorCode,
   respondWithStructuredError,
 } from '../errors';
+import {
+  wrapHandlerForBundle,
+  COLLECT_DEBUG_BUNDLE_ON_FAILURE_SCHEMA,
+} from './debug-bundle-attach';
 
 type PopUntil =
   | { until: 'first' }
@@ -602,11 +606,12 @@ export function registerAppPopUntilTool(server: MCPServer): void {
             type: 'boolean',
             description: 'Skip the Flutter VM path even when it is connected. Useful for testing the native ladder in apps that also expose a VM.',
           },
+          collectDebugBundleOnFailure: COLLECT_DEBUG_BUNDLE_ON_FAILURE_SCHEMA,
         },
         required: ['until'],
       },
     },
-    async (_sessionId: string, params: Record<string, unknown>) => {
+    wrapHandlerForBundle('app_pop_until', async (_sessionId: string, params: Record<string, unknown>) => {
       const until = params.until as 'first' | 'route' | 'count' | undefined;
       if (!until || !['first', 'route', 'count'].includes(until)) {
         return respondWithStructuredError(
@@ -816,7 +821,7 @@ export function registerAppPopUntilTool(server: MCPServer): void {
         content: [{ type: 'text' as const, text: JSON.stringify(body) }],
         ...(overallOk ? {} : { isError: true as const }),
       };
-    },
+    }),
   );
 }
 
