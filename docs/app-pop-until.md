@@ -42,8 +42,9 @@ screen state before reporting success.
 
 At least one of `identifier`/`label`/`text`/`role`/`route` must be supplied
 inside `postcondition` when the field is present. `route` requires an
-active Flutter VM connection; the other four are AX-bridge queries that
-work in both VM and native contexts.
+active Flutter VM connection; in non-VM native fallback contexts provide
+`identifier`, `label`, `text`, or `role` so AX can verify the screen. The
+AX fields work in both VM and native contexts.
 
 ## Response shape
 
