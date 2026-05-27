@@ -19,6 +19,7 @@ import { MCPServer, getWebKitClient } from '../mcp-server';
 import { getSessionManager } from '../session-manager';
 import { getAccessibilityBridge } from '../native';
 import { getInputBackend } from './native-input-utils';
+import { ErrorCode, respondWithStructuredError } from '../errors';
 
 const MODES = ['auto', 'drawer', 'bottom_sheet', 'dialog'] as const;
 type OverlayMode = (typeof MODES)[number];
@@ -175,39 +176,21 @@ export function registerAppDismissOverlayTool(server: MCPServer): void {
     async (_sessionId: string, params: Record<string, unknown>) => {
       const mode = ((params.mode as string | undefined) ?? 'auto') as OverlayMode;
       if (!MODES.includes(mode)) {
-        return {
-          content: [{
-            type: 'text' as const,
-            text: JSON.stringify({ error: 'INVALID_MODE', allowed: MODES }),
-          }],
-          isError: true,
-        };
+        return respondWithStructuredError(ErrorCode.INVALID_INPUT, 'Invalid mode', { allowed: MODES });
       }
       const deviceId = await resolveDeviceId(params.deviceId as string | undefined);
       if (!deviceId) {
-        return {
-          content: [{
-            type: 'text' as const,
-            text: JSON.stringify({ error: 'DEVICE_NOT_BOOTED' }),
-          }],
-          isError: true,
-        };
+        return respondWithStructuredError(ErrorCode.DEVICE_NOT_BOOTED, 'No booted simulator found');
       }
 
       let verificationRequest: ReturnType<typeof parseVerification>;
       try {
         verificationRequest = parseVerification(params);
       } catch (err) {
-        return {
-          content: [{
-            type: 'text' as const,
-            text: JSON.stringify({
-              error: 'INVALID_VERIFICATION',
-              message: err instanceof Error ? err.message : String(err),
-            }),
-          }],
-          isError: true,
-        };
+        return respondWithStructuredError(
+          ErrorCode.INVALID_INPUT,
+          err instanceof Error ? err.message : String(err),
+        );
       }
 
       try {
@@ -293,13 +276,7 @@ export function registerAppDismissOverlayTool(server: MCPServer): void {
         };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        return {
-          content: [{
-            type: 'text' as const,
-            text: JSON.stringify({ error: 'DISMISS_FAILED', mode, message }),
-          }],
-          isError: true,
-        };
+        return respondWithStructuredError(ErrorCode.OVERLAY_DISMISS_FAILED, message, { mode });
       }
     },
   );
