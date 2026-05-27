@@ -7,3 +7,4 @@ export {
   toMcpErrorResponse,
 } from './structured-error';
 export type { McpToolErrorResponse } from './structured-error';
+export { respondWithStructuredError } from './respond';
