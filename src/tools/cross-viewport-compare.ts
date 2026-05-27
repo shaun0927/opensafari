@@ -1,5 +1,6 @@
 import { MCPServer } from '../mcp-server';
 import { formatForClaudeVision, MCPContent } from '../comparison/report';
+import { ErrorCode, respondWithStructuredError } from '../errors';
 
 let capturer: any = null;
 export function setCrossViewportCapture(c: any): void {
@@ -25,7 +26,7 @@ export function registerCrossViewportCompareTool(server: MCPServer): void {
     },
     async (_sessionId: string, params: Record<string, unknown>) => {
       if (!capturer)
-        return { content: [{ type: 'text' as const, text: 'Error: Cross-viewport capture not initialized' }], isError: true };
+        return respondWithStructuredError(ErrorCode.APP_STATE_UNKNOWN, 'Cross-viewport capture not initialized');
       const captures = await capturer.capture(params.url as string, {
         waitUntil: params.waitUntil as any,
         settleTime: params.settleTime as number | undefined,

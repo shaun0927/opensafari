@@ -1,5 +1,6 @@
 import { MCPServer, getWebKitClient } from '../mcp-server';
 import { getNetworkInterceptorForSession } from './network-intercept';
+import { ErrorCode, respondWithStructuredError } from '../errors';
 
 export function registerNetworkOfflineTool(server: MCPServer): void {
   server.registerTool(
@@ -19,7 +20,7 @@ export function registerNetworkOfflineTool(server: MCPServer): void {
       const deviceId = typeof params.device_id === 'string' ? params.device_id : undefined;
       const client = getWebKitClient(deviceId);
       if (!client)
-        return { content: [{ type: 'text' as const, text: 'Error: Safari not connected' }], isError: true };
+        return respondWithStructuredError(ErrorCode.BACKEND_NOT_CONNECTED, 'Safari not connected');
       const enabled = params.enabled as boolean;
       // Pass deviceId so the offline toggle targets the per-device interceptor
       // and does not bleed state across simulators in multi-device sessions

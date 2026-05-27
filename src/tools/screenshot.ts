@@ -1,6 +1,7 @@
 import { MCPServer } from '../mcp-server';
 import { SimulatorManager } from '../simulator';
 import { resolveClient, sessionNotFoundError, noClientError } from './client-resolver';
+import { ErrorCode, respondWithStructuredError } from '../errors';
 
 export function registerScreenshotTool(server: MCPServer): void {
   server.registerTool(
@@ -46,7 +47,7 @@ export function registerScreenshotTool(server: MCPServer): void {
         const manager = new SimulatorManager();
         const booted = await manager.listBooted();
         if (booted.length === 0) {
-          return { content: [{ type: 'text' as const, text: 'Error: No booted simulator for screenshot fallback' }], isError: true };
+          return respondWithStructuredError(ErrorCode.DEVICE_NOT_BOOTED, 'No booted simulator for screenshot fallback');
         }
         buffer = await manager.screenshot(booted[0].udid);
       }

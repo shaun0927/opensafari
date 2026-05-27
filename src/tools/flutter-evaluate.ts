@@ -18,6 +18,7 @@
 import { MCPServer } from '../mcp-server';
 import { getFlutterVMClient } from '../flutter';
 import { getSessionManager } from '../session-manager';
+import { ErrorCode, respondWithStructuredError } from '../errors';
 
 type EvalScope = 'root' | 'frame';
 
@@ -118,10 +119,7 @@ export function registerFlutterEvaluateTool(server: MCPServer): void {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         console.error(`[flutter_evaluate] ${message}`);
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({ error: message }) }],
-          isError: true,
-        };
+        return respondWithStructuredError(ErrorCode.FLUTTER_EVAL_FAILED, message);
       }
     },
   );

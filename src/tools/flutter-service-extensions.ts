@@ -14,6 +14,7 @@
 import { MCPServer } from '../mcp-server';
 import { getFlutterVMClient } from '../flutter';
 import { getSessionManager } from '../session-manager';
+import { ErrorCode, respondWithStructuredError } from '../errors';
 
 async function resolveClient(paramDeviceId: unknown) {
   const deviceId =
@@ -92,10 +93,7 @@ export function registerFlutterListServiceExtensionsTool(server: MCPServer): voi
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         console.error(`[flutter_list_service_extensions] ${message}`);
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({ error: message }) }],
-          isError: true,
-        };
+        return respondWithStructuredError(ErrorCode.FLUTTER_VM_NOT_CONNECTED, message);
       }
     },
   );
@@ -191,10 +189,7 @@ export function registerFlutterCallServiceExtensionTool(server: MCPServer): void
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         console.error(`[flutter_call_service_extension] ${message}`);
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({ error: message }) }],
-          isError: true,
-        };
+        return respondWithStructuredError(ErrorCode.FLUTTER_EVAL_FAILED, message);
       }
     },
   );

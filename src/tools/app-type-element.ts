@@ -313,23 +313,18 @@ export function registerAppTypeElementTool(server: MCPServer): void {
           } catch (err) {
             if (err instanceof Error && (err as unknown as PasteNotAppliedError).code === 'PASTE_NOT_APPLIED') {
               const e = err as unknown as PasteNotAppliedError;
-              return {
-                content: [
-                  {
-                    type: 'text' as const,
-                    text: JSON.stringify({
-                      error: 'PASTE_NOT_APPLIED',
-                      code: e.code,
-                      expected: e.expected,
-                      actual: e.actual,
-                      permissionDialogObserved: e.permissionDialogObserved,
-                      element: elementDescriptor,
-                      deviceId,
-                    }),
-                  },
-                ],
-                isError: true,
-              };
+              return respondWithStructuredError(
+                ErrorCode.APP_STATE_UNKNOWN,
+                'Paste not applied',
+                {
+                  code: e.code,
+                  expected: e.expected,
+                  actual: e.actual,
+                  permissionDialogObserved: e.permissionDialogObserved,
+                  element: elementDescriptor,
+                  deviceId,
+                },
+              );
             }
             throw err;
           }

@@ -1,5 +1,6 @@
 import { MCPServer } from '../mcp-server';
 import { SimulatorWorkflowEngine } from '../orchestration/workflow-engine';
+import { ErrorCode, respondWithStructuredError } from '../errors';
 
 let engine: SimulatorWorkflowEngine | null = null;
 
@@ -7,8 +8,8 @@ export function setWorkflowEngine(e: SimulatorWorkflowEngine): void {
   engine = e;
 }
 
-function errorResult(msg: string) {
-  return { content: [{ type: 'text' as const, text: `Error: ${msg}` }], isError: true as const };
+function errorResult(msg: string, code = ErrorCode.APP_STATE_UNKNOWN) {
+  return respondWithStructuredError(code, msg);
 }
 
 function jsonResult(data: unknown) {

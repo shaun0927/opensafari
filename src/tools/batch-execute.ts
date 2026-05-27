@@ -1,5 +1,6 @@
 import { MCPServer } from '../mcp-server';
 import { BatchExecutor } from '../simulator/batch';
+import { ErrorCode, respondWithStructuredError } from '../errors';
 
 let batchExecutor: BatchExecutor | null = null;
 
@@ -21,7 +22,7 @@ export function registerBatchExecuteTool(server: MCPServer): void {
       },
     },
     async (_sessionId: string, params: Record<string, unknown>) => {
-      if (!batchExecutor) return { content: [{ type: 'text' as const, text: 'Error: No simulator pool active' }], isError: true };
+      if (!batchExecutor) return respondWithStructuredError(ErrorCode.DEVICE_NOT_BOOTED, 'No simulator pool active');
       const results = await batchExecutor.batchExecute(params.expression as string);
       return { content: [{ type: 'text' as const, text: JSON.stringify(results, null, 2) }] };
     },
