@@ -96,13 +96,21 @@ describe('respondWithStructuredError helper (#797 PR1)', () => {
     const response = respondWithStructuredError(
       ErrorCode.MISSING_REQUIRED_PARAM,
       'name is required',
-      // toMcpResponse spreads extras AFTER canonical keys, so extras win —
-      // this is intentional (lets tools enrich) but we still pin the
-      // typical case where no override is provided.
-      { context: 'app_pop_until' },
+      {
+        error: 'AD_HOC_ERROR',
+        message: 'wrong message',
+        recoverable: false,
+        suggestion: 'wrong suggestion',
+        context: 'app_pop_until',
+      },
     );
     const payload = JSON.parse(response.content[0].text);
-    expect(payload.error).toBe(ErrorCode.MISSING_REQUIRED_PARAM);
-    expect(payload.context).toBe('app_pop_until');
+    expect(payload).toMatchObject({
+      error: ErrorCode.MISSING_REQUIRED_PARAM,
+      message: 'name is required',
+      recoverable: true,
+      suggestion: ERROR_CATALOG[ErrorCode.MISSING_REQUIRED_PARAM].suggestion,
+      context: 'app_pop_until',
+    });
   });
 });

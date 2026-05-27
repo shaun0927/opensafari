@@ -8,6 +8,10 @@
  * real simulator.
  */
 
+import { __forTests } from '../../src/tools/app-pop-until';
+
+const { nativePostconditionForVmState } = __forTests;
+
 function mockBridge(matchesByQuery: Array<{ q: Record<string, unknown>; matches: unknown[] }>) {
   return {
     query: jest.fn(async (q: Record<string, unknown>) => {
@@ -31,6 +35,27 @@ function mockBackend(opts?: { failSwipe?: boolean; failKey?: boolean; tapImpl?: 
     typeText: jest.fn(async () => undefined),
   };
 }
+
+
+describe('app_pop_until native postcondition normalization (#801 PR2)', () => {
+  it('rejects route-only postconditions when the Flutter VM is unavailable', () => {
+    const result = nativePostconditionForVmState({ route: '/home' }, false);
+    expect(result.postSpec).toBeNull();
+    expect(result.error).toMatch(/route-only/);
+  });
+
+  it('uses AX signals and drops route verification when VM is unavailable', () => {
+    const result = nativePostconditionForVmState({ route: '/home', identifier: 'home_tab' }, false);
+    expect(result.error).toBeUndefined();
+    expect(result.postSpec).toEqual({ identifier: 'home_tab' });
+  });
+
+  it('keeps route verification available when VM is connected during forceFallback', () => {
+    const result = nativePostconditionForVmState({ route: '/home' }, true);
+    expect(result.error).toBeUndefined();
+    expect(result.postSpec).toEqual({ route: '/home' });
+  });
+});
 
 describe('app_pop_until findBackAffordance (#801 PR2)', () => {
   it('returns the centre of the first identifier-hint match', async () => {
