@@ -102,8 +102,14 @@ interface BridgeResponse {
 }
 
 async function runBridge(args: string[]): Promise<BridgeResponse> {
+  // For tap/swipe the wrapper performs a post-dispatch probeContext flow
+  // (sleep + ax-bridge spawn) that can take 15-30s on GitHub-hosted macOS
+  // runners under load. The previous 10s budget consistently timed out the
+  // wrapper mid-probe, surfacing as "Command failed: ... tap" with no useful
+  // stderr. 60s covers the wrapper's own 15s execNative + 15s ax-bridge
+  // timeouts plus settle, while still failing fast on a truly hung bridge.
   const { stdout } = await execFileAsync(BRIDGE_PATH, args, {
-    timeout: 10_000,
+    timeout: 60_000,
   });
   return JSON.parse(stdout) as BridgeResponse;
 }
