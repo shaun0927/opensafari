@@ -24,6 +24,7 @@ import { promisify } from 'util';
 import { MCPServer } from '../mcp-server';
 import { getSessionManager } from '../session-manager';
 import { SimulatorManager } from '../simulator';
+import { ErrorCode, respondWithStructuredError } from '../errors';
 
 const execFileAsync = promisify(execFile);
 
@@ -225,13 +226,7 @@ export function registerAppListRoutesTool(server: MCPServer): void {
       const bundleId = params.bundleId as string;
       const deviceId = await resolveDeviceId(params.deviceId as string | undefined);
       if (!deviceId) {
-        return {
-          content: [{
-            type: 'text' as const,
-            text: JSON.stringify({ error: 'DEVICE_NOT_BOOTED' }),
-          }],
-          isError: true,
-        };
+        return respondWithStructuredError(ErrorCode.DEVICE_NOT_BOOTED, 'No booted simulator found. Call device_boot first.');
       }
       try {
         const result = await readAppRoutes(deviceId, bundleId);
@@ -240,13 +235,7 @@ export function registerAppListRoutesTool(server: MCPServer): void {
         };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        return {
-          content: [{
-            type: 'text' as const,
-            text: JSON.stringify({ error: 'READ_FAILED', message }),
-          }],
-          isError: true,
-        };
+        return respondWithStructuredError(ErrorCode.APP_STATE_UNKNOWN, message);
       }
     },
   );

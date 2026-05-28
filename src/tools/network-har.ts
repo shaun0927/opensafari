@@ -1,6 +1,7 @@
 import { MCPServer, getWebKitClient } from '../mcp-server';
 import { WebKitClient } from '../webkit/client';
 import { HarCollector } from '../network/har-collector';
+import { ErrorCode, respondWithStructuredError } from '../errors';
 
 let activeCollector: HarCollector | null = null;
 
@@ -37,13 +38,13 @@ export function registerNetworkHarTool(server: MCPServer): void {
     async (_sessionId: string, params: Record<string, unknown>) => {
       const client = getWebKitClient();
       if (!client)
-        return { content: [{ type: 'text' as const, text: 'Error: Safari not connected' }], isError: true };
+        return respondWithStructuredError(ErrorCode.BACKEND_NOT_CONNECTED, 'Safari not connected');
 
       const action = params.action as 'start' | 'stop' | 'export';
 
       if (action === 'start') {
         if (activeCollector?.isRecording()) {
-          return { content: [{ type: 'text' as const, text: 'HAR capture already in progress. Stop it first.' }], isError: true };
+          return respondWithStructuredError(ErrorCode.APP_STATE_UNKNOWN, 'HAR capture already in progress. Stop it first.');
         }
         activeCollector = new HarCollector(client as WebKitClient, {
           captureBody: (params.captureBody as boolean) ?? false,
@@ -55,7 +56,7 @@ export function registerNetworkHarTool(server: MCPServer): void {
 
       if (action === 'stop') {
         if (!activeCollector?.isRecording()) {
-          return { content: [{ type: 'text' as const, text: 'No active HAR capture to stop' }], isError: true };
+          return respondWithStructuredError(ErrorCode.APP_STATE_UNKNOWN, 'No active HAR capture to stop');
         }
         activeCollector.stop();
         const count = activeCollector.getEntryCount();
@@ -64,14 +65,14 @@ export function registerNetworkHarTool(server: MCPServer): void {
 
       if (action === 'export') {
         if (!activeCollector) {
-          return { content: [{ type: 'text' as const, text: 'No HAR data available. Start a capture first.' }], isError: true };
+          return respondWithStructuredError(ErrorCode.APP_STATE_UNKNOWN, 'No HAR data available. Start a capture first.');
         }
         const format = (params.format as 'har' | 'json') ?? 'har';
         const data = activeCollector.export(format);
         return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
       }
 
-      return { content: [{ type: 'text' as const, text: `Unknown action: ${action}` }], isError: true };
+      return respondWithStructuredError(ErrorCode.INVALID_INPUT, `Unknown action: ${action}`);
     },
   );
 }

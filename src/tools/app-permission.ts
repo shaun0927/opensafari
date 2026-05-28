@@ -2,6 +2,7 @@ import { MCPServer } from '../mcp-server';
 import { SimulatorManager } from '../simulator';
 import { getSessionManager } from '../session-manager';
 import { SimctlExecutor } from '../simulator/simctl';
+import { ErrorCode, respondWithStructuredError } from '../errors';
 
 const VALID_PERMISSIONS = [
   'location', 'camera', 'microphone', 'photos', 'contacts',
@@ -65,10 +66,7 @@ export function registerAppPermissionTools(server: MCPServer): void {
     async (_sessionId: string, params: Record<string, unknown>) => {
       const deviceId = await resolveDeviceId(params);
       if (!deviceId) {
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({ error: 'DEVICE_NOT_BOOTED', message: 'No booted simulator found. Call device_boot first.' }) }],
-          isError: true,
-        };
+        return respondWithStructuredError(ErrorCode.DEVICE_NOT_BOOTED, 'No booted simulator found. Call device_boot first.');
       }
 
       const permission = params.permission as string;
@@ -76,17 +74,11 @@ export function registerAppPermissionTools(server: MCPServer): void {
       const bundleId = params.bundleId as string;
 
       if (!VALID_PERMISSIONS.includes(permission as AppPermission)) {
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({ error: 'INVALID_PERMISSION', message: `Invalid permission "${permission}". Must be one of: ${VALID_PERMISSIONS.join(', ')}` }) }],
-          isError: true,
-        };
+        return respondWithStructuredError(ErrorCode.INVALID_INPUT, `Invalid permission "${permission}". Must be one of: ${VALID_PERMISSIONS.join(', ')}`);
       }
 
       if (action !== 'grant' && action !== 'revoke') {
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({ error: 'INVALID_ACTION', message: `Invalid action "${action}". Must be "grant" or "revoke".` }) }],
-          isError: true,
-        };
+        return respondWithStructuredError(ErrorCode.INVALID_INPUT, `Invalid action "${action}". Must be "grant" or "revoke".`);
       }
 
       const simctlPermission = PERMISSION_MAP[permission as AppPermission];
@@ -129,20 +121,14 @@ export function registerAppPermissionTools(server: MCPServer): void {
     async (_sessionId: string, params: Record<string, unknown>) => {
       const deviceId = await resolveDeviceId(params);
       if (!deviceId) {
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({ error: 'DEVICE_NOT_BOOTED', message: 'No booted simulator found. Call device_boot first.' }) }],
-          isError: true,
-        };
+        return respondWithStructuredError(ErrorCode.DEVICE_NOT_BOOTED, 'No booted simulator found. Call device_boot first.');
       }
 
       const permission = params.permission as string | undefined;
       const bundleId = params.bundleId as string;
 
       if (permission && !VALID_PERMISSIONS.includes(permission as AppPermission)) {
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({ error: 'INVALID_PERMISSION', message: `Invalid permission "${permission}". Must be one of: ${VALID_PERMISSIONS.join(', ')}` }) }],
-          isError: true,
-        };
+        return respondWithStructuredError(ErrorCode.INVALID_INPUT, `Invalid permission "${permission}". Must be one of: ${VALID_PERMISSIONS.join(', ')}`);
       }
 
       const resetTarget = permission ? PERMISSION_MAP[permission as AppPermission] : 'all';

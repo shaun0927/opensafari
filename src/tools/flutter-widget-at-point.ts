@@ -29,6 +29,7 @@ import { MCPServer } from '../mcp-server';
 import { getFlutterVMClient } from '../flutter';
 import { getSessionManager } from '../session-manager';
 import { summariseNode, type WidgetSummary } from './flutter-inspector';
+import { ErrorCode, respondWithStructuredError } from '../errors';
 
 // ── Shared helpers ──────────────────────────────────────────────────────────
 
@@ -209,13 +210,7 @@ export function registerFlutterWidgetAtPointTool(server: MCPServer): void {
         const x = Number(params.x);
         const y = Number(params.y);
         if (!Number.isFinite(x) || !Number.isFinite(y)) {
-          return {
-            content: [{
-              type: 'text' as const,
-              text: JSON.stringify({ error: 'x and y must be finite numbers' }),
-            }],
-            isError: true,
-          };
+          return respondWithStructuredError(ErrorCode.INVALID_INPUT, 'x and y must be finite numbers');
         }
 
         const objectGroup = typeof params.object_group === 'string'
@@ -333,10 +328,7 @@ export function registerFlutterWidgetAtPointTool(server: MCPServer): void {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         console.error(`[flutter_widget_at_point] ${message}`);
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({ error: message }) }],
-          isError: true,
-        };
+        return respondWithStructuredError(ErrorCode.FLUTTER_VM_NOT_CONNECTED, message);
       }
     },
   );

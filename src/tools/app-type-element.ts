@@ -38,6 +38,11 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 
 import { MCPServer, getWebKitClient } from '../mcp-server';
+import { ErrorCode, respondWithStructuredError } from '../errors';
+import {
+  wrapHandlerForBundle,
+  COLLECT_DEBUG_BUNDLE_ON_FAILURE_SCHEMA,
+} from './debug-bundle-attach';
 import { getAccessibilityBridge, ensureSemanticsActive } from '../native';
 import type { AXNode, AXQuery } from '../native';
 import { resolveDeviceId, getInputBackend, runInputOp } from './native-input-utils';
@@ -158,27 +163,30 @@ export function registerAppTypeElementTool(server: MCPServer): void {
             description:
               'When backend resolves to simhid (HID keyboard): inserts an inter-character pause between consecutive key sends. Default 0 (no pause). Required for segmented OTP-style fields (e.g. 6-cell verify-code inputs in Flutter) that drop characters when keys arrive faster than the field can advance focus. Recommended: 80–150 ms for 6-digit OTP inputs.',
           },
+          collectDebugBundleOnFailure: COLLECT_DEBUG_BUNDLE_ON_FAILURE_SCHEMA,
         },
         required: ['text'],
       },
     },
-    async (_sessionId: string, params: Record<string, unknown>) => {
+    wrapHandlerForBundle('app_type_element', async (_sessionId: string, params: Record<string, unknown>) => {
       const textToType = params.text as string | undefined;
       const identifier = params.identifier as string | undefined;
       const label = params.label as string | undefined;
       const role = params.role as string | undefined;
       const backendChoice = ((params.backend as string | undefined) ?? 'auto') as TypeBackendChoice;
       if (!SUPPORTED_BACKENDS.includes(backendChoice)) {
-        return jsonError(
+        return respondWithStructuredError(
+          ErrorCode.INVALID_INPUT,
           `backend must be one of: ${SUPPORTED_BACKENDS.join(', ')} (got "${backendChoice}")`,
         );
       }
 
       if (typeof textToType !== 'string' || textToType.length === 0) {
-        return jsonError('text must be a non-empty string');
+        return respondWithStructuredError(ErrorCode.INVALID_INPUT, 'text must be a non-empty string');
       }
       if (!identifier && !label && !role) {
-        return jsonError(
+        return respondWithStructuredError(
+          ErrorCode.MISSING_REQUIRED_PARAM,
           'At least one query parameter (identifier, label, or role) is required to locate the field',
         );
       }
@@ -224,19 +232,23 @@ export function registerAppTypeElementTool(server: MCPServer): void {
           }
         }
         if (!match) {
-          return jsonError('Element not found', { query, index, timeout });
+          return respondWithStructuredError(ErrorCode.APP_STATE_UNKNOWN, 'Element not found', { query, index, timeout });
         }
 
         if (!match.visible || match.frame.width <= 0 || match.frame.height <= 0) {
-          return jsonError('Element found but not visible or has zero size', {
-            element: {
-              role: match.role,
-              label: match.label,
-              identifier: match.identifier,
-              frame: match.frame,
-              visible: match.visible,
+          return respondWithStructuredError(
+            ErrorCode.NATIVE_GESTURE_FAILED,
+            'Element found but not visible or has zero size',
+            {
+              element: {
+                role: match.role,
+                label: match.label,
+                identifier: match.identifier,
+                frame: match.frame,
+                visible: match.visible,
+              },
             },
-          });
+          );
         }
 
         // Focus step: prefer Tier 1.5 AX press (headless — no mouse
@@ -306,23 +318,18 @@ export function registerAppTypeElementTool(server: MCPServer): void {
           } catch (err) {
             if (err instanceof Error && (err as unknown as PasteNotAppliedError).code === 'PASTE_NOT_APPLIED') {
               const e = err as unknown as PasteNotAppliedError;
-              return {
-                content: [
-                  {
-                    type: 'text' as const,
-                    text: JSON.stringify({
-                      error: 'PASTE_NOT_APPLIED',
-                      code: e.code,
-                      expected: e.expected,
-                      actual: e.actual,
-                      permissionDialogObserved: e.permissionDialogObserved,
-                      element: elementDescriptor,
-                      deviceId,
-                    }),
-                  },
-                ],
-                isError: true,
-              };
+              return respondWithStructuredError(
+                ErrorCode.APP_STATE_UNKNOWN,
+                'Paste not applied',
+                {
+                  code: e.code,
+                  expected: e.expected,
+                  actual: e.actual,
+                  permissionDialogObserved: e.permissionDialogObserved,
+                  element: elementDescriptor,
+                  deviceId,
+                },
+              );
             }
             throw err;
           }
@@ -470,9 +477,9 @@ export function registerAppTypeElementTool(server: MCPServer): void {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         console.error(`[app_type_element] ${message}`);
-        return jsonError(message);
+        return respondWithStructuredError(ErrorCode.APP_STATE_UNKNOWN, message);
       }
-    },
+    }),
   );
 }
 
@@ -595,13 +602,6 @@ async function detectKeyboardLayout(deviceId: string): Promise<string | null> {
   } catch {
     return null;
   }
-}
-
-function jsonError(error: string, extra: Record<string, unknown> = {}) {
-  return {
-    content: [{ type: 'text' as const, text: JSON.stringify({ error, ...extra }) }],
-    isError: true,
-  };
 }
 
 function sleep(ms: number): Promise<void> {

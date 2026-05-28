@@ -5,6 +5,7 @@ import { getInputBackend } from './native-input-backend';
 import { runInputOp } from './native-input-utils';
 import { getAccessibilityBridge } from '../native/accessibility-bridge';
 import type { AXNode } from '../native/ax-types';
+import { ErrorCode, respondWithStructuredError } from '../errors';
 
 type AlertVerification = {
   verified: boolean;
@@ -263,18 +264,10 @@ export function registerAppAlertHandleTool(server: MCPServer): void {
         (params.deviceId as string) ?? sm.getSoleDeviceId() ?? booted[0]?.udid;
 
       if (!deviceId) {
-        return {
-          content: [
-            {
-              type: 'text' as const,
-              text: JSON.stringify({
-                error: 'DEVICE_NOT_BOOTED',
-                message: 'No booted simulator found. Call device_boot first.',
-              }),
-            },
-          ],
-          isError: true,
-        };
+        return respondWithStructuredError(
+          ErrorCode.DEVICE_NOT_BOOTED,
+          'No booted simulator found. Call device_boot first.',
+        );
       }
 
       // Resolve the candidate label list
@@ -303,53 +296,34 @@ export function registerAppAlertHandleTool(server: MCPServer): void {
 
           if (!matchedNode) {
             const visibleLabels = collectButtonLabels(alertTree);
-            return {
-              content: [
-                {
-                  type: 'text' as const,
-                  text: JSON.stringify({
-                    error: 'NO_MATCHING_BUTTON',
-                    message:
-                      `No button matching ${JSON.stringify(buttonLabels)} found. ` +
-                      `Visible button titles: ${JSON.stringify(visibleLabels)}.`,
-                    buttonLabels,
-                    visibleLabels,
-                  }),
-                },
-              ],
-              isError: true,
-            };
+            return respondWithStructuredError(
+              ErrorCode.ALERT_NO_EFFECT,
+              `No button matching ${JSON.stringify(buttonLabels)} found. Visible button titles: ${JSON.stringify(visibleLabels)}.`,
+              { buttonLabels, visibleLabels },
+            );
           }
 
           const pressResponse = await bridge.press(matchedNode.path, deviceId);
 
           if (!pressResponse.ok) {
-            return {
-              content: [
-                {
-                  type: 'text' as const,
-                  text: JSON.stringify({
-                    error: 'ALERT_HANDLE_FAILED',
-                    message:
-                      `AX press failed on "${matchedNode.label ?? matchedNode.path}": ` +
-                      `${pressResponse.message ?? pressResponse.code}`,
-                    code: pressResponse.code,
-                    path: matchedNode.path,
-                    _meta: {
-                      _telemetry: [
-                        {
-                          backend: 'ax-press',
-                          path: matchedNode.path,
-                          label: matchedNode.label,
-                          axCode: pressResponse.code,
-                        },
-                      ],
+            return respondWithStructuredError(
+              ErrorCode.ALERT_NO_EFFECT,
+              `AX press failed on "${matchedNode.label ?? matchedNode.path}": ${pressResponse.message ?? pressResponse.code}`,
+              {
+                code: pressResponse.code,
+                path: matchedNode.path,
+                _meta: {
+                  _telemetry: [
+                    {
+                      backend: 'ax-press',
+                      path: matchedNode.path,
+                      label: matchedNode.label,
+                      axCode: pressResponse.code,
                     },
-                  }),
+                  ],
                 },
-              ],
-              isError: true,
-            };
+              },
+            );
           }
 
           // Bounded poll loop: check every ~150 ms, stop early on any state
@@ -407,35 +381,27 @@ export function registerAppAlertHandleTool(server: MCPServer): void {
           }
 
           if (!verification.verified) {
-            return {
-              content: [
-                {
-                  type: 'text' as const,
-                  text: JSON.stringify({
-                    error: 'ALERT_HANDLE_NO_EFFECT',
-                    message:
-                      `Pressed "${matchedNode.label ?? matchedNode.path}" via AXPress, ` +
-                      'but no observable alert transition was detected.',
-                    buttonLabel: matchedNode.label,
-                    deviceId,
-                    verified: false,
-                    effect: verification.effect,
-                    visibleLabelsAfter: verification.visibleLabelsAfter,
-                    escalated: false,
-                    _meta: {
-                      _telemetry: [
-                        {
-                          backend: 'ax-press',
-                          path: matchedNode.path,
-                          label: matchedNode.label,
-                        },
-                      ],
+            return respondWithStructuredError(
+              ErrorCode.ALERT_NO_EFFECT,
+              `Pressed "${matchedNode.label ?? matchedNode.path}" via AXPress, but no observable alert transition was detected.`,
+              {
+                buttonLabel: matchedNode.label,
+                deviceId,
+                verified: false,
+                effect: verification.effect,
+                visibleLabelsAfter: verification.visibleLabelsAfter,
+                escalated: false,
+                _meta: {
+                  _telemetry: [
+                    {
+                      backend: 'ax-press',
+                      path: matchedNode.path,
+                      label: matchedNode.label,
                     },
-                  }),
+                  ],
                 },
-              ],
-              isError: true,
-            };
+              },
+            );
           }
           // verification verified, possibly via escalation — mark it
           // so callers can attribute success to the keyboard fallback.
@@ -469,18 +435,10 @@ export function registerAppAlertHandleTool(server: MCPServer): void {
           };
         } catch (err: unknown) {
           const message = err instanceof Error ? err.message : String(err);
-          return {
-            content: [
-              {
-                type: 'text' as const,
-                text: JSON.stringify({
-                  error: 'ALERT_HANDLE_FAILED',
-                  message: `AX label-match failed: ${message}`,
-                }),
-              },
-            ],
-            isError: true,
-          };
+          return respondWithStructuredError(
+            ErrorCode.ALERT_NO_EFFECT,
+            `AX label-match failed: ${message}`,
+          );
         }
       }
 
@@ -488,34 +446,17 @@ export function registerAppAlertHandleTool(server: MCPServer): void {
       const action = params.action as string | undefined;
 
       if (!action) {
-        return {
-          content: [
-            {
-              type: 'text' as const,
-              text: JSON.stringify({
-                error: 'MISSING_PARAMS',
-                message:
-                  'Either action ("accept"|"dismiss") or buttonLabel/buttonLabels must be provided.',
-              }),
-            },
-          ],
-          isError: true,
-        };
+        return respondWithStructuredError(
+          ErrorCode.MISSING_REQUIRED_PARAM,
+          'Either action ("accept"|"dismiss") or buttonLabel/buttonLabels must be provided.',
+        );
       }
 
       if (action !== 'accept' && action !== 'dismiss') {
-        return {
-          content: [
-            {
-              type: 'text' as const,
-              text: JSON.stringify({
-                error: 'INVALID_ACTION',
-                message: `Invalid action "${action}". Must be "accept" or "dismiss".`,
-              }),
-            },
-          ],
-          isError: true,
-        };
+        return respondWithStructuredError(
+          ErrorCode.INVALID_INPUT,
+          `Invalid action "${action}". Must be "accept" or "dismiss".`,
+        );
       }
 
       // Use the input backend to send the appropriate key
@@ -544,18 +485,10 @@ export function registerAppAlertHandleTool(server: MCPServer): void {
         };
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
-        return {
-          content: [
-            {
-              type: 'text' as const,
-              text: JSON.stringify({
-                error: 'ALERT_HANDLE_FAILED',
-                message: `Failed to ${action} alert: ${message}. No visible alert may be present.`,
-              }),
-            },
-          ],
-          isError: true,
-        };
+        return respondWithStructuredError(
+          ErrorCode.ALERT_NO_EFFECT,
+          `Failed to ${action} alert: ${message}. No visible alert may be present.`,
+        );
       }
     },
   );

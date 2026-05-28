@@ -188,7 +188,8 @@ describe('app_notes_paste_and_tap_url', () => {
     });
     expect(result.isError).toBe(true);
     const parsed = JSON.parse((result.content as unknown as Array<{ text: string }>)[0].text);
-    expect(parsed.error).toMatch(/Data Detector did not produce a link/);
+    expect(parsed.error).toBe('APP_STATE_UNKNOWN');
+    expect(parsed.message).toMatch(/Data Detector did not produce a link/);
     // The press for the detected link must never fire on a fallback candidate.
     expect(pressMock).not.toHaveBeenCalledWith('link#stale', 'TEST-UDID-1234');
   });
@@ -217,7 +218,8 @@ describe('app_notes_paste_and_tap_url', () => {
     });
     expect(result.isError).toBe(true);
     const parsed = JSON.parse((result.content as unknown as Array<{ text: string }>)[0].text);
-    expect(parsed.error).toMatch(/Notes editor did not appear/);
+    expect(parsed.error).toBe('APP_STATE_UNKNOWN');
+    expect(parsed.message).toMatch(/Notes editor did not appear/);
     expect(typeViaPasteboardMock).not.toHaveBeenCalled();
   });
 
@@ -238,7 +240,8 @@ describe('app_notes_paste_and_tap_url', () => {
     });
     expect(result.isError).toBe(true);
     const parsed = JSON.parse((result.content as unknown as Array<{ text: string }>)[0].text);
-    expect(parsed.error).toMatch(/Data Detector did not produce a link/);
+    expect(parsed.error).toBe('APP_STATE_UNKNOWN');
+    expect(parsed.message).toMatch(/Data Detector did not produce a link/);
   });
 
   test('returns isError when Notes launch fails', async () => {
@@ -278,6 +281,7 @@ describe('app_notes_paste_and_tap_url', () => {
     });
     expect(result.isError).toBe(true);
     const parsed = JSON.parse((result.content as unknown as Array<{ text: string }>)[0].text);
-    expect(parsed.error).toMatch(/Failed to press detected link/);
+    expect(parsed.error).toBe('APP_STATE_UNKNOWN');
+    expect(parsed.message).toMatch(/Failed to press detected link/);
   });
 });

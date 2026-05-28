@@ -1,4 +1,5 @@
 import { MCPServer, getWebKitClient } from '../mcp-server';
+import { ErrorCode, respondWithStructuredError } from '../errors';
 
 export type ThrottleProfile = 'slow-3g' | 'fast-3g' | '4g' | 'wifi' | 'none';
 
@@ -53,22 +54,19 @@ export function registerNetworkThrottleTool(server: MCPServer): void {
     async (_sessionId: string, params: Record<string, unknown>) => {
       const client = getWebKitClient();
       if (!client)
-        return { content: [{ type: 'text' as const, text: 'Error: Safari not connected' }], isError: true };
+        return respondWithStructuredError(ErrorCode.BACKEND_NOT_CONNECTED, 'Safari not connected');
 
       const profile = params.profile as ThrottleProfile;
       const config = THROTTLE_PROFILES[profile];
       if (!config) {
-        return { content: [{ type: 'text' as const, text: 'Error: unknown profile "' + profile + '"' }], isError: true };
+        return respondWithStructuredError(ErrorCode.INVALID_INPUT, `Unknown profile "${profile}"`);
       }
 
       try {
         await client.evaluate(buildThrottleScript(config));
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        return {
-          content: [{ type: 'text' as const, text: 'Failed to inject throttle script: ' + message }],
-          isError: true,
-        };
+        return respondWithStructuredError(ErrorCode.APP_STATE_UNKNOWN, `Failed to inject throttle script: ${message}`);
       }
       activeProfile = profile;
 

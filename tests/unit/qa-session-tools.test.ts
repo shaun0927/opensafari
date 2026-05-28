@@ -84,7 +84,8 @@ describe('qa_session_create', () => {
     const result = await handler('s', { url: '' });
     expect((result as any).isError).toBe(true);
     const body = parseResult(result);
-    expect(body.error).toContain('non-empty string');
+    expect(body.error).toBe('INVALID_INPUT');
+    expect(body.message).toContain('non-empty string');
   });
 
   test('returns NO_WEBKIT_CLIENT when no client is available', async () => {
@@ -93,7 +94,7 @@ describe('qa_session_create', () => {
     const result = await handler('s', { url: 'https://example.com' });
     expect((result as any).isError).toBe(true);
     const body = parseResult(result);
-    expect(body.error).toBe('NO_WEBKIT_CLIENT');
+    expect(body.error).toBe('BACKEND_NOT_CONNECTED');
   });
 
   test('surfaces openSession errors as tool errors', async () => {
@@ -102,7 +103,8 @@ describe('qa_session_create', () => {
     const result = await handler('s', { url: 'https://example.com' });
     expect((result as any).isError).toBe(true);
     const body = parseResult(result);
-    expect(body.error).toContain('target discovery failed');
+    expect(body.error).toBe('APP_STATE_UNKNOWN');
+    expect(body.message).toContain('target discovery failed');
   });
 });
 

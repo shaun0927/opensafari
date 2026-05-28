@@ -22,6 +22,7 @@
 import { MCPServer } from '../mcp-server';
 import { getFlutterVMClient } from '../flutter';
 import { getSessionManager } from '../session-manager';
+import { ErrorCode, respondWithStructuredError } from '../errors';
 
 const ROUTE_EXPRESSION = `
 (() {
@@ -99,24 +100,12 @@ export function registerFlutterGetRouteTool(server: MCPServer): void {
     async (_sessionId: string, params: Record<string, unknown>) => {
       const deviceId = (params.device_id as string) ?? getSessionManager().getSoleDeviceId();
       if (!deviceId) {
-        return {
-          content: [{
-            type: 'text' as const,
-            text: JSON.stringify({ error: 'DEVICE_NOT_BOOTED', message: 'No device id available; pass device_id explicitly.' }),
-          }],
-          isError: true,
-        };
+        return respondWithStructuredError(ErrorCode.DEVICE_NOT_BOOTED, 'No device id available; pass device_id explicitly.');
       }
 
       const client = getFlutterVMClient(deviceId);
       if (!client.isConnected()) {
-        return {
-          content: [{
-            type: 'text' as const,
-            text: JSON.stringify({ error: 'NOT_CONNECTED', message: 'flutter_connect must be called first.' }),
-          }],
-          isError: true,
-        };
+        return respondWithStructuredError(ErrorCode.FLUTTER_VM_NOT_CONNECTED, 'flutter_connect must be called first.');
       }
 
       try {
@@ -131,13 +120,7 @@ export function registerFlutterGetRouteTool(server: MCPServer): void {
         };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        return {
-          content: [{
-            type: 'text' as const,
-            text: JSON.stringify({ name: null, source: 'error', error: message }),
-          }],
-          isError: true,
-        };
+        return respondWithStructuredError(ErrorCode.FLUTTER_EVAL_FAILED, message);
       }
     },
   );

@@ -2,6 +2,7 @@ import { MCPServer } from '../mcp-server';
 import { getDefaultSimulatorManager } from '../simulator';
 import { getSessionManager } from '../session-manager';
 import { NativeAuthManager } from '../auth/native-manager';
+import { ErrorCode, respondWithStructuredError } from '../errors';
 
 export function registerAppResetTool(server: MCPServer): void {
   const nativeAuth = new NativeAuthManager();
@@ -46,10 +47,10 @@ export function registerAppResetTool(server: MCPServer): void {
       const deviceId = (params.deviceId as string) ?? sm.getSoleDeviceId() ?? booted[0]?.udid;
 
       if (!deviceId) {
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({ error: 'DEVICE_NOT_BOOTED', message: 'No booted simulator found. Call device_boot first.' }) }],
-          isError: true,
-        };
+        return respondWithStructuredError(
+          ErrorCode.DEVICE_NOT_BOOTED,
+          'No booted simulator found. Call device_boot first.',
+        );
       }
 
       const bundleId = params.bundleId as string;

@@ -2,6 +2,7 @@ import { MCPServer } from '../mcp-server';
 import { SimulatorManager } from '../simulator';
 import { getSessionManager } from '../session-manager';
 import { probeMobileContext } from './app-context';
+import { ErrorCode, respondWithStructuredError } from '../errors';
 
 export function registerAppSwitchAppTool(server: MCPServer): void {
   server.registerTool(
@@ -34,10 +35,7 @@ export function registerAppSwitchAppTool(server: MCPServer): void {
       const deviceId = (params.deviceId as string) ?? sm.getSoleDeviceId() ?? booted[0]?.udid;
 
       if (!deviceId) {
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({ error: 'DEVICE_NOT_BOOTED', message: 'No booted simulator found. Call device_boot first.' }) }],
-          isError: true,
-        };
+        return respondWithStructuredError(ErrorCode.DEVICE_NOT_BOOTED, 'No booted simulator found. Call device_boot first.');
       }
 
       const bundleId = params.bundleId as string;
@@ -53,23 +51,11 @@ export function registerAppSwitchAppTool(server: MCPServer): void {
           action: 'Opened URL for',
         });
         if (context?.expectedBundleMatch === 'mismatch') {
-          return {
-            content: [{
-              type: 'text' as const,
-              text: JSON.stringify({
-                error: 'EXPECTED_BUNDLE_MISMATCH',
-                message:
-                  `Opened URL for ${bundleId}, but the foreground context is ${context.surface} ` +
-                  `(${context.expectedBundleMatch}).`,
-                switched: true,
-                bundleId,
-                deviceId,
-                url,
-                context,
-              }),
-            }],
-            isError: true,
-          };
+          return respondWithStructuredError(
+            ErrorCode.APP_STATE_UNKNOWN,
+            `Opened URL for ${bundleId}, but the foreground context is ${context.surface} (${context.expectedBundleMatch}).`,
+            { switched: true, bundleId, deviceId, url, context },
+          );
         }
         return {
           content: [{
@@ -89,23 +75,11 @@ export function registerAppSwitchAppTool(server: MCPServer): void {
       });
 
       if (context?.expectedBundleMatch === 'mismatch') {
-        return {
-          content: [{
-            type: 'text' as const,
-            text: JSON.stringify({
-              error: 'EXPECTED_BUNDLE_MISMATCH',
-              message:
-                `Switched to ${bundleId}, but the foreground context is ${context.surface} ` +
-                `(${context.expectedBundleMatch}).`,
-              switched: true,
-              bundleId,
-              deviceId,
-              pid: result.pid,
-              context,
-            }),
-          }],
-          isError: true,
-        };
+        return respondWithStructuredError(
+          ErrorCode.APP_STATE_UNKNOWN,
+          `Switched to ${bundleId}, but the foreground context is ${context.surface} (${context.expectedBundleMatch}).`,
+          { switched: true, bundleId, deviceId, pid: result.pid, context },
+        );
       }
 
       return {

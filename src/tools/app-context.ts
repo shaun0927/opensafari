@@ -3,6 +3,7 @@ import { getAccessibilityBridge } from '../native/accessibility-bridge';
 import { getSessionManager } from '../session-manager';
 import { SimulatorManager } from '../simulator';
 import { classifyMobileContext, type MobileContextProbe } from './mobile-context';
+import { ErrorCode, respondWithStructuredError } from '../errors';
 
 export async function probeMobileContext(params: {
   deviceId: string;
@@ -71,18 +72,10 @@ export function registerAppContextTool(server: MCPServer): void {
           booted[0]?.udid;
 
         if (!deviceId) {
-          return {
-            content: [
-              {
-                type: 'text' as const,
-                text: JSON.stringify({
-                  error: 'DEVICE_NOT_BOOTED',
-                  message: 'No booted simulator found. Call device_boot first.',
-                }),
-              },
-            ],
-            isError: true,
-          };
+          return respondWithStructuredError(
+            ErrorCode.DEVICE_NOT_BOOTED,
+            'No booted simulator found. Call device_boot first.',
+          );
         }
 
         const expectedBundle = params.expectedBundle as string | undefined;
@@ -102,18 +95,11 @@ export function registerAppContextTool(server: MCPServer): void {
             probe.expectedBundleMatchConfidence === 'heuristic');
 
         if (requireMatch && expectedBundle && !isMatched) {
-          return {
-            content: [
-              {
-                type: 'text' as const,
-                text: JSON.stringify({
-                  error: 'EXPECTED_BUNDLE_MISMATCH',
-                  ...probe,
-                }),
-              },
-            ],
-            isError: true,
-          };
+          return respondWithStructuredError(
+            ErrorCode.APP_STATE_UNKNOWN,
+            'Expected bundle not matched',
+            { ...probe },
+          );
         }
 
         return {
@@ -126,18 +112,7 @@ export function registerAppContextTool(server: MCPServer): void {
         };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        return {
-          content: [
-            {
-              type: 'text' as const,
-              text: JSON.stringify({
-                error: 'APP_CONTEXT_FAILED',
-                message,
-              }),
-            },
-          ],
-          isError: true,
-        };
+        return respondWithStructuredError(ErrorCode.APP_STATE_UNKNOWN, message);
       }
     },
   );

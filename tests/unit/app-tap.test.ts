@@ -235,7 +235,8 @@ describe('app_tap — bounded poll verification (Codex P2)', () => {
     const body = JSON.parse(result.content[0].text);
 
     expect(result.isError).toBe(true);
-    expect(body.error).toBe('TAP_NO_EFFECT');
+    expect(body.error).toBe('APP_STATE_UNKNOWN');
+    expect(body.message).toContain('no observable AX tree change');
     expect(body.effect).toBe('no_observable_change');
 
     // Poll must have run more than once (bounded polling, not single shot).
@@ -290,13 +291,13 @@ describe('app_tap — basic behaviour', () => {
   it('returns error for non-finite x', async () => {
     const result = await handler('session', { x: NaN, y: 100 });
     expect(result.isError).toBe(true);
-    expect(JSON.parse(result.content[0].text).error).toMatch(/finite/);
+    { const body = JSON.parse(result.content[0].text); expect(body.error).toBe('INVALID_INPUT'); expect(body.message).toMatch(/finite/); }
   });
 
   it('returns error for non-finite y', async () => {
     const result = await handler('session', { x: 100, y: Infinity });
     expect(result.isError).toBe(true);
-    expect(JSON.parse(result.content[0].text).error).toMatch(/finite/);
+    { const body = JSON.parse(result.content[0].text); expect(body.error).toBe('INVALID_INPUT'); expect(body.message).toMatch(/finite/); }
   });
 
   it('returns tapped with verified: true when tree changes', async () => {
