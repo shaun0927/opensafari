@@ -4,17 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-### Fixed
-
-- **Headless Smoke Tests / `Flutter — headless VM-Service input` job** — the scheduled run on `main` was being cancelled at its 35-minute timeout every day because the `flutter-vm-input.live.test.ts` suite (a) failed its `tap`/`typeText` assertions, which read app state back through the native `ax-bridge` (it requires Simulator.app + TCC Accessibility, unavailable on GitHub-hosted runners), and (b) then left the live VM Service WebSocket + heartbeat open, so jest never exited ("Jest did not exit one second after the test run has completed") and the job burned its full budget. The step now mirrors the sibling `webview-smoke` job with `continue-on-error: true` for the ax-bridge limitation, runs jest with `--forceExit`, and the suite tears down its VM Service client in `afterAll`. This unblocks the daily 06:00 UTC `Headless Smoke Tests` run without weakening the headless Tier-0 routing / swipe-dispatch assertions, which still execute.
-
-## [0.6.3] - 2026-05-28
+## [0.6.3] - 2026-05-29
 
 **OpenSafari 0.6.3 is a portability and reliability patch release.** It lands the structured-error rollout across every agent-facing MCP tool, introduces the `debug_bundle_collect` MCP tool with automatic attachment on recoverable failures, and unblocks the scheduled Headless Smoke Tests run on `main` that has been red since 2026-05-22 because the `sim-hid-bridge` smoke probe was timing out before the wrapper's own probe-context flow could complete on GitHub-hosted runners.
 
 ### Fixed
 
 - **Headless Smoke Tests / `Simulator.app is NOT brought to the foreground by simhid taps`** — the test wrapper now allows the `dist/sim-hid-bridge` invocation up to 60 seconds. The previous 10 second budget consistently truncated the wrapper mid-`probeContext` (which itself spawns `dist/ax-bridge` with a 15 second timeout after a 1.2 second settle), surfacing as `Command failed: ... tap 200 500` with no useful stderr. The new budget covers the wrapper's own 15 second `execNative` + 1.2 second settle + 15 second ax-bridge probe envelope while still failing fast on a genuinely hung bridge. This unblocks the daily 06:00 UTC `Headless Smoke Tests` run on `main` without weakening any product assertion.
+- **Headless Smoke Tests / `Flutter — headless VM-Service input` job** — the scheduled run on `main` was being cancelled at its 35-minute timeout every day because the `flutter-vm-input.live.test.ts` suite (a) failed its `tap`/`typeText` assertions, which read app state back through the native `ax-bridge` (it requires Simulator.app + TCC Accessibility, unavailable on GitHub-hosted runners), and (b) then left the live VM Service WebSocket + heartbeat open, so jest never exited ("Jest did not exit one second after the test run has completed") and the job burned its full budget. The step now mirrors the sibling `webview-smoke` job with `continue-on-error: true` for the ax-bridge limitation, runs jest with `--forceExit`, and the suite tears down its VM Service client in `afterAll`. This unblocks the daily 06:00 UTC `Headless Smoke Tests` run without weakening the headless Tier-0 routing / swipe-dispatch assertions, which still execute.
 
 ### Added
 
