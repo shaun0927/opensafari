@@ -4,6 +4,52 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-05-27
+
+**OpenSafari 0.6.2 is a reliability and semantic-navigation patch release.** It carries the post-0.6.1 fixes from `develop` into the release line: the macOS 15 SimulatorKit HID sentinel no longer fails main because of a cold-start timeout, agent-facing MCP failures are consistently machine-readable, overlay dismissal now proves caller-requested postconditions, and `app_pop_until` becomes a portable semantic back-navigation primitive for Flutter VM, release-build, UIKit, and SwiftUI flows.
+
+### Fixed
+
+- **Main CI / SimulatorKit HID Sentinel macos-15 timeout** — fixes the failing main check where `tests/ci/sim-hid-sentinel.test.ts` timed out after 45s on the first fake-UDID framework-load probe even though later probes succeeded. The sentinel now uses a 90s Jest/exec budget, prefers the native `dist/sim-hid-bridge-native` binary over Swift interpreter cold compilation, and keeps hard failures tied to real private-API break evidence (`exit 78` plus structured `SIMULATORKIT_MISSING`, `CORESIMULATOR_MISSING`, `HID_CLIENT_FAILED`, or `HID_FUNCTIONS_MISSING`). This preserves BC-break detection without blocking main on transient macos-15 startup latency.
+- **Structured MCP server catch-all failures** — thrown tool errors now route through the structured-error carrier instead of plain `Error: ...` text when possible. Unknown thrown values fall back to a stable catalog-backed envelope so clients can inspect `error`, `message`, `recoverable`, and `suggestion` consistently.
+- **Canonical structured-error fields are authoritative** — `respondWithStructuredError` / `StructuredErrorException.toMcpResponse()` no longer allow tool-specific `extra` diagnostics to override the canonical `error`, `message`, `recoverable`, or `suggestion` fields. This prevents accidental reintroduction of ad-hoc error shapes while still preserving extra context fields.
+- **Overlay dismissal postcondition proof** — `app_dismiss_overlay` can now verify a caller-supplied `waitForGone` AX postcondition before returning success. Failed verification reports structured `OVERLAY_DISMISS_FAILED` with `mode`, `deviceId`, `waitForGone`, and verification details instead of implying success from gesture dispatch alone.
+- **`app_pop_until` route verification false negatives** — route postconditions now use the same `_ModalScopeStatus` element-tree evidence strategy as `flutter_get_route` instead of `ModalRoute.of(rootElement)`, avoiding false negatives when the Flutter root element is not itself inside the current route subtree.
+- **Native `app_pop_until` route-only verification guard** — native fallback without a connected Flutter VM no longer accepts route-only postconditions, because route names cannot be verified in release/UIKit/SwiftUI contexts. Callers must provide AX evidence (`identifier`, `label`, `text`, or `role`) or connect the Flutter VM. Mixed route+AX specs keep route verification when VM is connected and drop to AX-only verification when VM is unavailable.
+
+### Added
+
+- **Expanded structured error catalog (#797 PR1)** — adds stable `ErrorCode` entries for common agent-facing failures: input validation (`INVALID_INPUT`, `MISSING_REQUIRED_PARAM`, `INVALID_URL`), device/session/backend resolution (`DEVICE_NOT_BOOTED`, `SESSION_NOT_FOUND`, `BACKEND_NOT_CONNECTED`), Flutter VM failures (`FLUTTER_VM_NOT_CONNECTED`, `FLUTTER_EVAL_FAILED`), overlay/keyboard dismissal (`OVERLAY_DISMISS_FAILED`, `KEYBOARD_DISMISS_FAILED`), alert/permission helpers (`ALERT_NO_EFFECT`, `PERMISSION_RESET_DENIED`), and `app_pop_until` outcomes (`POP_UNTIL_EXHAUSTED`, `POP_UNTIL_NO_FALLBACK_AVAILABLE`, `MISSING_POSTCONDITION`).
+- **`respondWithStructuredError(code, message, extra?)` helper** — one-line MCP tool response helper for catalog-backed errors. It emits the shared JSON envelope and is exported from `src/errors` for subsequent tool migrations.
+- **`app_pop_until` postcondition contract and attempt history (#801 PR1)** — responses now include `strategy`, bounded `attempts[]`, and `postcondition` evidence while preserving the pre-existing `ok`, `status`, `popped`, and `target` fields. Optional postconditions support AX queries (`identifier`, `label`, `text`, `role`) and Flutter route names (`route`) with configurable `timeoutMs` / `intervalMs`.
+- **`app_pop_until` native fallback ladder (#801 PR2)** — when Flutter VM service is unavailable, `app_pop_until` can now dispatch semantic native back steps and verify the requested postcondition after each attempt. The ladder tries AX-identified back affordances first, then iOS interactive-pop edge swipe, then Escape for sheets/custom navigators. It records each attempt and stops as soon as verification succeeds.
+- **`docs/app-pop-until.md`** — new agent-facing documentation covering inputs, response shape, error codes, `app_pop_until` vs. `app_tap_element`, route vs. AX postconditions, and native fallback constraints.
+
+### Changed
+
+- **`app_pop_until` keeps Flutter VM as the preferred strategy** when connected and not explicitly bypassed with `forceFallback`; native fallback is only used for non-VM/release/native contexts or explicit fallback testing.
+- **Native fallback success is postcondition-driven** for `until: "first"` and `until: "route"`; dispatch success alone is insufficient. For `until: "count"`, success can be based on the requested number of successful dispatches when no postcondition is supplied.
+- **Error metadata now carries recovery guidance** across newly cataloged failures so MCP clients can decide whether to retry, connect a backend, boot a simulator, adjust input, or ask the user.
+
+### Tests / CI
+
+- Added focused unit coverage for structured-error catalog expansion, canonical envelope clobber prevention, MCP server structured catch-all behavior, overlay postcondition verification, `app_pop_until` postcondition parsing, Flutter route/AX verification, native fallback strategy selection, no-backend diagnostics, exhaustion behavior, count caps, and route-only native rejection.
+- Local verification for this release preparation: targeted Jest suites, full `npm test -- --runInBand`, and `npm run build` pass on the release branch.
+
+### Detailed diff since 0.6.1
+
+- `tests/ci/sim-hid-sentinel.test.ts`: raises the slow bridge timeout from 45s to 90s and searches `dist/sim-hid-bridge-native` before Swift/interpreter fallbacks.
+- `src/mcp-server.ts`, `tests/unit/mcp-server.test.ts`: preserves `StructuredErrorException` metadata through the MCP server error path and adds regression coverage.
+- `src/errors/codes.ts`, `src/errors/respond.ts`, `src/errors/index.ts`, `src/errors/structured-error.ts`, `tests/unit/error-catalog-expansion.test.ts`: expands the catalog, exports the helper, and locks canonical error-envelope precedence.
+- `src/tools/app-dismiss-overlay.ts`, `tests/unit/app-dismiss-overlay.test.ts`: adds `waitForGone` verification and structured failure reporting for overlay dismissal.
+- `src/tools/app-pop-until.ts`, `tests/unit/app-pop-until-contract.test.ts`, `tests/unit/app-pop-until-native-fallback.test.ts`, `docs/app-pop-until.md`: adds postcondition/attempt response shape, route/AX verification, native back fallback ladder, route-only native guard, docs, and unit coverage.
+
+### Migration notes
+
+- No tool names are removed and existing `app_pop_until` VM use remains compatible. Consumers may observe additional additive fields (`strategy`, `attempts`, `postcondition`) and should ignore unknown fields if not needed.
+- Native `app_pop_until` for `until: "first"` / `until: "route"` requires a verifiable postcondition. In non-VM contexts, use AX signals rather than route-only assertions.
+- Clients that attach extra diagnostics to structured errors must use distinct field names; canonical `error`, `message`, `recoverable`, and `suggestion` are reserved and remain catalog-controlled.
+
 ## [0.6.1] - 2026-05-17
 
 **OpenSafari 0.6.1 is a *catch-up release* that lands every change accumulated on `develop` since 0.5.0 onto `main` and npm.** `v0.6.0` was tagged on 2026-05-16 but never merged to `main` and never published to the npm registry (`npm view opensafari-mcp versions` confirms `0.5.0` was the latest published until this release). Rather than ship a separate 0.6.0 → 0.6.1 pair, 0.6.1 rolls the entire 0.6.0 body forward together with one targeted pasteboard fix uncovered after the 0.6.0 tag. This is a feature-and-fix release; there are no breaking changes since 0.5.0.
