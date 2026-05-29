@@ -12,6 +12,7 @@ import { MCPServer } from '../mcp-server';
 import { getFlutterVMClient } from '../flutter';
 import { discoverVMServiceUrl } from '../flutter/vm-service-discovery';
 import { getSessionManager } from '../session-manager';
+import { ErrorCode, respondWithStructuredError } from '../errors';
 
 export type FlutterBuildMode = 'debug' | 'profile' | 'release' | 'unknown';
 
@@ -190,10 +191,7 @@ export function registerFlutterBuildModeTool(server: MCPServer): void {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         console.error(`[flutter_build_mode] ${message}`);
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({ error: message }) }],
-          isError: true,
-        };
+        return respondWithStructuredError(ErrorCode.APP_STATE_UNKNOWN, message);
       }
     },
   );

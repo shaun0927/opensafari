@@ -205,7 +205,8 @@ describe('app_tap tool', () => {
     const result = await handler('s', { x: NaN, y: 100 });
     expect((result as any).isError).toBe(true);
     const body = parseResult(result as any);
-    expect(body.error).toContain('finite numbers');
+    expect(body.error).toBe('INVALID_INPUT');
+    expect(body.message).toContain('finite numbers');
   });
 
   test('uses explicit deviceId when provided', async () => {
@@ -228,7 +229,8 @@ describe('app_tap tool', () => {
     const result = await handler('s', { x: 10, y: 20 });
     expect((result as any).isError).toBe(true);
     const body = parseResult(result as any);
-    expect(body.error).toContain('simctl io failed');
+    expect(body.error).toBe('APP_STATE_UNKNOWN');
+    expect(body.message).toContain('simctl io failed');
   });
 
   test('returns TAP_NO_EFFECT when the AX tree does not change after the tap', async () => {
@@ -245,7 +247,8 @@ describe('app_tap tool', () => {
 
     expect((result as any).isError).toBe(true);
     const body = parseResult(result as any);
-    expect(body.error).toBe('TAP_NO_EFFECT');
+    expect(body.error).toBe('APP_STATE_UNKNOWN');
+    expect(body.message).toContain('no observable AX tree change');
     expect(body.verified).toBe(false);
     expect(body.effect).toBe('no_observable_change');
   });
@@ -327,7 +330,8 @@ describe('app_type_text tool', () => {
     const result = await handler('s', { text: '' });
     expect((result as any).isError).toBe(true);
     const body = parseResult(result as any);
-    expect(body.error).toContain('non-empty string');
+    expect(body.error).toBe('INVALID_INPUT');
+    expect(body.message).toContain('non-empty string');
   });
 
   test('returns error on simctl failure', async () => {
@@ -413,7 +417,8 @@ describe('app_swipe_native tool', () => {
     const result = await handler('s', { direction: 'diagonal' });
     expect((result as any).isError).toBe(true);
     const body = parseResult(result as any);
-    expect(body.error).toContain('Invalid direction');
+    expect(body.error).toBe('INVALID_INPUT');
+    expect(body.message).toContain('Invalid direction');
   });
 });
 
@@ -460,8 +465,9 @@ describe('app_key_input tool', () => {
     const result = await handler('s', { key: 'f13' });
     expect((result as any).isError).toBe(true);
     const body = parseResult(result as any);
-    expect(body.error).toContain('Unknown key');
-    expect(body.error).toContain('Supported keys');
+    expect(body.error).toBe('INVALID_INPUT');
+    expect(body.message).toContain('Unknown key');
+    expect(body.message).toContain('Supported keys');
   });
 
   test('all KEY_MAP entries are strings', () => {

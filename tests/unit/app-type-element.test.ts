@@ -225,17 +225,17 @@ describe('app_type_element', () => {
   it('returns error when text is missing or empty', async () => {
     const missing = await handler('session', { label: 'Email' });
     expect(missing.isError).toBe(true);
-    expect(JSON.parse(missing.content[0].text).error).toContain('text');
+    { const body = JSON.parse(missing.content[0].text); expect(body.error).toBe('INVALID_INPUT'); expect(body.message).toContain('text'); }
 
     const empty = await handler('session', { label: 'Email', text: '' });
     expect(empty.isError).toBe(true);
-    expect(JSON.parse(empty.content[0].text).error).toContain('text');
+    { const body = JSON.parse(empty.content[0].text); expect(body.error).toBe('INVALID_INPUT'); expect(body.message).toContain('text'); }
   });
 
   it('returns error when no locator is provided', async () => {
     const result = await handler('session', { text: 'hello' });
     expect(result.isError).toBe(true);
-    expect(JSON.parse(result.content[0].text).error).toContain('query parameter');
+    { const body = JSON.parse(result.content[0].text); expect(body.error).toBe('MISSING_REQUIRED_PARAM'); expect(body.message).toContain('query parameter'); }
   });
 
   it('returns error when element is not found', async () => {
@@ -248,7 +248,7 @@ describe('app_type_element', () => {
     });
 
     expect(result.isError).toBe(true);
-    expect(JSON.parse(result.content[0].text).error).toBe('Element not found');
+    { const body = JSON.parse(result.content[0].text); expect(body.error).toBe('APP_STATE_UNKNOWN'); expect(body.message).toBe('Element not found'); }
     expect(mockTap).not.toHaveBeenCalled();
     expect(mockTypeText).not.toHaveBeenCalled();
   });
@@ -264,7 +264,7 @@ describe('app_type_element', () => {
     });
 
     expect(result.isError).toBe(true);
-    expect(JSON.parse(result.content[0].text).error).toContain('not visible');
+    { const body = JSON.parse(result.content[0].text); expect(body.error).toBe('NATIVE_GESTURE_FAILED'); expect(body.message).toContain('not visible'); }
     expect(mockTypeText).not.toHaveBeenCalled();
   });
 

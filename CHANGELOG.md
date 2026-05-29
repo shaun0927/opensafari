@@ -4,6 +4,35 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-05-29
+
+**OpenSafari 0.6.3 is a portability and reliability patch release.** It lands the structured-error rollout across every agent-facing MCP tool, introduces the `debug_bundle_collect` MCP tool with automatic attachment on recoverable failures, and unblocks the scheduled Headless Smoke Tests run on `main` that has been red since 2026-05-22 because the `sim-hid-bridge` smoke probe was timing out before the wrapper's own probe-context flow could complete on GitHub-hosted runners.
+
+### Fixed
+
+- **Headless Smoke Tests / `Simulator.app is NOT brought to the foreground by simhid taps`** — the test wrapper now allows the `dist/sim-hid-bridge` invocation up to 60 seconds. The previous 10 second budget consistently truncated the wrapper mid-`probeContext` (which itself spawns `dist/ax-bridge` with a 15 second timeout after a 1.2 second settle), surfacing as `Command failed: ... tap 200 500` with no useful stderr. The new budget covers the wrapper's own 15 second `execNative` + 1.2 second settle + 15 second ax-bridge probe envelope while still failing fast on a genuinely hung bridge. This unblocks the daily 06:00 UTC `Headless Smoke Tests` run on `main` without weakening any product assertion.
+- **Headless Smoke Tests / `Flutter — headless VM-Service input` job** — the scheduled run on `main` was being cancelled at its 35-minute timeout every day because the `flutter-vm-input.live.test.ts` suite (a) failed its `tap`/`typeText` assertions, which read app state back through the native `ax-bridge` (it requires Simulator.app + TCC Accessibility, unavailable on GitHub-hosted runners), and (b) then left the live VM Service WebSocket + heartbeat open, so jest never exited ("Jest did not exit one second after the test run has completed") and the job burned its full budget. The step now mirrors the sibling `webview-smoke` job with `continue-on-error: true` for the ax-bridge limitation, runs jest with `--forceExit`, and the suite tears down its VM Service client in `afterAll`. This unblocks the daily 06:00 UTC `Headless Smoke Tests` run without weakening the headless Tier-0 routing / swipe-dispatch assertions, which still execute.
+
+### Added
+
+- **`debug_bundle_collect` MCP tool (#798 PR1)** — single tool that gathers compact, local, redacted failure evidence for a device/session: device/session identity, backend health summary, screenshot path/metadata, AX summary, recent app and system logs when available, fresh crash report summaries, network/HAR/intercept status, Flutter route and widget state when a VM Service is connected, and explicit redaction notes. Collection is best-effort: individual evidence failures are surfaced inside the bundle rather than failing the whole call, unless the device or session cannot be resolved at all. Documented in `docs/debug-bundle.md`.
+- **Automatic `debug_bundle_collect` attachment on recoverable failures (#798 PR2)** — high-level semantic tools (starting with `app_pop_until`) now accept an optional `collectDebugBundleOnFailure` parameter. When set, recoverable failures automatically attach a compact bundle reference to the structured error response so MCP clients no longer have to discover and call `debug_bundle_collect` manually after every failed semantic action.
+
+### Changed
+
+- **Tier-0 tool error envelopes migrated to the structured catalog (#797 PR2)** — every Tier-0 agent-facing tool handler (`app_tap`, `app_swipe`, `app_type_text`, `app_screenshot_native`, `app_launch`, `app_terminate`, `app_open_url`, `app_activate`, the lifecycle helpers, and the simulator/device controls) now responds with `respondWithStructuredError(code, message, extra?)` rather than ad-hoc `Error: ...` text or one-off `{ error }` payloads. MCP clients can read `error`, `message`, `recoverable`, and `suggestion` consistently across this surface.
+- **Tier-1 tool error envelopes migrated and guarded against regression (#797 PR3)** — long-tail tools (`app_list_running`, `app_key_input`, the alert/permission helpers, the QA session tools, the auth/biometric/OTP helpers, the Flutter inspection surface, and the network/HAR tools) now share the same structured envelope. A new lint guard (`scripts/check-structured-errors.js` / Jest unit coverage) prevents tool handlers from re-introducing ad-hoc `Error: ...` envelopes in this surface.
+- **`app_pop_until` accepts `collectDebugBundleOnFailure`** as the first integration of the auto-attach helper. Behavior is opt-in: when the parameter is omitted the response is byte-identical to 0.6.2.
+
+### Tests / CI
+
+- Added 4 new unit suites (`tier0-error-envelope.test.ts`, `debug-bundle-collect.test.ts`, `debug-bundle-attach.test.ts`, `redaction.test.ts`) plus catalog-expansion coverage. Local: 202 suites / 2853 tests pass in ~26 seconds.
+- The Headless Smoke Tests `Native — SimulatorKit HID (Tier 1)` job should turn green on the next scheduled run; behaviour of the asserted invariants (`tryCreateSimulatorKitHIDBackend` resolves to simhid, Simulator.app stays in background, no AppleScript fallback loaded) is unchanged — only the wrapper-invocation budget moved.
+
+### Notes
+
+- Carries the full chain originally landed by PRs #805 (#797 PR1, already shipped in 0.6.2), #810 (#797 PR2), #811 (#797 PR3), #808 (#798 PR1), and #812 (#798 PR2), which were stranded outside `develop` by a stacked-PR topology and merged into `develop` as the single integration PR #814.
+
 ## [0.6.2] - 2026-05-27
 
 **OpenSafari 0.6.2 is a reliability and semantic-navigation patch release.** It carries the post-0.6.1 fixes from `develop` into the release line: the macOS 15 SimulatorKit HID sentinel no longer fails main because of a cold-start timeout, agent-facing MCP failures are consistently machine-readable, overlay dismissal now proves caller-requested postconditions, and `app_pop_until` becomes a portable semantic back-navigation primitive for Flutter VM, release-build, UIKit, and SwiftUI flows.

@@ -101,7 +101,7 @@ describe('app_dismiss_keyboard tool', () => {
 
     expect(result.isError).toBe(true);
     const body = JSON.parse((result.content as any)[0].text);
-    expect(body.code).toBe('DEVICE_NOT_BOOTED');
+    expect(body.error).toBe('DEVICE_NOT_BOOTED');
   });
 
   test('uses explicit deviceId when provided', async () => {
@@ -125,7 +125,7 @@ describe('app_dismiss_keyboard tool', () => {
 
     expect(result.isError).toBe(true);
     const body = JSON.parse((result.content as any)[0].text);
-    expect(body.code).toBe('KEYBOARD_DISMISS_FAILED');
+    expect(body.error).toBe('KEYBOARD_DISMISS_FAILED');
     expect(body.deviceId).toBe('device-789');
   });
 

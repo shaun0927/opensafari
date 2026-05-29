@@ -6,6 +6,7 @@ import {
   createContextMismatchError,
   NativeContextMeta,
 } from './native-app-context';
+import { ErrorCode, respondWithStructuredError } from '../errors';
 
 export function registerAppInspectTool(server: MCPServer): void {
   server.registerTool(
@@ -34,13 +35,7 @@ export function registerAppInspectTool(server: MCPServer): void {
     async (_sessionId: string, params: Record<string, unknown>) => {
       const elementPath = params.path as string;
       if (!elementPath && elementPath !== '') {
-        return {
-          content: [{
-            type: 'text' as const,
-            text: 'Error: path parameter is required',
-          }],
-          isError: true,
-        };
+        return respondWithStructuredError(ErrorCode.MISSING_REQUIRED_PARAM, 'path parameter is required');
       }
 
       try {
@@ -83,13 +78,10 @@ export function registerAppInspectTool(server: MCPServer): void {
           }],
         };
       } catch (err) {
-        return {
-          content: [{
-            type: 'text' as const,
-            text: `Error: ${err instanceof Error ? err.message : String(err)}`,
-          }],
-          isError: true,
-        };
+        return respondWithStructuredError(
+          ErrorCode.APP_STATE_UNKNOWN,
+          err instanceof Error ? err.message : String(err),
+        );
       }
     },
   );

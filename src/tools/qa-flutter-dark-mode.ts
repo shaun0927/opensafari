@@ -7,6 +7,7 @@
  */
 
 import { MCPServer } from '../mcp-server';
+import { ErrorCode, respondWithStructuredError } from '../errors';
 import { getAccessibilityBridge } from '../native';
 import type { AXNode } from '../native';
 import { getSessionManager } from '../session-manager';
@@ -269,10 +270,7 @@ export function registerQaFlutterDarkModeTool(server: MCPServer): void {
         if (lightPath) { try { fs.unlinkSync(lightPath); } catch { /* ignore */ } }
         if (darkPath) { try { fs.unlinkSync(darkPath); } catch { /* ignore */ } }
 
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({ error: message }) }],
-          isError: true,
-        };
+        return respondWithStructuredError(ErrorCode.APP_STATE_UNKNOWN, message);
       }
     },
   );

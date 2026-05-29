@@ -26,6 +26,11 @@ import { MCPServer } from '../mcp-server';
 import { getSessionManager } from '../session-manager';
 import { SimulatorManager } from '../simulator';
 import { getAccessibilityBridge, ensureSemanticsActive } from '../native';
+import { ErrorCode, respondWithStructuredError } from '../errors';
+import {
+  wrapHandlerForBundle,
+  COLLECT_DEBUG_BUNDLE_ON_FAILURE_SCHEMA,
+} from './debug-bundle-attach';
 
 const execFileAsync = promisify(execFile);
 
@@ -105,28 +110,20 @@ export function registerAppGotoScreenTool(server: MCPServer): void {
           },
           bundleId: { type: 'string', description: 'Target app bundle ID (forces ensureSemanticsActive scope)' },
           deviceId: { type: 'string' },
+          collectDebugBundleOnFailure: COLLECT_DEBUG_BUNDLE_ON_FAILURE_SCHEMA,
         },
         required: ['url'],
       },
     },
-    async (_sessionId: string, params: Record<string, unknown>) => {
+    wrapHandlerForBundle('app_goto_screen', async (_sessionId: string, params: Record<string, unknown>) => {
       const url = params.url as string | undefined;
       if (!url || !url.includes('://')) {
-        return {
-          content: [{
-            type: 'text' as const,
-            text: JSON.stringify({ error: 'INVALID_URL', message: 'url must include a scheme' }),
-          }],
-          isError: true,
-        };
+        return respondWithStructuredError(ErrorCode.INVALID_URL, 'url must include a scheme');
       }
 
       const deviceId = await resolveDeviceId(params.deviceId as string | undefined);
       if (!deviceId) {
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({ error: 'DEVICE_NOT_BOOTED' }) }],
-          isError: true,
-        };
+        return respondWithStructuredError(ErrorCode.DEVICE_NOT_BOOTED, 'No booted simulator found');
       }
 
       // Dispatch the deeplink. We shell out directly rather than calling
@@ -137,13 +134,7 @@ export function registerAppGotoScreenTool(server: MCPServer): void {
         await execFileAsync('xcrun', ['simctl', 'openurl', deviceId, url]);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        return {
-          content: [{
-            type: 'text' as const,
-            text: JSON.stringify({ error: 'OPEN_URL_FAILED', url, deviceId, message }),
-          }],
-          isError: true,
-        };
+        return respondWithStructuredError(ErrorCode.FLUTTER_EVAL_FAILED, message, { url, deviceId });
       }
 
       // Make sure semantics are active before we start polling.
@@ -184,6 +175,6 @@ export function registerAppGotoScreenTool(server: MCPServer): void {
         }],
         isError: !verdict.matched,
       };
-    },
+    }),
   );
 }

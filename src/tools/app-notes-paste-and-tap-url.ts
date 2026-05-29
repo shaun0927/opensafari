@@ -26,6 +26,7 @@ import { getAccessibilityBridge } from '../native';
 import type { AXQueryResult } from '../native/ax-types';
 import { typeViaPasteboard } from './pasteboard-input';
 import { resolveDeviceId } from './native-app-utils';
+import { ErrorCode, respondWithStructuredError } from '../errors';
 
 const NOTES_BUNDLE_ID = 'com.apple.mobilenotes';
 const DEFAULT_FOCUS_TIMEOUT_MS = 4000;
@@ -164,10 +165,7 @@ export function registerAppNotesPasteAndTapUrlTool(server: MCPServer): void {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         console.error(`[app_notes_paste_and_tap_url] ${message}`);
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({ error: message }) }],
-          isError: true,
-        };
+        return respondWithStructuredError(ErrorCode.APP_STATE_UNKNOWN, message);
       }
     },
   );

@@ -5,6 +5,7 @@
 import { MCPServer } from '../mcp-server';
 import { getFlutterVMClient } from '../flutter';
 import { getSessionManager } from '../session-manager';
+import { ErrorCode, respondWithStructuredError } from '../errors';
 
 export function registerFlutterHotReloadTool(server: MCPServer): void {
   server.registerTool(
@@ -71,10 +72,7 @@ export function registerFlutterHotReloadTool(server: MCPServer): void {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         console.error(`[flutter_hot_reload] ${message}`);
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({ error: message }) }],
-          isError: true,
-        };
+        return respondWithStructuredError(ErrorCode.FLUTTER_EVAL_FAILED, message);
       }
     },
   );

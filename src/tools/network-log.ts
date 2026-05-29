@@ -1,5 +1,6 @@
 import { MCPServer, getWebKitClient } from '../mcp-server';
 import { BufferedEventCollector, CollectedEvent } from '../utils/buffered-event-collector';
+import { ErrorCode, respondWithStructuredError } from '../errors';
 
 export interface NetworkEntry extends CollectedEvent {
   url: string;
@@ -34,7 +35,7 @@ export function registerNetworkLogTool(server: MCPServer): void {
     },
     async (sessionId: string, params: Record<string, unknown>) => {
       const client = getWebKitClient();
-      if (!client) return { content: [{ type: 'text' as const, text: 'Error: Safari not connected' }], isError: true };
+      if (!client) return respondWithStructuredError(ErrorCode.BACKEND_NOT_CONNECTED, 'Safari not connected');
       const action = params.action as 'start' | 'stop' | 'get';
       const collector = getOrCreateCollector(sessionId);
 
@@ -65,13 +66,13 @@ export function registerNetworkLogTool(server: MCPServer): void {
         if (urlFilter) {
           let re: RegExp;
           try { re = new RegExp(urlFilter); }
-          catch { return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'Invalid regex filter' }) }], isError: true }; }
+          catch { return respondWithStructuredError(ErrorCode.INVALID_INPUT, 'Invalid regex filter'); }
           entries = entries.filter((e) => re.test(e.url));
         }
         if (params.clear) collector.clear();
         return { content: [{ type: 'text' as const, text: JSON.stringify({ count: entries.length, entries }) }] };
       }
-      return { content: [{ type: 'text' as const, text: JSON.stringify({ error: `Unknown action: ${action}` }) }], isError: true };
+      return respondWithStructuredError(ErrorCode.INVALID_INPUT, `Unknown action: ${action}`);
     },
   );
 }

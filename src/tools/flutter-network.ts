@@ -13,6 +13,7 @@ import * as url from 'url';
 import { MCPServer } from '../mcp-server';
 import { getSessionManager } from '../session-manager';
 import { SimctlExecutor } from '../simulator/simctl';
+import { ErrorCode, respondWithStructuredError } from '../errors';
 
 interface NetworkEntry {
   id: number;
@@ -116,10 +117,7 @@ export function registerFlutterNetworkTool(server: MCPServer): void {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         console.error(`[flutter_network] ${message}`);
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({ error: message }) }],
-          isError: true,
-        };
+        return respondWithStructuredError(ErrorCode.APP_STATE_UNKNOWN, message);
       }
     },
   );

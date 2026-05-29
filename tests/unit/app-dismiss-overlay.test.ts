@@ -144,6 +144,6 @@ describe('app_dismiss_overlay tool', () => {
 
     expect(result.isError).toBe(true);
     const body = JSON.parse(result.content![0].text!);
-    expect(body.error).toBe('INVALID_VERIFICATION');
+    expect(body.error).toBe('INVALID_INPUT');
   });
 });

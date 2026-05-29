@@ -134,6 +134,7 @@ import { registerAppAssertElementTool } from './app-assert-element';
 import { registerAppPopUntilTool } from './app-pop-until';
 import { registerDiagnoseTool } from './diagnose';
 import { registerAppGotoScreenTool } from './app-goto-screen';
+import { registerDebugBundleCollectTool } from './debug-bundle-collect';
 
 export { setWorkflowEngine } from './orchestration-tools';
 export { setBarrier } from './barrier-tools';
@@ -346,5 +347,6 @@ export function registerAllTools(server: MCPServer): void {
 
   // Tier 1: Diagnostics
   registerDiagnoseTool(server);
+  registerDebugBundleCollectTool(server);
   registerAppGotoScreenTool(server);
 }

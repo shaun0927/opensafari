@@ -11,6 +11,7 @@ import { getAccessibilityBridge, ensureSemanticsActive } from '../native';
 import type { AXNode } from '../native';
 import { getSessionManager } from '../session-manager';
 import { getInputBackend } from './native-input-utils';
+import { ErrorCode, respondWithStructuredError } from '../errors';
 import {
   activateAndClassify,
   createContextMismatchError,
@@ -142,15 +143,10 @@ export function registerAppWaitForNativeTool(server: MCPServer): void {
       const role = params.role as string | undefined;
 
       if (!identifier && !label && !text && !role) {
-        return {
-          content: [{
-            type: 'text' as const,
-            text: JSON.stringify({
-              error: 'At least one query parameter (identifier, label, text, or role) is required',
-            }),
-          }],
-          isError: true,
-        };
+        return respondWithStructuredError(
+          ErrorCode.MISSING_REQUIRED_PARAM,
+          'At least one query parameter (identifier, label, text, or role) is required',
+        );
       }
 
       try {
@@ -270,27 +266,15 @@ export function registerAppWaitForNativeTool(server: MCPServer): void {
 
         // Timeout
         const elapsed = Date.now() - startTime;
-        return {
-          content: [{
-            type: 'text' as const,
-            text: JSON.stringify({
-              error: 'Timeout waiting for element',
-              condition,
-              query,
-              timeout,
-              elapsed,
-              polls: pollCount,
-            }),
-          }],
-          isError: true,
-        };
+        return respondWithStructuredError(
+          ErrorCode.APP_STATE_UNKNOWN,
+          'Timeout waiting for element',
+          { condition, query, timeout, elapsed, polls: pollCount },
+        );
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         console.error(`[app_wait_for] ${message}`);
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({ error: message }) }],
-          isError: true,
-        };
+        return respondWithStructuredError(ErrorCode.APP_STATE_UNKNOWN, message);
       }
     },
   );

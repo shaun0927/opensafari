@@ -7,6 +7,7 @@
  */
 
 import { MCPServer } from '../mcp-server';
+import { ErrorCode, respondWithStructuredError } from '../errors';
 import { getAccessibilityBridge } from '../native';
 import type { AXNode } from '../native';
 import { getSessionManager } from '../session-manager';
@@ -186,10 +187,7 @@ export function registerQaFlutterKeyboardOverlapTool(server: MCPServer): void {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         console.error(`[qa_flutter_keyboard_overlap] ${message}`);
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({ error: message }) }],
-          isError: true,
-        };
+        return respondWithStructuredError(ErrorCode.APP_STATE_UNKNOWN, message);
       }
     },
   );

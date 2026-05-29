@@ -28,6 +28,7 @@
 
 import { getInputBackend, resetInputBackend } from '../../src/tools/native-input-backend';
 import { FlutterVMInputBackend } from '../../src/tools/flutter-vm-input-backend';
+import { removeFlutterVMClient } from '../../src/flutter';
 import {
   ensureSemanticsActive,
   getAccessibilityBridge,
@@ -69,6 +70,14 @@ describe('issue #481 — FlutterVMInputBackend live', () => {
   beforeAll(async () => {
     resetInputBackend();
     await new Promise((r) => setTimeout(r, 2000));
+  });
+
+  afterAll(() => {
+    // Close the live VM Service WebSocket + heartbeat interval so jest's
+    // event loop drains; otherwise the suite leaves an open handle that keeps
+    // the process alive long after the assertions finish.
+    removeFlutterVMClient(DEVICE_ID);
+    resetInputBackend();
   });
 
   test('getInputBackend() selects Tier 0 (FlutterVMInputBackend)', async () => {

@@ -1,5 +1,6 @@
 import { MCPServer } from '../mcp-server';
 import { SimulatorManager } from '../simulator';
+import { ErrorCode, respondWithStructuredError } from '../errors';
 
 export function registerAppearanceToggleTool(server: MCPServer): void {
   server.registerTool(
@@ -20,7 +21,7 @@ export function registerAppearanceToggleTool(server: MCPServer): void {
       const booted = await manager.listBooted();
       const deviceId = (params.deviceId as string) ?? booted[0]?.udid;
       if (!deviceId) {
-        return { content: [{ type: 'text' as const, text: 'Error: no booted device found' }], isError: true };
+        return respondWithStructuredError(ErrorCode.DEVICE_NOT_BOOTED, 'no booted device found');
       }
       let result: 'light' | 'dark';
       if (params.mode) {

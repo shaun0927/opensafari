@@ -1,6 +1,7 @@
 import { MCPServer } from '../mcp-server';
 import { getDefaultSimulatorManager } from '../simulator';
 import { SimctlExecutor } from '../simulator/simctl';
+import { ErrorCode, respondWithStructuredError } from '../errors';
 import { getProxyForDevice, stopProxyForDevice, peekProxyForDevice } from '../simulator/proxy-manager';
 import { WebKitClient } from '../webkit/client';
 import { addManagedDevice } from '../reliability/zombie-cleanup';
@@ -65,18 +66,11 @@ export function registerDeviceBootTool(server: MCPServer): void {
       }
 
       if (!alreadyBooted && booted.length >= maxSims) {
-        return {
-          content: [{
-            type: 'text' as const,
-            text: JSON.stringify({
-              error: 'MAX_SIMULATORS_REACHED',
-              message: `Cannot boot another simulator: ${booted.length}/${maxSims} already running. ` +
-                `Set OPENSAFARI_MAX_SIMULATORS to increase the limit, or shut down an existing device.`,
-              running: booted.map((d) => ({ udid: d.udid, name: d.name })),
-            }),
-          }],
-          isError: true,
-        };
+        return respondWithStructuredError(
+          ErrorCode.RESOURCE_EXHAUSTED,
+          `Cannot boot another simulator: ${booted.length}/${maxSims} already running. Set OPENSAFARI_MAX_SIMULATORS to increase the limit, or shut down an existing device.`,
+          { running: booted.map((d) => ({ udid: d.udid, name: d.name })) },
+        );
       }
 
       const device = await manager.boot(params.device as string);

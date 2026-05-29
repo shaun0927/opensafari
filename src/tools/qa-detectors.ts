@@ -1,4 +1,5 @@
 import { MCPServer, getWebKitClient } from '../mcp-server';
+import { ErrorCode, respondWithStructuredError } from '../errors';
 
 export function registerQADetectorTools(server: MCPServer): void {
   const detectors = [
@@ -26,14 +27,15 @@ export function registerQADetectorTools(server: MCPServer): void {
       },
       async (_sessionId: string, _params: Record<string, unknown>) => {
         const client = getWebKitClient();
-        if (!client) return { content: [{ type: 'text' as const, text: 'Error: Safari not connected' }], isError: true };
+        if (!client) return respondWithStructuredError(ErrorCode.BACKEND_NOT_CONNECTED, 'Safari not connected');
         try {
           // Dynamic import for the detector
           const mod = await import(`../qa/detectors/${det.mod}.js`);
           const result = await mod[det.fn](client);
           return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
         } catch (err) {
-          return { content: [{ type: 'text' as const, text: `Error running ${det.name}: ${err}` }], isError: true };
+          const message = err instanceof Error ? err.message : String(err);
+          return respondWithStructuredError(ErrorCode.APP_STATE_UNKNOWN, `Error running ${det.name}: ${message}`);
         }
       },
     );

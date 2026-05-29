@@ -21,6 +21,7 @@ import * as path from 'path';
 import { MCPServer } from '../mcp-server';
 import { getFlutterVMClient, FlutterVMError } from '../flutter';
 import { getSessionManager } from '../session-manager';
+import { ErrorCode, respondWithStructuredError } from '../errors';
 
 const MAX_DURATION_MS = 120_000; // 2 minutes — longer windows balloon response size
 
@@ -202,10 +203,7 @@ export function registerFlutterCpuProfileTool(server: MCPServer): void {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         console.error(`[flutter_cpu_profile] ${message}`);
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({ error: message }) }],
-          isError: true,
-        };
+        return respondWithStructuredError(ErrorCode.FLUTTER_EVAL_FAILED, message);
       }
     },
   );
@@ -327,10 +325,7 @@ export function registerFlutterTimelineCaptureTool(server: MCPServer): void {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         console.error(`[flutter_timeline_capture] ${message}`);
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify({ error: message }) }],
-          isError: true,
-        };
+        return respondWithStructuredError(ErrorCode.FLUTTER_EVAL_FAILED, message);
       }
     },
   );

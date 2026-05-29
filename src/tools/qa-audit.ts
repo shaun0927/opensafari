@@ -1,4 +1,5 @@
 import { MCPServer, getWebKitClient } from '../mcp-server';
+import { ErrorCode, respondWithStructuredError } from '../errors';
 
 export function registerQAAuditTools(server: MCPServer): void {
   server.registerTool(
@@ -20,7 +21,7 @@ export function registerQAAuditTools(server: MCPServer): void {
     },
     async (_sessionId: string, params: Record<string, unknown>) => {
       const client = getWebKitClient();
-      if (!client) return { content: [{ type: 'text' as const, text: 'Error: Safari not connected' }], isError: true };
+      if (!client) return respondWithStructuredError(ErrorCode.BACKEND_NOT_CONNECTED, 'Safari not connected');
       const { QAAudit } = await import('../qa/audit');
       const { QAHistory } = await import('../qa/history');
       const audit = new QAAudit(client);
