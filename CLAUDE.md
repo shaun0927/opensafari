@@ -10,6 +10,17 @@ feature/* → develop → main (release)
 - Release merges go from `develop` into `main`
 - Tag-based npm publish triggers on `main` (v* tags)
 
+### Stacked / multi-part work
+
+Avoid long chains of interdependent feature branches that each PR into the previous one. When `0.6.3` was cut, several PRs (#810/#811/#808/#812) were stranded outside `develop` by a stacked-PR topology and had to be rescued via a single catch-up integration PR (#814).
+
+Rules to prevent recurrence:
+
+- **Each PR targets `develop` directly.** Do not target another feature branch unless the base is already merged to `develop`.
+- **If work must be split into parts, land each part to `develop` before opening the next**, or open them in parallel against `develop` and resolve conflicts at merge time — never as a chain where part N depends on unmerged part N-1.
+- **If a chain is unavoidable, the final integration PR must target `develop`** and the intermediate branches must be deleted, not left as dangling bases.
+- Keep one logical concern per PR; do not bundle a refactor + feature + CI change so that a CI failure in one strands the others.
+
 ## Build & Test
 
 ```bash
