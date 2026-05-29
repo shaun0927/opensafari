@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- **Headless Smoke `Flutter` job now gates the Tier-0 thesis** — the Flutter VM-Service live suite was entirely `continue-on-error` (advisory) after the #816 hang fix, so even a regression in headless Tier-0 routing or gesture dispatch would not fail CI. The step is now split: the ax-independent assertions (`getInputBackend()` selects `FlutterVMInputBackend`, and `swipe` dispatches gesture-arena events) run as a **blocking** step, while only the `tap`/`typeText` assertions — which verify their effect through the ax-bridge (needs Simulator.app + TCC Accessibility, unavailable on GitHub-hosted runners) — remain advisory. The load-bearing headless claim is verified on every run; the ax-dependent readback stays advisory until it is reworked off the ax-bridge. Documented in `docs/headless-architecture.md`.
+
 ## [0.6.3] - 2026-05-29
 
 **OpenSafari 0.6.3 is a portability and reliability patch release.** It lands the structured-error rollout across every agent-facing MCP tool, introduces the `debug_bundle_collect` MCP tool with automatic attachment on recoverable failures, and unblocks the scheduled Headless Smoke Tests run on `main` that has been red since 2026-05-22 because the `sim-hid-bridge` smoke probe was timing out before the wrapper's own probe-context flow could complete on GitHub-hosted runners.

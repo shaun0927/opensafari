@@ -513,23 +513,27 @@ jobs:
           echo "::error::DDS VM service websocket did not accept getVM within warmup window"
           exit 1
 
-      - name: Run Flutter VM headless input live test
-        continue-on-error: true  # tap/typeText verification reads app state via ax-bridge, which needs TCC Accessibility unavailable on GitHub-hosted runners (same limitation as the webview-smoke job)
+      # Split into two steps so the headless Tier-0 thesis is actually gated.
+      #
+      # BLOCKING — the ax-independent assertions that prove the product claim
+      # "Tier-0 FlutterVMInputBackend is selected and dispatches gestures
+      # headless, no focus steal": backend selection + swipe gesture dispatch.
+      # These never touch the ax-bridge, so a regression here is a real product
+      # regression and must fail the job.
+      - name: Run Flutter VM Tier-0 routing + dispatch (blocking)
         env:
           OPENSAFARI_LIVE_VM: '1'
           OSF_DEVICE_ID: ${{ env.SIMULATOR_UDID }}
           JEST_JUNIT_OUTPUT_DIR: test-results
-          JEST_JUNIT_OUTPUT_NAME: flutter-smoke.junit.xml
+          JEST_JUNIT_OUTPUT_NAME: flutter-smoke-blocking.junit.xml
           JEST_JUNIT_CLASSNAME: '{filepath}'
-          JEST_JUNIT_SUITE_NAME: 'Flutter VM headless smoke'
+          JEST_JUNIT_SUITE_NAME: 'Flutter VM headless smoke (Tier-0 blocking)'
         run: |
           set -euo pipefail
           mkdir -p test-results
           # --forceExit: the live FlutterVMInputBackend holds an open VM Service
-          # WebSocket + heartbeat interval that this suite does not tear down,
-          # so jest would otherwise hang past the test run ("Jest did not exit
-          # one second after the test run has completed") and burn the full
-          # 35-minute job budget on every scheduled run.
+          # WebSocket + heartbeat interval, so jest would otherwise hang past
+          # the test run and burn the full job budget.
           node scripts/run-with-cursor-monitor.js -- \
           npx jest \
             --config jest.config.js \
@@ -538,6 +542,36 @@ jobs:
             --runInBand \
             --forceExit \
             --runTestsByPath tests/integration/flutter-vm-input.live.test.ts \
+            -t 'selects Tier 0|swipe produces multiple move' \
+            --reporters=default \
+            --reporters=jest-junit
+
+      # NON-BLOCKING — tap/typeText verification reads app state back through the
+      # ax-bridge, which needs Simulator.app + TCC Accessibility that
+      # GitHub-hosted runners do not grant (same limitation as the webview-smoke
+      # job). Kept advisory until the result-readback is reworked off the
+      # ax-bridge (e.g. via the VM Service widget tree) — tracked separately.
+      - name: Run Flutter VM ax-verified tap/type (advisory)
+        continue-on-error: true
+        env:
+          OPENSAFARI_LIVE_VM: '1'
+          OSF_DEVICE_ID: ${{ env.SIMULATOR_UDID }}
+          JEST_JUNIT_OUTPUT_DIR: test-results
+          JEST_JUNIT_OUTPUT_NAME: flutter-smoke-advisory.junit.xml
+          JEST_JUNIT_CLASSNAME: '{filepath}'
+          JEST_JUNIT_SUITE_NAME: 'Flutter VM headless smoke (ax-verified advisory)'
+        run: |
+          set -euo pipefail
+          mkdir -p test-results
+          node scripts/run-with-cursor-monitor.js -- \
+          npx jest \
+            --config jest.config.js \
+            --testPathIgnorePatterns='/node_modules/' \
+            --testTimeout=180000 \
+            --runInBand \
+            --forceExit \
+            --runTestsByPath tests/integration/flutter-vm-input.live.test.ts \
+            -t 'tap on Login|typeText into focused' \
             --reporters=default \
             --reporters=jest-junit
 
