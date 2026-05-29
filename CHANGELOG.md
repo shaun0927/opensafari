@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- Catalog-coded the two most common recoverable failure conditions so MCP clients receive a specific error code plus `recoverable` flag and `suggestion` instead of the generic `APP_STATE_UNKNOWN` fallback. "No device specified and no active device" (28 sites across `src/tools/**` and the canonical `resolveDeviceId` in `src/native/accessibility.ts`) now throws `StructuredErrorException.fromCode(ErrorCode.DEVICE_NOT_BOOTED, …)`, and "Not connected to Flutter VM Service. Run flutter_connect first." (12 sites) now throws `StructuredErrorException.fromCode(ErrorCode.FLUTTER_VM_NOT_CONNECTED, …)`. Each site preserves its original message string. The error envelope was already structured via the MCP server catch-all; this upgrades specificity (enabling client-side auto-recovery) for the highest-frequency cases.
+
 ## [0.6.3] - 2026-05-29
 
 **OpenSafari 0.6.3 is a portability and reliability patch release.** It lands the structured-error rollout across every agent-facing MCP tool, introduces the `debug_bundle_collect` MCP tool with automatic attachment on recoverable failures, and unblocks the scheduled Headless Smoke Tests run on `main` that has been red since 2026-05-22 because the `sim-hid-bridge` smoke probe was timing out before the wrapper's own probe-context flow could complete on GitHub-hosted runners.

@@ -6,6 +6,7 @@ import { getSessionManager } from '../session-manager';
 import * as os from 'os';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
+import { ErrorCode, StructuredErrorException } from '../errors';
 
 /**
  * Resolve device ID from params or the active device in the session.
@@ -14,7 +15,7 @@ import { randomUUID } from 'crypto';
 export function resolveDeviceId(params: Record<string, unknown>): string {
   const deviceId = (params.deviceId as string) || getSessionManager().getSoleDeviceId();
   if (!deviceId) {
-    throw new Error('No device specified and no active device. Boot a simulator first with device_boot.');
+    throw StructuredErrorException.fromCode(ErrorCode.DEVICE_NOT_BOOTED, 'No device specified and no active device. Boot a simulator first with device_boot.');
   }
   return deviceId;
 }

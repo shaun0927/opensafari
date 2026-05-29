@@ -14,6 +14,7 @@ import {
   isMemoryMetaEnabled,
   type InputTelemetryEvent,
 } from '../metrics/input-telemetry';
+import { ErrorCode, StructuredErrorException } from '../errors';
 
 // Re-export input backend for tool files
 export {
@@ -140,9 +141,7 @@ export function resolveDeviceId(params: Record<string, unknown>): string {
     (params.deviceId as string | undefined) ||
     getSessionManager().getSoleDeviceId();
   if (!deviceId) {
-    throw new Error(
-      'No device specified and no active device. Boot a simulator first with device_boot.',
-    );
+    throw StructuredErrorException.fromCode(ErrorCode.DEVICE_NOT_BOOTED, 'No device specified and no active device. Boot a simulator first with device_boot.');
   }
   return deviceId;
 }
