@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- **Publish workflow honest-green** — the `Publish` workflow has reported `failure` on every release since v0.6.0 even though each version reached npm, because `npm publish --provenance` returns a misleading `E404 … not in this registry` when the version already exists or the `NPM_TOKEN` lacks publish rights. `publish.yml` now (a) skips publishing with a success status when the exact `name@version` is already on the registry (idempotent re-runs / re-pushed tags), (b) runs an `npm whoami` auth preflight that fails with an actionable message instead of the masked E404, and (c) fans a failure out through the existing `_sentinel-notify` reusable workflow so a broken release pipeline cannot sit red unnoticed. NOTE: a genuinely-new version still requires a valid publish-scoped `NPM_TOKEN`.
+
 ## [0.6.3] - 2026-05-29
 
 **OpenSafari 0.6.3 is a portability and reliability patch release.** It lands the structured-error rollout across every agent-facing MCP tool, introduces the `debug_bundle_collect` MCP tool with automatic attachment on recoverable failures, and unblocks the scheduled Headless Smoke Tests run on `main` that has been red since 2026-05-22 because the `sim-hid-bridge` smoke probe was timing out before the wrapper's own probe-context flow could complete on GitHub-hosted runners.
