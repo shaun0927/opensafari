@@ -15,7 +15,7 @@ import {
   createContextMismatchError,
   NativeContextMeta,
 } from './native-app-context';
-import { ErrorCode, respondWithStructuredError } from '../errors';
+import { ErrorCode, respondWithStructuredError, StructuredErrorException } from '../errors';
 
 type AssertCondition = 'exists' | 'not_exists' | 'visible' | 'enabled' | 'disabled' | 'has_text';
 
@@ -86,9 +86,7 @@ export function registerAppAssertElementTool(server: MCPServer): void {
           (params.device_id as string | undefined) ??
           getSessionManager().getSoleDeviceId();
         if (!deviceId) {
-          throw new Error(
-            'No device specified and no active device. Boot a simulator first with device_boot.',
-          );
+          throw StructuredErrorException.fromCode(ErrorCode.DEVICE_NOT_BOOTED, 'No device specified and no active device. Boot a simulator first with device_boot.');
         }
 
         const condition = (params.assert as AssertCondition | undefined) ?? 'exists';

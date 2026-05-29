@@ -6,7 +6,7 @@
  */
 
 import { MCPServer } from '../mcp-server';
-import { ErrorCode, respondWithStructuredError } from '../errors';
+import { ErrorCode, respondWithStructuredError, StructuredErrorException } from '../errors';
 import { getAccessibilityBridge } from '../native';
 import type { AXNode } from '../native';
 import { getSessionManager } from '../session-manager';
@@ -52,7 +52,7 @@ export function registerQaFlutterSemanticsTool(server: MCPServer): void {
           (params.device_id as string | undefined) ??
           getSessionManager().getSoleDeviceId();
         if (!deviceId) {
-          throw new Error('No device specified and no active device.');
+          throw StructuredErrorException.fromCode(ErrorCode.DEVICE_NOT_BOOTED, 'No device specified and no active device.');
         }
 
         const minCoverage = (params.min_coverage as number | undefined) ?? 80;

@@ -12,7 +12,7 @@ import { MCPServer } from '../mcp-server';
 import { getFlutterVMClient } from '../flutter';
 import { discoverVMServiceUrl } from '../flutter/vm-service-discovery';
 import { getSessionManager } from '../session-manager';
-import { ErrorCode, respondWithStructuredError } from '../errors';
+import { ErrorCode, respondWithStructuredError, StructuredErrorException } from '../errors';
 
 export type FlutterBuildMode = 'debug' | 'profile' | 'release' | 'unknown';
 
@@ -161,7 +161,7 @@ export function registerFlutterBuildModeTool(server: MCPServer): void {
           (params.device_id as string | undefined) ??
           getSessionManager().getSoleDeviceId();
         if (!deviceId) {
-          throw new Error('No device specified and no active device. Boot a simulator first.');
+          throw StructuredErrorException.fromCode(ErrorCode.DEVICE_NOT_BOOTED, 'No device specified and no active device. Boot a simulator first.');
         }
 
         const probe = await detectBuildMode(deviceId, {

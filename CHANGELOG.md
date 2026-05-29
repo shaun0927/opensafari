@@ -4,7 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- **Publish workflow honest-green** — the `Publish` workflow has reported `failure` on every release since v0.6.0 even though each version reached npm, because `npm publish --provenance` returns a misleading `E404 … not in this registry` when the version already exists or the `NPM_TOKEN` lacks publish rights. `publish.yml` now (a) skips publishing with a success status when the exact `name@version` is already on the registry (idempotent re-runs / re-pushed tags), (b) runs an `npm whoami` auth preflight that fails with an actionable message instead of the masked E404, and (c) fans a failure out through the existing `_sentinel-notify` reusable workflow so a broken release pipeline cannot sit red unnoticed. NOTE: a genuinely-new version still requires a valid publish-scoped `NPM_TOKEN`.
+
 ### Changed
+
+- Catalog-coded the two most common recoverable failure conditions so MCP clients receive a specific error code plus `recoverable` flag and `suggestion` instead of the generic `APP_STATE_UNKNOWN` fallback. "No device specified and no active device" (28 sites across `src/tools/**` and the canonical `resolveDeviceId` in `src/native/accessibility.ts`) now throws `StructuredErrorException.fromCode(ErrorCode.DEVICE_NOT_BOOTED, …)`, and "Not connected to Flutter VM Service. Run flutter_connect first." (12 sites) now throws `StructuredErrorException.fromCode(ErrorCode.FLUTTER_VM_NOT_CONNECTED, …)`. Each site preserves its original message string. The error envelope was already structured via the MCP server catch-all; this upgrades specificity (enabling client-side auto-recovery) for the highest-frequency cases.
 - **Headless Smoke `Flutter` job now gates the Tier-0 thesis** — the Flutter VM-Service live suite was entirely `continue-on-error` (advisory) after the #816 hang fix, so even a regression in headless Tier-0 routing or gesture dispatch would not fail CI. The step is now split: the ax-independent assertions (`getInputBackend()` selects `FlutterVMInputBackend`, and `swipe` dispatches gesture-arena events) run as a **blocking** step, while only the `tap`/`typeText` assertions — which verify their effect through the ax-bridge (needs Simulator.app + TCC Accessibility, unavailable on GitHub-hosted runners) — remain advisory. The load-bearing headless claim is verified on every run; the ax-dependent readback stays advisory until it is reworked off the ax-bridge. Documented in `docs/headless-architecture.md`.
 
 ## [0.6.3] - 2026-05-29
