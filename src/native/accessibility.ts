@@ -1,4 +1,5 @@
 import { getSessionManager } from '../session-manager';
+import { ErrorCode, StructuredErrorException } from '../errors';
 
 /**
  * Native iOS Accessibility Tree — Query Engine & Utilities
@@ -48,9 +49,7 @@ export function resolveDeviceId(explicit?: string): string {
   if (explicit) return explicit;
   const active = getSessionManager().getSoleDeviceId();
   if (!active) {
-    throw new Error(
-      'No device specified and no active device found. Boot a simulator first with device_boot.',
-    );
+    throw StructuredErrorException.fromCode(ErrorCode.DEVICE_NOT_BOOTED, 'No device specified and no active device found. Boot a simulator first with device_boot.');
   }
   return active;
 }

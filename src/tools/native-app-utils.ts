@@ -1,4 +1,5 @@
 import { getSessionManager } from '../session-manager';
+import { ErrorCode, StructuredErrorException } from '../errors';
 
 /**
  * Resolve a device ID from tool params or fall back to the active device.
@@ -7,9 +8,7 @@ import { getSessionManager } from '../session-manager';
 export function resolveDeviceId(params: Record<string, unknown>): string {
   const deviceId = (params.deviceId as string) || getSessionManager().getSoleDeviceId();
   if (!deviceId) {
-    throw new Error(
-      'No device specified and no active device. Boot a simulator first with device_boot.',
-    );
+    throw StructuredErrorException.fromCode(ErrorCode.DEVICE_NOT_BOOTED, 'No device specified and no active device. Boot a simulator first with device_boot.');
   }
   return deviceId;
 }
