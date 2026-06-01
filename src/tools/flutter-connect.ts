@@ -115,15 +115,17 @@ export function registerFlutterConnectTool(server: MCPServer): void {
       } catch (err) {
         const message = redactVmServiceUrl(err instanceof Error ? err.message : String(err)) ?? '';
         console.error(`[flutter_connect] ${message}`);
+        const attachDiagnostics = buildStaticAttachDiagnostics(params);
         return respondWithStructuredError(ErrorCode.FLUTTER_VM_NOT_CONNECTED, message, {
-          attachDiagnostics: buildStaticAttachDiagnostics(params),
+          attachDiagnostics,
+          suggestions: buildAttachTroubleshooting(message, attachDiagnostics.attempts),
         });
       }
     },
   );
 }
 
-interface AttachAttempt {
+export interface AttachAttempt {
   source: 'explicit_url' | 'env_http_url' | 'env_ws_url' | 'cache' | 'fixed_port' | 'log_scan';
   url?: string;
   valid?: boolean;
@@ -132,7 +134,7 @@ interface AttachAttempt {
   reason?: string;
 }
 
-async function buildAttachDiagnostics(args: {
+export async function buildAttachDiagnostics(args: {
   explicitUrl?: string;
   port?: number;
   authCode?: string;
@@ -206,7 +208,7 @@ async function buildAttachDiagnostics(args: {
   return { attempts, fixedPortUrl, cachedUrl: cached };
 }
 
-function buildStaticAttachDiagnostics(params: Record<string, unknown>): { attempts: AttachAttempt[] } {
+export function buildStaticAttachDiagnostics(params: Record<string, unknown>): { attempts: AttachAttempt[] } {
   const explicit = params.vm_service_url as string | undefined;
   const port = params.vm_service_port as number | undefined;
   const attempts: AttachAttempt[] = [];
@@ -239,4 +241,26 @@ export function redactVmServiceUrl(url: string | undefined): string | undefined 
       return `${prefix}<redacted>${suffix ?? '/'}`;
     },
   );
+}
+
+
+export function buildAttachTroubleshooting(message: string, attempts: AttachAttempt[]): string[] {
+  const suggestions: string[] = [];
+  if (/invalid/i.test(message) || attempts.some((a) => a.valid === false)) {
+    suggestions.push('Check the VM Service URL shape: use http://127.0.0.1:<port>/<auth-code>/ or ws://127.0.0.1:<port>/<auth-code>/ws.');
+  }
+  if (attempts.some((a) => a.source === 'cache' && a.reachable === false)) {
+    suggestions.push('Cached VM Service URL is stale; reconnect with vm_service_url or restart the debug/profile Flutter app.');
+  }
+  if (attempts.some((a) => a.source === 'fixed_port' && a.reachable === false)) {
+    suggestions.push('Fixed VM Service port is not reachable; verify the external flutter run/profile command uses the same host port and auth-code settings.');
+  }
+  if (!attempts.some((a) => a.source === 'explicit_url' || a.source === 'fixed_port' || a.source.startsWith('env_'))) {
+    suggestions.push('For deterministic QA, launch Flutter externally with a fixed VM Service port and pass vm_service_port plus vm_service_auth_code, or pass vm_service_url directly.');
+  }
+  if (/release/i.test(message)) {
+    suggestions.push('Flutter release builds disable VM Service; use debug or profile builds for flutter_* inspection tools.');
+  }
+  suggestions.push('OpenSafari does not own flutter run; keep app launch external and use flutter_connect only to attach.');
+  return [...new Set(suggestions)];
 }

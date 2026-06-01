@@ -17,9 +17,9 @@
 
 import { MCPServer, getWebKitClient } from '../mcp-server';
 import { getSessionManager } from '../session-manager';
-import { getAccessibilityBridge } from '../native';
 import { getInputBackend } from './native-input-utils';
 import { ErrorCode, respondWithStructuredError } from '../errors';
+import { waitForSettle } from './settle-policy';
 import {
   wrapHandlerForBundle,
   COLLECT_DEBUG_BUNDLE_ON_FAILURE_SCHEMA,
@@ -84,49 +84,30 @@ async function verifyPostcondition(
   kind: VerificationKind,
   spec: OverlayVerificationSpec,
 ): Promise<OverlayVerificationResult> {
-  const bridge = getAccessibilityBridge();
   const query = {
     identifier: spec.identifier,
     label: spec.label,
     text: spec.text,
     role: spec.role,
   };
-  const timeoutMs = Math.max(0, Math.floor(spec.timeoutMs ?? DEFAULT_VERIFY_TIMEOUT_MS));
-  const intervalMs = Math.max(50, Math.floor(spec.intervalMs ?? DEFAULT_VERIFY_INTERVAL_MS));
-  const start = Date.now();
-  const deadline = start + timeoutMs;
-  let polls = 0;
-  let finalMatchCount = 0;
-
-  while (Date.now() <= deadline) {
-    polls++;
-    const result = await bridge.query(query, { deviceId });
-    finalMatchCount = result.matches.length;
-    const verified = kind === 'gone' ? finalMatchCount === 0 : finalMatchCount > 0;
-    if (verified) {
-      return {
-        requested: true,
-        kind,
-        verified: true,
-        query,
-        elapsedMs: Date.now() - start,
-        polls,
-        finalMatchCount,
-      };
-    }
-    const remaining = deadline - Date.now();
-    if (remaining <= 0) break;
-    await new Promise((resolve) => setTimeout(resolve, Math.min(intervalMs, remaining)));
-  }
-
+  const settle = await waitForSettle(deviceId, {
+    query,
+    condition: kind === 'gone' ? 'not_exists' : 'exists',
+    timeoutMs: spec.timeoutMs ?? DEFAULT_VERIFY_TIMEOUT_MS,
+    intervalMs: spec.intervalMs ?? DEFAULT_VERIFY_INTERVAL_MS,
+    stableMs: 0,
+    allowTransientErrors: true,
+    maxRecoverableRetries: 2,
+  });
   return {
     requested: true,
     kind,
-    verified: false,
+    verified: settle.met,
     query,
-    elapsedMs: Date.now() - start,
-    polls,
-    finalMatchCount,
+    elapsedMs: settle.elapsedMs,
+    polls: settle.polls,
+    finalMatchCount: settle.matchingCount,
+    error: settle.errors.at(-1),
   };
 }
 

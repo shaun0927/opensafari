@@ -29,6 +29,22 @@ jest.mock('../../src/tools/native-input-utils', () => ({
   })),
 }));
 
+jest.mock('../../src/native', () => ({
+  getAccessibilityBridge: jest.fn(() => ({
+    query: jest.fn(async () => ({ matches: [{ path: '/0/1', frame: { x: 0, y: 0, width: 44, height: 44 } }] })),
+    press: jest.fn(async () => ({ ok: true })),
+  })),
+}));
+jest.mock('../../src/tools/native-input-utils', () => ({
+  getInputBackend: jest.fn(async () => ({
+    kind: 'simhid',
+    tap: jest.fn(async () => undefined),
+    typeText: jest.fn(async () => undefined),
+    sendKey: jest.fn(async () => undefined),
+    swipe: jest.fn(async () => undefined),
+  })),
+}));
+
 const sim = {
   device: { udid: 'D1', name: 'iPhone' },
   preset: 'iphone',
@@ -129,4 +145,19 @@ describe('ScenarioRunner v2', () => {
     expect(result.passed).toBe(true);
     expect(waitForSettle).toHaveBeenCalledWith('D1', expect.objectContaining({ query: { identifier: 'settings' } }));
   });
+});
+
+it('supports popUntil and dismissOverlay with shared settle verification', async () => {
+  const runner = new ScenarioRunner(pool as any);
+  const result = await runner.run({
+    name: 'mobile-actions',
+    version: 2,
+    steps: [
+      { action: 'popUntil', query: { identifier: 'home' }, maxNativeAttempts: 1 },
+      { action: 'dismissOverlay', query: { identifier: 'overlay' }, condition: 'not_exists', mode: 'dialog' },
+    ],
+  });
+  expect(result.passed).toBe(true);
+  expect(result.steps[0].devices[0].result).toMatchObject({ popped: 1 });
+  expect(result.steps[1].devices[0].result).toMatchObject({ dismissed: true, mode: 'dialog' });
 });

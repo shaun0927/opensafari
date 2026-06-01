@@ -1,27 +1,11 @@
 /**
- * `app_goto_screen` — high-level "take me to this screen" macro.
+ * `app_goto_screen` — high-level verified semantic screen navigation.
  *
- * Composes a deeplink open with a post-condition wait, so cross-screen
- * navigation that previously took the LLM 3-4 separate calls
- * (`app_deeplink` → `app_wait_for` → maybe `app_tap_element` to land
- * on the exact tab) collapses into a single semantic action.
- *
- * Input
- *   url           — required. The deeplink to dispatch via `simctl
- *                   openurl`. Callers can mint this from
- *                   `app_list_routes` (#779) if they need to discover
- *                   what's supported.
- *   waitFor       — required postcondition. After the openurl succeeds,
- *                   poll the AX tree until an element matching this label /
- *                   identifier appears. Default timeout 5000 ms.
- *
- * On failure the response uses StructuredErrorException's MCP shape so
- * the caller's auto-retry layer can introspect `recoverable` /
- * `suggestion`.
+ * Dispatching a deeplink/tap/route mutation is not success. The tool first
+ * checks whether the requested postcondition is already true, then tries the
+ * requested transport, and only reports success when the postcondition is met.
  */
 
-import { execFile } from 'child_process';
-import { promisify } from 'util';
 import { MCPServer } from '../mcp-server';
 import { getSessionManager } from '../session-manager';
 import { SimulatorManager } from '../simulator';
@@ -31,10 +15,12 @@ import {
   wrapHandlerForBundle,
   COLLECT_DEBUG_BUNDLE_ON_FAILURE_SCHEMA,
 } from './debug-bundle-attach';
-import { collectAppSessionState } from './app-state-snapshot';
-import { waitForSettle } from './settle-policy';
-
-const execFileAsync = promisify(execFile);
+import {
+  hasScreenPostconditionSignal,
+  navigateSemantically,
+  type NativeFallbackQuery,
+  type ScreenTargetPostcondition,
+} from './semantic-navigation';
 
 async function resolveDeviceId(explicit?: string): Promise<string | null> {
   if (explicit) return explicit;
@@ -49,21 +35,14 @@ async function resolveDeviceId(explicit?: string): Promise<string | null> {
   return null;
 }
 
-interface WaitForSpec {
-  label?: string;
-  identifier?: string;
-  role?: string;
-  text?: string;
-  timeoutMs?: number;
-  stableMs?: number;
-}
+type WaitForSpec = ScreenTargetPostcondition;
 
 export function registerAppGotoScreenTool(server: MCPServer): void {
   server.registerTool(
     {
       name: 'app_goto_screen',
       description:
-        'High-level "take me to this screen" macro. Dispatches a deeplink via simctl openurl, then requires a waitFor postcondition to verify the target screen before reporting success. Collapses the common app_deeplink → app_wait_for sequence into a single call.',
+        'High-level verified semantic navigation. Dispatches a deeplink only after an already-on-target check, optionally tries bounded native fallback queries, and reports success only when waitFor postcondition is met.',
       inputSchema: {
         type: 'object' as const,
         properties: {
@@ -71,18 +50,34 @@ export function registerAppGotoScreenTool(server: MCPServer): void {
           waitFor: {
             type: 'object',
             description:
-              'Required postcondition. The tool polls the AX tree until at least one node matches the supplied label / identifier / text / role, or the timeout fires. Dispatch-only deeplink calls are rejected as unverified.',
+              'Required postcondition. Provide identifier, label, text, role, and/or Flutter route. Transport-only navigation is rejected as unverified.',
             properties: {
               label: { type: 'string' },
               identifier: { type: 'string' },
               text: { type: 'string' },
               role: { type: 'string' },
+              route: { type: 'string', description: 'Optional Flutter route name to verify when VM Service is connected.' },
               timeoutMs: { type: 'number', description: 'Poll timeout (default 5000)' },
               stableMs: { type: 'number', description: 'Require the postcondition to hold continuously for this many ms before success.' },
             },
           },
           bundleId: { type: 'string', description: 'Target app bundle ID (forces ensureSemanticsActive scope)' },
           deviceId: { type: 'string' },
+          allowNativeFallback: { type: 'boolean', description: 'When true, try bounded native fallback queries after already-on-target/deeplink strategies fail. Default false.' },
+          nativeFallbackQueries: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                identifier: { type: 'string' },
+                label: { type: 'string' },
+                text: { type: 'string' },
+                role: { type: 'string' },
+              },
+            },
+            description: 'Bounded native fallback elements to press/tap in order. Requires allowNativeFallback=true and every attempt is postcondition-verified.',
+          },
+          maxNativeAttempts: { type: 'number', description: 'Maximum native fallback attempts (default 3).' },
           collectDebugBundleOnFailure: COLLECT_DEBUG_BUNDLE_ON_FAILURE_SCHEMA,
         },
         required: ['url', 'waitFor'],
@@ -102,10 +97,10 @@ export function registerAppGotoScreenTool(server: MCPServer): void {
           { url },
         );
       }
-      if (!hasWaitForSignal(waitForSpec)) {
+      if (!hasScreenPostconditionSignal(waitForSpec)) {
         return respondWithStructuredError(
           ErrorCode.INVALID_INPUT,
-          'waitFor requires at least one of identifier, label, text, or role',
+          'waitFor requires at least one of identifier, label, text, role, or route',
           { waitFor: waitForSpec },
         );
       }
@@ -115,174 +110,44 @@ export function registerAppGotoScreenTool(server: MCPServer): void {
         return respondWithStructuredError(ErrorCode.DEVICE_NOT_BOOTED, 'No booted simulator found');
       }
 
-      // Make sure semantics are active before we start polling.
       const bundleId = params.bundleId as string | undefined;
       try {
         await ensureSemanticsActive(deviceId, { bundleId });
       } catch {
-        // Continue — the poll loop tolerates AX errors as transient.
+        // Continue — the settle loop tolerates AX errors as transient.
       }
 
-      const attempts: Array<{
-        strategy: string;
-        elapsedMs: number;
-        ok: boolean;
-        skipped?: boolean;
-        skipReason?: string;
-        verification?: unknown;
-        error?: string;
-      }> = [];
-
-      let beforeState: unknown;
       try {
-        beforeState = await collectAppSessionState({
+        const result = await navigateSemantically({
           deviceId,
-          expectedBundleId: bundleId,
-          includeFlutter: true,
-          maxVisibleNodes: 12,
+          url,
+          bundleId,
+          postcondition: waitForSpec,
+          allowNativeFallback: params.allowNativeFallback === true,
+          nativeFallbackQueries: Array.isArray(params.nativeFallbackQueries)
+            ? (params.nativeFallbackQueries as NativeFallbackQuery[])
+            : undefined,
+          maxNativeAttempts: params.maxNativeAttempts as number | undefined,
         });
-      } catch (err) {
-        attempts.push({
-          strategy: 'state_snapshot',
-          elapsedMs: 0,
-          ok: false,
-          skipped: true,
-          skipReason: err instanceof Error ? err.message : String(err),
-        });
-      }
 
-      if (waitForSpec) {
-        const alreadyStart = Date.now();
-        try {
-          const pre = await waitForSettle(deviceId, {
-            query: {
-              identifier: waitForSpec.identifier,
-              label: waitForSpec.label,
-              text: waitForSpec.text,
-              role: waitForSpec.role,
-            },
-            condition: 'exists',
-            timeoutMs: 250,
-            intervalMs: 100,
-            stableMs: 0,
-            allowTransientErrors: true,
-            maxRecoverableRetries: 1,
-          });
-          attempts.push({
-            strategy: 'already_on_target',
-            elapsedMs: Date.now() - alreadyStart,
-            ok: pre.met,
-            verification: pre,
-          });
-          if (pre.met) {
-            return {
-              content: [{
-                type: 'text' as const,
-                text: JSON.stringify({
-                  navigated: false,
-                  strategy: 'already_on_target',
-                  url,
-                  deviceId,
-                  beforeState,
-                  afterState: beforeState,
-                  attempts,
-                  waitFor: { ...waitForSpec, matched: true, elapsedMs: pre.elapsedMs, matchCount: pre.matchingCount },
-                  verification: pre,
-                }, null, 2),
-              }],
-            };
-          }
-        } catch (err) {
-          attempts.push({
-            strategy: 'already_on_target',
-            elapsedMs: Date.now() - alreadyStart,
-            ok: false,
-            error: err instanceof Error ? err.message : String(err),
-          });
+        if (!result.navigated && result.strategy === 'failed') {
+          return respondWithStructuredError(
+            ErrorCode.FLUTTER_EVAL_FAILED,
+            'app_goto_screen postcondition was not met',
+            { ...result },
+          );
         }
-      }
 
-      // Dispatch the deeplink only after the non-mutating already-on-target
-      // check has failed. This preserves the semantic navigation contract:
-      // when the requested postcondition is already true, the tool returns
-      // without perturbing the app state.
-      const openedAt = Date.now();
-      try {
-        await execFileAsync('xcrun', ['simctl', 'openurl', deviceId, url]);
+        return {
+          content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
+        };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        attempts.push({
-          strategy: 'deeplink',
-          elapsedMs: Date.now() - openedAt,
-          ok: false,
-          error: message,
-        });
         return respondWithStructuredError(ErrorCode.FLUTTER_EVAL_FAILED, message, {
           url,
           deviceId,
-          beforeState,
-          attempts,
         });
       }
-
-      const verifyStart = Date.now();
-      let verification: unknown;
-      let verdict: { matched: boolean; elapsedMs: number; matchCount: number };
-      const settle = await waitForSettle(deviceId, {
-        query: {
-          identifier: waitForSpec.identifier,
-          label: waitForSpec.label,
-          text: waitForSpec.text,
-          role: waitForSpec.role,
-        },
-        condition: 'exists',
-        timeoutMs: waitForSpec.timeoutMs ?? 5000,
-        intervalMs: 250,
-        stableMs: waitForSpec.stableMs ?? 0,
-        allowTransientErrors: true,
-        maxRecoverableRetries: 3,
-      });
-      verification = settle;
-      verdict = { matched: settle.met, elapsedMs: settle.elapsedMs, matchCount: settle.matchingCount };
-      attempts.push({
-        strategy: 'deeplink_postcondition',
-        elapsedMs: Date.now() - verifyStart,
-        ok: settle.met,
-        verification: settle,
-      });
-      let afterState: unknown;
-      try {
-        afterState = await collectAppSessionState({
-          deviceId,
-          expectedBundleId: bundleId,
-          includeFlutter: true,
-          maxVisibleNodes: 12,
-        });
-      } catch {
-        afterState = undefined;
-      }
-      return {
-        content: [{
-          type: 'text' as const,
-          text: JSON.stringify({
-            navigated: true,
-            strategy: 'deeplink',
-            url,
-            deviceId,
-            openedAt: new Date(openedAt).toISOString(),
-            beforeState,
-            afterState,
-            attempts,
-            waitFor: { ...waitForSpec, ...verdict },
-            verification,
-          }, null, 2),
-        }],
-        isError: !verdict.matched,
-      };
     }),
   );
-}
-
-function hasWaitForSignal(spec: WaitForSpec): boolean {
-  return Boolean(spec.identifier || spec.label || spec.text || spec.role);
 }
