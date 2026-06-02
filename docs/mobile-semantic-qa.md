@@ -46,3 +46,26 @@ Release builds generally do not expose VM Service and should use native AX seman
 ## Scenario runner v2
 
 `run_scenario` accepts `version: 2` for currently implemented mobile semantic steps: `recordState`, `launchApp`, `gotoScreen`, `tapElement`, `typeElement`, `waitFor`, `assertElement`, and `collectDebugBundle`. V2 results include per-device state, backend hint, verification, timing, and partial-failure data. Existing v1 browser scenarios remain compatible. V2 starts from the current simulator state by design; use an explicit `launchApp` step only when a scenario needs to foreground an app.
+
+## Follow-up runtime contracts after PR #828
+
+Semantic navigation is now controller-shaped: every strategy records an attempt,
+skipped reason, selected strategy, verification evidence, and recovery hint. A
+transport dispatch (`simctl openurl`, native tap, text injection, route mutation)
+is never success without a route or AX postcondition.
+
+Shared settle policies are available to high-level interaction and scenario
+steps. `app_tap_element` and `app_type_element` preserve their historical behavior
+when no `settle` object is supplied; when `settle.query` is supplied, the response
+includes settle evidence and failed postconditions become tool errors.
+
+Scenario v2 is stateful-by-default. Use explicit `launchApp` only when a scenario
+requires a fresh foreground app. Otherwise, start from current state with
+`recordState`, `gotoScreen`, `waitFor`, `tapElement`, `typeElement`, `popUntil`,
+`dismissOverlay`, and `collectDebugBundle` steps. `gotoScreen` requires `query`,
+`settle.query`, or a Flutter route target and cannot pass from deeplink dispatch
+alone.
+
+Flutter selector quality remains AX-first and release-compatible. When Flutter VM
+is attached, findings may include best-effort route/widget/source hints; VM
+absence is reported as data, not failure.

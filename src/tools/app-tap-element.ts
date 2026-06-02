@@ -23,6 +23,7 @@ import type { AccessibilityBridge } from '../native/accessibility-bridge';
 import { walkTree, fingerprintTree } from '../native/ax-verification';
 import { resolveDeviceId, getInputBackend, runInputOp } from './native-input-utils';
 import { probeMobileContext } from './app-context';
+import { waitForSettle, type SettlePolicy } from './settle-policy';
 import {
   activateAndClassify,
   createContextMismatchError,
@@ -116,6 +117,19 @@ export function registerAppTapElementTool(server: MCPServer): void {
             type: 'boolean',
             description:
               'When the primary identifier/label/text/role query misses, retry with a relaxed `text` substring built from all provided query fields. Catches the common case where the desired string lives in `value` rather than `label`. Default false.',
+          },
+          settle: {
+            type: 'object',
+            description: 'Optional semantic postcondition. When supplied, the tap is only reported successful if the shared settle policy is met after dispatch.',
+            properties: {
+              query: { type: 'object', properties: { identifier: { type: 'string' }, label: { type: 'string' }, text: { type: 'string' }, role: { type: 'string' } } },
+              condition: { type: 'string', enum: ['exists', 'not_exists', 'visible', 'enabled'] },
+              timeoutMs: { type: 'number' },
+              intervalMs: { type: 'number' },
+              stableMs: { type: 'number' },
+              allowTransientErrors: { type: 'boolean' },
+              maxRecoverableRetries: { type: 'number' },
+            },
           },
           collectDebugBundleOnFailure: COLLECT_DEBUG_BUNDLE_ON_FAILURE_SCHEMA,
         },
@@ -421,6 +435,8 @@ export function registerAppTapElementTool(server: MCPServer): void {
                 ...(response._meta as Record<string, unknown>),
                 context: contextMeta,
               };
+              const settle = await runOptionalPostActionSettle(deviceId, params, response);
+              if (settle) return settle;
               return {
                 content: [{ type: 'text' as const, text: JSON.stringify(response) }],
               };
@@ -573,6 +589,8 @@ export function registerAppTapElementTool(server: MCPServer): void {
           response.warning = response.warning
             ? `${response.warning}; The tap was dispatched but post-action AX verification was unavailable.`
             : 'The tap was dispatched but post-action AX verification was unavailable.';
+          const settle = await runOptionalPostActionSettle(deviceId, params, response);
+          if (settle) return settle;
           return {
             content: [{ type: 'text' as const, text: JSON.stringify(response) }],
           };
@@ -586,6 +604,8 @@ export function registerAppTapElementTool(server: MCPServer): void {
           );
         }
 
+        const settle = await runOptionalPostActionSettle(deviceId, params, response);
+        if (settle) return settle;
         return {
           content: [{ type: 'text' as const, text: JSON.stringify(response) }],
         };
@@ -939,4 +959,21 @@ export function buildAXPressResponse(args: {
     response.warning = warnings.join('; ');
   }
   return response;
+}
+
+
+async function runOptionalPostActionSettle(
+  deviceId: string,
+  params: Record<string, unknown>,
+  response: Record<string, unknown>,
+): Promise<{ content: Array<{ type: 'text'; text: string }>; isError?: boolean } | null> {
+  const settle = params.settle as SettlePolicy | undefined;
+  if (!settle?.query) return null;
+  const verification = await waitForSettle(deviceId, settle);
+  response.settle = verification;
+  response.verifiedPostcondition = verification.met;
+  return {
+    content: [{ type: 'text' as const, text: JSON.stringify(response) }],
+    ...(verification.met ? {} : { isError: true as const }),
+  };
 }
