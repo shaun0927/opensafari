@@ -9,6 +9,7 @@
 import { MCPServer, getWebKitClient } from '../mcp-server';
 import { getAccessibilityBridge, ensureSemanticsActive, activateSemanticsOrWarn } from '../native';
 import type { AXNode } from '../native';
+import { buildNotFoundDiagnostics } from '../native/not-found-diagnostics';
 import { getSessionManager } from '../session-manager';
 import { getInputBackend } from './native-input-utils';
 import { ErrorCode, respondWithStructuredError, StructuredErrorException } from '../errors';
@@ -265,10 +266,18 @@ export function registerAppWaitForNativeTool(server: MCPServer): void {
 
         // Timeout
         const elapsed = Date.now() - startTime;
+        // For "wait until it appears" conditions, attach a bounded snapshot of
+        // what IS on screen so the timeout is diagnosable in one call instead
+        // of a manual app_tree round-trip (#834). Skipped for not_exists, where
+        // a timeout means the element is still present (nothing to surface).
+        const diagnostics =
+          condition === 'not_exists'
+            ? undefined
+            : await buildNotFoundDiagnostics(bridge, deviceId, query);
         return respondWithStructuredError(
           ErrorCode.APP_STATE_UNKNOWN,
           'Timeout waiting for element',
-          { condition, query, timeout, elapsed, polls: pollCount, semanticsWarning },
+          { condition, query, timeout, elapsed, polls: pollCount, semanticsWarning, diagnostics },
         );
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
