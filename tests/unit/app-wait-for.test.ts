@@ -206,6 +206,47 @@ describe('app_wait_for', () => {
     const result = await waitHandler('session', {});
     expect(result.isError).toBe(true);
   });
+
+  it('attaches searched-tree diagnostics on timeout for an appearance condition (#834)', async () => {
+    jest.useFakeTimers();
+    mockQuery.mockResolvedValue(makeQueryResult([]));
+    mockDumpTree.mockResolvedValue({
+      role: 'AXWindow', traits: [], frame: { x: 0, y: 0, width: 1, height: 1 },
+      visible: true, enabled: true, focused: false, path: '0',
+      children: [{
+        role: 'AXButton', label: 'Login', traits: [],
+        frame: { x: 0, y: 0, width: 1, height: 1 },
+        visible: true, enabled: true, focused: false, path: '0/0',
+      }],
+    });
+
+    const promise = waitHandler('session', { label: 'login', timeout: 500, interval: 100 });
+    await jest.advanceTimersByTimeAsync(600);
+    const result = await promise;
+    const body = JSON.parse(result.content[0].text);
+
+    expect(body.message).toBe('Timeout waiting for element');
+    expect(body.diagnostics).toBeDefined();
+    expect(body.diagnostics.candidates.map((c: { label?: string }) => c.label)).toContain('Login');
+    jest.useRealTimers();
+  });
+
+  it('omits diagnostics on timeout for a not_exists condition (#834)', async () => {
+    jest.useFakeTimers();
+    // not_exists times out while the element is still present — nothing to surface.
+    mockQuery.mockResolvedValue(makeQueryResult([makeNode()]));
+
+    const promise = waitHandler('session', {
+      label: 'Persist', condition: 'not_exists', timeout: 500, interval: 100,
+    });
+    await jest.advanceTimersByTimeAsync(600);
+    const result = await promise;
+    const body = JSON.parse(result.content[0].text);
+
+    expect(body.message).toBe('Timeout waiting for element');
+    expect(body.diagnostics).toBeUndefined();
+    jest.useRealTimers();
+  });
 });
 
 // ── app_assert_element Tests ─────────────────────────────────────────────────
