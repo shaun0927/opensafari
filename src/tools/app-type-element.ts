@@ -43,7 +43,7 @@ import {
   wrapHandlerForBundle,
   COLLECT_DEBUG_BUNDLE_ON_FAILURE_SCHEMA,
 } from './debug-bundle-attach';
-import { getAccessibilityBridge, ensureSemanticsActive } from '../native';
+import { getAccessibilityBridge, activateSemanticsOrWarn } from '../native';
 import type { AXNode, AXQuery } from '../native';
 import { resolveDeviceId, getInputBackend, runInputOp } from './native-input-utils';
 import { tryPress } from './app-tap-element';
@@ -220,7 +220,7 @@ export function registerAppTypeElementTool(server: MCPServer): void {
             ? perKeyDelayMsRaw
             : 0;
 
-        await ensureSemanticsActive(deviceId);
+        const { warning: semanticsWarning } = await activateSemanticsOrWarn(deviceId);
 
         const bridge = getAccessibilityBridge();
         // Note: the bridge supports a `text` query param (searches label/value),
@@ -246,7 +246,7 @@ export function registerAppTypeElementTool(server: MCPServer): void {
           }
         }
         if (!match) {
-          return respondWithStructuredError(ErrorCode.APP_STATE_UNKNOWN, 'Element not found', { query, index, timeout });
+          return respondWithStructuredError(ErrorCode.APP_STATE_UNKNOWN, 'Element not found', { query, index, timeout, semanticsWarning });
         }
 
         if (!match.visible || match.frame.width <= 0 || match.frame.height <= 0) {

@@ -7,7 +7,7 @@
  */
 
 import { MCPServer } from '../mcp-server';
-import { getAccessibilityBridge, ensureSemanticsActive } from '../native';
+import { getAccessibilityBridge, ensureSemanticsActive, activateSemanticsOrWarn } from '../native';
 import type { AXNode } from '../native';
 import { getSessionManager } from '../session-manager';
 import {
@@ -108,6 +108,7 @@ export function registerAppAssertElementTool(server: MCPServer): void {
           activationAttempted: false,
           activationRetries: 0,
         };
+        let semanticsWarning: string | undefined;
         if (bundleId) {
           const context = await activateAndClassify({
             bridge,
@@ -120,7 +121,7 @@ export function registerAppAssertElementTool(server: MCPServer): void {
             throw createContextMismatchError(meta);
           }
         } else {
-          await ensureSemanticsActive(deviceId, { bundleId });
+          semanticsWarning = (await activateSemanticsOrWarn(deviceId, { bundleId })).warning;
         }
         const result = await bridge.query(query, { deviceId });
         const matches = result.matches;
@@ -171,6 +172,9 @@ export function registerAppAssertElementTool(server: MCPServer): void {
           debug: !passed && match === null
             ? await collectNoMatchDebug(bridge, deviceId, query)
             : undefined,
+          // Surface the empty-tree cause only when the assertion failed
+          // because nothing was found (not for a passing not_exists check).
+          semanticsWarning: !passed && match === null ? semanticsWarning : undefined,
           _meta: { context: meta },
           element: match ? {
             role: match.role,
