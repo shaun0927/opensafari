@@ -118,7 +118,7 @@ async function verifyPostcondition(deviceId: string, spec: ScreenTargetPostcondi
   }
   const settle = await waitForSettle(deviceId, settlePolicyFromPostcondition(spec));
   if (spec.route) {
-    const route = await verifyRoute(deviceId, spec.route, Math.min(spec.timeoutMs ?? 1000, 1000));
+    const route = await verifyRoute(deviceId, spec.route, spec.timeoutMs ?? 1000);
     return { ax: settle, route, met: settle.met && route.met };
   }
   return settle;
@@ -195,7 +195,7 @@ export async function navigateSemantically(args: SemanticNavigationTarget): Prom
   const hasAxPostcondition = Boolean(args.postcondition.identifier || args.postcondition.label || args.postcondition.text || args.postcondition.role);
   if (args.postcondition.route) {
     const routeStart = Date.now();
-    const route = await verifyRoute(args.deviceId, args.postcondition.route, Math.min(args.postcondition.timeoutMs ?? 1000, 1000));
+    const route = await verifyRoute(args.deviceId, args.postcondition.route, args.postcondition.timeoutMs ?? 1000);
     attempts.push({ strategy: 'flutter_route', elapsedMs: Date.now() - routeStart, ok: route.met && !hasAxPostcondition, verification: route, skipped: !getFlutterVMClient(args.deviceId).isConnected() || hasAxPostcondition, skipReason: hasAxPostcondition ? 'Route evidence alone is insufficient because AX postcondition was also requested.' : (getFlutterVMClient(args.deviceId).isConnected() ? undefined : 'Flutter VM is not connected.') });
     if (route.met && !hasAxPostcondition) return { navigated: false, strategy: 'flutter_route', deviceId: args.deviceId, url: args.url, route: args.postcondition.route, beforeState, afterState: beforeState, attempts, verification: route, waitFor: args.postcondition as Record<string, unknown>, recoveryHints: [] };
   }
@@ -241,3 +241,5 @@ export async function navigateSemantically(args: SemanticNavigationTarget): Prom
     ],
   };
 }
+
+export const __forTests = { verifyRoute, verifyPostcondition };

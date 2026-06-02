@@ -1,4 +1,4 @@
-import { analyzeSelectorQuality } from '../../src/tools/qa-flutter-semantics';
+import { analyzeSelectorQuality, __forTests } from '../../src/tools/qa-flutter-semantics';
 import type { AXNode } from '../../src/native';
 
 function node(partial: Partial<AXNode>): AXNode {
@@ -54,4 +54,16 @@ it('keeps selector quality AX-first when Flutter VM is unavailable', () => {
   const report = analyzeSelectorQuality(node({ children: [node({ role: 'AXButton', label: 'Only Label' })] }), { flutterVmConnected: false });
   expect(report.enrichment).toMatchObject({ flutterVmConnected: false, widgetTreeUsed: false });
   expect(report.findings.map((f) => f.category)).toContain('label_only_selector');
+});
+
+
+it('preserves Dart regex escaping when extracting Flutter route hints', async () => {
+  const evaluate = jest.fn(async (_expression: string) => ({ valueAsString: '/checkout' }));
+  const getRootWidgetSummaryTree = jest.fn(async () => { throw new Error('tree unavailable'); });
+  const context = await __forTests.collectSelectorVmContext({ evaluate, getRootWidgetSummaryTree } as any);
+  const expression = evaluate.mock.calls[0][0];
+  expect(expression).toContain('name:\\s*"');
+  expect(expression).toContain("name:\\s*'");
+  expect(expression).not.toContain('name:s*');
+  expect(context).toMatchObject({ flutterVmConnected: true, widgetTreeUsed: false, routeContext: '/checkout' });
 });

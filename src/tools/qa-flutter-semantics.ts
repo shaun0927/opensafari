@@ -366,7 +366,7 @@ async function collectSelectorVmContext(client: ReturnType<typeof getFlutterVMCl
   let widgetSummaryHint: string | undefined;
   let sourceLocationHint: string | undefined;
   try {
-    const routeRaw = await client.evaluate(`(() { try { final binding = WidgetsBinding.instance; final root = binding.rootElement; if (root == null) return 'null'; String? name; void visit(Element el) { if (name != null) return; final s = el.toString(); final m = RegExp(r'name:\s*"([^"]+)"').firstMatch(s) ?? RegExp(r"name:\s*'([^']+)'").firstMatch(s); if (m != null) name = m.group(1); el.visitChildren(visit); } visit(root); return name ?? 'unknown'; } catch (e) { return 'unavailable'; } })()`);
+    const routeRaw = await client.evaluate(`(() { try { final binding = WidgetsBinding.instance; final root = binding.rootElement; if (root == null) return 'null'; String? name; void visit(Element el) { if (name != null) return; final s = el.toString(); final m = RegExp(r'name:\\s*"([^"]+)"').firstMatch(s) ?? RegExp(r"name:\\s*'([^']+)'").firstMatch(s); if (m != null) name = m.group(1); el.visitChildren(visit); } visit(root); return name ?? 'unknown'; } catch (e) { return 'unavailable'; } })()`);
     routeContext = (routeRaw as { valueAsString?: string }).valueAsString ?? null;
   } catch {
     routeContext = null;
@@ -414,3 +414,5 @@ function shapeVmContext(enrichment: { routeContext?: string | null; widgetSummar
     sourceLocationHint: enrichment.sourceLocationHint,
   };
 }
+
+export const __forTests = { collectSelectorVmContext };

@@ -26,20 +26,6 @@ jest.mock('../../src/tools/native-input-utils', () => ({
     kind: 'simhid',
     tap: tapMock,
     typeText: typeTextMock,
-  })),
-}));
-
-jest.mock('../../src/native', () => ({
-  getAccessibilityBridge: jest.fn(() => ({
-    query: jest.fn(async () => ({ matches: [{ path: '/0/1', frame: { x: 0, y: 0, width: 44, height: 44 } }] })),
-    press: jest.fn(async () => ({ ok: true })),
-  })),
-}));
-jest.mock('../../src/tools/native-input-utils', () => ({
-  getInputBackend: jest.fn(async () => ({
-    kind: 'simhid',
-    tap: jest.fn(async () => undefined),
-    typeText: jest.fn(async () => undefined),
     sendKey: jest.fn(async () => undefined),
     swipe: jest.fn(async () => undefined),
   })),
