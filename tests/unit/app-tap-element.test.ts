@@ -1025,6 +1025,9 @@ describe('app_tap_element — macOS-pt → iOS-pt coordinate conversion (#693 WU
     expect(body.status).toBe('tapped');
     // Raw center unchanged: 200, 222
     expect(body.coordinates).toEqual({ x: 200, y: 222 });
+    // #833 PR 3.2: a known-device preset miss warns that raw coordinates may
+    // be inaccurate rather than degrading silently.
+    expect(body.warning).toContain('not in the known preset table');
   });
 
   it('falls back to raw AX coordinates when getDevice returns null (simctl failure)', async () => {
@@ -1043,6 +1046,9 @@ describe('app_tap_element — macOS-pt → iOS-pt coordinate conversion (#693 WU
     expect(body.status).toBe('tapped');
     // Raw center unchanged.
     expect(body.coordinates).toEqual({ x: 200, y: 222 });
+    // #833 PR 3.2: a transient simctl failure must NOT emit the preset-miss
+    // warning (avoids alarm fatigue), since it may recover on a later call.
+    expect(body.warning ?? '').not.toContain('preset table');
   });
 });
 
