@@ -77,6 +77,16 @@ export interface AppStateSnapshotOptions {
   maxDepth?: number;
 }
 
+export class AppStateSnapshotError extends Error {
+  constructor(
+    message: string,
+    public readonly code: ErrorCode,
+  ) {
+    super(message);
+    this.name = 'AppStateSnapshotError';
+  }
+}
+
 export async function collectAppSessionState(
   options: AppStateSnapshotOptions = {},
 ): Promise<AppSessionState> {
@@ -87,7 +97,10 @@ export async function collectAppSessionState(
     getSessionManager().getSoleDeviceId() ??
     booted[0]?.udid;
   if (!deviceId) {
-    throw new Error('No booted simulator found. Call device_boot first or pass deviceId.');
+    throw new AppStateSnapshotError(
+      'No booted simulator found. Call device_boot first or pass deviceId.',
+      ErrorCode.DEVICE_NOT_BOOTED,
+    );
   }
 
   const device = booted.find((d) => d.udid === deviceId);
@@ -330,8 +343,11 @@ export function registerAppStateSnapshotTool(server: MCPServer): void {
         });
         return { content: [{ type: 'text' as const, text: JSON.stringify(snapshot, null, 2) }] };
       } catch (err) {
+        const code = err instanceof AppStateSnapshotError
+          ? err.code
+          : ErrorCode.APP_STATE_UNKNOWN;
         return respondWithStructuredError(
-          ErrorCode.DEVICE_NOT_BOOTED,
+          code,
           err instanceof Error ? err.message : String(err),
         );
       }

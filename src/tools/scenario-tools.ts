@@ -20,7 +20,7 @@ export function registerScenarioTools(server: MCPServer): void {
   server.registerTool(
     {
       name: 'run_scenario',
-      description: 'Execute a declarative test scenario across devices with per-step, per-device results. Mobile semantic v2 navigation is postcondition-first: gotoScreen requires query or settle.query and never succeeds on deeplink dispatch alone.',
+      description: 'Execute a declarative test scenario across devices with per-step, per-device results. Mobile semantic v2 navigation is postcondition-first: action-specific required fields are enforced in the schema before runtime execution.',
       inputSchema: {
         type: 'object' as const,
         properties: {
@@ -40,14 +40,14 @@ export function registerScenarioTools(server: MCPServer): void {
                   ],
                 },
                 target: { type: 'string', description: 'CSS selector' },
-                value: { type: 'string', description: 'Input value, URL, or scroll direction. For v2 gotoScreen this is an optional deeplink transport; query or settle.query is still required as the postcondition.' },
+                value: { type: 'string', description: 'Input value, URL, or scroll direction. Required for typeElement. For v2 gotoScreen this is an optional deeplink transport; query or settle.query is still required as the postcondition.' },
                 assertion: { type: 'string', description: 'JS expression evaluated in the page context (same as javascript tool). Returns boolean.' },
-                bundleId: { type: 'string', description: 'Bundle id for mobile v2 steps such as launchApp' },
+                bundleId: { type: 'string', description: 'Bundle id for mobile v2 launchApp' },
                 expectedBundleId: { type: 'string', description: 'Expected app bundle for state snapshots and post-step verification' },
                 context: { type: 'string', enum: ['native', 'webview', 'safari', 'flutter'] },
                 query: {
                   type: 'object',
-                  description: 'AX query for mobile v2 wait/assert steps. Required for gotoScreen unless settle.query is supplied; gotoScreen uses it as the success postcondition.',
+                  description: 'AX query for mobile v2 tap/type/wait/assert steps. Required for tapElement and typeElement; required for gotoScreen, waitFor, and assertElement unless settle.query is supplied.',
                   properties: {
                     identifier: { type: 'string' },
                     label: { type: 'string' },
@@ -88,6 +88,42 @@ export function registerScenarioTools(server: MCPServer): void {
               allOf: [
                 {
                   if: { properties: { action: { const: 'gotoScreen' } }, required: ['action'] },
+                  then: {
+                    anyOf: [
+                      { required: ['query'] },
+                      {
+                        required: ['settle'],
+                        properties: { settle: { required: ['query'] } },
+                      },
+                    ],
+                  },
+                },
+                {
+                  if: { properties: { action: { const: 'launchApp' } }, required: ['action'] },
+                  then: { required: ['bundleId'] },
+                },
+                {
+                  if: { properties: { action: { const: 'tapElement' } }, required: ['action'] },
+                  then: { required: ['query'] },
+                },
+                {
+                  if: { properties: { action: { const: 'typeElement' } }, required: ['action'] },
+                  then: { required: ['query', 'value'] },
+                },
+                {
+                  if: { properties: { action: { const: 'waitFor' } }, required: ['action'] },
+                  then: {
+                    anyOf: [
+                      { required: ['query'] },
+                      {
+                        required: ['settle'],
+                        properties: { settle: { required: ['query'] } },
+                      },
+                    ],
+                  },
+                },
+                {
+                  if: { properties: { action: { const: 'assertElement' } }, required: ['action'] },
                   then: {
                     anyOf: [
                       { required: ['query'] },
