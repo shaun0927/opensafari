@@ -159,6 +159,31 @@ export function registerScenarioTools(server: MCPServer): void {
                     ],
                   },
                 },
+
+                {
+                  if: { properties: { action: { const: 'popUntil' } }, required: ['action'] },
+                  then: {
+                    anyOf: [
+                      { required: ['query'] },
+                      {
+                        required: ['settle'],
+                        properties: { settle: { required: ['query'] } },
+                      },
+                    ],
+                  },
+                },
+                {
+                  if: { properties: { action: { const: 'dismissOverlay' } }, required: ['action'] },
+                  then: {
+                    anyOf: [
+                      { required: ['query'] },
+                      {
+                        required: ['settle'],
+                        properties: { settle: { required: ['query'] } },
+                      },
+                    ],
+                  },
+                },
               ],
             },
             description: 'Ordered list of test steps',

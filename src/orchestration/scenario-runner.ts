@@ -303,6 +303,8 @@ export class ScenarioRunner {
           break;
         }
         case 'popUntil': {
+          const postconditionQuery = step.settle?.query ?? step.query;
+          if (!postconditionQuery) throw new Error('popUntil requires query or settle.query postcondition');
           const backend = await getInputBackend(sim.device.udid, sim.client);
           const attempts: Array<{ action: string; ok: boolean; elapsedMs: number; error?: string }> = [];
           const max = Math.max(1, Math.min(step.maxNativeAttempts ?? 3, 10));
@@ -320,28 +322,66 @@ export class ScenarioRunner {
                 attempts.push({ action: dispatch.action, ok: false, elapsedMs: Date.now() - started, error: err instanceof Error ? err.message : String(err) });
                 continue;
               }
-              if (step.settle?.query || step.query) {
-                verification = await waitForSettle(sim.device.udid, { ...(step.settle ?? {}), query: step.settle?.query ?? step.query, condition: step.condition ?? step.settle?.condition ?? 'exists', timeoutMs: step.timeout ?? step.settle?.timeoutMs });
-                if ((verification as { met?: boolean }).met) break;
-              }
+              verification = await waitForSettle(sim.device.udid, { ...(step.settle ?? {}), query: postconditionQuery, condition: step.condition ?? step.settle?.condition ?? 'exists', timeoutMs: step.timeout ?? step.settle?.timeoutMs });
+              if ((verification as { met?: boolean }).met) break;
             }
-            if (!step.settle?.query && !step.query) break;
             if ((verification as { met?: boolean } | undefined)?.met) break;
           }
-          if ((step.settle?.query || step.query) && !(verification as { met?: boolean } | undefined)?.met) throw new Error('popUntil postcondition was not met');
+          if (!(verification as { met?: boolean } | undefined)?.met) {
+            return {
+              device: sim.preset,
+              deviceId: sim.device.udid,
+              passed: false,
+              beforeState,
+              afterState: await safeState(sim.device.udid, step.expectedBundleId ?? step.bundleId),
+              selectedBackend: inferStepBackend(step),
+              headless: true,
+              result: { popped: attempts.filter((a) => a.ok).length, attempts },
+              verification,
+              error: 'popUntil postcondition was not met',
+              timing: Date.now() - start,
+            };
+          }
           result = { popped: attempts.filter((a) => a.ok).length, attempts };
           break;
         }
         case 'dismissOverlay': {
+          const postconditionQuery = step.settle?.query ?? step.query;
+          if (!postconditionQuery) throw new Error('dismissOverlay requires query or settle.query postcondition');
           const backend = await getInputBackend(sim.device.udid, sim.client);
           const mode = step.mode ?? 'auto';
-          const attempts: string[] = [];
-          if (mode === 'dialog' || mode === 'auto') { await backend.sendKey(sim.device.udid, 'Escape').catch(() => undefined); attempts.push('escape'); }
-          if (mode === 'drawer' || mode === 'auto') { await backend.swipe(sim.device.udid, 360, 400, 80, 400, 0.25).catch(() => undefined); attempts.push('swipe_from_right'); }
-          if (mode === 'bottom_sheet' || mode === 'auto') { await backend.swipe(sim.device.udid, 200, 240, 200, 720, 0.25).catch(() => undefined); attempts.push('swipe_down'); }
-          if (step.settle?.query || step.query) {
-            verification = await waitForSettle(sim.device.udid, { ...(step.settle ?? {}), query: step.settle?.query ?? step.query, condition: step.condition ?? step.settle?.condition ?? 'not_exists', timeoutMs: step.timeout ?? step.settle?.timeoutMs });
-            if (!(verification as { met?: boolean }).met) throw new Error('dismissOverlay postcondition was not met');
+          const attempts: Array<{ action: string; ok: boolean; elapsedMs: number; error?: string }> = [];
+          const dispatches: Array<{ action: string; enabled: boolean; run: () => Promise<void> }> = [
+            { action: 'escape', enabled: mode === 'dialog' || mode === 'auto', run: () => backend.sendKey(sim.device.udid, 'Escape') },
+            { action: 'swipe_from_right', enabled: mode === 'drawer' || mode === 'auto', run: () => backend.swipe(sim.device.udid, 360, 400, 80, 400, 0.25) },
+            { action: 'swipe_down', enabled: mode === 'bottom_sheet' || mode === 'auto', run: () => backend.swipe(sim.device.udid, 200, 240, 200, 720, 0.25) },
+          ];
+          for (const dispatch of dispatches.filter((d) => d.enabled)) {
+            const started = Date.now();
+            try {
+              await dispatch.run();
+              attempts.push({ action: dispatch.action, ok: true, elapsedMs: Date.now() - started });
+            } catch (err) {
+              attempts.push({ action: dispatch.action, ok: false, elapsedMs: Date.now() - started, error: err instanceof Error ? err.message : String(err) });
+              continue;
+            }
+            verification = await waitForSettle(sim.device.udid, { ...(step.settle ?? {}), query: postconditionQuery, condition: step.condition ?? step.settle?.condition ?? 'not_exists', timeoutMs: step.timeout ?? step.settle?.timeoutMs });
+            if ((verification as { met?: boolean }).met) break;
+          }
+          if (!(verification as { met?: boolean } | undefined)?.met) {
+            return {
+              device: sim.preset,
+              deviceId: sim.device.udid,
+              passed: false,
+              beforeState,
+              afterState: await safeState(sim.device.udid, step.expectedBundleId ?? step.bundleId),
+              selectedBackend: inferStepBackend(step),
+              headless: true,
+              result: { dismissed: false, mode, attempts },
+              verification,
+              error: 'dismissOverlay postcondition was not met',
+              timing: Date.now() - start,
+            };
           }
           result = { dismissed: true, mode, attempts };
           break;

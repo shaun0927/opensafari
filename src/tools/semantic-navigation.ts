@@ -202,15 +202,23 @@ export async function navigateSemantically(args: SemanticNavigationTarget): Prom
 
   if (args.url) {
     const openStart = Date.now();
-    await execFileAsync('xcrun', ['simctl', 'openurl', args.deviceId, args.url]);
-    attempts.push({ strategy: 'deeplink', elapsedMs: Date.now() - openStart, ok: true });
-    const verifyStart = Date.now();
-    const verification = await verifyPostcondition(args.deviceId, args.postcondition);
-    const ok = postconditionMet(verification);
-    attempts.push({ strategy: 'deeplink_postcondition', elapsedMs: Date.now() - verifyStart, ok, verification });
-    if (ok) {
-      const afterState = args.collectState === false ? undefined : await collectAppSessionState({ deviceId: args.deviceId, expectedBundleId: args.bundleId, includeFlutter: args.includeFlutter !== false, maxVisibleNodes: 12 }).catch(() => undefined);
-      return { navigated: true, strategy: 'deeplink_postcondition', deviceId: args.deviceId, url: args.url, route: args.postcondition.route, beforeState, afterState, attempts, verification, waitFor: args.postcondition as Record<string, unknown>, recoveryHints: [] };
+    let openOk = false;
+    try {
+      await execFileAsync('xcrun', ['simctl', 'openurl', args.deviceId, args.url]);
+      openOk = true;
+      attempts.push({ strategy: 'deeplink', elapsedMs: Date.now() - openStart, ok: true });
+    } catch (err) {
+      attempts.push({ strategy: 'deeplink', elapsedMs: Date.now() - openStart, ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+    if (openOk) {
+      const verifyStart = Date.now();
+      const verification = await verifyPostcondition(args.deviceId, args.postcondition);
+      const ok = postconditionMet(verification);
+      attempts.push({ strategy: 'deeplink_postcondition', elapsedMs: Date.now() - verifyStart, ok, verification });
+      if (ok) {
+        const afterState = args.collectState === false ? undefined : await collectAppSessionState({ deviceId: args.deviceId, expectedBundleId: args.bundleId, includeFlutter: args.includeFlutter !== false, maxVisibleNodes: 12 }).catch(() => undefined);
+        return { navigated: true, strategy: 'deeplink_postcondition', deviceId: args.deviceId, url: args.url, route: args.postcondition.route, beforeState, afterState, attempts, verification, waitFor: args.postcondition as Record<string, unknown>, recoveryHints: [] };
+      }
     }
   } else {
     attempts.push({ strategy: 'deeplink', elapsedMs: 0, ok: false, skipped: true, skipReason: 'No deeplink URL supplied.' });

@@ -5,6 +5,8 @@ const queryMock = jest.fn();
 const pressMock = jest.fn();
 const tapMock = jest.fn();
 const typeTextMock = jest.fn();
+const sendKeyMock = jest.fn();
+const swipeMock = jest.fn();
 
 jest.mock('../../src/tools/app-state-snapshot', () => ({
   collectAppSessionState: jest.fn(async ({ deviceId }) => ({ schemaVersion: '1', device: { id: deviceId }, app: { classification: 'TARGET_BUNDLE_CONFIRMED' } })),
@@ -26,8 +28,8 @@ jest.mock('../../src/tools/native-input-utils', () => ({
     kind: 'simhid',
     tap: tapMock,
     typeText: typeTextMock,
-    sendKey: jest.fn(async () => undefined),
-    swipe: jest.fn(async () => undefined),
+    sendKey: sendKeyMock,
+    swipe: swipeMock,
   })),
 }));
 
@@ -45,6 +47,8 @@ describe('ScenarioRunner v2', () => {
     jest.clearAllMocks();
     queryMock.mockResolvedValue({ matches: [{ path: '/0/1', frame: { x: 10, y: 20, width: 30, height: 40 } }] });
     pressMock.mockResolvedValue({ ok: true });
+    sendKeyMock.mockResolvedValue(undefined);
+    swipeMock.mockResolvedValue(undefined);
     (waitForSettle as jest.Mock).mockResolvedValue({ met: true, polls: 1, elapsedMs: 1, stableForMs: 0, matchingCount: 1, lastObserved: [], errors: [] });
   });
   it('records state with per-device result metadata', async () => {
@@ -132,6 +136,52 @@ describe('ScenarioRunner v2', () => {
     expect(waitForSettle).toHaveBeenCalledWith('D1', expect.objectContaining({ query: { identifier: 'settings' } }));
   });
 });
+
+
+  it('fails popUntil before dispatch when postcondition is omitted', async () => {
+    sendKeyMock.mockClear();
+    swipeMock.mockClear();
+    const runner = new ScenarioRunner(pool as any);
+    const result = await runner.run({ name: 'mobile', version: 2, steps: [{ action: 'popUntil', maxNativeAttempts: 1 }] });
+    expect(result.passed).toBe(false);
+    expect(result.steps[0].devices[0].error).toContain('popUntil requires query or settle.query postcondition');
+    expect(sendKeyMock).not.toHaveBeenCalled();
+    expect(swipeMock).not.toHaveBeenCalled();
+  });
+
+  it('preserves failed popUntil dispatch evidence when postcondition is not met', async () => {
+    sendKeyMock.mockRejectedValueOnce(new Error('escape failed'));
+    swipeMock.mockRejectedValueOnce(new Error('swipe failed'));
+    const runner = new ScenarioRunner(pool as any);
+    const result = await runner.run({ name: 'mobile', version: 2, steps: [{ action: 'popUntil', query: { identifier: 'home' }, maxNativeAttempts: 1 }] });
+    expect(result.passed).toBe(false);
+    expect(result.steps[0].devices[0].result).toMatchObject({
+      attempts: [
+        { action: 'escape', ok: false, error: 'escape failed' },
+        { action: 'edge_swipe', ok: false, error: 'swipe failed' },
+      ],
+    });
+    expect(result.steps[0].devices[0].error).toContain('popUntil postcondition was not met');
+  });
+
+  it('fails dismissOverlay before dispatch when postcondition is omitted', async () => {
+    sendKeyMock.mockClear();
+    swipeMock.mockClear();
+    const runner = new ScenarioRunner(pool as any);
+    const result = await runner.run({ name: 'mobile', version: 2, steps: [{ action: 'dismissOverlay', mode: 'dialog' }] });
+    expect(result.passed).toBe(false);
+    expect(result.steps[0].devices[0].error).toContain('dismissOverlay requires query or settle.query postcondition');
+    expect(sendKeyMock).not.toHaveBeenCalled();
+  });
+
+  it('preserves failed dismissOverlay dispatch evidence when postcondition is not met', async () => {
+    sendKeyMock.mockRejectedValueOnce(new Error('escape failed'));
+    const runner = new ScenarioRunner(pool as any);
+    const result = await runner.run({ name: 'mobile', version: 2, steps: [{ action: 'dismissOverlay', mode: 'dialog', query: { identifier: 'overlay' } }] });
+    expect(result.passed).toBe(false);
+    expect(result.steps[0].devices[0].result).toMatchObject({ attempts: [{ action: 'escape', ok: false, error: 'escape failed' }] });
+    expect(result.steps[0].devices[0].error).toContain('dismissOverlay postcondition was not met');
+  });
 
 it('supports popUntil and dismissOverlay with shared settle verification', async () => {
   const runner = new ScenarioRunner(pool as any);

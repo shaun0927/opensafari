@@ -21,6 +21,8 @@ describe('run_scenario v2 schema SSOT', () => {
     ['waitFor requires query or settle.query', { action: 'waitFor' }],
     ['assertElement requires query or settle.query', { action: 'assertElement' }],
     ['gotoScreen requires postcondition query', { action: 'gotoScreen', value: 'myapp://settings' }],
+    ['popUntil requires query or settle.query postcondition', { action: 'popUntil' }],
+    ['dismissOverlay requires query or settle.query postcondition', { action: 'dismissOverlay', mode: 'dialog' }],
   ] as const;
 
   it.each(invalidCases)('rejects %s', (_name, step) => {
@@ -40,6 +42,8 @@ describe('run_scenario v2 schema SSOT', () => {
         { action: 'waitFor', settle: { query: { label: 'Home' } } },
         { action: 'assertElement', query: { text: 'Done' } },
         { action: 'gotoScreen', value: 'myapp://settings', query: { identifier: 'settings' } },
+        { action: 'popUntil', query: { identifier: 'home' } },
+        { action: 'dismissOverlay', mode: 'dialog', settle: { query: { identifier: 'dialog' }, condition: 'not_exists' } },
       ],
     })).toBe(true);
   });
