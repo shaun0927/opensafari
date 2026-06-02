@@ -367,7 +367,7 @@ void main() {
 
 For debug/profile builds, `flutter_connect` + `flutter_widget_tree` additionally expose the Dart VM Service, which returns the full Flutter widget hierarchy (including render-tree nodes that never reach the native AX bridge).
 
-See [docs/troubleshooting.md](docs/troubleshooting.md) for common failure modes (empty trees, missing labels, Safari shadowing).
+See [docs/troubleshooting.md](docs/troubleshooting.md) for common failure modes (empty trees, missing labels, Safari shadowing). For stateful semantic mobile QA, selector quality, settle policy, and scenario v2 guidance, see [docs/mobile-semantic-qa.md](docs/mobile-semantic-qa.md).
 
 ---
 
