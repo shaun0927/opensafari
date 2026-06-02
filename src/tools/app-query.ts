@@ -1,5 +1,5 @@
 import { MCPServer } from '../mcp-server';
-import { getAccessibilityBridge, ensureSemanticsActive } from '../native';
+import { getAccessibilityBridge, ensureSemanticsActive, activateSemanticsOrWarn } from '../native';
 import type { AXNode } from '../native';
 import { getSessionManager } from '../session-manager';
 import {
@@ -78,6 +78,7 @@ export function registerAppQueryTool(server: MCPServer): void {
           activationAttempted: false,
           activationRetries: 0,
         };
+        let semanticsWarning: string | undefined;
         if (bundleId) {
           const context = await activateAndClassify({
             bridge,
@@ -90,7 +91,7 @@ export function registerAppQueryTool(server: MCPServer): void {
             throw createContextMismatchError(meta);
           }
         } else {
-          await ensureSemanticsActive(deviceId, { bundleId });
+          semanticsWarning = (await activateSemanticsOrWarn(deviceId, { bundleId })).warning;
         }
 
         let result = await bridge.query(
@@ -189,6 +190,9 @@ export function registerAppQueryTool(server: MCPServer): void {
             type: 'text' as const,
             text: JSON.stringify({
               ...result,
+              // Surface the empty-tree cause only when the query ultimately
+              // found nothing — a recovered match means semantics did populate.
+              ...(semanticsWarning && result.total === 0 ? { semanticsWarning } : {}),
               _meta: {
                 context: meta,
                 queryRecovery,

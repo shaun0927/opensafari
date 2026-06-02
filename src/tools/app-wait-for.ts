@@ -7,7 +7,7 @@
  */
 
 import { MCPServer, getWebKitClient } from '../mcp-server';
-import { getAccessibilityBridge, ensureSemanticsActive } from '../native';
+import { getAccessibilityBridge, ensureSemanticsActive, activateSemanticsOrWarn } from '../native';
 import type { AXNode } from '../native';
 import { getSessionManager } from '../session-manager';
 import { getInputBackend } from './native-input-utils';
@@ -174,6 +174,7 @@ export function registerAppWaitForNativeTool(server: MCPServer): void {
           activationAttempted: false,
           activationRetries: 0,
         };
+        let semanticsWarning: string | undefined;
         if (bundleId) {
           const context = await activateAndClassify({
             bridge,
@@ -186,7 +187,7 @@ export function registerAppWaitForNativeTool(server: MCPServer): void {
             throw createContextMismatchError(meta);
           }
         } else {
-          await ensureSemanticsActive(deviceId, { bundleId });
+          semanticsWarning = (await activateSemanticsOrWarn(deviceId, { bundleId })).warning;
         }
         const startTime = Date.now();
         const deadline = startTime + timeout;
@@ -267,7 +268,7 @@ export function registerAppWaitForNativeTool(server: MCPServer): void {
         return respondWithStructuredError(
           ErrorCode.APP_STATE_UNKNOWN,
           'Timeout waiting for element',
-          { condition, query, timeout, elapsed, polls: pollCount },
+          { condition, query, timeout, elapsed, polls: pollCount, semanticsWarning },
         );
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);

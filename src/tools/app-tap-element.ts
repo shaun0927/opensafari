@@ -10,6 +10,7 @@ import { MCPServer, getWebKitClient } from '../mcp-server';
 import {
   getAccessibilityBridge,
   ensureSemanticsActive,
+  activateSemanticsOrWarn,
   countNodes,
   isLikelyChromeOnlyTree,
 } from '../native';
@@ -167,6 +168,7 @@ export function registerAppTapElementTool(server: MCPServer): void {
           activationAttempted: false,
           activationRetries: 0,
         };
+        let semanticsWarning: string | undefined;
         if (bundleId) {
           const context = await activateAndClassify({
             bridge,
@@ -179,7 +181,7 @@ export function registerAppTapElementTool(server: MCPServer): void {
             throw createContextMismatchError(contextMeta);
           }
         } else {
-          await ensureSemanticsActive(deviceId, { bundleId });
+          semanticsWarning = (await activateSemanticsOrWarn(deviceId, { bundleId })).warning;
         }
         const query = { identifier, label, text, role };
 
@@ -273,6 +275,7 @@ export function registerAppTapElementTool(server: MCPServer): void {
               labelAliases: labelAliases.length > 0 ? labelAliases : undefined,
               index,
               timeout,
+              semanticsWarning,
               diagnostics,
               hint: diagnostics
                 ? 'No node matched. See diagnostics.candidates for near matches; narrow the query or enable autoScroll if the element is offscreen.'
