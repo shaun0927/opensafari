@@ -15,6 +15,12 @@ import {
   probeVMServiceUrl,
   wsToHttpUrl,
 } from '../flutter/vm-service-discovery';
+import {
+  detectBuildMode,
+  capabilitiesFor,
+  type FlutterBuildMode,
+  type FlutterCapabilities,
+} from './flutter-build-mode';
 
 export function registerFlutterConnectTool(server: MCPServer): void {
   server.registerTool(
@@ -89,6 +95,12 @@ export function registerFlutterConnectTool(server: MCPServer): void {
           timeout: params.timeout as number | undefined,
         });
 
+        // Build-mode + capability disclosure (issue #831): tell the caller
+        // up front whether Tier-0 `evaluate` actually works, instead of
+        // surfacing a code-113 failure on the first downstream tool.
+        const { buildMode, capabilities, evaluateProbed } =
+          await computeBuildModeDisclosure(deviceId, client);
+
         return {
           content: [{
             type: 'text' as const,
@@ -97,6 +109,10 @@ export function registerFlutterConnectTool(server: MCPServer): void {
               vmServiceUrl: redactVmServiceUrl(state.httpUrl),
               wsUrl: redactVmServiceUrl(state.wsUrl),
               deviceId: state.deviceId,
+              buildMode,
+              vmServiceAvailable: true,
+              capabilities,
+              evaluateProbed,
               attachDiagnostics: {
                 attempts: attachDiagnostics.attempts,
               },
@@ -123,6 +139,51 @@ export function registerFlutterConnectTool(server: MCPServer): void {
       }
     },
   );
+}
+
+/**
+ * Compute the build-mode + capability disclosure for a freshly connected
+ * Flutter VM (issue #831).
+ *
+ * The load-bearing `evaluate` capability is **probe-backed**, not inferred
+ * from the mode label: a no-compiler AOT attach (e.g. `simctl launch` without
+ * `flutter run`) has no `ext.flutter.reassemble` and is therefore classified
+ * `profile`, yet it rejects `evaluate` with code 113. Trusting the label would
+ * report `evaluate: true` falsely. Debug builds skip the probe entirely (JIT
+ * always evaluates). Detection/probe failure degrades to `unknown` + no
+ * evaluate, and never throws — the connect itself already succeeded.
+ */
+export async function computeBuildModeDisclosure(
+  deviceId: string,
+  client: { probeEvaluateCompile(): Promise<{ available: boolean }> },
+): Promise<{
+  buildMode: FlutterBuildMode;
+  capabilities: FlutterCapabilities;
+  evaluateProbed: boolean;
+}> {
+  let buildMode: FlutterBuildMode = 'unknown';
+  let capabilities: FlutterCapabilities = capabilitiesFor('unknown');
+  let evaluateProbed = false;
+  try {
+    const probe = await detectBuildMode(deviceId);
+    buildMode = probe.mode;
+    if (buildMode === 'debug') {
+      // JIT always evaluates — no probe needed.
+      capabilities = capabilitiesFor('debug');
+    } else {
+      const evalProbe = await client.probeEvaluateCompile();
+      evaluateProbed = true;
+      capabilities = { ...capabilitiesFor(buildMode), evaluate: evalProbe.available };
+    }
+  } catch (err) {
+    console.error(
+      `[flutter_connect] build-mode disclosure skipped: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    buildMode = 'unknown';
+    capabilities = { ...capabilitiesFor('unknown'), evaluate: false };
+    evaluateProbed = false;
+  }
+  return { buildMode, capabilities, evaluateProbed };
 }
 
 export interface AttachAttempt {
