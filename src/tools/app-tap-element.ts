@@ -33,6 +33,7 @@ import { SimulatorManager } from '../simulator';
 import { DEVICE_PRESETS } from '../simulator/presets';
 import { convertMacOSPtToIOSPt } from '../utils/coordinate-space';
 import type { Size2D } from '../utils/coordinate-space';
+import { buildNotFoundDiagnostics } from '../native/not-found-diagnostics';
 
 type AXPressVerification = {
   verified: boolean;
@@ -253,6 +254,11 @@ export function registerAppTapElementTool(server: MCPServer): void {
         }
 
         if (!match) {
+          // Terminal miss (all relaxed/alias attempts failed): attach a
+          // bounded snapshot of the searched tree so the developer sees the
+          // cause in one call instead of manually re-running app_tree. One
+          // dump, capped; absent if the dump fails. (issue #834)
+          const diagnostics = await buildNotFoundDiagnostics(bridge, deviceId, query);
           return respondWithStructuredError(
             ErrorCode.APP_STATE_UNKNOWN,
             'Element not found',
@@ -261,6 +267,10 @@ export function registerAppTapElementTool(server: MCPServer): void {
               labelAliases: labelAliases.length > 0 ? labelAliases : undefined,
               index,
               timeout,
+              diagnostics,
+              hint: diagnostics
+                ? 'No node matched. See diagnostics.candidates for near matches; narrow the query or enable autoScroll if the element is offscreen.'
+                : undefined,
               _meta: { context: contextMeta },
             },
           );
