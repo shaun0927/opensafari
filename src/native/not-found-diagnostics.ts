@@ -10,20 +10,35 @@
  * `undefined` if the dump fails — so it never makes the failure worse.
  *
  * Deliberately minimal: substring matching only (no fuzzy/ranking), a hard
- * node cap, and exactly one dump. See the issue's over-engineering checklist.
+ * node cap, and exactly one bounded dump. See the issue's over-engineering
+ * checklist.
+ *
+ * Privacy (#795 pillar 6 / checklist #12): the digest is part of the MCP
+ * response body, so it must not leak on-screen secrets. The node `value`
+ * field — which holds user-entered text (passwords, emails, tokens, OTPs) —
+ * is therefore NEVER emitted. Only developer-authored metadata (`role`,
+ * `label`, `identifier`, `path`) is surfaced, and `label`/`identifier` are run
+ * through the shared credential redactor before emission. `value` is still
+ * used internally for candidate matching (it is never returned).
  */
 
 import type { AXNode, AXQuery } from './ax-types';
+import { redactText, REDACTION_POLICY_VERSION } from '../observability/redaction';
 
 /** Default ceiling on how many nodes the digest carries. */
 export const DEFAULT_MAX_NODES = 40;
 
-/** Compact node shape — just enough to recognise an element, no geometry. */
+/** Bound the dump so a huge tree cannot stall the already-failed path. */
+const DUMP_MAX_DEPTH = 8;
+
+/**
+ * Compact node shape — just enough to recognise an element, no geometry and
+ * deliberately no `value` (see the privacy note above).
+ */
 export interface CompactAXNode {
   role: string;
   label?: string;
   identifier?: string;
-  value?: string;
   path: string;
 }
 
@@ -36,6 +51,8 @@ export interface NotFoundDiagnostics {
   nodes: CompactAXNode[];
   /** Up to 5 nodes whose label/identifier/value contains the query term. */
   candidates: CompactAXNode[];
+  /** Redaction policy applied to emitted strings, so clients know the posture. */
+  redactionPolicy: string;
 }
 
 /** Minimal surface this helper needs from the accessibility bridge. */
@@ -45,12 +62,15 @@ export interface TreeDumper {
 
 const MAX_CANDIDATES = 5;
 
+function redact(s: string | undefined): string | undefined {
+  return s === undefined ? undefined : redactText(s, 'ax').text;
+}
+
 function compact(node: AXNode): CompactAXNode {
   return {
     role: node.role,
-    label: node.label,
-    identifier: node.identifier,
-    value: node.value,
+    label: redact(node.label),
+    identifier: redact(node.identifier),
     path: node.path,
   };
 }
@@ -86,7 +106,7 @@ export async function buildNotFoundDiagnostics(
   const maxNodes = opts?.maxNodes ?? DEFAULT_MAX_NODES;
   let root: AXNode;
   try {
-    root = await bridge.dumpTree(deviceId ? { deviceId } : undefined);
+    root = await bridge.dumpTree({ deviceId, maxDepth: DUMP_MAX_DEPTH });
   } catch {
     // Graceful degradation: a failed/slow dump must not worsen the
     // already-failing not-found path.
@@ -108,8 +128,12 @@ export async function buildNotFoundDiagnostics(
     if (candidates.length < MAX_CANDIDATES && matchesTerm(node, term)) {
       candidates.push(compact(node));
     }
+    // Push in reverse so pop() yields natural reading order (pre-order):
+    // the capped digest then keeps the first/top-of-screen elements.
     if (node.children) {
-      for (const child of node.children) stack.push(child);
+      for (let i = node.children.length - 1; i >= 0; i--) {
+        stack.push(node.children[i]);
+      }
     }
   }
 
@@ -118,5 +142,6 @@ export async function buildNotFoundDiagnostics(
     truncated: searchedNodeCount > nodes.length,
     nodes,
     candidates,
+    redactionPolicy: REDACTION_POLICY_VERSION,
   };
 }

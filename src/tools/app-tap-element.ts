@@ -258,6 +258,12 @@ export function registerAppTapElementTool(server: MCPServer): void {
           // bounded snapshot of the searched tree so the developer sees the
           // cause in one call instead of manually re-running app_tree. One
           // dump, capped; absent if the dump fails. (issue #834)
+          //
+          // This `diagnostics` digest is a lightweight, always-on, redacted
+          // inline complement to the heavy opt-in `debugBundle`
+          // (collectDebugBundleOnFailure): same redaction posture, but no
+          // screenshots/logs/file I/O, so it is safe to emit unconditionally.
+          // See #795 for the evidence-layering rationale.
           const diagnostics = await buildNotFoundDiagnostics(bridge, deviceId, query);
           return respondWithStructuredError(
             ErrorCode.APP_STATE_UNKNOWN,
