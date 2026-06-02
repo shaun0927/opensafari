@@ -244,41 +244,51 @@ export class ScenarioRunner {
         }
         case 'tapElement': {
           if (!step.query) throw new Error('tapElement requires query');
+          if (!step.settle?.query) throw new Error('tapElement requires a settle.query postcondition');
           const bridge = getAccessibilityBridge();
           const queryResult = await bridge.query(step.query, { deviceId: sim.device.udid, maxResults: 1 });
           const match = queryResult.matches[0];
           if (!match) throw new Error('tapElement query matched no elements');
-          const press = await bridge.press(match.path, sim.device.udid);
+          let press: { ok: boolean; error?: string };
+          try {
+            press = await bridge.press(match.path, sim.device.udid);
+          } catch (err) {
+            press = { ok: false, error: err instanceof Error ? err.message : String(err) };
+          }
+          let backend = 'ax-press';
           if (!press.ok) {
-            const backend = await getInputBackend(sim.device.udid, sim.client);
-            await backend.tap(
+            const inputBackend = await getInputBackend(sim.device.udid, sim.client);
+            await inputBackend.tap(
               sim.device.udid,
               match.frame.x + match.frame.width / 2,
               match.frame.y + match.frame.height / 2,
             );
+            backend = inputBackend.kind;
           }
-          if (step.settle?.query) {
-            verification = await waitForSettle(sim.device.udid, step.settle);
-            if (!(verification as { met?: boolean }).met) throw new Error('tapElement postcondition was not met');
-          }
-          result = { tapped: true, path: match.path, backend: press.ok ? 'ax-press' : 'input-backend' };
+          verification = await waitForSettle(sim.device.udid, step.settle);
+          if (!(verification as { met?: boolean }).met) throw new Error('tapElement postcondition was not met');
+          result = { tapped: true, path: match.path, backend, axPress: press };
           break;
         }
         case 'typeElement': {
           if (!step.query) throw new Error('typeElement requires query');
           if (step.value === undefined) throw new Error('typeElement requires value');
+          if (!step.settle?.query) throw new Error('typeElement requires a settle.query postcondition');
           const bridge = getAccessibilityBridge();
           const queryResult = await bridge.query(step.query, { deviceId: sim.device.udid, maxResults: 1 });
           const match = queryResult.matches[0];
           if (!match) throw new Error('typeElement query matched no elements');
-          await bridge.press(match.path, sim.device.udid).catch(() => undefined);
+          let focus: { ok: boolean; error?: string };
+          try {
+            focus = await bridge.press(match.path, sim.device.udid);
+          } catch (err) {
+            focus = { ok: false, error: err instanceof Error ? err.message : String(err) };
+          }
           const backend = await getInputBackend(sim.device.udid, sim.client);
           await backend.typeText(sim.device.udid, step.value);
-          if (step.settle?.query) {
-            verification = await waitForSettle(sim.device.udid, step.settle);
-            if (!(verification as { met?: boolean }).met) throw new Error('typeElement postcondition was not met');
-          }
-          result = { typed: true, path: match.path, length: step.value.length, backend: backend.kind };
+          verification = await waitForSettle(sim.device.udid, step.settle);
+          if (!(verification as { met?: boolean }).met) throw new Error('typeElement postcondition was not met');
+          result = { typed: true, path: match.path, length: step.value.length, backend: backend.kind, focus };
           break;
         }
         case 'collectDebugBundle': {

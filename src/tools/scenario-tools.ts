@@ -47,7 +47,7 @@ export function registerScenarioTools(server: MCPServer): void {
                 context: { type: 'string', enum: ['native', 'webview', 'safari', 'flutter'] },
                 query: {
                   type: 'object',
-                  description: 'AX query for mobile v2 tap/type/wait/assert steps. Required for tapElement and typeElement; required for gotoScreen, waitFor, and assertElement unless settle.query is supplied.',
+                  description: 'AX query for mobile v2 tap/type/wait/assert steps. Required for tapElement and typeElement as the target selector; gotoScreen, waitFor, and assertElement require query unless settle.query is supplied. Mutating tap/type steps also require settle.query as the success postcondition.',
                   properties: {
                     identifier: { type: 'string' },
                     label: { type: 'string' },
@@ -104,11 +104,17 @@ export function registerScenarioTools(server: MCPServer): void {
                 },
                 {
                   if: { properties: { action: { const: 'tapElement' } }, required: ['action'] },
-                  then: { required: ['query'] },
+                  then: {
+                    required: ['query', 'settle'],
+                    properties: { settle: { required: ['query'] } },
+                  },
                 },
                 {
                   if: { properties: { action: { const: 'typeElement' } }, required: ['action'] },
-                  then: { required: ['query', 'value'] },
+                  then: {
+                    required: ['query', 'value', 'settle'],
+                    properties: { settle: { required: ['query'] } },
+                  },
                 },
                 {
                   if: { properties: { action: { const: 'waitFor' } }, required: ['action'] },

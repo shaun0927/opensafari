@@ -13,9 +13,11 @@ function schemaValidator() {
 describe('run_scenario v2 schema SSOT', () => {
   const invalidCases = [
     ['launchApp requires bundleId', { action: 'launchApp' }],
-    ['tapElement requires query', { action: 'tapElement' }],
-    ['typeElement requires query', { action: 'typeElement', value: 'hello' }],
-    ['typeElement requires value', { action: 'typeElement', query: { identifier: 'email' } }],
+    ['tapElement requires query', { action: 'tapElement', settle: { query: { identifier: 'done' } } }],
+    ['tapElement requires settle.query postcondition', { action: 'tapElement', query: { identifier: 'button' } }],
+    ['typeElement requires query', { action: 'typeElement', value: 'hello', settle: { query: { identifier: 'done' } } }],
+    ['typeElement requires value', { action: 'typeElement', query: { identifier: 'email' }, settle: { query: { identifier: 'done' } } }],
+    ['typeElement requires settle.query postcondition', { action: 'typeElement', query: { identifier: 'email' }, value: 'hello' }],
     ['waitFor requires query or settle.query', { action: 'waitFor' }],
     ['assertElement requires query or settle.query', { action: 'assertElement' }],
     ['gotoScreen requires postcondition query', { action: 'gotoScreen', value: 'myapp://settings' }],
@@ -33,8 +35,8 @@ describe('run_scenario v2 schema SSOT', () => {
       version: 2,
       steps: [
         { action: 'launchApp', bundleId: 'com.example.app' },
-        { action: 'tapElement', query: { identifier: 'settings' } },
-        { action: 'typeElement', query: { identifier: 'email' }, value: 'agent@example.com' },
+        { action: 'tapElement', query: { identifier: 'settings' }, settle: { query: { identifier: 'settings_open' } } },
+        { action: 'typeElement', query: { identifier: 'email' }, value: 'agent@example.com', settle: { query: { text: 'agent@example.com' } } },
         { action: 'waitFor', settle: { query: { label: 'Home' } } },
         { action: 'assertElement', query: { text: 'Done' } },
         { action: 'gotoScreen', value: 'myapp://settings', query: { identifier: 'settings' } },
