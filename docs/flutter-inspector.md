@@ -41,7 +41,7 @@ Legend:
 
 ### Detecting release-mode fall-through
 
-When Tier 0 probes a release build it rejects with `FlutterVMInputBackendError { code: 'VM_NO_EVALUATE' }` whose `.message` surfaces the canonical recipe link. Tool consumers can key on the structured code to prompt users to rebuild with `--profile`, or parse `flutter_connect`'s response metadata (Dart VM flags expose the build mode).
+When Tier 0 probes a release build it rejects with `FlutterVMInputBackendError { code: 'VM_NO_EVALUATE' }` whose `.message` surfaces the canonical recipe link. Tool consumers can key on the structured code to prompt users to rebuild with `--profile`, or read `flutter_connect`'s `buildMode` / `capabilities.evaluate` response fields up front (see [Deterministic Flutter VM attach](./flutter-vm-attach.md#success-response-fields)) instead of waiting for the first `evaluate` to fail.
 
 ## Flutter Compatibility Matrix
 

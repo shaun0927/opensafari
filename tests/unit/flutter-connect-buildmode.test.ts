@@ -52,6 +52,18 @@ describe('computeBuildModeDisclosure (issue #831)', () => {
     expect(r.evaluateProbed).toBe(true);
   });
 
+  it('unknown mode (VM discovered but not yet distinguished) still probes evaluate', async () => {
+    // detectBuildMode's happy path can return 'unknown' (VM URL seen in logs
+    // but debug-vs-profile not yet confirmed). This must still probe, not skip.
+    detectBuildMode.mockResolvedValue({ mode: 'unknown', vmServiceAvailable: true, details: '' });
+    const client = fakeClient(true);
+    const r = await computeBuildModeDisclosure('udid', client);
+    expect(r.buildMode).toBe('unknown');
+    expect(r.capabilities.evaluate).toBe(true);
+    expect(r.evaluateProbed).toBe(true);
+    expect(client.probeEvaluateCompile).toHaveBeenCalledTimes(1);
+  });
+
   it('detection failure degrades to unknown + no evaluate, never throws', async () => {
     detectBuildMode.mockRejectedValue(new Error('vm gone'));
     const client = fakeClient(true);
