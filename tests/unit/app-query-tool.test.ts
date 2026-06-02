@@ -3,8 +3,10 @@ import { registerAppQueryTool } from '../../src/tools/app-query';
 import {
   AccessibilityBridge,
   ensureSemanticsActive,
+  activateSemanticsOrWarn,
   getAccessibilityBridge,
 } from '../../src/native';
+import { SEMANTICS_INACTIVE_WARNING } from '../../src/native/semantics-activator';
 
 jest.mock('../../src/native');
 jest.mock('../../src/session-manager', () => ({
@@ -16,6 +18,7 @@ jest.mock('../../src/session-manager', () => ({
 const MockBridge = AccessibilityBridge as jest.MockedClass<typeof AccessibilityBridge>;
 const mockGetBridge = getAccessibilityBridge as jest.MockedFunction<typeof getAccessibilityBridge>;
 const mockEnsureSemanticsActive = ensureSemanticsActive as jest.MockedFunction<typeof ensureSemanticsActive>;
+const mockActivate = activateSemanticsOrWarn as jest.MockedFunction<typeof activateSemanticsOrWarn>;
 
 describe('app_query tool', () => {
   let server: MCPServer;
@@ -24,6 +27,7 @@ describe('app_query tool', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockEnsureSemanticsActive.mockResolvedValue(true);
+    mockActivate.mockResolvedValue({ active: true });
     server = {
       registerTool: jest.fn((_def, h) => { handler = h; }),
     } as unknown as MCPServer;
@@ -59,6 +63,39 @@ describe('app_query tool', () => {
     const parsed = JSON.parse(result.content[0].text!);
     expect(parsed.total).toBe(1);
     expect(parsed.matches[0].identifier).toBe('submit-btn');
+  });
+
+  it('surfaces semanticsWarning when activation fails and the query finds nothing (#833)', async () => {
+    mockActivate.mockResolvedValue({ active: false, warning: SEMANTICS_INACTIVE_WARNING });
+    MockBridge.prototype.query = jest.fn().mockResolvedValue({
+      matches: [], total: 0, query: { label: 'Login' }, ambiguous: false,
+    });
+    MockBridge.prototype.dumpTree = jest.fn().mockResolvedValue({
+      role: 'AXWindow', traits: [], frame: { x: 0, y: 0, width: 1, height: 1 },
+      visible: true, enabled: true, focused: false, path: '0', children: [],
+    });
+    mockGetBridge.mockReturnValue(new MockBridge());
+
+    const result = await handler('session-1', { label: 'Login' });
+
+    const parsed = JSON.parse(result.content[0].text!);
+    expect(parsed.total).toBe(0);
+    expect(parsed.semanticsWarning).toBe(SEMANTICS_INACTIVE_WARNING);
+  });
+
+  it('omits semanticsWarning when the query recovers a match (no false alarm) (#833)', async () => {
+    mockActivate.mockResolvedValue({ active: false, warning: SEMANTICS_INACTIVE_WARNING });
+    MockBridge.prototype.query = jest.fn().mockResolvedValue({
+      matches: [{ role: 'AXButton', identifier: 'login_btn', path: '0/1' }],
+      total: 1, query: { label: 'Login' }, ambiguous: false,
+    });
+    mockGetBridge.mockReturnValue(new MockBridge());
+
+    const result = await handler('session-1', { label: 'Login' });
+
+    const parsed = JSON.parse(result.content[0].text!);
+    expect(parsed.total).toBe(1);
+    expect(parsed.semanticsWarning).toBeUndefined();
   });
 
   it('queries by label and text combined', async () => {
@@ -117,10 +154,12 @@ describe('app_query tool', () => {
     const result = await handler('session-1', { label: 'Email address field' });
 
     expect(queryMock).toHaveBeenCalledTimes(2);
-    expect(mockEnsureSemanticsActive).toHaveBeenNthCalledWith(1, 'mock-device-id', {
+    // The initial activation goes through activateSemanticsOrWarn (#833);
+    // the zero-match recovery still force-refreshes via ensureSemanticsActive.
+    expect(mockActivate).toHaveBeenCalledWith('mock-device-id', {
       bundleId: undefined,
     });
-    expect(mockEnsureSemanticsActive).toHaveBeenNthCalledWith(2, 'mock-device-id', {
+    expect(mockEnsureSemanticsActive).toHaveBeenCalledWith('mock-device-id', {
       bundleId: undefined,
       forceRefresh: true,
     });

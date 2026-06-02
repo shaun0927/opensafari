@@ -10,6 +10,7 @@ import { MCPServer, getWebKitClient } from '../mcp-server';
 import {
   getAccessibilityBridge,
   ensureSemanticsActive,
+  activateSemanticsOrWarn,
   countNodes,
   isLikelyChromeOnlyTree,
 } from '../native';
@@ -167,6 +168,7 @@ export function registerAppTapElementTool(server: MCPServer): void {
           activationAttempted: false,
           activationRetries: 0,
         };
+        let semanticsWarning: string | undefined;
         if (bundleId) {
           const context = await activateAndClassify({
             bridge,
@@ -179,7 +181,7 @@ export function registerAppTapElementTool(server: MCPServer): void {
             throw createContextMismatchError(contextMeta);
           }
         } else {
-          await ensureSemanticsActive(deviceId, { bundleId });
+          semanticsWarning = (await activateSemanticsOrWarn(deviceId, { bundleId })).warning;
         }
         const query = { identifier, label, text, role };
 
@@ -258,6 +260,12 @@ export function registerAppTapElementTool(server: MCPServer): void {
           // bounded snapshot of the searched tree so the developer sees the
           // cause in one call instead of manually re-running app_tree. One
           // dump, capped; absent if the dump fails. (issue #834)
+          //
+          // This `diagnostics` digest is a lightweight, always-on, redacted
+          // inline complement to the heavy opt-in `debugBundle`
+          // (collectDebugBundleOnFailure): same redaction posture, but no
+          // screenshots/logs/file I/O, so it is safe to emit unconditionally.
+          // See #795 for the evidence-layering rationale.
           const diagnostics = await buildNotFoundDiagnostics(bridge, deviceId, query);
           return respondWithStructuredError(
             ErrorCode.APP_STATE_UNKNOWN,
@@ -267,6 +275,7 @@ export function registerAppTapElementTool(server: MCPServer): void {
               labelAliases: labelAliases.length > 0 ? labelAliases : undefined,
               index,
               timeout,
+              semanticsWarning,
               diagnostics,
               hint: diagnostics
                 ? 'No node matched. See diagnostics.candidates for near matches; narrow the query or enable autoScroll if the element is offscreen.'
@@ -500,9 +509,10 @@ export function registerAppTapElementTool(server: MCPServer): void {
         // — same behavior as before. The lookup is deferred to here (rather
         // than running before AXPress) so successful AXPress taps avoid the
         // `simctl list` round-trip entirely.
+        let coordinateWarning: string | undefined;
         const macOSPtSize = queryResult?.deviceContentMacOSPt;
         if (macOSPtSize) {
-          const iosPtSize = await getIosPtSizeForDevice(deviceId);
+          const { size: iosPtSize, reason } = await getIosPtSizeForDevice(deviceId);
           if (iosPtSize) {
             const before = { x: centerX, y: centerY };
             const converted = convertMacOSPtToIOSPt(before, macOSPtSize, iosPtSize);
@@ -515,6 +525,14 @@ export function registerAppTapElementTool(server: MCPServer): void {
                 `scale=(${(iosPtSize.width / macOSPtSize.width).toFixed(4)}, ` +
                 `${(iosPtSize.height / macOSPtSize.height).toFixed(4)})`,
             );
+          } else if (reason === 'preset_miss') {
+            // simctl resolved the device but its name is not in the preset
+            // table, so no scale factor is known. Warn rather than silently
+            // tap with raw AX coordinates (which are off on a scaled Simulator
+            // window). Transient simctl failures are intentionally silent.
+            coordinateWarning =
+              'device is not in the known preset table; tap used raw AX-frame ' +
+              'coordinates and may be inaccurate on a scaled Simulator window';
           }
         }
 
@@ -586,6 +604,9 @@ export function registerAppTapElementTool(server: MCPServer): void {
             `ambiguous: ${totalMatches} elements matched; tapped index ${index}`,
           );
         }
+        if (coordinateWarning) {
+          warnings.push(coordinateWarning);
+        }
         if (warnings.length > 0) {
           response.warning = warnings.join('; ');
         }
@@ -638,15 +659,28 @@ function sleep(ms: number): Promise<void> {
  * Resolves: device UDID → device name (from simctl list) → preset entry
  * (matched by name) → `{ width: w, height: h }`.
  *
- * Returns `null` when the device cannot be found, no name matches a preset,
- * or the simctl call fails — callers treat `null` as "no conversion available"
- * and fall back to using raw AX-frame coordinates.
+ * Returns a discriminated result so the caller can tell apart the two ways a
+ * size can be absent (issue #833):
+ *   - `preset_miss` — simctl resolved the device, but its name is not in the
+ *     preset table. Permanent for this process; the caller should warn that
+ *     raw coordinates may be inaccurate.
+ *   - `transient` — simctl could not see the device on this call. May recover
+ *     on a later dispatch, so it is NOT cached and must NOT raise a warning
+ *     (avoids alarm fatigue).
+ *   - `ok` — a usable iOS-point size was resolved.
  */
-const iosPtSizeCache = new Map<string, Size2D | null>();
+type IosPtSizeReason = 'ok' | 'preset_miss' | 'transient';
+interface IosPtSizeResult {
+  size: Size2D | null;
+  reason: IosPtSizeReason;
+}
 
-async function getIosPtSizeForDevice(deviceId: string): Promise<Size2D | null> {
-  if (iosPtSizeCache.has(deviceId)) {
-    return iosPtSizeCache.get(deviceId) ?? null;
+const iosPtSizeCache = new Map<string, IosPtSizeResult>();
+
+async function getIosPtSizeForDevice(deviceId: string): Promise<IosPtSizeResult> {
+  const cached = iosPtSizeCache.get(deviceId);
+  if (cached) {
+    return cached;
   }
   try {
     const manager = new SimulatorManager();
@@ -656,15 +690,15 @@ async function getIosPtSizeForDevice(deviceId: string): Promise<Size2D | null> {
       // dispatch after simctl recovers should retry, so do NOT memoize
       // this failure (otherwise one transient error permanently disables
       // coordinate conversion for the UDID until process restart).
-      return null;
+      return { size: null, reason: 'transient' };
     }
     const deviceNameLower = device.name.toLowerCase();
     const preset = Object.values(DEVICE_PRESETS).find(
       (p) => p.name.toLowerCase() === deviceNameLower,
     );
-    const result: Size2D | null = preset
-      ? { width: preset.w, height: preset.h }
-      : null;
+    const result: IosPtSizeResult = preset
+      ? { size: { width: preset.w, height: preset.h }, reason: 'ok' }
+      : { size: null, reason: 'preset_miss' };
     // simctl returned a stable device descriptor — caching the preset
     // hit-or-miss is safe (the device's name and the preset table are
     // both static for this process). Transient simctl failures handled
@@ -673,7 +707,7 @@ async function getIosPtSizeForDevice(deviceId: string): Promise<Size2D | null> {
     return result;
   } catch {
     // Same rationale as the !device branch — never cache a thrown error.
-    return null;
+    return { size: null, reason: 'transient' };
   }
 }
 

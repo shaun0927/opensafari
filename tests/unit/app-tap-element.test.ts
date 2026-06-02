@@ -18,6 +18,9 @@ import {
 } from '../../src/tools/app-tap-element';
 import type { AXNode, AXQueryResult } from '../../src/native/ax-types';
 import { DEVICE_PRESETS } from '../../src/simulator/presets';
+import { activateSemanticsOrWarn } from '../../src/native/semantics-activator';
+
+const mockActivate = activateSemanticsOrWarn as unknown as jest.Mock;
 
 // ── Mocks ──────────────────────────────────────────────────────────────────
 
@@ -50,6 +53,7 @@ jest.mock('../../src/native/accessibility-bridge', () => ({
 
 jest.mock('../../src/native/semantics-activator', () => ({
   ensureSemanticsActive: jest.fn().mockResolvedValue(true),
+  activateSemanticsOrWarn: jest.fn().mockResolvedValue({ active: true }),
   countNodes: jest.fn().mockReturnValue(10),
   isLikelyChromeOnlyTree: jest.fn().mockReturnValue(false),
 }));
@@ -234,6 +238,20 @@ describe('app_tap_element', () => {
     const body = JSON.parse(result.content[0].text);
     expect(body.error).toBe('APP_STATE_UNKNOWN');
     expect(body.message).toBe('Element not found');
+  });
+
+  it('propagates semanticsWarning into the not-found error when activation fails (#833)', async () => {
+    mockActivate.mockResolvedValueOnce({
+      active: false,
+      warning: 'semantics may not have populated',
+    });
+    mockQuery.mockResolvedValue(makeQueryResult([]));
+
+    const result = await handler('session', { label: 'NonExistent', timeout: 0 });
+
+    const body = JSON.parse(result.content[0].text);
+    expect(body.message).toBe('Element not found');
+    expect(body.semanticsWarning).toBe('semantics may not have populated');
   });
 
   it('attaches bounded searched-tree diagnostics on a terminal miss (#834)', async () => {
@@ -1074,6 +1092,9 @@ describe('app_tap_element — macOS-pt → iOS-pt coordinate conversion (#693 WU
     expect(body.status).toBe('tapped');
     // Raw center unchanged: 200, 222
     expect(body.coordinates).toEqual({ x: 200, y: 222 });
+    // #833 PR 3.2: a known-device preset miss warns that raw coordinates may
+    // be inaccurate rather than degrading silently.
+    expect(body.warning).toContain('not in the known preset table');
   });
 
   it('falls back to raw AX coordinates when getDevice returns null (simctl failure)', async () => {
@@ -1092,6 +1113,9 @@ describe('app_tap_element — macOS-pt → iOS-pt coordinate conversion (#693 WU
     expect(body.status).toBe('tapped');
     // Raw center unchanged.
     expect(body.coordinates).toEqual({ x: 200, y: 222 });
+    // #833 PR 3.2: a transient simctl failure must NOT emit the preset-miss
+    // warning (avoids alarm fatigue), since it may recover on a later call.
+    expect(body.warning ?? '').not.toContain('preset table');
   });
 });
 

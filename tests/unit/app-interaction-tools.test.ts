@@ -107,6 +107,7 @@ jest.mock('../../src/native/accessibility-bridge', () => ({
 
 jest.mock('../../src/native/semantics-activator', () => ({
   ensureSemanticsActive: jest.fn().mockResolvedValue(true),
+  activateSemanticsOrWarn: jest.fn().mockResolvedValue({ active: true }),
   countNodes: jest.fn().mockReturnValue(10),
 }));
 

@@ -22,4 +22,4 @@ export type {
 export { AccessibilityBridge, AccessibilityBridgeError, getAccessibilityBridge } from './accessibility-bridge';
 export type { AXPressResponse } from './accessibility-bridge';
 export type { AXNode, AXFrame, AXQuery, AXQueryResult, AXDumpOptions, AXQueryOptions } from './ax-types';
-export { ensureSemanticsActive, countNodes, isLikelyChromeOnlyTree } from './semantics-activator';
+export { ensureSemanticsActive, activateSemanticsOrWarn, SEMANTICS_INACTIVE_WARNING, countNodes, isLikelyChromeOnlyTree } from './semantics-activator';

@@ -134,6 +134,39 @@ export function isLikelyChromeOnlyTree(node: AXNode): boolean {
  * This is a no-op for native (non-Flutter) apps that already expose a full
  * accessibility tree.
  */
+/**
+ * Canonical warning surfaced when accessibility semantics fail to populate.
+ * Single source of truth so every tool emits identical, non-absolute wording
+ * (a slow device can still recover on a later call). Issue #833.
+ */
+export const SEMANTICS_INACTIVE_WARNING =
+  'Accessibility semantics may not have populated (the tree was empty after activation). ' +
+  'A missing element may be a symptom of this. If this is a Flutter app, rebuild with ' +
+  '`flutter run --debug`, restart the app, or wrap the target widget in Semantics(); ' +
+  'on a slow device, retrying the call may also succeed.';
+
+export interface SemanticsActivationResult {
+  active: boolean;
+  warning?: string;
+}
+
+/**
+ * Activate semantics and, when activation does not populate the tree, return a
+ * structured warning instead of silently proceeding (issue #833).
+ *
+ * Thin wrapper over {@link ensureSemanticsActive}; the boolean contract is
+ * unchanged. Tools merge `warning` (when present) into their response so an
+ * empty-tree degradation is never silent. `app_tap` and `app_tree` already
+ * surface this themselves and intentionally do not use this helper.
+ */
+export async function activateSemanticsOrWarn(
+  deviceId: string,
+  options?: EnsureSemanticsOptions,
+): Promise<SemanticsActivationResult> {
+  const active = await ensureSemanticsActive(deviceId, options);
+  return active ? { active: true } : { active: false, warning: SEMANTICS_INACTIVE_WARNING };
+}
+
 export async function ensureSemanticsActive(
   deviceId: string,
   options?: EnsureSemanticsOptions,

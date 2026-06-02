@@ -30,7 +30,7 @@ export interface FlutterCapabilities {
 }
 
 /** Tools that remain usable in release mode (no VM Service required). */
-const RELEASE_FALLBACK_TOOLS = [
+export const RELEASE_FALLBACK_TOOLS = [
   'app_tap_element',
   'app_assert_element',
   'app_wait_for',
@@ -41,7 +41,7 @@ const RELEASE_FALLBACK_TOOLS = [
   'flutter_network', // HTTP proxy works regardless of build mode
 ];
 
-function capabilitiesFor(mode: FlutterBuildMode): FlutterCapabilities {
+export function capabilitiesFor(mode: FlutterBuildMode): FlutterCapabilities {
   const vmAvailable = mode === 'debug' || mode === 'profile';
   return {
     hot_reload: mode === 'debug',

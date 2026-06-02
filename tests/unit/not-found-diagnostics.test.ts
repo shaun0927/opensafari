@@ -87,4 +87,37 @@ describe('buildNotFoundDiagnostics (issue #834)', () => {
     const diag = await buildNotFoundDiagnostics(bridge, 'udid', { label: 'save' });
     expect(diag!.candidates.length).toBe(5);
   });
+
+  it('never emits node value and redacts credential patterns in label (#795 #12)', async () => {
+    const token = 'ghp_abcdef0123456789abcdef0123456789abcd'; // 36 chars after ghp_
+    const root = node({ role: 'AXWindow', path: '0', children: [
+      // value holds user-entered secret — must never be emitted.
+      node({ role: 'AXTextField', label: 'API token', value: token, path: '0/0' }),
+      // a credential that leaks into a label must be redacted on emit.
+      node({ role: 'AXButton', label: `token ${token}`, identifier: 'submit', path: '0/1' }),
+    ] });
+    const bridge = dumperReturning(root);
+    const diag = await buildNotFoundDiagnostics(bridge, 'udid', { label: 'nope' });
+
+    const serialized = JSON.stringify(diag);
+    expect(serialized).not.toContain(token); // no raw secret anywhere
+    expect(diag!.nodes.every((n) => !('value' in n))).toBe(true); // no value field at all
+    const submit = diag!.nodes.find((n) => n.identifier === 'submit');
+    expect(submit?.label).toContain('[REDACTED_GH_TOKEN]');
+    expect(diag!.redactionPolicy).toBeTruthy();
+  });
+
+  it('counts and finds candidates across a deeply nested tree', async () => {
+    const deep = node({ role: 'AXWindow', path: '0', children: [
+      node({ role: 'AXGroup', path: '0/0', children: [
+        node({ role: 'AXScrollArea', path: '0/0/0', children: [
+          node({ role: 'AXButton', label: 'Deep Checkout', path: '0/0/0/0' }),
+        ] }),
+      ] }),
+    ] });
+    const bridge = dumperReturning(deep);
+    const diag = await buildNotFoundDiagnostics(bridge, 'udid', { label: 'checkout' });
+    expect(diag!.searchedNodeCount).toBe(4); // all 4 levels counted
+    expect(diag!.candidates.map((c) => c.label)).toContain('Deep Checkout');
+  });
 });
