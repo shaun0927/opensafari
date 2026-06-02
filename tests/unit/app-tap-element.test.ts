@@ -236,6 +236,55 @@ describe('app_tap_element', () => {
     expect(body.message).toBe('Element not found');
   });
 
+  it('attaches bounded searched-tree diagnostics on a terminal miss (#834)', async () => {
+    mockQuery.mockResolvedValue(makeQueryResult([]));
+    mockDumpTree.mockResolvedValue({
+      role: 'AXWindow',
+      traits: [],
+      frame: { x: 0, y: 0, width: 100, height: 100 },
+      visible: true,
+      enabled: true,
+      focused: false,
+      path: '0',
+      children: [
+        {
+          role: 'AXButton',
+          label: 'Submit Order',
+          traits: [],
+          frame: { x: 0, y: 0, width: 10, height: 10 },
+          visible: true,
+          enabled: true,
+          focused: false,
+          path: '0/0',
+        },
+      ],
+    });
+
+    const result = await handler('session', { label: 'submit', timeout: 0 });
+
+    const body = JSON.parse(result.content[0].text);
+    expect(body.message).toBe('Element not found');
+    expect(body.diagnostics).toBeDefined();
+    expect(body.diagnostics.candidates.map((c: { label?: string }) => c.label)).toContain(
+      'Submit Order',
+    );
+    expect(typeof body.hint).toBe('string');
+    // Exactly one diagnostic dump, and only because we missed.
+    expect(mockDumpTree).toHaveBeenCalledTimes(1);
+  });
+
+  it('omits diagnostics gracefully when the diagnostic dump fails (#834)', async () => {
+    mockQuery.mockResolvedValue(makeQueryResult([]));
+    mockDumpTree.mockRejectedValue(new Error('dump timed out'));
+
+    const result = await handler('session', { label: 'submit', timeout: 0 });
+
+    const body = JSON.parse(result.content[0].text);
+    expect(body.message).toBe('Element not found');
+    expect(body.diagnostics).toBeUndefined();
+    expect(body.hint).toBeUndefined();
+  });
+
   it('returns error when element is not visible', async () => {
     const node = makeNode({ visible: false, frame: { x: 0, y: 0, width: 0, height: 0 } });
     mockQuery.mockResolvedValue(makeQueryResult([node]));
