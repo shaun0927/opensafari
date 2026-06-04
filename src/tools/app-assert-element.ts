@@ -7,7 +7,7 @@
  */
 
 import { MCPServer } from '../mcp-server';
-import { getAccessibilityBridge, ensureSemanticsActive } from '../native';
+import { getAccessibilityBridge, ensureSemanticsActive, activateSemanticsOrWarn } from '../native';
 import type { AXNode } from '../native';
 import { getSessionManager } from '../session-manager';
 import {
@@ -15,7 +15,7 @@ import {
   createContextMismatchError,
   NativeContextMeta,
 } from './native-app-context';
-import { ErrorCode, respondWithStructuredError } from '../errors';
+import { ErrorCode, respondWithStructuredError, StructuredErrorException } from '../errors';
 
 type AssertCondition = 'exists' | 'not_exists' | 'visible' | 'enabled' | 'disabled' | 'has_text';
 
@@ -86,9 +86,7 @@ export function registerAppAssertElementTool(server: MCPServer): void {
           (params.device_id as string | undefined) ??
           getSessionManager().getSoleDeviceId();
         if (!deviceId) {
-          throw new Error(
-            'No device specified and no active device. Boot a simulator first with device_boot.',
-          );
+          throw StructuredErrorException.fromCode(ErrorCode.DEVICE_NOT_BOOTED, 'No device specified and no active device. Boot a simulator first with device_boot.');
         }
 
         const condition = (params.assert as AssertCondition | undefined) ?? 'exists';
@@ -110,6 +108,7 @@ export function registerAppAssertElementTool(server: MCPServer): void {
           activationAttempted: false,
           activationRetries: 0,
         };
+        let semanticsWarning: string | undefined;
         if (bundleId) {
           const context = await activateAndClassify({
             bridge,
@@ -122,7 +121,7 @@ export function registerAppAssertElementTool(server: MCPServer): void {
             throw createContextMismatchError(meta);
           }
         } else {
-          await ensureSemanticsActive(deviceId, { bundleId });
+          semanticsWarning = (await activateSemanticsOrWarn(deviceId, { bundleId })).warning;
         }
         const result = await bridge.query(query, { deviceId });
         const matches = result.matches;
@@ -173,6 +172,9 @@ export function registerAppAssertElementTool(server: MCPServer): void {
           debug: !passed && match === null
             ? await collectNoMatchDebug(bridge, deviceId, query)
             : undefined,
+          // Surface the empty-tree cause only when the assertion failed
+          // because nothing was found (not for a passing not_exists check).
+          semanticsWarning: !passed && match === null ? semanticsWarning : undefined,
           _meta: { context: meta },
           element: match ? {
             role: match.role,

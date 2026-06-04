@@ -13,7 +13,7 @@ import * as url from 'url';
 import { MCPServer } from '../mcp-server';
 import { getSessionManager } from '../session-manager';
 import { SimctlExecutor } from '../simulator/simctl';
-import { ErrorCode, respondWithStructuredError } from '../errors';
+import { ErrorCode, respondWithStructuredError, StructuredErrorException } from '../errors';
 
 interface NetworkEntry {
   id: number;
@@ -95,7 +95,7 @@ export function registerFlutterNetworkTool(server: MCPServer): void {
           (params.device_id as string | undefined) ??
           getSessionManager().getSoleDeviceId();
         if (!deviceId) {
-          throw new Error('No device specified and no active device.');
+          throw StructuredErrorException.fromCode(ErrorCode.DEVICE_NOT_BOOTED, 'No device specified and no active device.');
         }
 
         const action = (params.action as string | undefined) ?? 'log';

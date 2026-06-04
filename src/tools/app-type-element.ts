@@ -43,7 +43,7 @@ import {
   wrapHandlerForBundle,
   COLLECT_DEBUG_BUNDLE_ON_FAILURE_SCHEMA,
 } from './debug-bundle-attach';
-import { getAccessibilityBridge, ensureSemanticsActive } from '../native';
+import { getAccessibilityBridge, activateSemanticsOrWarn } from '../native';
 import type { AXNode, AXQuery } from '../native';
 import { resolveDeviceId, getInputBackend, runInputOp } from './native-input-utils';
 import { tryPress } from './app-tap-element';
@@ -53,6 +53,7 @@ import {
   type PasteNotAppliedError,
 } from './pasteboard-input';
 import { mismatchHint } from './keyboard-layout';
+import { waitForSettle, type SettlePolicy } from './settle-policy';
 
 const execFileAsync = promisify(execFile);
 
@@ -163,6 +164,19 @@ export function registerAppTypeElementTool(server: MCPServer): void {
             description:
               'When backend resolves to simhid (HID keyboard): inserts an inter-character pause between consecutive key sends. Default 0 (no pause). Required for segmented OTP-style fields (e.g. 6-cell verify-code inputs in Flutter) that drop characters when keys arrive faster than the field can advance focus. Recommended: 80–150 ms for 6-digit OTP inputs.',
           },
+          settle: {
+            type: 'object',
+            description: 'Optional semantic postcondition. When supplied, typing is only reported successful if the shared settle policy is met after dispatch.',
+            properties: {
+              query: { type: 'object', properties: { identifier: { type: 'string' }, label: { type: 'string' }, text: { type: 'string' }, role: { type: 'string' } } },
+              condition: { type: 'string', enum: ['exists', 'not_exists', 'visible', 'enabled'] },
+              timeoutMs: { type: 'number' },
+              intervalMs: { type: 'number' },
+              stableMs: { type: 'number' },
+              allowTransientErrors: { type: 'boolean' },
+              maxRecoverableRetries: { type: 'number' },
+            },
+          },
           collectDebugBundleOnFailure: COLLECT_DEBUG_BUNDLE_ON_FAILURE_SCHEMA,
         },
         required: ['text'],
@@ -206,7 +220,7 @@ export function registerAppTypeElementTool(server: MCPServer): void {
             ? perKeyDelayMsRaw
             : 0;
 
-        await ensureSemanticsActive(deviceId);
+        const { warning: semanticsWarning } = await activateSemanticsOrWarn(deviceId);
 
         const bridge = getAccessibilityBridge();
         // Note: the bridge supports a `text` query param (searches label/value),
@@ -232,7 +246,7 @@ export function registerAppTypeElementTool(server: MCPServer): void {
           }
         }
         if (!match) {
-          return respondWithStructuredError(ErrorCode.APP_STATE_UNKNOWN, 'Element not found', { query, index, timeout });
+          return respondWithStructuredError(ErrorCode.APP_STATE_UNKNOWN, 'Element not found', { query, index, timeout, semanticsWarning });
         }
 
         if (!match.visible || match.frame.width <= 0 || match.frame.height <= 0) {
@@ -334,32 +348,24 @@ export function registerAppTypeElementTool(server: MCPServer): void {
             throw err;
           }
 
+          const pasteResponse: Record<string, unknown> = {
+            status: 'typed',
+            element: elementDescriptor,
+            coordinates: { x: centerX, y: centerY },
+            length: textToType.length,
+            backend: 'pasteboard',
+            focusBackend: focusedViaAXPress ? 'ax-press' : backend.kind,
+            pasteboardRestored: pasteResult.pasteboardRestored,
+            permissionDialog: pasteResult.permissionDialog,
+            permissionDialogMatchedLabel: pasteResult.permissionDialogMatchedLabel,
+            elapsedMs: pasteResult.elapsedMs,
+            deviceId,
+            ...(pasteResult.secureField ? { secureField: true } : {}),
+          };
+          const settle = await runOptionalPostTypeSettle(deviceId, params, pasteResponse);
           return {
-            content: [
-              {
-                type: 'text' as const,
-                text: JSON.stringify({
-                  status: 'typed',
-                  element: elementDescriptor,
-                  coordinates: { x: centerX, y: centerY },
-                  length: textToType.length,
-                  backend: 'pasteboard',
-                  focusBackend: focusedViaAXPress ? 'ax-press' : backend.kind,
-                  pasteboardRestored: pasteResult.pasteboardRestored,
-                  permissionDialog: pasteResult.permissionDialog,
-                  permissionDialogMatchedLabel:
-                    pasteResult.permissionDialogMatchedLabel,
-                  elapsedMs: pasteResult.elapsedMs,
-                  deviceId,
-                  // Echoed when readback was skipped because the focused
-                  // element is an `AXSecureTextField` (password) whose AX
-                  // value is OS-masked. Lets callers distinguish "no
-                  // readback because secure field" from "no readback because
-                  // verify opted out" (issue #760).
-                  ...(pasteResult.secureField ? { secureField: true } : {}),
-                }),
-              },
-            ],
+            content: [{ type: 'text' as const, text: JSON.stringify(pasteResponse) }],
+            ...(settle?.met === false ? { isError: true as const } : {}),
           };
         }
 
@@ -464,12 +470,14 @@ export function registerAppTypeElementTool(server: MCPServer): void {
                 };
           }
         }
+        const settle = await runOptionalPostTypeSettle(deviceId, params, responseBody);
         const result: {
           content: Array<{ type: 'text'; text: string }>;
           isError?: boolean;
         } = {
           content: [{ type: 'text' as const, text: JSON.stringify(responseBody) }],
         };
+        if (settle?.met === false) result.isError = true;
         if (mismatched) {
           result.isError = true;
         }
@@ -645,4 +653,18 @@ function computeDroppedIndices(expected: string, actual: string): number[] {
   }
 
   return dropped;
+}
+
+
+async function runOptionalPostTypeSettle(
+  deviceId: string,
+  params: Record<string, unknown>,
+  response: Record<string, unknown>,
+): Promise<{ met: boolean } | null> {
+  const settle = params.settle as SettlePolicy | undefined;
+  if (!settle?.query) return null;
+  const verification = await waitForSettle(deviceId, settle);
+  response.settle = verification;
+  response.verifiedPostcondition = verification.met;
+  return { met: verification.met };
 }

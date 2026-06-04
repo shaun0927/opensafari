@@ -1,20 +1,41 @@
 import { SimulatorPool, PooledSimulator } from '../simulator/pool';
 import { ActionTraceRecorder } from '../observability/action-trace';
+import { collectAppSessionState } from '../tools/app-state-snapshot';
+import { waitForSettle, type SettlePolicy } from '../tools/settle-policy';
+import { navigateSemantically, type NativeFallbackQuery } from '../tools/semantic-navigation';
+import { SimulatorManager } from '../simulator';
+import { getAccessibilityBridge } from '../native';
+import { getInputBackend } from '../tools/native-input-utils';
+import { collectDebugBundle } from '../tools/debug-bundle-collect';
 
 export interface TestScenario {
   name: string;
   steps: TestStep[];
+  version?: 1 | 2;
   /** Optional JSON trace artifact path for action-level live-validation evidence. */
   tracePath?: string;
 }
 
 export interface TestStep {
-  action: 'navigate' | 'click' | 'type' | 'scroll' | 'wait' | 'assert' | 'screenshot';
+  action:
+    | 'navigate' | 'click' | 'type' | 'scroll' | 'wait' | 'assert' | 'screenshot'
+    | 'recordState' | 'launchApp' | 'gotoScreen' | 'tapElement' | 'typeElement'
+    | 'waitFor' | 'assertElement' | 'popUntil' | 'dismissOverlay' | 'collectDebugBundle';
   target?: string;     // CSS selector
   value?: string;      // input value, URL, or scroll direction
   assertion?: string;  // JS expression for assert steps
   devices?: string[];  // subset of device presets (default: all)
   timeout?: number;    // step timeout in ms
+  bundleId?: string;
+  expectedBundleId?: string;
+  query?: SettlePolicy['query'];
+  settle?: SettlePolicy;
+  condition?: SettlePolicy['condition'];
+  context?: 'native' | 'webview' | 'safari' | 'flutter';
+  allowNativeFallback?: boolean;
+  nativeFallbackQueries?: NativeFallbackQuery[];
+  maxNativeAttempts?: number;
+  mode?: 'auto' | 'drawer' | 'bottom_sheet' | 'dialog';
 }
 
 export interface StepResult {
@@ -29,6 +50,11 @@ export interface DeviceStepResult {
   deviceId: string;
   passed: boolean;
   result?: unknown;
+  beforeState?: unknown;
+  afterState?: unknown;
+  selectedBackend?: string;
+  headless?: boolean;
+  verification?: unknown;
   error?: string;
   timing: number;
 }
@@ -52,7 +78,7 @@ export class ScenarioRunner {
 
     for (let i = 0; i < scenario.steps.length; i++) {
       const step = scenario.steps[i];
-      const result = await this.executeStep(i, step);
+      const result = await this.executeStep(i, step, scenario.version === 2);
       for (const device of result.devices) {
         trace?.record({
           action: `${step.action}:${i}`,
@@ -91,7 +117,7 @@ export class ScenarioRunner {
     };
   }
 
-  private async executeStep(index: number, step: TestStep): Promise<StepResult> {
+  private async executeStep(index: number, step: TestStep, scenarioIsV2: boolean): Promise<StepResult> {
     // Get target simulators (filter by step.devices if specified, else all)
     const allSims = this.pool.getAll();
     const sims = step.devices
@@ -99,7 +125,7 @@ export class ScenarioRunner {
       : allSims;
 
     const deviceResults = await Promise.all(
-      sims.map(sim => this.executeOnDevice(sim, step))
+      sims.map(sim => this.executeOnDevice(sim, step, scenarioIsV2))
     );
 
     return {
@@ -110,10 +136,20 @@ export class ScenarioRunner {
     };
   }
 
-  private async executeOnDevice(sim: PooledSimulator, step: TestStep): Promise<DeviceStepResult> {
+  private async executeOnDevice(sim: PooledSimulator, step: TestStep, scenarioIsV2: boolean): Promise<DeviceStepResult> {
     const start = Date.now();
+    let beforeState: unknown;
+    let afterState: unknown;
+    let verification: unknown;
+    const isV2 = isMobileV2Step(step);
     try {
+      if (isV2 && !scenarioIsV2) {
+        throw new Error(`Scenario action "${step.action}" requires scenario.version === 2`);
+      }
       let result: unknown;
+      if (isV2) {
+        beforeState = await safeState(sim.device.udid, step.expectedBundleId ?? step.bundleId);
+      }
       switch (step.action) {
         case 'navigate':
           result = await sim.client.navigate({ url: step.value!, waitUntil: 'load', timeout: step.timeout });
@@ -150,6 +186,213 @@ export class ScenarioRunner {
           result = `screenshot:${buf.length}bytes`;
           break;
         }
+        case 'recordState': {
+          result = beforeState ?? await collectAppSessionState({
+            deviceId: sim.device.udid,
+            expectedBundleId: step.expectedBundleId ?? step.bundleId,
+          });
+          break;
+        }
+        case 'launchApp': {
+          if (!step.bundleId) throw new Error('launchApp requires bundleId');
+          await new SimulatorManager().launchApp(sim.device.udid, step.bundleId);
+          result = { launched: true, bundleId: step.bundleId };
+          break;
+        }
+        case 'gotoScreen': {
+          const postconditionQuery = step.settle?.query ?? step.query;
+          const route = step.context === 'flutter' && step.target ? step.target : undefined;
+          if (!postconditionQuery && !route) {
+            throw new Error('gotoScreen requires a postcondition query or Flutter route target');
+          }
+          const nav = await navigateSemantically({
+            deviceId: sim.device.udid,
+            url: step.value,
+            bundleId: step.expectedBundleId ?? step.bundleId,
+            postcondition: {
+              ...(postconditionQuery ?? {}),
+              route,
+              timeoutMs: step.timeout ?? step.settle?.timeoutMs,
+              stableMs: step.settle?.stableMs,
+            },
+            allowNativeFallback: step.allowNativeFallback,
+            nativeFallbackQueries: step.nativeFallbackQueries,
+            maxNativeAttempts: step.maxNativeAttempts,
+            collectState: false,
+          });
+          verification = nav.verification;
+          if (nav.strategy === 'failed') {
+            throw new Error('gotoScreen postcondition was not met');
+          }
+          result = nav;
+          break;
+        }
+        case 'waitFor':
+        case 'assertElement': {
+          verification = await waitForSettle(sim.device.udid, {
+            ...(step.settle ?? {}),
+            query: step.settle?.query ?? step.query,
+            condition: step.condition ?? step.settle?.condition ?? 'exists',
+            timeoutMs: step.timeout ?? step.settle?.timeoutMs,
+          });
+          const met = Boolean((verification as { met?: boolean }).met);
+          if (!met) {
+            return {
+              device: sim.preset,
+              deviceId: sim.device.udid,
+              passed: false,
+              beforeState,
+              afterState: await safeState(sim.device.udid, step.expectedBundleId ?? step.bundleId),
+              selectedBackend: inferStepBackend(step),
+              headless: true,
+              verification,
+              error: `${step.action} postcondition was not met`,
+              timing: Date.now() - start,
+            };
+          }
+          result = verification;
+          break;
+        }
+        case 'tapElement': {
+          if (!step.query) throw new Error('tapElement requires query');
+          if (!step.settle?.query) throw new Error('tapElement requires a settle.query postcondition');
+          const bridge = getAccessibilityBridge();
+          const queryResult = await bridge.query(step.query, { deviceId: sim.device.udid, maxResults: 1 });
+          const match = queryResult.matches[0];
+          if (!match) throw new Error('tapElement query matched no elements');
+          let press: { ok: boolean; error?: string };
+          try {
+            press = await bridge.press(match.path, sim.device.udid);
+          } catch (err) {
+            press = { ok: false, error: err instanceof Error ? err.message : String(err) };
+          }
+          let backend = 'ax-press';
+          if (!press.ok) {
+            const inputBackend = await getInputBackend(sim.device.udid, sim.client);
+            await inputBackend.tap(
+              sim.device.udid,
+              match.frame.x + match.frame.width / 2,
+              match.frame.y + match.frame.height / 2,
+            );
+            backend = inputBackend.kind;
+          }
+          verification = await waitForSettle(sim.device.udid, step.settle);
+          if (!(verification as { met?: boolean }).met) throw new Error('tapElement postcondition was not met');
+          result = { tapped: true, path: match.path, backend, axPress: press };
+          break;
+        }
+        case 'typeElement': {
+          if (!step.query) throw new Error('typeElement requires query');
+          if (step.value === undefined) throw new Error('typeElement requires value');
+          if (!step.settle?.query) throw new Error('typeElement requires a settle.query postcondition');
+          const bridge = getAccessibilityBridge();
+          const queryResult = await bridge.query(step.query, { deviceId: sim.device.udid, maxResults: 1 });
+          const match = queryResult.matches[0];
+          if (!match) throw new Error('typeElement query matched no elements');
+          let focus: { ok: boolean; error?: string };
+          try {
+            focus = await bridge.press(match.path, sim.device.udid);
+          } catch (err) {
+            focus = { ok: false, error: err instanceof Error ? err.message : String(err) };
+          }
+          const backend = await getInputBackend(sim.device.udid, sim.client);
+          await backend.typeText(sim.device.udid, step.value);
+          verification = await waitForSettle(sim.device.udid, step.settle);
+          if (!(verification as { met?: boolean }).met) throw new Error('typeElement postcondition was not met');
+          result = { typed: true, path: match.path, length: step.value.length, backend: backend.kind, focus };
+          break;
+        }
+        case 'popUntil': {
+          const postconditionQuery = step.settle?.query ?? step.query;
+          if (!postconditionQuery) throw new Error('popUntil requires query or settle.query postcondition');
+          const backend = await getInputBackend(sim.device.udid, sim.client);
+          const attempts: Array<{ action: string; ok: boolean; elapsedMs: number; error?: string }> = [];
+          const max = Math.max(1, Math.min(step.maxNativeAttempts ?? 3, 10));
+          const dispatches: Array<{ action: string; run: () => Promise<void> }> = [
+            { action: 'escape', run: () => backend.sendKey(sim.device.udid, 'Escape') },
+            { action: 'edge_swipe', run: () => backend.swipe(sim.device.udid, 2, 420, 220, 420, 0.18) },
+          ];
+          for (let i = 0; i < max; i++) {
+            for (const dispatch of dispatches) {
+              const started = Date.now();
+              try {
+                await dispatch.run();
+                attempts.push({ action: dispatch.action, ok: true, elapsedMs: Date.now() - started });
+              } catch (err) {
+                attempts.push({ action: dispatch.action, ok: false, elapsedMs: Date.now() - started, error: err instanceof Error ? err.message : String(err) });
+                continue;
+              }
+              verification = await waitForSettle(sim.device.udid, { ...(step.settle ?? {}), query: postconditionQuery, condition: step.condition ?? step.settle?.condition ?? 'exists', timeoutMs: step.timeout ?? step.settle?.timeoutMs });
+              if ((verification as { met?: boolean }).met) break;
+            }
+            if ((verification as { met?: boolean } | undefined)?.met) break;
+          }
+          if (!(verification as { met?: boolean } | undefined)?.met) {
+            return {
+              device: sim.preset,
+              deviceId: sim.device.udid,
+              passed: false,
+              beforeState,
+              afterState: await safeState(sim.device.udid, step.expectedBundleId ?? step.bundleId),
+              selectedBackend: inferStepBackend(step),
+              headless: true,
+              result: { popped: attempts.filter((a) => a.ok).length, attempts },
+              verification,
+              error: 'popUntil postcondition was not met',
+              timing: Date.now() - start,
+            };
+          }
+          result = { popped: attempts.filter((a) => a.ok).length, attempts };
+          break;
+        }
+        case 'dismissOverlay': {
+          const postconditionQuery = step.settle?.query ?? step.query;
+          if (!postconditionQuery) throw new Error('dismissOverlay requires query or settle.query postcondition');
+          const backend = await getInputBackend(sim.device.udid, sim.client);
+          const mode = step.mode ?? 'auto';
+          const attempts: Array<{ action: string; ok: boolean; elapsedMs: number; error?: string }> = [];
+          const dispatches: Array<{ action: string; enabled: boolean; run: () => Promise<void> }> = [
+            { action: 'escape', enabled: mode === 'dialog' || mode === 'auto', run: () => backend.sendKey(sim.device.udid, 'Escape') },
+            { action: 'swipe_from_right', enabled: mode === 'drawer' || mode === 'auto', run: () => backend.swipe(sim.device.udid, 360, 400, 80, 400, 0.25) },
+            { action: 'swipe_down', enabled: mode === 'bottom_sheet' || mode === 'auto', run: () => backend.swipe(sim.device.udid, 200, 240, 200, 720, 0.25) },
+          ];
+          for (const dispatch of dispatches.filter((d) => d.enabled)) {
+            const started = Date.now();
+            try {
+              await dispatch.run();
+              attempts.push({ action: dispatch.action, ok: true, elapsedMs: Date.now() - started });
+            } catch (err) {
+              attempts.push({ action: dispatch.action, ok: false, elapsedMs: Date.now() - started, error: err instanceof Error ? err.message : String(err) });
+              continue;
+            }
+            verification = await waitForSettle(sim.device.udid, { ...(step.settle ?? {}), query: postconditionQuery, condition: step.condition ?? step.settle?.condition ?? 'not_exists', timeoutMs: step.timeout ?? step.settle?.timeoutMs });
+            if ((verification as { met?: boolean }).met) break;
+          }
+          if (!(verification as { met?: boolean } | undefined)?.met) {
+            return {
+              device: sim.preset,
+              deviceId: sim.device.udid,
+              passed: false,
+              beforeState,
+              afterState: await safeState(sim.device.udid, step.expectedBundleId ?? step.bundleId),
+              selectedBackend: inferStepBackend(step),
+              headless: true,
+              result: { dismissed: false, mode, attempts },
+              verification,
+              error: 'dismissOverlay postcondition was not met',
+              timing: Date.now() - start,
+            };
+          }
+          result = { dismissed: true, mode, attempts };
+          break;
+        }
+        case 'collectDebugBundle': {
+          result = await collectDebugBundle({
+            deviceId: sim.device.udid,
+            bundleId: step.bundleId ?? step.expectedBundleId,
+          });
+          break;
+        }
         default:
           return {
             device: sim.preset,
@@ -159,11 +402,19 @@ export class ScenarioRunner {
             timing: Date.now() - start,
           };
       }
+      if (isV2) {
+        afterState = await safeState(sim.device.udid, step.expectedBundleId ?? step.bundleId);
+      }
       return {
         device: sim.preset,
         deviceId: sim.device.udid,
         passed: true,
         result,
+        beforeState,
+        afterState,
+        selectedBackend: isV2 ? inferStepBackend(step) : undefined,
+        headless: isV2 ? inferStepBackend(step) !== 'applescript' : undefined,
+        verification,
         timing: Date.now() - start,
       };
     } catch (err) {
@@ -171,9 +422,50 @@ export class ScenarioRunner {
         device: sim.preset,
         deviceId: sim.device.udid,
         passed: false,
+        beforeState,
+        afterState: isV2 ? await safeState(sim.device.udid, step.expectedBundleId ?? step.bundleId) : undefined,
+        selectedBackend: isV2 ? inferStepBackend(step) : undefined,
+        headless: isV2 ? inferStepBackend(step) !== 'applescript' : undefined,
+        verification,
         error: err instanceof Error ? err.message : String(err),
         timing: Date.now() - start,
       };
     }
+  }
+}
+
+function isMobileV2Step(step: TestStep): boolean {
+  return [
+    'recordState',
+    'launchApp',
+    'gotoScreen',
+    'tapElement',
+    'typeElement',
+    'waitFor',
+    'assertElement',
+    'popUntil',
+    'dismissOverlay',
+    'collectDebugBundle',
+  ].includes(step.action);
+}
+
+
+function inferStepBackend(step: TestStep): string {
+  if (step.context === 'webview' || step.context === 'safari') return 'webkit';
+  if (step.context === 'flutter') return 'flutter-vm';
+  if (['waitFor', 'assertElement', 'recordState'].includes(step.action)) return 'ax';
+  return 'semantic-mobile';
+}
+
+async function safeState(deviceId: string, expectedBundleId?: string): Promise<unknown> {
+  try {
+    return await collectAppSessionState({
+      deviceId,
+      expectedBundleId,
+      includeFlutter: true,
+      maxVisibleNodes: 10,
+    });
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : String(err) };
   }
 }

@@ -61,6 +61,59 @@ Claude: [Uses navigate, screenshot, qa_full_audit tools]
         Found 3 issues: auto-zoom on search input, touch target too small...
 ```
 
+## Debugging a Flutter Native App
+
+OpenSafari can drive Flutter apps running in the iOS Simulator and inspect them
+through the Dart VM Service. **How you launch the app decides what works.**
+
+### Launch so the VM Service is reachable
+
+The VM Service (and therefore `flutter_connect`, `flutter_widget_tree`,
+`flutter_hot_reload`, synthetic pointer input, profiling, etc.) is only exposed
+when the app is started with `flutter run` in a VM-enabled build mode:
+
+```bash
+# Simulator: use --debug. OpenSafari attaches and gets the full tool surface.
+flutter run --debug
+
+# Physical device: --profile keeps the VM Service while running near release perf.
+flutter run --profile
+```
+
+- `xcrun simctl launch` and **release builds do not expose the VM Service** — the
+  `flutter_*` inspection tools will not attach. Use the native fallback tools
+  (`app_tree`, `app_tap_element`, `app_screenshot_native`, `app_logs`,
+  `flutter_network`) for those.
+- **`--profile` is rejected by the Flutter toolchain on simulators**
+  (*"Profile mode is not supported for simulators."*). On the simulator, use
+  `--debug`; reserve `--profile` for physical-device QA.
+
+### Attach deterministically
+
+Auto-discovery scans the simulator logs for the VM Service URL, which is
+convenient but can be slow on a cold start. For repeatable runs, pin the port and
+pass it to `flutter_connect`:
+
+```bash
+flutter run --debug --host-vmservice-port=50642
+```
+
+Then call `flutter_connect` with `vm_service_port: 50642` (plus
+`vm_service_auth_code` if the VM Service prints an auth token), or pass the full
+`vm_service_url` directly. See [Flutter VM attach](flutter-vm-attach.md) for the
+attach patterns and troubleshooting.
+
+### Which mode supports which tools
+
+Capability depends on build mode (and Xcode version). Rather than duplicate it
+here, see the
+[Build-mode × Xcode tier matrix](flutter-inspector.md#build-mode--xcode-tier-matrix-596).
+
+> Release/TestFlight builds are not VM-debuggable here — they run as release
+> (AOT) builds on real devices with debugging disabled. Debug in the Simulator
+> (`--debug`) or on a physical device (`--profile`); use TestFlight only for
+> black-box verification.
+
 ## Available Device Presets
 
 ```bash

@@ -202,13 +202,21 @@ describe('tier-0 error envelope shape (#797 PR2)', () => {
     assertStructuredError(result, ErrorCode.INVALID_URL);
   });
 
-  // 1b. app-goto-screen — DEVICE_NOT_BOOTED (no url scheme ok, no device)
+  test('app_goto_screen: INVALID_INPUT when waitFor postcondition is omitted', async () => {
+    const { registerAppGotoScreenTool } = await import('../../src/tools/app-goto-screen');
+    registerAppGotoScreenTool(server);
+    const handler = server.getToolHandler('app_goto_screen')!;
+    const result = await handler('s', { url: 'myapp://home' });
+    assertStructuredError(result, ErrorCode.INVALID_INPUT);
+  });
+
+  // 1b. app-goto-screen — DEVICE_NOT_BOOTED (valid url/postcondition, no device)
   test('app_goto_screen: DEVICE_NOT_BOOTED when no simulator', async () => {
     const { registerAppGotoScreenTool } = await import('../../src/tools/app-goto-screen');
     registerAppGotoScreenTool(server);
     const handler = server.getToolHandler('app_goto_screen')!;
-    // url is valid but resolveDeviceId will return null (session mock returns null)
-    const result = await handler('s', { url: 'myapp://home' });
+    // url and waitFor are valid but resolveDeviceId will return null (session mock returns null)
+    const result = await handler('s', { url: 'myapp://home', waitFor: { identifier: 'home' } });
     assertStructuredError(result, ErrorCode.DEVICE_NOT_BOOTED);
   });
 

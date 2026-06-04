@@ -44,7 +44,11 @@ jest.mock('../../src/flutter/vm-service-client', () => ({
 }));
 
 // Import after mocks
-import { ensureSemanticsActive } from '../../src/native/semantics-activator';
+import {
+  ensureSemanticsActive,
+  activateSemanticsOrWarn,
+  SEMANTICS_INACTIVE_WARNING,
+} from '../../src/native/semantics-activator';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -417,5 +421,39 @@ describe('ensureSemanticsActive', () => {
     expect(result).toBe(false);
     // disconnect() should still be attempted in the finally block
     expect(mockVMDisconnect).toHaveBeenCalled();
+  });
+});
+
+describe('activateSemanticsOrWarn (issue #833)', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    jest.useFakeTimers();
+    mockDiscoverVMServiceUrl.mockResolvedValue(null);
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it('returns active:true with no warning when semantics populate', async () => {
+    mockDumpTree.mockResolvedValue(makeTree(10));
+
+    const result = await activateSemanticsOrWarn('test-device-id');
+
+    expect(result.active).toBe(true);
+    expect(result.warning).toBeUndefined();
+  });
+
+  it('returns active:false with the canonical warning when the tree never populates', async () => {
+    mockDumpTree.mockResolvedValue(makeTree(2));
+    mockExecFile.mockResolvedValue({ stdout: '', stderr: '' });
+    mockDiscoverVMServiceUrl.mockResolvedValue(null);
+
+    const promise = activateSemanticsOrWarn('test-device-id', { timeout: 600 });
+    await jest.advanceTimersByTimeAsync(1000);
+    const result = await promise;
+
+    expect(result.active).toBe(false);
+    expect(result.warning).toBe(SEMANTICS_INACTIVE_WARNING);
   });
 });

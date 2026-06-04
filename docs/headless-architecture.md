@@ -439,6 +439,28 @@ probe latency.
 Status: **Production** (Tier 0). Shipped in
 [#481 / #486](https://github.com/shaun0927/opensafari/pull/486).
 
+#### CI verification posture (Headless Smoke `Flutter` job)
+
+The live suite `tests/integration/flutter-vm-input.live.test.ts` runs on the
+daily Headless Smoke workflow, split into two steps with different gating
+because the assertions have different infrastructure requirements:
+
+| Assertion | Reads back via | CI gate |
+|---|---|---|
+| `getInputBackend()` selects Tier-0 `FlutterVMInputBackend` | none (backend selection) | **blocking** |
+| `swipe` dispatches gesture-arena move events | none (VM dispatch only) | **blocking** |
+| `tap` on Login changes status | **ax-bridge** (Simulator.app + TCC) | advisory (`continue-on-error`) |
+| `typeText` fires `onChanged` | **ax-bridge** (Simulator.app + TCC) | advisory (`continue-on-error`) |
+
+The blocking step proves the load-bearing headless claim — that the Tier-0 VM
+backend is selected and dispatches input without focus steal — on every run.
+The tap/type assertions verify their *effect* by reading app state back through
+the native ax-bridge, which needs Simulator.app foregrounded and TCC
+Accessibility that GitHub-hosted runners do not grant; they are advisory until
+the result-readback is reworked off the ax-bridge (candidate: parse the live
+`Status:` Text node from the VM Service widget summary tree, so the readback
+uses the same transport as the input — tracked as a follow-up).
+
 ---
 
 ## 5. Environment Variables

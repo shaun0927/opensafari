@@ -12,7 +12,7 @@ import { MCPServer } from '../mcp-server';
 import { getFlutterVMClient } from '../flutter';
 import { discoverVMServiceUrl } from '../flutter/vm-service-discovery';
 import { getSessionManager } from '../session-manager';
-import { ErrorCode, respondWithStructuredError } from '../errors';
+import { ErrorCode, respondWithStructuredError, StructuredErrorException } from '../errors';
 
 export type FlutterBuildMode = 'debug' | 'profile' | 'release' | 'unknown';
 
@@ -30,7 +30,7 @@ export interface FlutterCapabilities {
 }
 
 /** Tools that remain usable in release mode (no VM Service required). */
-const RELEASE_FALLBACK_TOOLS = [
+export const RELEASE_FALLBACK_TOOLS = [
   'app_tap_element',
   'app_assert_element',
   'app_wait_for',
@@ -41,7 +41,7 @@ const RELEASE_FALLBACK_TOOLS = [
   'flutter_network', // HTTP proxy works regardless of build mode
 ];
 
-function capabilitiesFor(mode: FlutterBuildMode): FlutterCapabilities {
+export function capabilitiesFor(mode: FlutterBuildMode): FlutterCapabilities {
   const vmAvailable = mode === 'debug' || mode === 'profile';
   return {
     hot_reload: mode === 'debug',
@@ -161,7 +161,7 @@ export function registerFlutterBuildModeTool(server: MCPServer): void {
           (params.device_id as string | undefined) ??
           getSessionManager().getSoleDeviceId();
         if (!deviceId) {
-          throw new Error('No device specified and no active device. Boot a simulator first.');
+          throw StructuredErrorException.fromCode(ErrorCode.DEVICE_NOT_BOOTED, 'No device specified and no active device. Boot a simulator first.');
         }
 
         const probe = await detectBuildMode(deviceId, {

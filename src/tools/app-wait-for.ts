@@ -7,11 +7,12 @@
  */
 
 import { MCPServer, getWebKitClient } from '../mcp-server';
-import { getAccessibilityBridge, ensureSemanticsActive } from '../native';
+import { getAccessibilityBridge, ensureSemanticsActive, activateSemanticsOrWarn } from '../native';
 import type { AXNode } from '../native';
+import { buildNotFoundDiagnostics } from '../native/not-found-diagnostics';
 import { getSessionManager } from '../session-manager';
 import { getInputBackend } from './native-input-utils';
-import { ErrorCode, respondWithStructuredError } from '../errors';
+import { ErrorCode, respondWithStructuredError, StructuredErrorException } from '../errors';
 import {
   activateAndClassify,
   createContextMismatchError,
@@ -154,9 +155,7 @@ export function registerAppWaitForNativeTool(server: MCPServer): void {
           (params.device_id as string | undefined) ??
           getSessionManager().getSoleDeviceId();
         if (!deviceId) {
-          throw new Error(
-            'No device specified and no active device. Boot a simulator first with device_boot.',
-          );
+          throw StructuredErrorException.fromCode(ErrorCode.DEVICE_NOT_BOOTED, 'No device specified and no active device. Boot a simulator first with device_boot.');
         }
 
         const condition = (params.condition as WaitCondition | undefined) ?? 'exists';
@@ -176,6 +175,7 @@ export function registerAppWaitForNativeTool(server: MCPServer): void {
           activationAttempted: false,
           activationRetries: 0,
         };
+        let semanticsWarning: string | undefined;
         if (bundleId) {
           const context = await activateAndClassify({
             bridge,
@@ -188,7 +188,7 @@ export function registerAppWaitForNativeTool(server: MCPServer): void {
             throw createContextMismatchError(meta);
           }
         } else {
-          await ensureSemanticsActive(deviceId, { bundleId });
+          semanticsWarning = (await activateSemanticsOrWarn(deviceId, { bundleId })).warning;
         }
         const startTime = Date.now();
         const deadline = startTime + timeout;
@@ -266,10 +266,18 @@ export function registerAppWaitForNativeTool(server: MCPServer): void {
 
         // Timeout
         const elapsed = Date.now() - startTime;
+        // For "wait until it appears" conditions, attach a bounded snapshot of
+        // what IS on screen so the timeout is diagnosable in one call instead
+        // of a manual app_tree round-trip (#834). Skipped for not_exists, where
+        // a timeout means the element is still present (nothing to surface).
+        const diagnostics =
+          condition === 'not_exists'
+            ? undefined
+            : await buildNotFoundDiagnostics(bridge, deviceId, query);
         return respondWithStructuredError(
           ErrorCode.APP_STATE_UNKNOWN,
           'Timeout waiting for element',
-          { condition, query, timeout, elapsed, polls: pollCount },
+          { condition, query, timeout, elapsed, polls: pollCount, semanticsWarning, diagnostics },
         );
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);

@@ -19,7 +19,7 @@ import { MCPServer } from '../mcp-server';
 import { getFlutterVMClient } from '../flutter';
 import { getSessionManager } from '../session-manager';
 import type { VMServiceEvent } from '../flutter/flutter-types';
-import { ErrorCode, respondWithStructuredError } from '../errors';
+import { ErrorCode, respondWithStructuredError, StructuredErrorException } from '../errors';
 
 // ── Per-device tracking state ───────────────────────────────────────────────
 
@@ -292,12 +292,12 @@ export function registerFlutterTrackRebuildsTool(server: MCPServer): void {
           (params.device_id as string | undefined) ??
           getSessionManager().getSoleDeviceId();
         if (!deviceId) {
-          throw new Error('No device specified and no active device. Boot a simulator first.');
+          throw StructuredErrorException.fromCode(ErrorCode.DEVICE_NOT_BOOTED, 'No device specified and no active device. Boot a simulator first.');
         }
 
         const client = getFlutterVMClient(deviceId);
         if (!client.isConnected()) {
-          throw new Error('Not connected to Flutter VM Service. Run flutter_connect first.');
+          throw StructuredErrorException.fromCode(ErrorCode.FLUTTER_VM_NOT_CONNECTED, 'Not connected to Flutter VM Service. Run flutter_connect first.');
         }
 
         if (action === 'start') {
