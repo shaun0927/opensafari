@@ -4,13 +4,42 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-### Fixed
-- **Publish workflow honest-green** — the `Publish` workflow has reported `failure` on every release since v0.6.0 even though each version reached npm, because `npm publish --provenance` returns a misleading `E404 … not in this registry` when the version already exists or the `NPM_TOKEN` lacks publish rights. `publish.yml` now (a) skips publishing with a success status when the exact `name@version` is already on the registry (idempotent re-runs / re-pushed tags), (b) runs an `npm whoami` auth preflight that fails with an actionable message instead of the masked E404, and (c) fans a failure out through the existing `_sentinel-notify` reusable workflow so a broken release pipeline cannot sit red unnoticed. NOTE: a genuinely-new version still requires a valid publish-scoped `NPM_TOKEN`.
+## [0.7.0] - 2026-06-04
+
+**OpenSafari 0.7.0 is a stateful-QA and observability release.** It lands the foundations for stateful mobile semantic QA (durable `AppSessionState` / `ScreenStateSnapshot` contracts, a verified semantic navigation controller, a shared settle/postcondition policy, and an upgraded scenario runner), and makes previously-silent automation failures actionable by attaching searched-tree diagnostics to not-found errors, surfacing semantics-activation and raw-coordinate fallbacks as warnings, and disclosing Flutter build mode and VM capabilities at connect time. All emitted diagnostics are redacted and length-bounded.
+
+### Added
+
+- **Stateful mobile semantic QA runtime foundations (#822, #823, #824, #827, #828, #830)** — introduces durable QA state contracts and the runtime that drives them:
+  - `AppSessionState` and `ScreenStateSnapshot` contracts (`src/tools/app-state-snapshot.ts`) define a portable, serializable description of where a session is and what is on screen, so QA flows can reason about state instead of replaying blind tap sequences.
+  - A **semantic navigation controller** (`src/tools/semantic-navigation.ts`) performs verified screen transitions — each navigation asserts its destination postcondition rather than relaunching the app on every step, eliminating relaunch loops.
+  - A shared **settle / postcondition policy** (`src/tools/settle-policy.ts`) standardizes how high-level mobile actions wait for the UI to quiesce and how they prove their effect, applied consistently across `app_goto_screen`, `app_pop_until`, `app_dismiss_overlay`, `app_tap_element`, `app_type_element`, and `app_wait_for`.
+  - The **scenario runner is upgraded** for mobile semantic flows with resume-from-current-state support (`src/orchestration/scenario-runner.ts`, `src/tools/scenario-tools.ts`), so a scenario can pick up from the live device state instead of restarting from scratch.
+- **Flutter `flutter_connect` build-mode & capability disclosure (#831, #836)** — `flutter_connect` now reports the app's build mode (debug / profile / release) and which VM-service capabilities are available, and performs a probe-backed `flutter_evaluate` so callers know up front whether expression evaluation and inspection are usable on the attached VM rather than discovering it on first failure.
+- **Flutter semantics selector quality audit (#825)** — `qa_flutter_semantics` gains an automation-readiness audit that flags low-quality / ambiguous semantics selectors before they cause flaky automation.
 
 ### Changed
 
+- **Searched-tree diagnostics on not-found errors (#834, #837, #840)** — when `app_tap_element` (and related element-targeting tools) cannot find a target, and when `app_wait_for` times out, the structured error now attaches a redacted, length-bounded summary of the accessibility tree that was actually searched, so the caller can see *why* the match failed instead of only that it did. Diagnostics are distinct from, and complementary to, the heavier `debug_bundle_collect`.
+- **Semantics-activation failures surfaced as warnings (#833, #838)** — when the native accessibility semantics activation degrades silently, affected tools now emit an actionable warning across the surface instead of proceeding as if nothing happened.
+- **Raw-coordinate fallback warning (#839)** — `app_tap_element` now warns when it falls back to raw screen coordinates for an unknown preset, making a silent precision degradation visible to the operator.
+- **Diagnostics are redacted and bounded (#841, #833)** — all newly-emitted diagnostic strings are passed through redaction and the searched-tree dump is size-capped, so attaching diagnostics never leaks sensitive content or blows up the response payload.
 - Catalog-coded the two most common recoverable failure conditions so MCP clients receive a specific error code plus `recoverable` flag and `suggestion` instead of the generic `APP_STATE_UNKNOWN` fallback. "No device specified and no active device" (28 sites across `src/tools/**` and the canonical `resolveDeviceId` in `src/native/accessibility.ts`) now throws `StructuredErrorException.fromCode(ErrorCode.DEVICE_NOT_BOOTED, …)`, and "Not connected to Flutter VM Service. Run flutter_connect first." (12 sites) now throws `StructuredErrorException.fromCode(ErrorCode.FLUTTER_VM_NOT_CONNECTED, …)`. Each site preserves its original message string. The error envelope was already structured via the MCP server catch-all; this upgrades specificity (enabling client-side auto-recovery) for the highest-frequency cases.
-- **Headless Smoke `Flutter` job now gates the Tier-0 thesis** — the Flutter VM-Service live suite was entirely `continue-on-error` (advisory) after the #816 hang fix, so even a regression in headless Tier-0 routing or gesture dispatch would not fail CI. The step is now split: the ax-independent assertions (`getInputBackend()` selects `FlutterVMInputBackend`, and `swipe` dispatches gesture-arena events) run as a **blocking** step, while only the `tap`/`typeText` assertions — which verify their effect through the ax-bridge (needs Simulator.app + TCC Accessibility, unavailable on GitHub-hosted runners) — remain advisory. The load-bearing headless claim is verified on every run; the ax-dependent readback stays advisory until it is reworked off the ax-bridge. Documented in `docs/headless-architecture.md`.
+- **Headless Smoke `Flutter` job now gates the Tier-0 thesis (#820)** — the Flutter VM-Service live suite was entirely `continue-on-error` (advisory) after the #816 hang fix, so even a regression in headless Tier-0 routing or gesture dispatch would not fail CI. The step is now split: the ax-independent assertions (`getInputBackend()` selects `FlutterVMInputBackend`, and `swipe` dispatches gesture-arena events) run as a **blocking** step, while only the `tap`/`typeText` assertions — which verify their effect through the ax-bridge (needs Simulator.app + TCC Accessibility, unavailable on GitHub-hosted runners) — remain advisory. The load-bearing headless claim is verified on every run; the ax-dependent readback stays advisory until it is reworked off the ax-bridge. Documented in `docs/headless-architecture.md`.
+
+### Fixed
+- **Publish workflow honest-green (#817, #821)** — the `Publish` workflow has reported `failure` on every release since v0.6.0 even though each version reached npm, because `npm publish --provenance` returns a misleading `E404 … not in this registry` when the version already exists or the `NPM_TOKEN` lacks publish rights. `publish.yml` now (a) skips publishing with a success status when the exact `name@version` is already on the registry (idempotent re-runs / re-pushed tags), (b) runs an `npm whoami` auth preflight that fails with an actionable message instead of the masked E404, and (c) fans a failure out through the existing `_sentinel-notify` reusable workflow so a broken release pipeline cannot sit red unnoticed. NOTE: a genuinely-new version still requires a valid publish-scoped `NPM_TOKEN`.
+
+### Docs
+
+- **Flutter native debugging setup in getting-started (#832, #835)** — `docs/getting-started.md` now covers how to bring up native Flutter debugging end-to-end, and `docs/flutter-vm-attach.md` documents deterministic fast VM attach for debug/profile QA sessions.
+- **Mobile semantic QA guide (#828)** — `docs/mobile-semantic-qa.md` describes the new stateful QA contracts, the semantic navigation controller, and the resume-from-current-state scenario flow.
+- **Single-integration branch policy (#819)** — documented in `CLAUDE.md` to prevent the stranded-PR / stacked-branch topology that stalled the 0.6.3 cut.
+
+### Tests / CI
+
+- Full suite green: **211 suites / 2917 tests** pass locally in ~28 seconds on the merged release branch; lint clean (0 errors).
+- The Headless Smoke `Flutter` job now runs the ax-independent Tier-0 routing + swipe-dispatch assertions as a blocking gate (see Changed), so a headless regression fails CI on every run.
 
 ## [0.6.3] - 2026-05-29
 
