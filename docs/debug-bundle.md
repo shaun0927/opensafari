@@ -89,6 +89,33 @@ forces auto-attach on for the 5 wired tools regardless of the per-call
 parameter. Useful for CI runs where every recoverable failure should
 carry evidence.
 
+## AX walker topology on failure (#842)
+
+When an AX read fails on a recoverable path (`DEVICE_CONTENT_ROOT_EMPTY`
+or `BRIDGE_EXEC_FAILED`) and `OPENSAFARI_AX_DEBUG_ON_FAILURE=1` is set,
+the accessibility-bridge wrapper re-invokes the failing `dump`/`query`
+**once** with `--debug` and parses the `walker_*` JSON-line stderr
+events the Swift bridge emits (#660 PR C / #691). The parsed summary is
+attached to the thrown `AccessibilityBridgeError` as `topology`:
+
+```jsonc
+{
+  "windowCount": 2,                 // AX children Simulator.app exposed
+  "windows": [ { "role": "AXWindow", "subrole": "AXStandardWindow", … } ],
+  "overlayRolesSeen": 0,            // AXSheet/AXAlert/… encountered during the walk
+  "winner": { "role": "AXGroup", "score": 5, "appSemanticsCount": 0 }
+}
+```
+
+This makes a failed AX read self-diagnosing — e.g. a permission sheet
+sitting in a sibling window (`windowCount > 2`) versus an in-subtree
+sheet the content-root scorer discarded (`overlayRolesSeen > 0`,
+`winner.appSemanticsCount === 0`) — without a manual `--debug` repro.
+
+Opt-in and failure-only by design: the success path never passes
+`--debug`, so a healthy `dump` produces no extra stderr. A failed
+re-capture is best-effort and never masks the original error.
+
 ## Artifacts
 
 By default, `screenshot.png`, `ax-tree.json`, and `logs.txt` are written

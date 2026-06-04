@@ -47,6 +47,138 @@ function formatStreamTail(label: string, value: string | undefined): string {
   return ` | ${label}: ${truncated}`;
 }
 
+/**
+ * Issue #842: structured AX walker topology, parsed from the `walker_*`
+ * JSON-line stderr events the Swift bridge emits under `--debug`
+ * (#660 PR C / #691). Attached to a thrown {@link AccessibilityBridgeError}
+ * on a recoverable failure so the next real failure is self-diagnosing
+ * without a manual repro.
+ */
+export interface AxTopologyWindow {
+  role: string;
+  subrole: string;
+  title: string;
+  identifier: string;
+}
+
+export interface AxTopologyOverlaySample {
+  depth: number;
+  role: string;
+  label: string | null;
+}
+
+export interface AxTopologyWinner {
+  depth: number;
+  role: string;
+  label: string | null;
+  score: number;
+  appSemanticsCount: number;
+}
+
+export interface AxTopology {
+  /** Number of AX children Simulator.app exposed (device window + menubar, …). */
+  windowCount?: number;
+  windows?: AxTopologyWindow[];
+  /** Count of overlay-suspect roles (AXSheet/AXAlert/…) the walk encountered. */
+  overlayRolesSeen?: number;
+  overlaySamples?: AxTopologyOverlaySample[];
+  /** Winning content-root candidate, or null when the walk found none. */
+  winner?: AxTopologyWinner | null;
+}
+
+/**
+ * Time budget for the best-effort `--debug` re-capture on the failure
+ * path. Kept short: this runs only after an AX read already failed, so a
+ * second hang must not compound the original latency.
+ */
+const AX_DEBUG_RECAPTURE_TIMEOUT_MS = 8_000;
+
+/**
+ * Parse the Swift bridge's `--debug` stderr (one JSON object per line)
+ * into a compact {@link AxTopology}. Non-JSON lines and unrelated debug
+ * events are ignored. Returns `undefined` when no `walker_*` event is
+ * present, so a quiet/empty stream never produces a noisy empty object.
+ */
+export function parseWalkerTopology(stderr: string | undefined): AxTopology | undefined {
+  if (!stderr) return undefined;
+  let found = false;
+  const topology: AxTopology = {};
+
+  for (const rawLine of stderr.split('\n')) {
+    const line = rawLine.trim();
+    if (!line.startsWith('{')) continue;
+
+    let evt: Record<string, unknown>;
+    try {
+      const parsed = JSON.parse(line);
+      if (!parsed || typeof parsed !== 'object') continue;
+      evt = parsed as Record<string, unknown>;
+    } catch {
+      // Not JSON (e.g. a stray log line) — skip.
+      continue;
+    }
+
+    switch (evt.event) {
+      case 'walker_app_windows_enumerated':
+        found = true;
+        if (typeof evt.count === 'number') topology.windowCount = evt.count;
+        if (Array.isArray(evt.windows)) {
+          topology.windows = evt.windows.map((w) => {
+            const win = (w ?? {}) as Record<string, unknown>;
+            return {
+              role: String(win.role ?? ''),
+              subrole: String(win.subrole ?? ''),
+              title: String(win.title ?? ''),
+              identifier: String(win.identifier ?? ''),
+            };
+          });
+        }
+        break;
+      case 'walker_overlay_roles_seen':
+        found = true;
+        if (typeof evt.count === 'number') topology.overlayRolesSeen = evt.count;
+        if (Array.isArray(evt.samples)) {
+          topology.overlaySamples = evt.samples.map((s) => {
+            const sample = (s ?? {}) as Record<string, unknown>;
+            return {
+              depth: Number(sample.depth ?? 0),
+              role: String(sample.role ?? ''),
+              label: sample.label == null ? null : String(sample.label),
+            };
+          });
+        }
+        break;
+      case 'walker_winner':
+        found = true;
+        topology.winner = {
+          depth: Number(evt.depth ?? 0),
+          role: String(evt.role ?? ''),
+          label: evt.label == null ? null : String(evt.label),
+          score: Number(evt.score ?? 0),
+          appSemanticsCount: Number(evt.appSemanticsCount ?? 0),
+        };
+        break;
+      case 'walker_winner_none':
+        found = true;
+        topology.winner = null;
+        break;
+      default:
+        break;
+    }
+  }
+
+  return found ? topology : undefined;
+}
+
+/**
+ * Opt-in gate (issue #842). The success path is never affected; only a
+ * recoverable dump/query failure triggers the one-shot `--debug`
+ * re-capture, and only when this is set.
+ */
+function axDebugOnFailureEnabled(): boolean {
+  return process.env.OPENSAFARI_AX_DEBUG_ON_FAILURE === '1';
+}
+
 export interface AccessibilityBridgeOptions {
   /**
    * Pre-resolve the bridge path, bypassing the filesystem search.
@@ -194,6 +326,19 @@ export class AccessibilityBridge {
       const stdoutForDiag = error.stdout ?? capturedStdout;
       const stderrForDiag = error.stderr ?? capturedStderr;
 
+      // Issue #842: opt-in self-diagnosis. On a recoverable dump/query
+      // failure, re-invoke once with `--debug` and parse the `walker_*`
+      // topology so the thrown error carries why the AX read came up empty
+      // (sibling window vs in-subtree vs degraded read) without a manual
+      // repro. The success path never reaches here, so stderr volume on a
+      // healthy dump is unchanged. Best-effort: a failed re-capture leaves
+      // topology undefined and never masks the original error.
+      const command = args[0];
+      const topology =
+        axDebugOnFailureEnabled() && (command === 'dump' || command === 'query')
+          ? await this.captureAxTopologyOnFailure(cmd, cmdArgs)
+          : undefined;
+
       // Issue #693 WU1: the bridge writes its structured ErrorJSON
       // (`{ error, code }`) to STDOUT and then `exit(1)`, NOT to stderr —
       // see `outputError()` in `src/native/ax-bridge.swift`. The previous
@@ -213,6 +358,7 @@ export class AccessibilityBridge {
             throw new AccessibilityBridgeError(
               errJson.error,
               typeof errJson.code === 'string' ? errJson.code : 'AX_ERROR',
+              topology,
             );
           }
         } catch (parseErr) {
@@ -235,7 +381,32 @@ export class AccessibilityBridge {
           formatStreamTail('stdout', stdoutForDiag) +
           formatStreamTail('stderr', stderrForDiag),
         'BRIDGE_EXEC_FAILED',
+        topology,
       );
+    }
+  }
+
+  /**
+   * Best-effort `--debug` re-capture for issue #842. Re-invokes the
+   * already-failed command once with `--debug` appended and parses the
+   * `walker_*` topology from stderr. Never throws: the bridge re-invoke
+   * itself usually exits non-zero (the original failure reproduces), so we
+   * read stderr off the rejection and parse it. Returns `undefined` on any
+   * problem so the caller's primary error is never masked.
+   */
+  private async captureAxTopologyOnFailure(
+    cmd: string,
+    cmdArgs: string[],
+  ): Promise<AxTopology | undefined> {
+    try {
+      const debugArgs = cmdArgs.includes('--debug') ? cmdArgs : [...cmdArgs, '--debug'];
+      const result = await execFileAsync(cmd, debugArgs, {
+        timeout: AX_DEBUG_RECAPTURE_TIMEOUT_MS,
+        maxBuffer: 4 * 1024 * 1024,
+      }).catch((e: { stderr?: string }) => ({ stderr: e?.stderr }));
+      return parseWalkerTopology(result.stderr);
+    } catch {
+      return undefined;
     }
   }
 
@@ -338,6 +509,12 @@ export class AccessibilityBridgeError extends Error {
   constructor(
     message: string,
     public readonly code: string,
+    /**
+     * Issue #842: AX walker topology parsed from a best-effort `--debug`
+     * re-capture, present only on recoverable dump/query failures when
+     * `OPENSAFARI_AX_DEBUG_ON_FAILURE=1`. Undefined otherwise.
+     */
+    public readonly topology?: AxTopology,
   ) {
     super(message);
     this.name = 'AccessibilityBridgeError';
