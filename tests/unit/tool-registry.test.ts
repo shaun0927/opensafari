@@ -55,9 +55,9 @@ describe('tool registry — defineToolEntry', () => {
     expect(entry._cachedHandler).toBeUndefined();
   });
 
-  test('tier is assigned from tool-tiers config (defaults to 2 for unknown)', () => {
+  test('tier is assigned from tool-tiers config (falls back to 3 for unknown)', () => {
     defineToolEntry(makeDefinition(TOOL_NAME), async () => async () => ECHO_RESULT);
-    expect(toolRegistry.get(TOOL_NAME)!.tier).toBe(2);
+    expect(toolRegistry.get(TOOL_NAME)!.tier).toBe(3);
   });
 
   test('well-known tool gets correct tier (navigate = 1)', () => {
@@ -209,7 +209,7 @@ describe('MCPServer.registerLazyTool', () => {
   });
 
   test('tier filtering excludes lazy tool when tier is too low', () => {
-    // LAZY_TOOL defaults to tier 2
+    // LAZY_TOOL has no TOOL_TIERS entry, so it falls back to tier 3
     const def = makeDefinition(LAZY_TOOL);
     defineToolEntry(def, async (): Promise<ToolHandler> => async () => ECHO_RESULT);
 
@@ -218,9 +218,9 @@ describe('MCPServer.registerLazyTool', () => {
     server.registerLazyTool(def);
 
     // getRegisteredTools returns all; filtering happens in handleToolsList.
-    // Simulate via the private map by checking that the entry's tier is 2.
+    // Simulate via the private map by checking that the entry's tier is 3.
     const entry = toolRegistry.get(LAZY_TOOL)!;
-    expect(entry.tier).toBe(2);
+    expect(entry.tier).toBe(3);
     // The server still holds the tool; it would be hidden at list time.
   });
 

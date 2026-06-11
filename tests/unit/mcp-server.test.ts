@@ -104,7 +104,7 @@ describe('MCPServer — JSON-RPC protocol', () => {
   });
 
   test('tools/list respects tier filtering', async () => {
-    // Unrecognized tool names default to tier 2; setting tier to 0 should hide all
+    // Unrecognized tool names fall back to tier 3; setting tier to 0 should hide all
     server.setTier(0);
     const res = await mcpPost(PORT, { jsonrpc: '2.0', id: 3, method: 'tools/list', params: {} });
     const result = res.body.result as Record<string, unknown>;

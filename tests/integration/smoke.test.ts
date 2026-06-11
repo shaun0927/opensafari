@@ -83,8 +83,8 @@ describe('Smoke: Tool tier mapping', () => {
     expect(getToolTier('workflow_init')).toBe(3);
   });
 
-  test('unknown tool returns default tier (2)', () => {
-    expect(getToolTier('nonexistent_tool_xyz')).toBe(2);
+  test('unknown tool falls back to tier 3 (never the default surface)', () => {
+    expect(getToolTier('nonexistent_tool_xyz')).toBe(3);
   });
 
   test('all TOOL_TIERS entries are between 1 and 3', () => {
