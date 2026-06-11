@@ -41,12 +41,17 @@ export function setupGracefulShutdown(pool: SimulatorPool): void {
       1,
       error instanceof Error ? error.message : String(error),
     ));
-  process.on('unhandledRejection', (reason) =>
-    void shutdown(
-      'UNHANDLED_REJECTION',
-      1,
-      reason instanceof Error ? reason.message : String(reason),
-    ));
+  // Unhandled rejections must NOT kill the server: a rejection aborts one
+  // isolated async chain, while exiting here tears down the MCP transport and
+  // every simulator. Keep this listener installed even though it only logs —
+  // without it, Node >= 15 crashes the process on any unhandled rejection.
+  process.on('unhandledRejection', (reason) => {
+    const detail =
+      reason instanceof Error ? reason.stack ?? reason.message : String(reason);
+    console.error(
+      `[OpenSafari] Unhandled rejection (continuing): ${detail}`,
+    );
+  });
 }
 
 export function __resetGracefulShutdownForTests(): void {
