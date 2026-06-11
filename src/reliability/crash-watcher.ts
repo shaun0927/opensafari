@@ -26,6 +26,8 @@ export class SimulatorCrashWatcher extends EventEmitter {
     }
 
     this.interval = setInterval(() => this.check(), checkIntervalMs);
+    // Watchdogs must never be the thing keeping the process alive.
+    this.interval.unref();
   }
 
   stop(): void {
