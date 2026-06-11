@@ -13,6 +13,13 @@ import {
 
 const execFileAsync = promisify(execFile);
 
+// Supervisor: restart an unexpectedly-exited proxy with exponential backoff.
+const RESTART_BASE_DELAY_MS = 1_000;
+const RESTART_MAX_DELAY_MS = 30_000;
+const RESTART_MAX_ATTEMPTS = 5;
+/** A proxy that stayed up this long is considered stable; the attempt counter resets. */
+const RESTART_STABLE_RESET_MS = 60_000;
+
 export interface ProxyOptions {
   /**
    * WebKit Inspector proxy port for device connections.
@@ -66,6 +73,14 @@ export class WebInspectorProxy {
   private _deviceListPort: number;
   private _running = false;
   private _reusing = false;
+  /** True once a caller has asked for stop(); suppresses supervised restarts. */
+  private stopRequested = false;
+  /** True while teardown() is killing our own process (not an unexpected exit). */
+  private tearingDown = false;
+  private restartAttempts = 0;
+  private restartTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastSpawnTime = 0;
+  private lastStartOptions: { targetUdid?: string } | undefined;
 
   constructor(private options: ProxyOptions = {}) {
     const rawPort = process.env.OPENSAFARI_PROXY_PORT
@@ -97,6 +112,9 @@ export class WebInspectorProxy {
    */
   async start(options?: { targetUdid?: string }): Promise<void> {
     if (this._running) return;
+    this.stopRequested = false;
+    this.cancelScheduledRestart();
+    this.lastStartOptions = options;
 
     // Check if our device-list port already has a healthy proxy (from another session)
     const deviceListInUse = await this.isPortInUse(this._deviceListPort);
@@ -152,6 +170,7 @@ export class WebInspectorProxy {
       detached: false,
     });
 
+    this.lastSpawnTime = Date.now();
     this._running = true;
     this._reusing = false;
     this.registerRefSync();
@@ -168,8 +187,19 @@ export class WebInspectorProxy {
 
     this.process.on('exit', (code) => {
       console.error(`[WebInspectorProxy] exited with code ${code}`);
+      // Distinguish an unexpected crash from the three intentional paths:
+      // caller stop() (stopRequested), teardown of our own failed start
+      // (tearingDown), and reuse/detach (where _running is already false).
+      const unexpected =
+        this._running && !this._reusing && !this.stopRequested && !this.tearingDown;
       this._running = false;
       this.process = null;
+      if (unexpected) {
+        if (Date.now() - this.lastSpawnTime >= RESTART_STABLE_RESET_MS) {
+          this.restartAttempts = 0;
+        }
+        this.scheduleRestart();
+      }
     });
 
     // Only wait for process-ready (device-list endpoint responds).
@@ -177,7 +207,10 @@ export class WebInspectorProxy {
     try {
       await this.waitForProcessReady();
     } catch (err) {
-      try { await this.stop(); } catch { /* swallow stop errors so original error propagates */ }
+      // teardown(), not stop(): this is internal cleanup of our own failed
+      // start, not a caller-requested stop, so it must not suppress the
+      // supervisor for future starts.
+      try { await this.teardown(); } catch { /* swallow stop errors so original error propagates */ }
       throw err;
     }
   }
@@ -241,6 +274,25 @@ export class WebInspectorProxy {
 
   /** Stop the proxy process gracefully with SIGKILL fallback. */
   async stop(): Promise<void> {
+    this.stopRequested = true;
+    this.cancelScheduledRestart();
+    return this.teardown();
+  }
+
+  /**
+   * Kill/detach the proxy process without marking a caller-requested stop.
+   * Shared by stop() and by start()'s internal failure cleanup.
+   */
+  private async teardown(): Promise<void> {
+    this.tearingDown = true;
+    try {
+      await this.teardownProcess();
+    } finally {
+      this.tearingDown = false;
+    }
+  }
+
+  private async teardownProcess(): Promise<void> {
     const remaining = this.unregisterRefSync();
 
     if (this._reusing) {
@@ -276,6 +328,52 @@ export class WebInspectorProxy {
       });
       proc.kill('SIGTERM');
     });
+  }
+
+  private cancelScheduledRestart(): void {
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer);
+      this.restartTimer = null;
+    }
+  }
+
+  /**
+   * Schedule a supervised restart after an unexpected proxy exit.
+   * Without this, a dead ios_webkit_debug_proxy left every WebKit reconnect
+   * attempt failing until the whole MCP server was manually restarted.
+   * Exponential backoff with a hard attempt cap so a permanently broken
+   * environment (no booted simulator, missing binary) cannot spawn-loop.
+   */
+  private scheduleRestart(): void {
+    if (this.stopRequested || this.restartTimer) return;
+    if (this.restartAttempts >= RESTART_MAX_ATTEMPTS) {
+      console.error(
+        `[WebInspectorProxy] Proxy keeps exiting — giving up after ${RESTART_MAX_ATTEMPTS} restart attempts. ` +
+        `Safari tooling will fail until the server is restarted.`,
+      );
+      return;
+    }
+    this.restartAttempts++;
+    const delay = Math.min(
+      RESTART_BASE_DELAY_MS * 2 ** (this.restartAttempts - 1),
+      RESTART_MAX_DELAY_MS,
+    );
+    console.error(
+      `[WebInspectorProxy] Unexpected exit — restarting in ${delay}ms ` +
+      `(attempt ${this.restartAttempts}/${RESTART_MAX_ATTEMPTS})`,
+    );
+    this.restartTimer = setTimeout(() => {
+      this.restartTimer = null;
+      this.start(this.lastStartOptions)
+        .then(() => {
+          console.error(`[WebInspectorProxy] Proxy restarted successfully`);
+        })
+        .catch((err) => {
+          console.error(`[WebInspectorProxy] Restart attempt failed: ${err}`);
+          this.scheduleRestart();
+        });
+    }, delay);
+    this.restartTimer.unref();
   }
 
   /** Whether the proxy process is currently running. */
