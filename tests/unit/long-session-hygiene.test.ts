@@ -59,6 +59,7 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
 
 describe('HarCollector entry cap', () => {
   test('stops storing entries at maxEntries and counts the dropped rest', async () => {
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
     const client = new MockWebKitClient();
     const collector = new HarCollector(client as any, { maxEntries: 3 });
     await collector.start();
@@ -68,6 +69,10 @@ describe('HarCollector entry cap', () => {
     expect(collector.getEntryCount()).toBe(3);
     expect(collector.getDroppedCount()).toBe(2);
     collector.stop();
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Dropped 2 request(s) beyond maxEntries=3'),
+    );
+    errorSpy.mockRestore();
   });
 
   test('logs the dropped count on stop', async () => {
@@ -87,6 +92,7 @@ describe('HarCollector entry cap', () => {
   });
 
   test('a new start() resets the dropped counter', async () => {
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
     const client = new MockWebKitClient();
     const collector = new HarCollector(client as any, { maxEntries: 1 });
     await collector.start();
@@ -97,6 +103,7 @@ describe('HarCollector entry cap', () => {
     await collector.start();
     expect(collector.getDroppedCount()).toBe(0);
     collector.stop();
+    errorSpy.mockRestore();
   });
 });
 
