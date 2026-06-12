@@ -13,6 +13,13 @@ export const DEFAULT_MAX_SIMULATORS = 3;
 export const DEFAULT_WEBKIT_CONNECT_TIMEOUT_MS = 10000;
 export const DEFAULT_WEBKIT_SEND_TIMEOUT_MS = 15000;
 export const DEFAULT_HEARTBEAT_INTERVAL_MS = 30000;
+/**
+ * Consecutive heartbeat failures tolerated before tearing down the connection.
+ * A single failed probe is routinely benign (page JS busy past the send
+ * timeout, active target briefly absent during navigation), so reconnecting
+ * on the first failure amplifies transient slowness into a full teardown.
+ */
+export const DEFAULT_HEARTBEAT_FAILURE_THRESHOLD = 3;
 export const DEFAULT_RECONNECT_MAX_ATTEMPTS = 10;
 export const DEFAULT_RECONNECT_BASE_DELAY_MS = 1000;
 export const DEFAULT_RECONNECT_MAX_DELAY_MS = 30000;

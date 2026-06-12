@@ -34,6 +34,7 @@ import {
   DEFAULT_WEBKIT_CONNECT_TIMEOUT_MS,
   DEFAULT_WEBKIT_SEND_TIMEOUT_MS,
   DEFAULT_HEARTBEAT_INTERVAL_MS,
+  DEFAULT_HEARTBEAT_FAILURE_THRESHOLD,
   DEFAULT_RECONNECT_MAX_ATTEMPTS,
   DEFAULT_RECONNECT_BASE_DELAY_MS,
   DEFAULT_RECONNECT_MAX_DELAY_MS,
@@ -46,6 +47,13 @@ export interface WebKitClientOptions {
   connectTimeout?: number;
   sendTimeout?: number;
   heartbeatInterval?: number;
+  /** Consecutive heartbeat failures before reconnecting. Default 3. */
+  heartbeatFailureThreshold?: number;
+  /**
+   * Re-navigate to the last URL after a successful reconnect. Default false:
+   * an implicit reload destroys page state the caller did not ask to lose.
+   */
+  renavigateOnReconnect?: boolean;
 }
 
 export interface WebKitTarget {
@@ -62,6 +70,7 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
   private innerMessageId = 0;
   private connected = false;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  private heartbeatFailures = 0;
   private lastUrl: string = '';
   private reconnecting = false;
   readonly backendType = 'safari' as const;
@@ -84,7 +93,11 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
     this.transport.on('transport:close', () => {
       if (this.connected && !this.reconnecting) {
         this.connected = false;
-        this.handleDisconnect();
+        // Fire-and-forget: handleDisconnect never intentionally rejects, but
+        // an unhandled rejection here would escalate to the process level.
+        void this.handleDisconnect().catch((err) => {
+          console.error(`[WebKitClient] Disconnect handling failed: ${err}`);
+        });
       }
     });
     this.transport.on('transport:error', (_err: Error) => {
@@ -309,11 +322,28 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
   private startHeartbeat(): void {
     const interval =
       this.options.heartbeatInterval ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
+    const threshold =
+      this.options.heartbeatFailureThreshold ?? DEFAULT_HEARTBEAT_FAILURE_THRESHOLD;
+    this.heartbeatFailures = 0;
     this.heartbeatTimer = setInterval(async () => {
       try {
         await this.send('Runtime.evaluate', { expression: '1' });
+        this.heartbeatFailures = 0;
       } catch {
-        this.handleDisconnect();
+        // A single failed probe is not a dead connection: page JS can be busy
+        // past the send timeout, and the active target is briefly absent
+        // during navigation. Only sustained failure tears the connection down.
+        this.heartbeatFailures++;
+        if (this.heartbeatFailures < threshold) {
+          console.error(
+            `[WebKitClient] Heartbeat failure ${this.heartbeatFailures}/${threshold} (tolerated)`,
+          );
+          return;
+        }
+        this.heartbeatFailures = 0;
+        void this.handleDisconnect().catch((err) => {
+          console.error(`[WebKitClient] Disconnect handling failed: ${err}`);
+        });
       }
     }, interval);
   }
@@ -334,8 +364,14 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
 
     // Tear down the transport so any stale pending requests are rejected
     // before reconnecting, then reset target-session state owned by the
-    // extracted TargetSessionManager.
-    await this.transport.disconnect();
+    // extracted TargetSessionManager. Teardown failures must not escape:
+    // this method runs fire-and-forget from event handlers, and a rejection
+    // would leave the client stuck with `reconnecting = true`.
+    try {
+      await this.transport.disconnect();
+    } catch (err) {
+      console.error(`[WebKitClient] Transport teardown failed (continuing): ${err}`);
+    }
     this.targetSession.resetTargets();
 
     this.stopHeartbeat();
@@ -369,8 +405,9 @@ export class WebKitClient extends EventEmitter implements BrowserBackend {
           await this.enableDomain(domain);
         }
 
-        // Re-navigate to last URL
-        if (this.lastUrl) {
+        // Re-navigate to the last URL only when explicitly requested — an
+        // implicit reload destroys page state the caller did not ask to lose.
+        if (this.options.renavigateOnReconnect && this.lastUrl) {
           await this.navigate({ url: this.lastUrl });
         }
 
