@@ -124,7 +124,9 @@ export interface MCPServerOptions {
 export class MCPServer {
   private tools: Map<string, RegisteredTool> = new Map();
   private transport: MCPTransport | null = null;
-  private currentTier: number = 2;
+  // Tier 1 is the default surface (matches README "Tool Tiers" table).
+  // Raise via setTier(), OPENSAFARI_TOOL_TIER, or --all-tools.
+  private currentTier: number = 1;
   private auditLogEnabled = false;
   private httpHighRiskToolsEnabled = false;
 
