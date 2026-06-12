@@ -21,6 +21,8 @@ export class SimulatorMonitor extends EventEmitter {
   start(): void {
     if (this.interval) return;
     this.interval = setInterval(() => this.check(), this.checkIntervalMs);
+    // Watchdogs must never be the thing keeping the process alive.
+    this.interval.unref();
   }
 
   stop(): void {

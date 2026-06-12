@@ -1,5 +1,5 @@
 import { MCPServer, getWebKitClient } from '../mcp-server';
-import { BufferedEventCollector, CollectedEvent } from '../utils/buffered-event-collector';
+import { BufferedEventCollector, CollectedEvent, getOrCreateSessionCollector } from '../utils/buffered-event-collector';
 
 export interface ConsoleEntry extends CollectedEvent {
   level: string;
@@ -10,9 +10,7 @@ const collectors = new Map<string, BufferedEventCollector<ConsoleEntry>>();
 let attachedClient: unknown = null;
 
 function getOrCreateCollector(sid: string): BufferedEventCollector<ConsoleEntry> {
-  let c = collectors.get(sid);
-  if (!c) { c = new BufferedEventCollector<ConsoleEntry>(500); collectors.set(sid, c); }
-  return c;
+  return getOrCreateSessionCollector(collectors, sid);
 }
 
 export function registerConsoleLogTool(server: MCPServer): void {
