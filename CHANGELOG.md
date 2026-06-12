@@ -4,6 +4,44 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+
+## [0.7.1] - 2026-06-12
+
+**OpenSafari 0.7.1 is a stability and long-session performance release.** It reduces the default MCP tool catalog to a compact Tier 1 surface, hardens WebKit and proxy recovery so transient simulator/WebKit failures no longer cascade into page reloads or permanent Safari-tool outages, keeps the MCP server alive after isolated unhandled promise rejections, and bounds observability buffers and watchdog timers for long-running sessions. It also adds opt-in AX walker topology diagnostics for recoverable accessibility-tree failures.
+
+### MCP tool catalog and startup weight
+
+- **Default Tier 1 tool surface (#849)** — `MCPServer` now starts at Tier 1 by default instead of Tier 2, shrinking the default `tools/list` response from the broad advanced/native/Flutter catalog to the compact core automation surface. Users who need the previous broad surface can set `OPENSAFARI_TOOL_TIER=2` or start with `--all-tools`.
+- **Safe tier fallback (#849)** — tools missing an explicit `TOOL_TIERS` entry now fall back to Tier 3 rather than Tier 2, preventing newly-added tools from silently expanding the default schema payload. `tests/unit/tool-tier-drift.test.ts` enforces explicit tier assignment for every registered tool.
+- **Documentation alignment (#849)** — README tier tables and programmatic `createServer()` examples now document the Tier 1 default and `allTools` opt-in path.
+
+### WebKit and proxy resilience
+
+- **Heartbeat hysteresis (#851)** — WebKit heartbeat probes now tolerate consecutive transient failures before reconnecting. A single busy page, navigation gap, or temporarily absent target no longer immediately tears down the WebSocket.
+- **No implicit reload on reconnect (#851)** — reconnect no longer re-navigates to `lastUrl` by default, avoiding surprise page-state loss after a transient WebKit interruption. `renavigateOnReconnect` remains available as an explicit opt-in.
+- **Catch-safe disconnect handling (#851)** — fire-and-forget disconnect paths now catch and log teardown failures, preventing reconnect bookkeeping from becoming stuck or leaking process-level rejections.
+- **Supervised `ios_webkit_debug_proxy` restarts (#852)** — unexpected proxy exits now trigger bounded exponential-backoff restarts. Intentional stop and internal teardown paths suppress the supervisor, so manual shutdown remains deterministic while crash recovery becomes automatic.
+
+### MCP process reliability
+
+- **Unhandled rejection policy (#850)** — unhandled promise rejections are logged without calling `process.exit(1)`, so one leaked async rejection no longer terminates the MCP transport and all managed simulators. `uncaughtException` remains fatal.
+- **Regression coverage (#850, #851)** — unit coverage now verifies non-Error rejection logging, catch-safe WebKit teardown, heartbeat failure thresholds, failure-counter reset, and explicit reconnect re-navigation behavior.
+
+### Long-session observability hygiene
+
+- **Bounded HAR capture (#853)** — `HarCollector` now caps stored entries (`maxEntries`, default 2000), reports dropped requests, and skips `Network.getResponseBody` when encoded size already exceeds `maxBodySize`. This prevents long captures on chatty pages from growing without bound or fetching oversized bodies just to discard them.
+- **Bounded session log collectors (#853)** — console/error/network collectors now use a bounded LRU session map while preserving the `stop -> get` retrieval workflow.
+- **Timer liveness hygiene (#853)** — crash watcher, simulator pool monitors, and simulator memory monitor intervals are now `unref()`'d so watchdogs do not keep an otherwise-finished process alive.
+
+### AX diagnostics
+
+- **Opt-in walker topology on AX failures (#843)** — setting `OPENSAFARI_AX_DEBUG_ON_FAILURE=1` re-runs failed `dump`/`query` AX reads once with `--debug` and attaches parsed `walker_*` topology to `AccessibilityBridgeError`. The success path is unchanged, and failed debug recapture never masks the original error.
+
+### Validation
+
+- GitHub PR checks passed for #843 and #849–#853 (`lint`, `test`, `dependency-audit`, `build`; #851 also passed the headless Safari, Flutter, native HID, and WebView smoke suites).
+- Local integrated validation before merging to `main`: all six PRs merged cleanly in a scratch branch, `npm test -- --runInBand` passed (216 suites / 2951 tests), and `npm run build` completed successfully.
+
 ## [0.7.0] - 2026-06-04
 
 **OpenSafari 0.7.0 is a stateful-QA and observability release.** It lands the foundations for stateful mobile semantic QA (durable `AppSessionState` / `ScreenStateSnapshot` contracts, a verified semantic navigation controller, a shared settle/postcondition policy, and an upgraded scenario runner), and makes previously-silent automation failures actionable by attaching searched-tree diagnostics to not-found errors, surfacing semantics-activation and raw-coordinate fallbacks as warnings, and disclosing Flutter build mode and VM capabilities at connect time. All emitted diagnostics are redacted and length-bounded.
