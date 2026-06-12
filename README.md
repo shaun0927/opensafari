@@ -457,17 +457,18 @@ Every registered tool must have an explicit entry in `src/config/tool-tiers.ts`;
 ```typescript
 import { createServer } from 'opensafari-mcp';
 
-// Create and start the MCP server
-const server = createServer({
-  tier: 3,          // expose all tool tiers
-  auditLog: true,   // enable tool call logging
-});
+// Start with the default Tier 1 tool surface over stdio
+await createServer();
 
-// Start with stdio transport (default)
-await server.start();
+// Expose all tool tiers immediately (same as opensafari serve --all-tools)
+await createServer({ allTools: true });
 
 // Or start with HTTP transport
-await server.start({ transport: 'http', port: 3100, authToken: process.env.OPENSAFARI_HTTP_TOKEN });
+await createServer({
+  transport: 'http',
+  port: 3100,
+  authToken: process.env.OPENSAFARI_HTTP_TOKEN,
+});
 ```
 
 ### WebKitClient
