@@ -178,8 +178,44 @@ export const TOOL_TIERS: Record<string, number> = {
 
   // Tier 1: Diagnostics
   diagnose: 1,
+
+  // Tier 2: QA sessions
+  qa_session_create: 2,
+  qa_session_destroy: 2,
+  qa_session_list: 2,
+
+  // Tier 2: Native auth & OTP
+  auth_save_native: 2,
+  auth_restore_native: 2,
+  auth_list_native: 2,
+  auth_delete_native: 2,
+  auth_otp_fetch: 2,
+
+  // Tier 2: Device network conditioning
+  device_network_set: 2,
+  device_network_get: 2,
+
+  // Tier 2: Native app context & navigation helpers
+  app_context: 2,
+  app_state_snapshot: 2,
+  app_list_routes: 2,
+  app_notes_paste_and_tap_url: 2,
+  app_dismiss_overlay: 2,
+  app_biometric: 2,
+  app_wait_for: 2,
+  app_pop_until: 2,
+  app_goto_screen: 2,
+
+  // Tier 2: Flutter route inspection
+  flutter_get_route: 2,
+
+  // Tier 2: Diagnostics bundles
+  debug_bundle_collect: 2,
 };
 
 export function getToolTier(toolName: string): number {
-  return TOOL_TIERS[toolName] ?? 2;
+  // Unassigned tools fall back to tier 3 so a missing TOOL_TIERS entry can
+  // never silently expand the default tools/list surface. Every registered
+  // tool must have an explicit entry (enforced by tool-tier-drift.test.ts).
+  return TOOL_TIERS[toolName] ?? 3;
 }

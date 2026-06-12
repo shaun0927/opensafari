@@ -1,5 +1,5 @@
 import { MCPServer, getWebKitClient } from '../mcp-server';
-import { BufferedEventCollector, CollectedEvent } from '../utils/buffered-event-collector';
+import { BufferedEventCollector, CollectedEvent, getOrCreateSessionCollector } from '../utils/buffered-event-collector';
 
 export interface ErrorEntry extends CollectedEvent {
   message: string;
@@ -13,9 +13,7 @@ const collectors = new Map<string, BufferedEventCollector<ErrorEntry>>();
 let attachedClient: unknown = null;
 
 function getOrCreateCollector(sid: string): BufferedEventCollector<ErrorEntry> {
-  let c = collectors.get(sid);
-  if (!c) { c = new BufferedEventCollector<ErrorEntry>(500); collectors.set(sid, c); }
-  return c;
+  return getOrCreateSessionCollector(collectors, sid);
 }
 
 export function registerErrorLogTool(server: MCPServer): void {

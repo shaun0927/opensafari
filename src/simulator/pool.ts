@@ -331,6 +331,8 @@ export class SimulatorPool extends EventEmitter {
         }
       }
     }, DEFAULT_IDLE_CHECK_INTERVAL_MS);
+    // Monitors must never be the thing keeping the process alive.
+    this.idleCheckInterval.unref();
   }
 
   stopIdleMonitor(): void {
@@ -357,6 +359,8 @@ export class SimulatorPool extends EventEmitter {
         }
       }
     }, DEFAULT_RESOURCE_CHECK_INTERVAL_MS);
+    // Monitors must never be the thing keeping the process alive.
+    this.resourceCheckInterval.unref();
   }
 
   stopResourceMonitor(): void {

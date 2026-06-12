@@ -1,5 +1,5 @@
 import { MCPServer, getWebKitClient } from '../mcp-server';
-import { BufferedEventCollector, CollectedEvent } from '../utils/buffered-event-collector';
+import { BufferedEventCollector, CollectedEvent, getOrCreateSessionCollector } from '../utils/buffered-event-collector';
 import { ErrorCode, respondWithStructuredError } from '../errors';
 
 export interface NetworkEntry extends CollectedEvent {
@@ -13,9 +13,7 @@ const collectors = new Map<string, BufferedEventCollector<NetworkEntry>>();
 let attachedClient: unknown = null;
 
 function getOrCreateCollector(sid: string): BufferedEventCollector<NetworkEntry> {
-  let c = collectors.get(sid);
-  if (!c) { c = new BufferedEventCollector<NetworkEntry>(500); collectors.set(sid, c); }
-  return c;
+  return getOrCreateSessionCollector(collectors, sid);
 }
 
 export function registerNetworkLogTool(server: MCPServer): void {

@@ -91,12 +91,12 @@ describe('Edge cases: AuthManager restore nonexistent profile', () => {
 });
 
 describe('Edge cases: Tool tier defaults', () => {
-  test('unknown tool returns default tier 2', () => {
-    expect(getToolTier('completely_unknown_tool')).toBe(2);
+  test('unknown tool falls back to tier 3 (never the default surface)', () => {
+    expect(getToolTier('completely_unknown_tool')).toBe(3);
   });
 
-  test('empty string tool returns default tier 2', () => {
-    expect(getToolTier('')).toBe(2);
+  test('empty string tool falls back to tier 3', () => {
+    expect(getToolTier('')).toBe(3);
   });
 
   test('known tools return expected tiers', () => {

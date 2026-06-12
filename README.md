@@ -438,13 +438,17 @@ curl -H "Authorization: Bearer $OPENSAFARI_HTTP_TOKEN" \
 
 ### Tool Tiers
 
-Tools are organized into 3 tiers for progressive disclosure:
+Tools are organized into 3 tiers for progressive disclosure. The default surface is **Tier 1** (12 tools, ~4.5 KB of schema); higher tiers are opt-in so the `tools/list` payload stays small for MCP clients that load every tool schema into model context.
 
 | Tier | Tools | Access |
 |------|-------|--------|
-| **Tier 1** | navigate, screenshot, click, type, scroll, read_page, query_dom, javascript, cookies, device_boot, device_shutdown, device_list | Default |
-| **Tier 2** | inspect, wait_for, press, swipe, long_press, batch_navigate, batch_screenshot, cross_viewport_compare | `setTier(2)` |
-| **Tier 3** | auth_save, auth_restore, auth_list, qa_audit, qa_* detectors, workflow_init, appearance_toggle | `--all-tools` |
+| **Tier 1** | navigate, screenshot, click, type, scroll, read_page, query_dom, javascript, cookies, device_boot, device_shutdown, diagnose | Default |
+| **Tier 2** | inspect, wait_for, press, swipe, long_press, device_list, app_* native tools, flutter_* tools, qa_* detectors, network_* tools | `OPENSAFARI_TOOL_TIER=2` or `setTier(2)` |
+| **Tier 3** | auth_save, auth_restore, auth_list, batch_*, workflow_*, qa_full_audit, cross_viewport_compare | `--all-tools` or `OPENSAFARI_TOOL_TIER=3` |
+
+Every registered tool must have an explicit entry in `src/config/tool-tiers.ts`; tools without one fall back to Tier 3 (enforced by `tests/unit/tool-tier-drift.test.ts`).
+
+> **Migration note (0.7.x):** earlier releases exposed Tier 2 (132 tools, ~22k tokens of schema) by default. If you relied on Tier 2 tools being listed without configuration, set `OPENSAFARI_TOOL_TIER=2` in the server environment or pass `--all-tools`.
 
 ---
 
@@ -453,17 +457,18 @@ Tools are organized into 3 tiers for progressive disclosure:
 ```typescript
 import { createServer } from 'opensafari-mcp';
 
-// Create and start the MCP server
-const server = createServer({
-  tier: 3,          // expose all tool tiers
-  auditLog: true,   // enable tool call logging
-});
+// Start with the default Tier 1 tool surface over stdio
+await createServer();
 
-// Start with stdio transport (default)
-await server.start();
+// Expose all tool tiers immediately (same as opensafari serve --all-tools)
+await createServer({ allTools: true });
 
 // Or start with HTTP transport
-await server.start({ transport: 'http', port: 3100, authToken: process.env.OPENSAFARI_HTTP_TOKEN });
+await createServer({
+  transport: 'http',
+  port: 3100,
+  authToken: process.env.OPENSAFARI_HTTP_TOKEN,
+});
 ```
 
 ### WebKitClient

@@ -44,7 +44,7 @@ describe('setupGracefulShutdown', () => {
     expect(process.listeners('unhandledRejection').length).toBeGreaterThan(counts.unhandledRejection);
   });
 
-  test('logs structured shutdown reason and exits 1 for unhandled rejections', async () => {
+  test('logs unhandled rejections and keeps the process alive', async () => {
     const module = await import('../../src/reliability/graceful-shutdown');
     const pool = { shutdownAll: jest.fn().mockResolvedValue(undefined) } as any;
     const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
@@ -55,14 +55,36 @@ describe('setupGracefulShutdown', () => {
     handler(new Error('boom'));
     await new Promise((resolve) => setImmediate(resolve));
 
-    expect(pool.shutdownAll).toHaveBeenCalledTimes(1);
+    // One leaked rejection must not tear down the MCP server or simulators.
+    expect(pool.shutdownAll).not.toHaveBeenCalled();
+    expect(exitSpy).not.toHaveBeenCalled();
     expect(errorSpy).toHaveBeenCalledWith(
-      expect.stringContaining('"reason":"UNHANDLED_REJECTION"'),
+      expect.stringContaining('Unhandled rejection (continuing)'),
     );
     expect(errorSpy).toHaveBeenCalledWith(
-      expect.stringContaining('"detail":"boom"'),
+      expect.stringContaining('boom'),
     );
-    expect(exitSpy).toHaveBeenCalledWith(1);
+
+    errorSpy.mockRestore();
+    exitSpy.mockRestore();
+  });
+
+  test('logs non-Error rejection reasons and keeps the process alive', async () => {
+    const module = await import('../../src/reliability/graceful-shutdown');
+    const pool = { shutdownAll: jest.fn().mockResolvedValue(undefined) } as any;
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const exitSpy = jest.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+
+    module.setupGracefulShutdown(pool);
+    const handler = process.listeners('unhandledRejection').at(-1) as (reason: unknown) => void;
+    handler('string-reason');
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(pool.shutdownAll).not.toHaveBeenCalled();
+    expect(exitSpy).not.toHaveBeenCalled();
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('string-reason'),
+    );
 
     errorSpy.mockRestore();
     exitSpy.mockRestore();

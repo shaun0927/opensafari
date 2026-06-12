@@ -15,6 +15,13 @@ export interface HarCollectorOptions {
   captureBody?: boolean;
   /** Maximum response body size in bytes (default: 1MB). Bodies exceeding this are skipped. */
   maxBodySize?: number;
+  /**
+   * Maximum number of stored entries (default: 2000). Requests beyond the cap
+   * are counted as dropped instead of stored, so a long recording on a chatty
+   * page cannot grow without bound. Existing entries are never evicted — HAR
+   * consumers expect a stable prefix with intact request/response pairing.
+   */
+  maxEntries?: number;
 }
 
 interface PendingRequest {
@@ -50,6 +57,8 @@ export class HarCollector {
   private client: WebKitClient;
   private captureBody: boolean;
   private maxBodySize: number;
+  private maxEntries: number;
+  private droppedEntries = 0;
   private requestListener: ((params: any) => void) | null = null;
   private responseListener: ((params: any) => void) | null = null;
   private startTime = 0;
@@ -58,6 +67,7 @@ export class HarCollector {
     this.client = client;
     this.captureBody = options?.captureBody ?? false;
     this.maxBodySize = options?.maxBodySize ?? 1024 * 1024; // 1MB
+    this.maxEntries = options?.maxEntries ?? 2000;
   }
 
   async start(): Promise<void> {
@@ -65,6 +75,7 @@ export class HarCollector {
     this.recording = true;
     this.startTime = Date.now();
     this.entries.clear();
+    this.droppedEntries = 0;
     this.pages = [{
       id: 'page_0',
       title: 'Page',
@@ -78,6 +89,11 @@ export class HarCollector {
       const req = params.request;
       if (!req) return;
       const requestId = params.requestId;
+
+      if (this.entries.size >= this.maxEntries) {
+        this.droppedEntries++;
+        return;
+      }
 
       const queryString: Array<{ name: string; value: string }> = [];
       try {
@@ -138,6 +154,13 @@ export class HarCollector {
       };
 
       if (this.captureBody && /^(text\/|application\/json)/.test(mimeType)) {
+        // Skip the RPC entirely when the response is already known to exceed
+        // the cap — fetching first and checking later would transfer the full
+        // body over the protocol just to throw it away.
+        const knownSize = resp.encodedDataLength;
+        if (typeof knownSize === 'number' && knownSize > this.maxBodySize) {
+          return;
+        }
         try {
           const result = await this.client.send<{ body: string; base64Encoded?: boolean }>(
             'Network.getResponseBody',
@@ -159,6 +182,12 @@ export class HarCollector {
 
   stop(): void {
     this.recording = false;
+    if (this.droppedEntries > 0) {
+      console.error(
+        `[HarCollector] Dropped ${this.droppedEntries} request(s) beyond maxEntries=${this.maxEntries}; ` +
+        `raise the maxEntries option to record more`,
+      );
+    }
     if (this.requestListener) {
       this.client.removeListener('Network.requestWillBeSent', this.requestListener);
       this.requestListener = null;
@@ -245,6 +274,11 @@ export class HarCollector {
 
   getEntryCount(): number {
     return this.entries.size;
+  }
+
+  /** Requests not stored because the maxEntries cap was reached. */
+  getDroppedCount(): number {
+    return this.droppedEntries;
   }
 
   clear(): void {
