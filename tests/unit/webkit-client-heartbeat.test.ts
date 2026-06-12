@@ -28,12 +28,16 @@ function stopHeartbeat(client: WebKitClient): void {
 }
 
 describe('WebKitClient heartbeat failure threshold', () => {
+  let errorSpy: jest.SpyInstance;
+
   beforeEach(() => {
     jest.useFakeTimers();
+    errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
   });
 
   afterEach(() => {
     jest.useRealTimers();
+    errorSpy.mockRestore();
     jest.restoreAllMocks();
   });
 
@@ -98,12 +102,16 @@ describe('WebKitClient heartbeat failure threshold', () => {
 });
 
 describe('WebKitClient reconnect re-navigation', () => {
+  let errorSpy: jest.SpyInstance;
+
   beforeEach(() => {
     jest.useFakeTimers();
+    errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
   });
 
   afterEach(() => {
     jest.useRealTimers();
+    errorSpy.mockRestore();
     jest.restoreAllMocks();
   });
 
@@ -146,5 +154,8 @@ describe('WebKitClient reconnect re-navigation', () => {
     await jest.advanceTimersByTimeAsync(5_000);
 
     await expect(promise).resolves.toBeUndefined();
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Transport teardown failed (continuing): Error: teardown boom'),
+    );
   });
 });
