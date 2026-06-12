@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 
+## [0.7.2] - 2026-06-12
+
+**OpenSafari 0.7.2 is a release-process patch for the 0.7.x stability line.** It keeps the 0.7.1 runtime fixes intact while making the GitHub release validation workflow match the maintainer's manual npm publishing process.
+
+### Release workflow
+
+- **Tag pushes validate without publishing** — the `Publish` GitHub Actions workflow now runs the release gate (`npm ci`, lint, CI tests, build, production dependency audit, and dist verification) on `v*` tags but no longer runs `npm whoami` or `npm publish`.
+- **Manual npm publish preserved** — the workflow reports whether the package version is already present on npm and leaves publishing to the maintainer's local terminal after checks are green.
+- **Clearer failure notification** — release validation failures now describe the failed validation gate instead of implying an automated npm publish failure.
+
+### Runtime changes
+
+- No runtime code changes beyond the 0.7.1 stability, WebKit resilience, proxy recovery, long-session hygiene, tool-tier, and AX diagnostic fixes.
+
+### Validation
+
+- Local validation for the 0.7.1 release line passed before this patch: `npm test -- --runInBand` (216 suites / 2951 tests), `npm run build`, and `npm run audit:prod`.
+- The 0.7.2 tag validation workflow is expected to complete without invoking npm publish.
+
 ## [0.7.1] - 2026-06-12
 
 **OpenSafari 0.7.1 is a stability and long-session performance release.** It reduces the default MCP tool catalog to a compact Tier 1 surface, hardens WebKit and proxy recovery so transient simulator/WebKit failures no longer cascade into page reloads or permanent Safari-tool outages, keeps the MCP server alive after isolated unhandled promise rejections, and bounds observability buffers and watchdog timers for long-running sessions. It also adds opt-in AX walker topology diagnostics for recoverable accessibility-tree failures.
