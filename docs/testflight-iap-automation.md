@@ -46,3 +46,8 @@ npm test -- --runTestsByPath tests/scripts/appstoreconnect-build-status.test.ts 
 ```
 
 For the human-in-the-loop purchase flow, see [TestFlight + IAP human loop](recipes/testflight-iap-human-loop.md).
+
+
+## Host macOS TestFlight vs Simulator TestFlight
+
+Simulator TestFlight/IAP automation remains device-scoped and uses `app_testflight_iap_snapshot`. Host macOS TestFlight automation uses the new `mac_*` tools against `/Applications/TestFlight.app` / `com.apple.TestFlight` and does not require `deviceId`. See [Host macOS TestFlight QA](recipes/macos-testflight-qa.md).

@@ -137,6 +137,7 @@ import { registerAppGotoScreenTool } from './app-goto-screen';
 import { registerDebugBundleCollectTool } from './debug-bundle-collect';
 import { registerAppStateSnapshotTool } from './app-state-snapshot';
 import { registerAppTestFlightIapSnapshotTool } from './app-testflight-iap-snapshot';
+import { registerMacHostTools } from './mac-host-tools';
 
 export { setWorkflowEngine } from './orchestration-tools';
 export { setBarrier } from './barrier-tools';
@@ -353,4 +354,7 @@ export function registerAllTools(server: MCPServer): void {
   registerDiagnoseTool(server);
   registerDebugBundleCollectTool(server);
   registerAppGotoScreenTool(server);
+
+  // Tier 2: host macOS app automation (not simulator-scoped)
+  registerMacHostTools(server);
 }

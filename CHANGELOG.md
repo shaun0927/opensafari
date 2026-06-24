@@ -5,6 +5,49 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 
+## [0.7.4] - 2026-06-24
+
+**OpenSafari 0.7.4 adds host macOS TestFlight automation for Apple silicon Mac QA without changing the existing iOS Simulator automation path.** The release introduces a small macOS Accessibility backend for real host apps, read-only and safe-action TestFlight tools for `/Applications/TestFlight.app`, evidence collection for iOS-on-Mac apps, and an Omofictions-oriented QA recipe that stops at Apple ID, 2FA, invite, terms, sandbox, and purchase-confirmation blockers instead of attempting credential or secret automation.
+
+### Added
+
+- **Host macOS Accessibility backend** — new `src/macos/host-ax.swift` helper plus TypeScript wrapper for launching, foregrounding, dumping, querying, pressing, coordinate-clicking only when explicitly allowed, screenshotting, and collecting evidence from host macOS apps. This backend targets bundle IDs or process names such as `com.apple.TestFlight` and does not require a simulator `deviceId`.
+- **Host app MCP tools** — new Tier 2 tools for macOS app automation:
+  - `mac_app_launch` foregrounds or opens a host app by bundle ID or path.
+  - `mac_app_tree` dumps a host app AX tree.
+  - `mac_app_query` searches host AX labels, values, identifiers, and roles.
+  - `mac_app_tap_element` presses matched elements with AXPress first and uses coordinate fallback only when `allowCoordinateFallback` is explicitly set.
+  - `mac_app_screenshot` captures host screenshots to artifact paths.
+  - `mac_app_context` returns an AX tree, label-hit counts, and optional evidence artifacts.
+  - `mac_debug_bundle_collect` gathers a screenshot, AX tree, and recent cheap log excerpt for a host app.
+- **Host TestFlight classifier and tools** — new TestFlight-specific surface for the macOS TestFlight app:
+  - `mac_testflight_snapshot` launches/inspects host TestFlight and classifies app/build/account state.
+  - `mac_testflight_find_build` provides a read-only named-app/build lookup shape.
+  - `mac_testflight_install_update_open` presses only visible safe TestFlight actions (`Install`, `Update`, or `Open`) and returns blockers otherwise.
+- **Structured host TestFlight states** — classifier returns `HOST_TESTFLIGHT_MISSING`, `APP_NOT_FOUND`, `BUILD_AVAILABLE`, `INSTALL_AVAILABLE`, `UPDATE_AVAILABLE`, `OPEN_AVAILABLE`, `APPLE_ID_REQUIRED`, `TWO_FACTOR_REQUIRED`, `INVITE_OR_GROUP_BLOCKED`, `TERMS_REQUIRED`, or `UNKNOWN_WITH_EVIDENCE`, with confidence, matched AX signals, next safe action, and optional artifact paths.
+- **iOS-on-Mac evidence support** — host AX inspection can collect screenshot/tree/log evidence from a launched iOS-on-Mac app by bundle ID, including label checks for Omofictions QA targets such as `Ducats Shop`, `Payment Page`, `confirm-payment`, and `restore-purchases`.
+- **Omofictions TestFlight QA runner** — `mac_testflight_qa_run` provides a minimal high-level recipe: snapshot host TestFlight, install/update/open when safe, inspect the launched app, collect evidence for payment-related labels, and stop on blockers. Purchase confirmation remains gated by explicit `allowPurchaseConfirm: true`.
+
+### Documentation
+
+- **Host macOS TestFlight QA recipe** — new `docs/recipes/macos-testflight-qa.md` documents the local host flow for Omofictions and the exact command sequence for `mac_app_launch`, `mac_app_tree`, `mac_testflight_snapshot`, `mac_testflight_install_update_open`, and `mac_testflight_qa_run`.
+- **Simulator vs host TestFlight distinction** — `docs/testflight-iap-automation.md` now explicitly separates simulator-scoped `app_testflight_iap_snapshot` from host macOS `mac_*` TestFlight automation.
+
+### Safety boundaries
+
+- Apple ID passwords, 2FA codes, TestFlight invite acceptance, TestFlight terms, sandbox login, StoreKit credentials, and purchase confirmation remain human-handoff boundaries.
+- The host backend uses public macOS Accessibility, `open`, `screencapture`, `log show`, and CGEvent APIs only.
+- Existing simulator tools, simulator AX behavior, and WebKit/Safari APIs are preserved; host macOS automation is registered as a separate Tier 2 surface.
+- No new npm dependencies were added.
+
+### Validation
+
+- Targeted unit suites pass: `npm test -- --runTestsByPath tests/unit/mac-testflight-classifier.test.ts tests/unit/mac-host-tools.test.ts tests/unit/tool-tier-drift.test.ts --runInBand` (3 suites / 9 tests).
+- Lint gate passes for errors: `npm run lint -- --quiet`.
+- Build passes: `npm run build`, including the new `build:host-ax-native` Swift helper step. Swift emits only macOS 14 deprecation warnings for `activateIgnoringOtherApps`; runtime behavior is unaffected.
+- Local host smoke passed with `/Applications/TestFlight.app` present: `mac_app_launch` launched TestFlight, `mac_app_tree` captured the host AX tree, `mac_app_screenshot` wrote a screenshot, and `mac_testflight_snapshot` produced evidence artifacts.
+- Local Omofictions smoke did not find an available Omofictions build in the visible host TestFlight UI and classified the launched-app step as blocked because `com.omofictions.omofictionsApp` was not running / AX-inspectable. Evidence artifacts were written under `test-output/macos-testflight-smoke3/` and `test-output/omofictions-qa-smoke/`.
+
 ## [0.7.3] - 2026-06-24
 
 **OpenSafari 0.7.3 adds a safe TestFlight / IAP handoff surface without pretending Apple account automation is solved.** The release introduces a read-only classifier-backed MCP snapshot for TestFlight install, Apple ID / 2FA, sandbox-account, StoreKit-sheet, purchase-success, and unknown-with-evidence states; expands StoreKit/TestFlight localized button semantics; documents the supported human-in-the-loop TestFlight sandbox IAP lane; and adds a small script-first App Store Connect build-status mapper for CI gates that already fetch build metadata. It intentionally does not automate Apple ID credentials, 2FA, TestFlight invitation acceptance, or arbitrary receipt extraction.
