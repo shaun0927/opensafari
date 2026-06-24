@@ -198,6 +198,7 @@ export const TOOL_TIERS: Record<string, number> = {
   // Tier 2: Native app context & navigation helpers
   app_context: 2,
   app_state_snapshot: 2,
+  app_testflight_iap_snapshot: 2,
   app_list_routes: 2,
   app_notes_paste_and_tap_url: 2,
   app_dismiss_overlay: 2,

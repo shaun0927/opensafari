@@ -136,6 +136,7 @@ import { registerDiagnoseTool } from './diagnose';
 import { registerAppGotoScreenTool } from './app-goto-screen';
 import { registerDebugBundleCollectTool } from './debug-bundle-collect';
 import { registerAppStateSnapshotTool } from './app-state-snapshot';
+import { registerAppTestFlightIapSnapshotTool } from './app-testflight-iap-snapshot';
 
 export { setWorkflowEngine } from './orchestration-tools';
 export { setBarrier } from './barrier-tools';
@@ -246,6 +247,7 @@ export function registerAllTools(server: MCPServer): void {
   // Tier 2: Native App Inspection
   registerAppContextTool(server);
   registerAppStateSnapshotTool(server);
+  registerAppTestFlightIapSnapshotTool(server);
   registerAppTreeTool(server);
   registerAppQueryTool(server);
   registerAppInspectTool(server);
