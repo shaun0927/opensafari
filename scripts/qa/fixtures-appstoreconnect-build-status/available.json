@@ -1,0 +1,15 @@
+{
+  "data": [
+    {
+      "type": "builds",
+      "id": "build-available",
+      "attributes": {
+        "version": "1.2.3",
+        "buildNumber": "46",
+        "processingState": "VALID",
+        "externalBuildState": "READY_FOR_BETA_TESTING",
+        "uploadedDate": "2026-06-23T11:00:00Z"
+      }
+    }
+  ]
+}
