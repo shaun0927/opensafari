@@ -1,0 +1,24 @@
+{
+  "data": [
+    {
+      "type": "builds",
+      "id": "build-review",
+      "attributes": {
+        "version": "1.2.3",
+        "buildNumber": "47",
+        "processingState": "VALID",
+        "externalBuildState": "IN_BETA_REVIEW",
+        "uploadedDate": "2026-06-23T12:00:00Z"
+      }
+    }
+  ],
+  "included": [
+    {
+      "type": "betaAppReviewSubmissions",
+      "id": "review-1",
+      "attributes": {
+        "betaReviewState": "WAITING_FOR_REVIEW"
+      }
+    }
+  ]
+}
