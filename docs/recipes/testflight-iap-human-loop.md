@@ -34,13 +34,9 @@ Current tools used below:
 - [`app_query`](../api-reference.md) / [`app_logs`](../api-reference.md) — read app-visible state or logs for entitlement/receipt evidence.
 - [`debug_bundle_collect`](../debug-bundle.md) — collect screenshot, AX summary, logs, crashes, and route hints.
 
-Planned tool from the TestFlight/IAP automation plan:
+TestFlight/IAP-specific snapshot tool:
 
-- `app_testflight_iap_snapshot` **(planned, not yet merged)** — a read-only
-  composed snapshot that classifies TestFlight install/account/StoreKit/backend
-  blockers and returns `phase`, `blocker`, `confidence`, `nextSafeAction`, and
-  evidence paths. Until it lands, use `app_state_snapshot` plus
-  `debug_bundle_collect`.
+- [`app_testflight_iap_snapshot`](../api-reference.md#app_testflight_iap_snapshot) — a read-only composed snapshot that classifies TestFlight install/account/StoreKit/backend blockers and returns `phase`, `blocker`, `confidence`, `nextSafeAction`, and optional evidence path summaries.
 
 ## JSON-RPC helper
 
@@ -69,33 +65,22 @@ Apple ID / 2FA steps.
 
 ### 1. Snapshot before TestFlight install/update
 
-Start by collecting a read-only state snapshot. If the planned classifier has
-landed in your branch, use it; otherwise use the current generic snapshot.
+Start by collecting a read-only TestFlight/IAP snapshot. Use the generic `app_state_snapshot` only as a fallback when running an older OpenSafari version.
 
 ```bash
 # Current safe snapshot: read-only, no taps.
-osafari-call app_state_snapshot \
-  '{
-    "expectedBundleId": "com.example.MyApp",
-    "maxVisibleNodes": 30,
-    "maxDepth": 8
-  }' | tee artifacts/testflight-state-before.json
-```
-
-Planned equivalent:
-
-```bash
-# Planned, not yet merged: use only after app_testflight_iap_snapshot exists.
 osafari-call app_testflight_iap_snapshot \
   '{
     "expectedAppBundleId": "com.example.MyApp",
-    "includeEvidencePaths": true
+    "includeEvidence": true,
+    "maxVisibleNodes": 30,
+    "maxDepth": 8
   }' | tee artifacts/testflight-iap-before.json
 ```
 
 Interpretation:
 
-- `TESTFLIGHT_BUILD_AVAILABLE` / visible **Install** or **Update**: a human or a
+- `TESTFLIGHT_INSTALL_AVAILABLE` or `TESTFLIGHT_UPDATE_AVAILABLE`: a human or a
   higher-level TestFlight install step may proceed.
 - `APPLE_ID_SIGN_IN_REQUIRED`, `TWO_FACTOR_REQUIRED`, or similar account state:
   stop automation and hand off to a human.
@@ -247,7 +232,7 @@ an active sandbox entitlement for the QA user.
 | StoreKit sheet not found | Purchase trigger ran, but `app_alert_handle` reports `NO_MATCHING_BUTTON` | Collect debug bundle, inspect `visibleLabels`, add locale-specific labels, or fix the app trigger. Do not use coordinate fallback. |
 | StoreKit confirmation has no effect | `app_alert_handle` reports `ALERT_HANDLE_NO_EFFECT` or the same sheet remains | Re-snapshot and collect evidence. If account auth is requested, hand off to human; otherwise retry once with the exact visible label. |
 | Purchase completes but entitlement is absent | App UI/log or backend does not show premium state | Collect bundle and app/backend logs. Investigate app receipt handling or backend sandbox verification; do not claim purchase success from sheet dismissal alone. |
-| Unknown foreground state | Snapshot confidence is low or planned classifier reports unknown | Wait briefly, snapshot again, then collect `debug_bundle_collect`. Escalate with artifacts instead of resetting first. |
+| Unknown foreground state | Snapshot confidence is low or `app_testflight_iap_snapshot` reports `UNKNOWN_WITH_EVIDENCE` | Wait briefly, snapshot again, then collect `debug_bundle_collect`. Escalate with artifacts instead of resetting first. |
 | Simulator/app crash | Debug bundle includes fresh crash or app is no longer foreground | Attach crash/log artifacts to the failure. Reinstall/relaunch only after evidence is captured. |
 
 ## CI guardrails

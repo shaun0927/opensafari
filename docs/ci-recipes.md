@@ -652,7 +652,7 @@ teams can copy the manifest with the right API expectations.
 | Recipe | Covers | Version / tool baseline |
 |---|---|---|
 | [Flutter + IAP (ko-KR)](recipes/flutter-iap-ko-kr.md) | boot → launch → deep-link → StoreKit purchase → ko-KR alert accept → receipt assert → backend verify | `opensafari-mcp@0.4.9` |
-| [TestFlight + IAP human loop](recipes/testflight-iap-human-loop.md) | snapshot → human Apple ID/2FA handoff → resume → StoreKit sheet → app/backend verification | current + planned `app_testflight_iap_snapshot` |
+| [TestFlight + IAP human loop](recipes/testflight-iap-human-loop.md) | snapshot → human Apple ID/2FA handoff → resume → StoreKit sheet → app/backend verification | `app_testflight_iap_snapshot` + human account handoff |
 
 ---
 

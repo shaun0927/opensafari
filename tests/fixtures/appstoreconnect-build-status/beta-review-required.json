@@ -1,0 +1,7 @@
+{
+  "data": [{
+    "type": "builds",
+    "id": "review-1",
+    "attributes": { "version": "1.0", "buildNumber": "44", "processingState": "VALID", "betaReviewState": "IN_REVIEW", "uploadedDate": "2026-06-24T03:00:00Z" }
+  }]
+}

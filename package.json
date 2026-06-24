@@ -1,6 +1,6 @@
 {
   "name": "opensafari-mcp",
-  "version": "0.7.2",
+  "version": "0.7.3",
   "description": "iOS Safari automation MCP server via Xcode Simulator + WebKit Remote Debugging Protocol",
   "main": "dist/index.js",
   "bin": {
@@ -57,6 +57,7 @@
     "dist/",
     "!dist/src/",
     "!dist/node_modules/",
+    "scripts/qa/appstoreconnect-build-status.mjs",
     "README.md",
     "LICENSE"
   ],

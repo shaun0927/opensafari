@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 
+## [0.7.3] - 2026-06-24
+
+**OpenSafari 0.7.3 adds a safe TestFlight / IAP handoff surface without pretending Apple account automation is solved.** The release introduces a read-only classifier-backed MCP snapshot for TestFlight install, Apple ID / 2FA, sandbox-account, StoreKit-sheet, purchase-success, and unknown-with-evidence states; expands StoreKit/TestFlight localized button semantics; documents the supported human-in-the-loop TestFlight sandbox IAP lane; and adds a small script-first App Store Connect build-status mapper for CI gates that already fetch build metadata. It intentionally does not automate Apple ID credentials, 2FA, TestFlight invitation acceptance, or arbitrary receipt extraction.
+
+### Added
+
+- **Read-only `app_testflight_iap_snapshot` MCP tool** — new Tier 2 tool that composes `app_state_snapshot`, installed-app hints, visible AX classifier signals, safe recovery hints, and optional compact `debug_bundle_collect` references. The tool never taps, types credentials, installs or updates apps, confirms purchases, or calls App Store Connect.
+- **TestFlight / IAP blocker classifier** — pure side-effect-free classifier for `TESTFLIGHT_NOT_INSTALLED`, `TESTFLIGHT_INSTALL_AVAILABLE`, `TESTFLIGHT_UPDATE_AVAILABLE`, `TESTFLIGHT_OPEN_AVAILABLE`, `APPLE_ID_SIGN_IN_REQUIRED`, `TWO_FACTOR_REQUIRED`, `SANDBOX_SIGN_IN_REQUIRED`, `STOREKIT_PURCHASE_SHEET_VISIBLE`, `PURCHASE_SUCCESS_VISIBLE`, and `UNKNOWN_WITH_EVIDENCE`. Unknown screens stay unknown and carry evidence signals instead of being treated as success.
+- **StoreKit and TestFlight localized button semantics** — expands `SYSTEM_BUTTON_CATALOG` with conservative StoreKit purchase labels (`confirm`, `buy`, `subscribe`) and TestFlight action labels (`install`, `update`, `open`, `signIn`) across the existing en / ko / ja / zh-Hans catalog shape.
+- **Script-first App Store Connect build-status mapper** — `scripts/qa/appstoreconnect-build-status.mjs` maps pre-fetched build metadata to compact CI-friendly statuses: `BUILD_PROCESSING`, `BUILD_AVAILABLE`, `BETA_REVIEW_REQUIRED`, `NO_BUILD`, and `UNKNOWN`. It accepts JSON files only, does not persist credentials, does not upload builds, and does not print input secrets.
+- **Physical-device feasibility spike report** — documents the go/no-go boundary for future full unattended TestFlight work using public Xcode device tooling, keeping production device automation out of this release.
+
+### Documentation
+
+- **TestFlight + IAP human-in-the-loop recipe** — new `docs/recipes/testflight-iap-human-loop.md` shows the supported semi-automated lane: snapshot before TestFlight install/update, pause for human Apple ID / 2FA / tester-enrollment steps, resume into StoreKit sheet handling, collect debug bundles, and verify entitlements through app-side logs/UI or backend evidence.
+- **TestFlight / IAP automation notes** — new `docs/testflight-iap-automation.md` describes how the App Store Connect build-status script feeds CI readiness checks and how `app_testflight_iap_snapshot` covers runtime state without mutating the simulator.
+- **API and CI recipe references** — `docs/api-reference.md` documents the new MCP tool and `docs/ci-recipes.md` links the TestFlight human-loop recipe.
+
+### Safety boundaries
+
+- Apple ID passwords, sandbox-account credentials, 2FA codes, and App Store Connect private keys remain outside OpenSafari tool parameters and logs.
+- Receipt verification is still owned by the app under test or backend; this release does not resurrect the removed `app_storekit_*` tools and does not scrape arbitrary app containers for receipts.
+- Full unattended TestFlight IAP remains a future physical-device/infrastructure project, gated on dedicated pre-authenticated devices and explicit operational evidence.
+
+### Validation
+
+- Targeted TestFlight/App Store Connect suites pass locally: `npm test -- --runTestsByPath tests/scripts/appstoreconnect-build-status.test.ts tests/unit/testflight-iap-classifier.test.ts tests/unit/app-testflight-iap-snapshot.test.ts tests/unit/system-button-catalog.test.ts --runInBand` (4 suites / 24 tests).
+- Release-gate validation passed locally for this branch: `npm run lint` (0 errors, existing warnings only), `npm run test:ci` (220 suites / 2975 tests), `npm run build`, `npm run audit:prod` (0 vulnerabilities), and `node dist/cli/index.js --help`.
+
 ## [0.7.2] - 2026-06-12
 
 **OpenSafari 0.7.2 is a release-process patch for the 0.7.x stability line.** It keeps the 0.7.1 runtime fixes intact while making the GitHub release validation workflow match the maintainer's manual npm publishing process.

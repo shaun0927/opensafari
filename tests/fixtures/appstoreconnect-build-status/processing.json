@@ -1,0 +1,7 @@
+{
+  "data": [{
+    "type": "builds",
+    "id": "processing-1",
+    "attributes": { "version": "1.0", "buildNumber": "42", "processingState": "PROCESSING", "uploadedDate": "2026-06-24T01:00:00Z" }
+  }]
+}
