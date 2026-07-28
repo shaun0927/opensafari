@@ -77,13 +77,14 @@ const FIXTURE_PATH = path.resolve(__dirname, '..', 'fixtures', 'ax-bridge-fake',
 // not depend on process.env propagating through execFile to the grandchild.
 // The parent-read gate (OPENSAFARI_AX_DEBUG_ON_FAILURE) is still set via
 // process.env because the bridge reads it in-process.
-function createShim(opts: { mode?: 'success'; logPath: string }): string {
+function createShim(opts: { mode?: 'success'; errorCode?: string; logPath: string }): string {
   const shim = path.join(
     fs.mkdtempSync(path.join(os.tmpdir(), 'ax-debug-on-failure-')),
     'ax-bridge-native',
   );
   const envAssignments = [
     opts.mode ? `FAKE_MODE=${JSON.stringify(opts.mode)}` : '',
+    opts.errorCode ? `FAKE_ERROR_CODE=${JSON.stringify(opts.errorCode)}` : '',
     `FAKE_AX_LOG=${JSON.stringify(opts.logPath)}`,
   ]
     .filter(Boolean)
@@ -110,8 +111,8 @@ describe('AccessibilityBridge — #842 --debug topology on failure', () => {
   let logPath: string;
   const savedGate = process.env.OPENSAFARI_AX_DEBUG_ON_FAILURE;
 
-  function makeBridge(mode?: 'success'): AccessibilityBridge {
-    const shimPath = createShim({ mode, logPath });
+  function makeBridge(mode?: 'success', errorCode?: string): AccessibilityBridge {
+    const shimPath = createShim({ mode, errorCode, logPath });
     createdDirs.push(path.dirname(shimPath));
     return new AccessibilityBridge({ bridgePath: shimPath });
   }
@@ -166,6 +167,21 @@ describe('AccessibilityBridge — #842 --debug topology on failure', () => {
 
     expect(err).toBeInstanceOf(AccessibilityBridgeError);
     expect(err!.code).toBe('DEVICE_CONTENT_ROOT_EMPTY');
+    expect(err!.topology).toBeUndefined();
+    expect(readLog(logPath)).toEqual(['plain']);
+  });
+
+  test('gated non-recoverable failure does not re-invoke with --debug', async () => {
+    process.env.OPENSAFARI_AX_DEBUG_ON_FAILURE = '1';
+    const bridge = makeBridge(undefined, 'DEVICE_RESOLUTION_FAILED');
+
+    const err = await bridge.dumpTree({ deviceId: 'FIXTURE-DEVICE' }).then(
+      () => null,
+      (e) => e as AccessibilityBridgeError,
+    );
+
+    expect(err).toBeInstanceOf(AccessibilityBridgeError);
+    expect(err!.code).toBe('DEVICE_RESOLUTION_FAILED');
     expect(err!.topology).toBeUndefined();
     expect(readLog(logPath)).toEqual(['plain']);
   });

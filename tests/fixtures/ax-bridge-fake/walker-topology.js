@@ -87,7 +87,7 @@ if (hasDebug) {
 process.stdout.write(
   JSON.stringify({
     error: 'No descendant subtree contains any app-semantics role',
-    code: 'DEVICE_CONTENT_ROOT_EMPTY',
+    code: process.env.FAKE_ERROR_CODE || 'DEVICE_CONTENT_ROOT_EMPTY',
   }),
 );
 process.exit(1);

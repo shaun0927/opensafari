@@ -1,5 +1,6 @@
 import { MCPServer } from '../../src/mcp-server';
 import { ErrorCode } from '../../src/errors';
+import { AccessibilityBridgeError } from '../../src/native/accessibility-bridge';
 
 const listBootedMock = jest.fn();
 const listRunningAppsMock = jest.fn();
@@ -17,9 +18,13 @@ jest.mock('../../src/session-manager', () => ({
   getSessionManager: () => ({ getSoleDeviceId: getSoleDeviceIdMock }),
 }));
 
-jest.mock('../../src/native', () => ({
-  getAccessibilityBridge: () => ({ dumpTree: dumpTreeMock }),
-}));
+jest.mock('../../src/native', () => {
+  const actual = jest.requireActual('../../src/native');
+  return {
+    ...actual,
+    getAccessibilityBridge: () => ({ dumpTree: dumpTreeMock }),
+  };
+});
 
 jest.mock('../../src/flutter', () => ({
   getFlutterVMClient: () => ({ isConnected: () => false }),
@@ -90,5 +95,29 @@ describe('app_state_snapshot contract', () => {
     const payload = parseToolError(result);
     expect(payload.error).toBe(ErrorCode.APP_STATE_UNKNOWN);
     expect(payload.message).toContain('AX dump failed');
+  });
+
+  it('surfaces AX topology diagnostics on recoverable bridge failures', async () => {
+    const topology = {
+      windowCount: 2,
+      overlayRolesSeen: 0,
+      winner: { depth: 1, role: 'AXGroup', label: null, score: 5, appSemanticsCount: 0 },
+    };
+    dumpTreeMock.mockRejectedValueOnce(
+      new AccessibilityBridgeError(
+        'No descendant subtree contains app semantics',
+        'DEVICE_CONTENT_ROOT_EMPTY',
+        topology,
+      ),
+    );
+    const { registerAppStateSnapshotTool } = await import('../../src/tools/app-state-snapshot');
+    const server = new MCPServer();
+    registerAppStateSnapshotTool(server);
+
+    const result = await server.getToolHandler('app_state_snapshot')!('s', {});
+    const payload = parseToolError(result);
+    expect(payload.error).toBe(ErrorCode.APP_STATE_UNKNOWN);
+    expect(payload.axBridgeCode).toBe('DEVICE_CONTENT_ROOT_EMPTY');
+    expect(payload.axTopology).toEqual(topology);
   });
 });
