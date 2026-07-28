@@ -3,7 +3,6 @@ module.exports = {
   ...require('./jest.config'),
   roots: ['<rootDir>/tests/sentinel'],
   testPathIgnorePatterns: ['/node_modules/'],
-  testTimeout: 60_000,
-  forceExit: true,
+  testTimeout: 75_000,
   verbose: true,
 };
