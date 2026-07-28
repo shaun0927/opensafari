@@ -161,6 +161,9 @@ export function classifyAppStoreConnectBuildStatus(input) {
   };
 }
 
+// Preserve the v0.7.4 programmatic export while keeping the stricter classifier name.
+export const classify = classifyAppStoreConnectBuildStatus;
+
 function selfCheck() {
   const here = dirname(fileURLToPath(import.meta.url));
   const fixtures = [
