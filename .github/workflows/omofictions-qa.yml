@@ -28,13 +28,15 @@ on:
         default: false
   pull_request:
     # Path-guard job only. It enforces #44 Clarification 5 mechanically on
-    # every PR that touches this workflow or its scripts/docs. The full QA
-    # run never fires on PRs — that would require a build artefact that is
-    # not guaranteed to be available.
+    # PRs that touch the Omofictions-specific workflow contract. Other QA
+    # utilities under scripts/qa or docs/qa are independent product surfaces
+    # and must not be classified as Omofictions QA-lane changes. The full QA
+    # run never fires on PRs — that would require a build artefact that is not
+    # guaranteed to be available.
     paths:
       - '.github/workflows/omofictions-qa.yml'
-      - 'scripts/qa/**'
-      - 'docs/qa/**'
+      - 'scripts/qa/omofictions-*'
+      - 'docs/qa/omofictions-app.md'
 
 jobs:
   # -------------------------------------------------------------------------
