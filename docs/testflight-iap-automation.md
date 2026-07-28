@@ -1,6 +1,6 @@
 # TestFlight / IAP automation notes
 
-OpenSafari's supported TestFlight direction is conservative: classify the current state, collect redacted evidence, and stop at Apple account / 2FA / tester-enrollment blockers. Do not pass Apple ID, sandbox account, 2FA, or App Store Connect private-key material through OpenSafari tool parameters or logs.
+OpenSafari's supported TestFlight direction is conservative: classify the current state, collect redacted evidence, and stop at Apple account / 2FA / tester-enrollment blockers. Host macOS TestFlight is an adjacent Tier 2 surface under [Product Direction](product-direction.md), not a silent expansion of the simulator core. Do not pass Apple ID, sandbox account, 2FA, or App Store Connect private-key material through OpenSafari tool parameters or logs.
 
 ## Build availability probe
 

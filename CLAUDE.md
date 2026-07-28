@@ -46,7 +46,17 @@ npm install && npm run build && npm test
 ## Key Architecture
 
 ```
-OpenSafari = WebKitClient → WebKit Remote Debugging Protocol → Real Safari in Xcode Simulator
+MCP contracts
+  -> session, orchestration, safety, and evidence layers
+  -> WebKit / AX / Flutter VM / simctl / SimulatorKit backends
+  -> real Safari, WebViews, native iOS, and Flutter apps in Xcode Simulator
+  -> bounded host macOS AX/TestFlight workflows
 ```
 
-No playwright. No middleware. Direct protocol connection via ios-webkit-debug-proxy.
+[Product Direction](docs/product-direction.md) is the authority for product
+scope, stability vocabulary, safety boundaries, and architectural direction.
+
+No Playwright/WebDriver re-platforming and no bundled browser. Safari/WebView
+automation uses direct WebKit Remote Debugging through ios-webkit-debug-proxy;
+the WebKit-specific rules above do not describe native AX, Flutter VM,
+SimulatorKit, `simctl`, or host macOS backends.

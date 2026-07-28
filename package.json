@@ -1,7 +1,7 @@
 {
   "name": "opensafari-mcp",
   "version": "0.7.4",
-  "description": "iOS Safari automation MCP server via Xcode Simulator + WebKit Remote Debugging Protocol",
+  "description": "MCP-native automation, debugging, and parallel QA for Safari, native iOS, Flutter, WebViews, and bounded macOS workflows",
   "main": "dist/index.js",
   "bin": {
     "opensafari": "./dist/cli/index.js"
@@ -47,11 +47,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/junghwan-oss/opensafari.git"
+    "url": "git+https://github.com/shaun0927/opensafari.git"
   },
-  "homepage": "https://github.com/junghwan-oss/opensafari#readme",
+  "homepage": "https://github.com/shaun0927/opensafari#readme",
   "bugs": {
-    "url": "https://github.com/junghwan-oss/opensafari/issues"
+    "url": "https://github.com/shaun0927/opensafari/issues"
   },
   "types": "dist/index.d.ts",
   "files": [
@@ -74,7 +74,11 @@
     "testing",
     "xcode",
     "mobile",
-    "qa"
+    "qa",
+    "flutter",
+    "native-ios",
+    "accessibility",
+    "testflight"
   ],
   "dependencies": {
     "commander": "^12.0.0",

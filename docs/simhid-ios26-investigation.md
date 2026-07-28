@@ -80,7 +80,9 @@ input surfaces are stable, which are opt-in, and which are still
 experimental. This table is the authoritative version — the
 [README](../README.md#headless-capabilities) and the
 [headless-architecture](./headless-architecture.md) routing table
-mirror it.
+mirror it. It is authoritative for input-backend stability; repository-wide
+scope and status vocabulary come from
+[Product Direction](./product-direction.md).
 
 | Surface | Xcode ≤ 16 | Xcode 26+ | Stability | Opt-in flag |
 |---------|------------|-----------|-----------|-------------|

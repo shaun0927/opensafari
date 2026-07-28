@@ -1,10 +1,15 @@
 # RFC: Native App Automation Backend for Xcode Simulator
 
-**Status**: Draft
+**Status**: Historical / Superseded
 **Author**: OpenSafari Contributors
 **Issue**: [#351](https://github.com/shaun0927/opensafari/issues/351)
 **Parent**: [#344](https://github.com/shaun0927/opensafari/issues/344)
 **Date**: 2026-04-05
+
+> This RFC records the pre-implementation native-app proposal. Its statements
+> about Safari-only scope and future AX/WebView work are no longer current.
+> Use [Product Direction](product-direction.md) for scope and
+> [Mobile Semantic QA](mobile-semantic-qa.md) for the shipped runtime contract.
 
 ---
 
