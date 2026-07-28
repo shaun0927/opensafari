@@ -4,6 +4,135 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+
+## [0.7.4] - 2026-06-24
+
+**OpenSafari 0.7.4 adds host macOS TestFlight automation for Apple silicon Mac QA without changing the existing iOS Simulator automation path.** The release introduces a small macOS Accessibility backend for real host apps, read-only and safe-action TestFlight tools for `/Applications/TestFlight.app`, evidence collection for iOS-on-Mac apps, and an Omofictions-oriented QA recipe that stops at Apple ID, 2FA, invite, terms, sandbox, and purchase-confirmation blockers instead of attempting credential or secret automation.
+
+### Added
+
+- **Host macOS Accessibility backend** — new `src/macos/host-ax.swift` helper plus TypeScript wrapper for launching, foregrounding, dumping, querying, pressing, coordinate-clicking only when explicitly allowed, screenshotting, and collecting evidence from host macOS apps. This backend targets bundle IDs or process names such as `com.apple.TestFlight` and does not require a simulator `deviceId`.
+- **Host app MCP tools** — new Tier 2 tools for macOS app automation:
+  - `mac_app_launch` foregrounds or opens a host app by bundle ID or path.
+  - `mac_app_tree` dumps a host app AX tree.
+  - `mac_app_query` searches host AX labels, values, identifiers, and roles.
+  - `mac_app_tap_element` presses matched elements with AXPress first and uses coordinate fallback only when `allowCoordinateFallback` is explicitly set.
+  - `mac_app_screenshot` captures host screenshots to artifact paths.
+  - `mac_app_context` returns an AX tree, label-hit counts, and optional evidence artifacts.
+  - `mac_debug_bundle_collect` gathers a screenshot, AX tree, and recent cheap log excerpt for a host app.
+- **Host TestFlight classifier and tools** — new TestFlight-specific surface for the macOS TestFlight app:
+  - `mac_testflight_snapshot` launches/inspects host TestFlight and classifies app/build/account state.
+  - `mac_testflight_find_build` provides a read-only named-app/build lookup shape.
+  - `mac_testflight_install_update_open` presses only visible safe TestFlight actions (`Install`, `Update`, or `Open`) and returns blockers otherwise.
+- **Structured host TestFlight states** — classifier returns `HOST_TESTFLIGHT_MISSING`, `APP_NOT_FOUND`, `BUILD_AVAILABLE`, `INSTALL_AVAILABLE`, `UPDATE_AVAILABLE`, `OPEN_AVAILABLE`, `APPLE_ID_REQUIRED`, `TWO_FACTOR_REQUIRED`, `INVITE_OR_GROUP_BLOCKED`, `TERMS_REQUIRED`, or `UNKNOWN_WITH_EVIDENCE`, with confidence, matched AX signals, next safe action, and optional artifact paths.
+- **iOS-on-Mac evidence support** — host AX inspection can collect screenshot/tree/log evidence from a launched iOS-on-Mac app by bundle ID, including label checks for Omofictions QA targets such as `Ducats Shop`, `Payment Page`, `confirm-payment`, and `restore-purchases`.
+- **Omofictions TestFlight QA runner** — `mac_testflight_qa_run` provides a minimal high-level recipe: snapshot host TestFlight, install/update/open when safe, inspect the launched app, collect evidence for payment-related labels, and stop on blockers. Purchase confirmation remains gated by explicit `allowPurchaseConfirm: true`.
+
+### Documentation
+
+- **Host macOS TestFlight QA recipe** — new `docs/recipes/macos-testflight-qa.md` documents the local host flow for Omofictions and the exact command sequence for `mac_app_launch`, `mac_app_tree`, `mac_testflight_snapshot`, `mac_testflight_install_update_open`, and `mac_testflight_qa_run`.
+- **Simulator vs host TestFlight distinction** — `docs/testflight-iap-automation.md` now explicitly separates simulator-scoped `app_testflight_iap_snapshot` from host macOS `mac_*` TestFlight automation.
+
+### Safety boundaries
+
+- Apple ID passwords, 2FA codes, TestFlight invite acceptance, TestFlight terms, sandbox login, StoreKit credentials, and purchase confirmation remain human-handoff boundaries.
+- The host backend uses public macOS Accessibility, `open`, `screencapture`, `log show`, and CGEvent APIs only.
+- Existing simulator tools, simulator AX behavior, and WebKit/Safari APIs are preserved; host macOS automation is registered as a separate Tier 2 surface.
+- No new npm dependencies were added.
+
+### Validation
+
+- Targeted unit suites pass: `npm test -- --runTestsByPath tests/unit/mac-testflight-classifier.test.ts tests/unit/mac-host-tools.test.ts tests/unit/tool-tier-drift.test.ts --runInBand` (3 suites / 9 tests).
+- Lint gate passes for errors: `npm run lint -- --quiet`.
+- Build passes: `npm run build`, including the new `build:host-ax-native` Swift helper step. Swift emits only macOS 14 deprecation warnings for `activateIgnoringOtherApps`; runtime behavior is unaffected.
+- Local host smoke passed with `/Applications/TestFlight.app` present: `mac_app_launch` launched TestFlight, `mac_app_tree` captured the host AX tree, `mac_app_screenshot` wrote a screenshot, and `mac_testflight_snapshot` produced evidence artifacts.
+- Local Omofictions smoke did not find an available Omofictions build in the visible host TestFlight UI and classified the launched-app step as blocked because `com.omofictions.omofictionsApp` was not running / AX-inspectable. Evidence artifacts were written under `test-output/macos-testflight-smoke3/` and `test-output/omofictions-qa-smoke/`.
+
+## [0.7.3] - 2026-06-24
+
+**OpenSafari 0.7.3 adds a safe TestFlight / IAP handoff surface without pretending Apple account automation is solved.** The release introduces a read-only classifier-backed MCP snapshot for TestFlight install, Apple ID / 2FA, sandbox-account, StoreKit-sheet, purchase-success, and unknown-with-evidence states; expands StoreKit/TestFlight localized button semantics; documents the supported human-in-the-loop TestFlight sandbox IAP lane; and adds a small script-first App Store Connect build-status mapper for CI gates that already fetch build metadata. It intentionally does not automate Apple ID credentials, 2FA, TestFlight invitation acceptance, or arbitrary receipt extraction.
+
+### Added
+
+- **Read-only `app_testflight_iap_snapshot` MCP tool** — new Tier 2 tool that composes `app_state_snapshot`, installed-app hints, visible AX classifier signals, safe recovery hints, and optional compact `debug_bundle_collect` references. The tool never taps, types credentials, installs or updates apps, confirms purchases, or calls App Store Connect.
+- **TestFlight / IAP blocker classifier** — pure side-effect-free classifier for `TESTFLIGHT_NOT_INSTALLED`, `TESTFLIGHT_INSTALL_AVAILABLE`, `TESTFLIGHT_UPDATE_AVAILABLE`, `TESTFLIGHT_OPEN_AVAILABLE`, `APPLE_ID_SIGN_IN_REQUIRED`, `TWO_FACTOR_REQUIRED`, `SANDBOX_SIGN_IN_REQUIRED`, `STOREKIT_PURCHASE_SHEET_VISIBLE`, `PURCHASE_SUCCESS_VISIBLE`, and `UNKNOWN_WITH_EVIDENCE`. Unknown screens stay unknown and carry evidence signals instead of being treated as success.
+- **StoreKit and TestFlight localized button semantics** — expands `SYSTEM_BUTTON_CATALOG` with conservative StoreKit purchase labels (`confirm`, `buy`, `subscribe`) and TestFlight action labels (`install`, `update`, `open`, `signIn`) across the existing en / ko / ja / zh-Hans catalog shape.
+- **Script-first App Store Connect build-status mapper** — `scripts/qa/appstoreconnect-build-status.mjs` maps pre-fetched build metadata to compact CI-friendly statuses: `BUILD_PROCESSING`, `BUILD_AVAILABLE`, `BETA_REVIEW_REQUIRED`, `NO_BUILD`, and `UNKNOWN`. It accepts JSON files only, does not persist credentials, does not upload builds, and does not print input secrets.
+- **Physical-device feasibility spike report** — documents the go/no-go boundary for future full unattended TestFlight work using public Xcode device tooling, keeping production device automation out of this release.
+
+### Documentation
+
+- **TestFlight + IAP human-in-the-loop recipe** — new `docs/recipes/testflight-iap-human-loop.md` shows the supported semi-automated lane: snapshot before TestFlight install/update, pause for human Apple ID / 2FA / tester-enrollment steps, resume into StoreKit sheet handling, collect debug bundles, and verify entitlements through app-side logs/UI or backend evidence.
+- **TestFlight / IAP automation notes** — new `docs/testflight-iap-automation.md` describes how the App Store Connect build-status script feeds CI readiness checks and how `app_testflight_iap_snapshot` covers runtime state without mutating the simulator.
+- **API and CI recipe references** — `docs/api-reference.md` documents the new MCP tool and `docs/ci-recipes.md` links the TestFlight human-loop recipe.
+
+### Safety boundaries
+
+- Apple ID passwords, sandbox-account credentials, 2FA codes, and App Store Connect private keys remain outside OpenSafari tool parameters and logs.
+- Receipt verification is still owned by the app under test or backend; this release does not resurrect the removed `app_storekit_*` tools and does not scrape arbitrary app containers for receipts.
+- Full unattended TestFlight IAP remains a future physical-device/infrastructure project, gated on dedicated pre-authenticated devices and explicit operational evidence.
+
+### Validation
+
+- Targeted TestFlight/App Store Connect suites pass locally: `npm test -- --runTestsByPath tests/scripts/appstoreconnect-build-status.test.ts tests/unit/testflight-iap-classifier.test.ts tests/unit/app-testflight-iap-snapshot.test.ts tests/unit/system-button-catalog.test.ts --runInBand` (4 suites / 24 tests).
+- Release-gate validation passed locally for this branch: `npm run lint` (0 errors, existing warnings only), `npm run test:ci` (220 suites / 2975 tests), `npm run build`, `npm run audit:prod` (0 vulnerabilities), and `node dist/cli/index.js --help`.
+
+## [0.7.2] - 2026-06-12
+
+**OpenSafari 0.7.2 is a release-process patch for the 0.7.x stability line.** It keeps the 0.7.1 runtime fixes intact while making the GitHub release validation workflow match the maintainer's manual npm publishing process.
+
+### Release workflow
+
+- **Tag pushes validate without publishing** — the `Publish` GitHub Actions workflow now runs the release gate (`npm ci`, lint, CI tests, build, production dependency audit, and dist verification) on `v*` tags but no longer runs `npm whoami` or `npm publish`.
+- **Manual npm publish preserved** — the workflow reports whether the package version is already present on npm and leaves publishing to the maintainer's local terminal after checks are green.
+- **Clearer failure notification** — release validation failures now describe the failed validation gate instead of implying an automated npm publish failure.
+
+### Runtime changes
+
+- No runtime code changes beyond the 0.7.1 stability, WebKit resilience, proxy recovery, long-session hygiene, tool-tier, and AX diagnostic fixes.
+
+### Validation
+
+- Local validation for the 0.7.1 release line passed before this patch: `npm test -- --runInBand` (216 suites / 2951 tests), `npm run build`, and `npm run audit:prod`.
+- The 0.7.2 tag validation workflow is expected to complete without invoking npm publish.
+
+## [0.7.1] - 2026-06-12
+
+**OpenSafari 0.7.1 is a stability and long-session performance release.** It reduces the default MCP tool catalog to a compact Tier 1 surface, hardens WebKit and proxy recovery so transient simulator/WebKit failures no longer cascade into page reloads or permanent Safari-tool outages, keeps the MCP server alive after isolated unhandled promise rejections, and bounds observability buffers and watchdog timers for long-running sessions. It also adds opt-in AX walker topology diagnostics for recoverable accessibility-tree failures.
+
+### MCP tool catalog and startup weight
+
+- **Default Tier 1 tool surface (#849)** — `MCPServer` now starts at Tier 1 by default instead of Tier 2, shrinking the default `tools/list` response from the broad advanced/native/Flutter catalog to the compact core automation surface. Users who need the previous broad surface can set `OPENSAFARI_TOOL_TIER=2` or start with `--all-tools`.
+- **Safe tier fallback (#849)** — tools missing an explicit `TOOL_TIERS` entry now fall back to Tier 3 rather than Tier 2, preventing newly-added tools from silently expanding the default schema payload. `tests/unit/tool-tier-drift.test.ts` enforces explicit tier assignment for every registered tool.
+- **Documentation alignment (#849)** — README tier tables and programmatic `createServer()` examples now document the Tier 1 default and `allTools` opt-in path.
+
+### WebKit and proxy resilience
+
+- **Heartbeat hysteresis (#851)** — WebKit heartbeat probes now tolerate consecutive transient failures before reconnecting. A single busy page, navigation gap, or temporarily absent target no longer immediately tears down the WebSocket.
+- **No implicit reload on reconnect (#851)** — reconnect no longer re-navigates to `lastUrl` by default, avoiding surprise page-state loss after a transient WebKit interruption. `renavigateOnReconnect` remains available as an explicit opt-in.
+- **Catch-safe disconnect handling (#851)** — fire-and-forget disconnect paths now catch and log teardown failures, preventing reconnect bookkeeping from becoming stuck or leaking process-level rejections.
+- **Supervised `ios_webkit_debug_proxy` restarts (#852)** — unexpected proxy exits now trigger bounded exponential-backoff restarts. Intentional stop and internal teardown paths suppress the supervisor, so manual shutdown remains deterministic while crash recovery becomes automatic.
+
+### MCP process reliability
+
+- **Unhandled rejection policy (#850)** — unhandled promise rejections are logged without calling `process.exit(1)`, so one leaked async rejection no longer terminates the MCP transport and all managed simulators. `uncaughtException` remains fatal.
+- **Regression coverage (#850, #851)** — unit coverage now verifies non-Error rejection logging, catch-safe WebKit teardown, heartbeat failure thresholds, failure-counter reset, and explicit reconnect re-navigation behavior.
+
+### Long-session observability hygiene
+
+- **Bounded HAR capture (#853)** — `HarCollector` now caps stored entries (`maxEntries`, default 2000), reports dropped requests, and skips `Network.getResponseBody` when encoded size already exceeds `maxBodySize`. This prevents long captures on chatty pages from growing without bound or fetching oversized bodies just to discard them.
+- **Bounded session log collectors (#853)** — console/error/network collectors now use a bounded LRU session map while preserving the `stop -> get` retrieval workflow.
+- **Timer liveness hygiene (#853)** — crash watcher, simulator pool monitors, and simulator memory monitor intervals are now `unref()`'d so watchdogs do not keep an otherwise-finished process alive.
+
+### AX diagnostics
+
+- **Opt-in walker topology on AX failures (#843)** — setting `OPENSAFARI_AX_DEBUG_ON_FAILURE=1` re-runs failed `dump`/`query` AX reads once with `--debug` and attaches parsed `walker_*` topology to `AccessibilityBridgeError`. The success path is unchanged, and failed debug recapture never masks the original error.
+
+### Validation
+
+- GitHub PR checks passed for #843 and #849–#853 (`lint`, `test`, `dependency-audit`, `build`; #851 also passed the headless Safari, Flutter, native HID, and WebView smoke suites).
+- Local integrated validation before merging to `main`: all six PRs merged cleanly in a scratch branch, `npm test -- --runInBand` passed (216 suites / 2951 tests), and `npm run build` completed successfully.
+
 ## [0.7.0] - 2026-06-04
 
 **OpenSafari 0.7.0 is a stateful-QA and observability release.** It lands the foundations for stateful mobile semantic QA (durable `AppSessionState` / `ScreenStateSnapshot` contracts, a verified semantic navigation controller, a shared settle/postcondition policy, and an upgraded scenario runner), and makes previously-silent automation failures actionable by attaching searched-tree diagnostics to not-found errors, surfacing semantics-activation and raw-coordinate fallbacks as warnings, and disclosing Flutter build mode and VM capabilities at connect time. All emitted diagnostics are redacted and length-bounded.

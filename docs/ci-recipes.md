@@ -646,12 +646,13 @@ See [docs/ci-integration.md](ci-integration.md#report-format-reference) for the 
 ## Specialized Recipes
 
 End-to-end, scenario-specific recipes that extend the generic flows above. Each
-recipe pins to a specific `opensafari-mcp` version so that teams can copy the
-manifest verbatim and know exactly which APIs it relies on.
+recipe lists the `opensafari-mcp` version or tool baseline it relies on so
+teams can copy the manifest with the right API expectations.
 
-| Recipe | Covers | Pinned version |
+| Recipe | Covers | Version / tool baseline |
 |---|---|---|
 | [Flutter + IAP (ko-KR)](recipes/flutter-iap-ko-kr.md) | boot → launch → deep-link → StoreKit purchase → ko-KR alert accept → receipt assert → backend verify | `opensafari-mcp@0.4.9` |
+| [TestFlight + IAP human loop](recipes/testflight-iap-human-loop.md) | snapshot → human Apple ID/2FA handoff → resume → StoreKit sheet → app/backend verification | `app_testflight_iap_snapshot` + human account handoff |
 
 ---
 
@@ -660,4 +661,4 @@ manifest verbatim and know exactly which APIs it relies on.
 - [CI Integration](ci-integration.md) — Output formats, exit-code gating, JUnit schema, native artifact collection
 - [Getting Started](getting-started.md) — Local setup guide
 - [Troubleshooting](troubleshooting.md) — General failure modes
-- [StoreKit Automation](storekit-automation.md) — Tool reference for `app_storekit_configure` / `app_storekit_test_session` / `app_storekit_receipt`
+- [StoreKit Automation](storekit-automation.md) — Current AX-driven StoreKit sheet pattern for simulator IAP QA

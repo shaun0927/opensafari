@@ -7,6 +7,7 @@ import { getFlutterVMClient } from '../flutter';
 import { ErrorCode, respondWithStructuredError } from '../errors';
 import { classifyMobileContext } from './mobile-context';
 import { probeToRawMobileContext, type RawMobileClassification } from './raw-mobile-context';
+import { getAccessibilityBridgeErrorDiagnostics } from '../native/accessibility-bridge';
 
 export interface VisibleNodeSummary {
   role?: string;
@@ -349,6 +350,7 @@ export function registerAppStateSnapshotTool(server: MCPServer): void {
         return respondWithStructuredError(
           code,
           err instanceof Error ? err.message : String(err),
+          getAccessibilityBridgeErrorDiagnostics(err),
         );
       }
     },

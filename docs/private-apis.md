@@ -156,9 +156,11 @@ that risk with three independent layers:
    runners every day at 06:00 UTC (and on any push touching
    `src/native/sim-hid-bridge.swift`). The sentinel probes
    `dlopen` for `SimulatorKit.framework` / `CoreSimulator.framework` and
-   checks for the `IndigoHIDMessage*` symbols. A failure on a scheduled run
-   opens (or updates) a `sentinel`-labelled GitHub issue so on-call sees it
-   on github.com without Slack access.
+   checks for the `IndigoHIDMessage*` symbols. After the full runner matrix
+   completes, a recognized framework or symbol contract failure opens (or
+   updates) one canonical `sentinel`-labelled GitHub issue. Harness, setup,
+   timeout, and empty-output failures still fail CI and retain artifacts, but
+   do not mutate issue state.
 2. **Fallback tiers stay wired** — Tier 1 activation does **not** remove
    `SimctlInputBackend`, `WebKitInputBackend`, or `AppleScriptInputBackend`.
    `getInputBackend()` only prefers `SimulatorKitHIDInputBackend` when the

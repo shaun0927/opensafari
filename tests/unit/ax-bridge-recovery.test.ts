@@ -165,10 +165,15 @@ describe('dumpTreeWithRecovery', () => {
   });
 
   test('persistent empty Flutter tree with failed reactivation surfaces a typed semantics-inactive error', async () => {
+    const topology = {
+      windowCount: 2,
+      overlayRolesSeen: 0,
+      winner: { depth: 1, role: 'AXGroup', label: null, score: 5, appSemanticsCount: 0 },
+    };
     const errors = [
       new AccessibilityBridgeError('empty 1', 'DEVICE_CONTENT_ROOT_EMPTY'),
       new AccessibilityBridgeError('empty 2', 'DEVICE_CONTENT_ROOT_EMPTY'),
-      new AccessibilityBridgeError('empty 3', 'DEVICE_CONTENT_ROOT_EMPTY'),
+      new AccessibilityBridgeError('empty 3', 'DEVICE_CONTENT_ROOT_EMPTY', topology),
     ];
     const { bridge } = makeBridge(errors);
 
@@ -190,6 +195,7 @@ describe('dumpTreeWithRecovery', () => {
     });
     expect(caught?.message).toContain('com.example.flutter');
     expect(caught?.message).toContain('Original error: empty 3');
+    expect(caught?.topology).toEqual(topology);
     expect(caught?.recovery).toMatchObject({
       attempts: 3,
       recovered: false,

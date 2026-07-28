@@ -11,7 +11,7 @@ const pkg = require('../package.json');
 
 const program = new Command()
   .name('opensafari')
-  .description('iOS Safari automation MCP server via Xcode Simulator')
+  .description('MCP-native automation and QA for Safari, native iOS, Flutter, and WebViews')
   .version(pkg.version);
 
 // --- serve ---

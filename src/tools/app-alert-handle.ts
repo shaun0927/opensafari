@@ -3,7 +3,10 @@ import { SimulatorManager } from '../simulator';
 import { getSessionManager } from '../session-manager';
 import { getInputBackend } from './native-input-backend';
 import { runInputOp } from './native-input-utils';
-import { getAccessibilityBridge } from '../native/accessibility-bridge';
+import {
+  getAccessibilityBridge,
+  getAccessibilityBridgeErrorDiagnostics,
+} from '../native/accessibility-bridge';
 import type { AXNode } from '../native/ax-types';
 import { ErrorCode, respondWithStructuredError } from '../errors';
 
@@ -438,6 +441,7 @@ export function registerAppAlertHandleTool(server: MCPServer): void {
           return respondWithStructuredError(
             ErrorCode.ALERT_NO_EFFECT,
             `AX label-match failed: ${message}`,
+            getAccessibilityBridgeErrorDiagnostics(err),
           );
         }
       }

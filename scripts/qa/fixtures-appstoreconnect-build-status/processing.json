@@ -1,0 +1,14 @@
+{
+  "data": [
+    {
+      "type": "builds",
+      "id": "build-processing",
+      "attributes": {
+        "version": "1.2.3",
+        "buildNumber": "45",
+        "processingState": "PROCESSING",
+        "uploadedDate": "2026-06-23T10:00:00Z"
+      }
+    }
+  ]
+}

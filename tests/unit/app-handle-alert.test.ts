@@ -1,6 +1,7 @@
 import { MCPServer } from '../../src/mcp-server';
 import { registerAppHandleAlertTool, buildAlertScript, _internal } from '../../src/tools/app-handle-alert';
 import type { AXNode } from '../../src/native/ax-types';
+import { AccessibilityBridgeError } from '../../src/native/accessibility-bridge';
 import mapsKoFixture from '../fixtures/ax-trees/maps-ko-location.json';
 import photosEnFixture from '../fixtures/ax-trees/photos-en-permission.json';
 import inAppOkFixture from '../fixtures/ax-trees/in-app-ok.json';
@@ -8,14 +9,18 @@ import inAppOkFixture from '../fixtures/ax-trees/in-app-ok.json';
 const mockDumpTree = jest.fn();
 const mockPress = jest.fn();
 
-jest.mock('../../src/native/accessibility-bridge', () => ({
-  getAccessibilityBridge: jest.fn(() => ({
-    dumpTree: mockDumpTree,
-    press: mockPress,
-    query: jest.fn(),
-    inspect: jest.fn(),
-  })),
-}));
+jest.mock('../../src/native/accessibility-bridge', () => {
+  const actual = jest.requireActual('../../src/native/accessibility-bridge');
+  return {
+    ...actual,
+    getAccessibilityBridge: jest.fn(() => ({
+      dumpTree: mockDumpTree,
+      press: mockPress,
+      query: jest.fn(),
+      inspect: jest.fn(),
+    })),
+  };
+});
 
 jest.mock('../../src/session-manager', () => ({
   getSessionManager: jest.fn().mockReturnValue({
@@ -222,6 +227,32 @@ describe('app_handle_alert tool', () => {
     expect(body.reason).toBe('no_candidate_button');
     expect(body.visibleButtons).toContain('OK');
     expect(body.fallbackAvailable).toEqual(expect.arrayContaining(['permission_reset', 'simulator_reboot']));
+  });
+
+  test('diagnostics preserve AX topology when the initial scan fails', async () => {
+    const topology = {
+      windowCount: 2,
+      overlayRolesSeen: 0,
+      winner: { depth: 1, role: 'AXGroup', label: null, score: 5, appSemanticsCount: 0 },
+    };
+    mockDumpTree.mockRejectedValueOnce(
+      new AccessibilityBridgeError(
+        'No descendant subtree contains app semantics',
+        'DEVICE_CONTENT_ROOT_EMPTY',
+        topology,
+      ),
+    );
+
+    const handler = server.getToolHandler('app_handle_alert')!;
+    const result = await handler('s', {
+      action: 'accept',
+      keyboardFallback: false,
+    });
+    const body = parseResult(result as { content: Array<{ type: string; text: string }> });
+
+    expect(body.reason).toBe('ax_scan_timeout');
+    expect(body.axBridgeCode).toBe('DEVICE_CONTENT_ROOT_EMPTY');
+    expect(body.axTopology).toEqual(topology);
   });
 
   test('diagnostics: suggestedLabelsToAdd lists non-corpus labels', async () => {

@@ -4,8 +4,8 @@ OpenSafari's `debug_bundle_collect` MCP tool composes existing debugging
 helpers (screenshot, AX tree summary, system/app logs, fresh crash
 reports, Flutter route, action trace) into a single compact JSON payload.
 The intent is to make a failed semantic action *explainable without
-manually re-running the simulator flow* (#795 SSOT P1 — Mobile debugging
-bundle).
+manually re-running the simulator flow*, following the evidence contract in
+[Product Direction](product-direction.md).
 
 ## Schema (v1)
 
@@ -91,8 +91,9 @@ carry evidence.
 
 ## AX walker topology on failure (#842)
 
-When an AX read fails on a recoverable path (`DEVICE_CONTENT_ROOT_EMPTY`
-or `BRIDGE_EXEC_FAILED`) and `OPENSAFARI_AX_DEBUG_ON_FAILURE=1` is set,
+When an AX read fails with `DEVICE_CONTENT_ROOT_EMPTY`, `AX_TIMEOUT`,
+`BRIDGE_EXEC_FAILED`, or `AX_ERROR` and
+`OPENSAFARI_AX_DEBUG_ON_FAILURE=1` is set,
 the accessibility-bridge wrapper re-invokes the failing `dump`/`query`
 **once** with `--debug` and parses the `walker_*` JSON-line stderr
 events the Swift bridge emits (#660 PR C / #691). The parsed summary is
@@ -115,6 +116,9 @@ sheet the content-root scorer discarded (`overlayRolesSeen > 0`,
 Opt-in and failure-only by design: the success path never passes
 `--debug`, so a healthy `dump` produces no extra stderr. A failed
 re-capture is best-effort and never masks the original error.
+Non-recoverable failures such as device resolution or permission denial do not
+trigger a second bridge process. Affected MCP tools preserve the original AX
+code as `axBridgeCode` and the parsed summary as `axTopology`.
 
 ## Artifacts
 

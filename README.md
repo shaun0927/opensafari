@@ -1,12 +1,12 @@
 <h1 align="center">OpenSafari</h1>
 
 <p align="center">
-  <b>Smart. Fast. Parallel.</b><br>
-  iOS Safari automation MCP server via Xcode Simulator.
+  <b>Portable. Semantic. Parallel.</b><br>
+  MCP-native automation, debugging, and QA for real iOS Simulator workflows.
 </p>
 
 <p align="center">
-  <b>Headless mobile QA automation</b> — drive real Safari, Flutter, and native iOS apps on Xcode Simulator without stealing your mouse or requiring Simulator.app focus.
+  Drive real Safari, native iOS, Flutter, and WebView flows with structured evidence, verified actions, and multi-simulator orchestration. Bounded host macOS/TestFlight QA is available as an adjacent tool surface.
 </p>
 
 <p align="center">
@@ -17,7 +17,7 @@
 
 ---
 
-### How OpenSafari compares
+### How the Safari backend compares
 
 |  | OpenSafari | Playwright WebKit | BrowserStack | Manual Testing |
 |---|:---:|:---:|:---:|:---:|
@@ -30,7 +30,7 @@
 | **Cost** | **free** (Xcode) | free | $29+/mo | device cost |
 | **iOS-specific QA** | **auto-detect** (zoom, safe area, keyboard) | none | manual | manual |
 
-> **tl;dr** — OpenSafari controls the **real Safari** inside Xcode Simulator via WebKit Remote Debugging Protocol — the same way [OpenChrome](https://github.com/shaun0927/openchrome) controls real Chrome via CDP. No middleware, no bundled browsers. Just direct protocol access to the actual Safari.app.
+> **tl;dr** — OpenSafari uses direct platform integrations instead of a bundled browser or WebDriver layer: WebKit Remote Debugging for Safari/WebViews, AX for semantic native UI, optional Flutter VM Service features, and `simctl`/SimulatorKit for simulator lifecycle and input.
 
 ---
 
@@ -71,7 +71,13 @@ Long-running MCP sessions are soak-tested nightly — see [memory-soak workflow]
 
 ## What is OpenSafari?
 
-Imagine testing your e-commerce site on **iPhone 17e, iPhone 17, iPhone 17 Pro Max, and iPad** — all at the same time, already logged in, with an AI agent that automatically finds iOS-specific bugs. That's OpenSafari.
+OpenSafari is a portable MCP runtime for semantic Apple-platform QA. Its core is
+real iOS Simulator automation across Safari, native apps, Flutter, and WebViews;
+the product contract is verified state and useful evidence rather than raw input
+dispatch. See [Product Direction](docs/product-direction.md) for the canonical
+scope, stability vocabulary, and current hardening priorities.
+
+Imagine testing your e-commerce site on **iPhone 17e, iPhone 17, iPhone 17 Pro Max, and iPad** — all at the same time, already logged in, with an AI agent that automatically finds iOS-specific bugs. That's one OpenSafari workflow.
 
 ```
 You: Check our checkout flow for mobile issues across all iPhone sizes
@@ -96,55 +102,40 @@ AI:  [4 parallel simulators, all devices simultaneously]
 
 ## Core Architecture
 
-OpenSafari follows the same direct-protocol philosophy as OpenChrome:
+OpenSafari keeps stable MCP contracts above several direct Apple-platform
+backends:
 
 ```
-OpenChrome:  CDPClient → Chrome DevTools Protocol → Real Chrome
-OpenSafari:  SafariClient → WebKit Remote Debugging Protocol → Real Safari in Simulator
+MCP clients
+    -> tool contracts, structured errors, and safety gates
+    -> sessions, orchestration, settle policies, and evidence
+    -> iOS Simulator surfaces
+         - Safari / WebView: WebKit Remote Debugging
+         - Native UI: AX bridge
+         - Flutter: AX plus optional VM Service
+         - Lifecycle / input: simctl and SimulatorKit
+    -> adjacent host macOS surfaces
+         - AX inspection and bounded TestFlight workflows
 ```
 
-No middleware. No bundled browsers. Direct connection.
+No bundled browser and no WebDriver re-platforming. The selected backend and
+fallback path are observable, while agent-facing tools remain semantic and
+portable.
 
 ```
-Claude Code / AI Agent (MCP Client)
-    │
-    │  JSON-RPC (stdio / HTTP)
-    ▼
-┌─────────────────────────────────────┐
-│         OpenSafari MCP Server       │
-│                                     │
-│  ┌─────────────┐  ┌──────────────┐  │
-│  │ Simulator   │  │ Safari       │  │
-│  │ Manager     │  │ Client       │  │
-│  │ (simctl)    │  │ (WebKit      │  │
-│  │             │  │  Protocol)   │  │
-│  └──────┬──────┘  └──────┬───────┘  │
-│         │                │          │
-│    boot/shutdown    navigate/click   │
-│    rotate/appear    screenshot       │
-│    multi-device     DOM/JS/cookies   │
-│         │                │          │
-│  ┌──────▼────────────────▼───────┐  │
-│  │     Xcode Simulator(s)       │  │
-│  │  ┌────────┐  ┌────────┐      │  │
-│  │  │ iPhone │  │ iPhone │ ...  │  │
-│  │  │ SE     │  │ 16 PM  │      │  │
-│  │  │ Safari │  │ Safari │      │  │
-│  │  └────────┘  └────────┘      │  │
-│  └───────────────────────────────┘  │
-│                                     │
-│  ┌─────────────────────────────┐    │
-│  │  Shared Infrastructure      │    │
-│  │  (from OpenChrome)          │    │
-│  │  • Security (sanitizer,     │    │
-│  │    domain guard, audit)     │    │
-│  │  • Watchdog (event loop,    │    │
-│  │    disk, health endpoint)   │    │
-│  │  • Orchestration (workflow  │    │
-│  │    engine, parallel workers)│    │
-│  │  • Session persistence      │    │
-│  └─────────────────────────────┘    │
-└─────────────────────────────────────┘
+AI agent / MCP client (stdio or HTTP)
+                  |
+         OpenSafari MCP server
+                  |
+    +-------------+--------------+
+    |             |              |
+ WebKit          AX       Flutter VM / simctl
+    |             |              |
+ Safari     Native / Flutter   Simulator fleet
+ WebViews       semantics       lifecycle/input
+                  |
+        redacted artifacts, traces,
+        screenshots, logs, and reports
 ```
 
 ---
@@ -181,12 +172,12 @@ Log in once, test forever. Cookies and localStorage are extracted directly from 
 ```
 # First time: login captured from real Safari
 opensafari auth save --site myapp.com
-  → Exports cookies via WebKit Protocol Network.getAllCookies
+  → Exports cookies via WebKit Page.getCookies
   → Saves to ~/.opensafari/auth/myapp.json
 
 # Every subsequent run: auto-restored
 opensafari serve
-  → Injects cookies via Network.setCookie into each simulator's Safari
+  → Injects cookies via Page.setCookie into each simulator's Safari
   → All simulators start already logged in
 ```
 
@@ -243,7 +234,7 @@ OpenSafari shares battle-tested infrastructure with [OpenChrome](https://github.
 
 ## Tools
 
-### Core Tools (Tier 1)
+### Safari/Web Tools (Tier 1)
 
 | Tool | Description |
 |------|-------------|
@@ -256,7 +247,7 @@ OpenSafari shares battle-tested infrastructure with [OpenChrome](https://github.
 | `query_dom` | CSS selector queries with element details |
 | `javascript` | Execute JavaScript in page context via `Runtime.evaluate` |
 | `inspect` | Element CSS, accessibility, and layout inspection |
-| `cookies` | Get/set/clear real Safari cookies via `Network` domain |
+| `cookies` | Get/set/clear real Safari cookies through WebKit page cookie commands |
 
 ### Device Management (Tier 1)
 
@@ -282,7 +273,28 @@ OpenSafari shares battle-tested infrastructure with [OpenChrome](https://github.
 | `app_reset` | Reset app state: terminate, clear permissions, uninstall |
 | `app_notes_paste_and_tap_url` | Reviewer-equivalent Universal Link tap: launches Notes.app, paste-injects the URL, waits for iOS Data Detector to produce an `AXLink`, and taps it — see [docs/recipes/universal-link-channels.md](docs/recipes/universal-link-channels.md) |
 
-### Auth Tools (Tier 3)
+### Semantic Mobile QA (Tier 2)
+
+| Tool | Description |
+|------|-------------|
+| `app_state_snapshot` | Read current device, foreground app, AX, Flutter, and recovery hints without mutating state |
+| `app_tree` / `app_query` | Inspect and query native or Flutter semantics |
+| `app_tap_element` / `app_type_element` | Perform element-targeted actions with backend and verification evidence |
+| `app_wait_for` / `app_assert_element` | Wait for or assert semantic postconditions with stability windows |
+| `app_goto_screen` | Navigate through verified semantic strategies instead of treating dispatch as success |
+| `app_pop_until` / `app_dismiss_overlay` | Recover navigation and overlays with bounded, observable attempts |
+| `app_alert_handle` / `app_handle_alert` | Handle system and app alerts with localized semantic matching and fallbacks |
+| `debug_bundle_collect` | Collect compact, redacted screenshot, AX, log, crash, route, and action-trace evidence |
+
+### Flutter and WebView (Tier 2)
+
+| Tool | Description |
+|------|-------------|
+| `flutter_connect` / `flutter_get_route` | Attach to optional debug/profile VM Service state and read route data |
+| `qa_flutter_semantics` | Audit selector quality and Flutter semantics without requiring VM Service |
+| `app_webview_connect` / `set_active_context` | Discover a native-app WebView and switch WebKit tools into or out of that target |
+
+### Browser Auth Persistence (Tier 3)
 
 | Tool | Description |
 |------|-------------|
@@ -290,7 +302,15 @@ OpenSafari shares battle-tested infrastructure with [OpenChrome](https://github.
 | `auth_restore` | Restore saved auth state into a simulator |
 | `auth_list` | List saved auth profiles |
 
-### Parallel & Orchestration (Tier 2)
+### Native Test Auth and Identity Controls (Tier 2)
+
+| Tool | Description |
+|------|-------------|
+| `auth_save_native` / `auth_restore_native` | Capture and restore local test-app container/keychain state under high-risk gating |
+| `auth_otp_fetch` | Fetch OTPs from explicitly configured developer/test inbox adapters |
+| `app_biometric` | Drive simulator biometric enrollment and match/nonmatch test states |
+
+### Parallel and Orchestration (Tier 3)
 
 | Tool | Description |
 |------|-------------|
@@ -298,8 +318,20 @@ OpenSafari shares battle-tested infrastructure with [OpenChrome](https://github.
 | `batch_execute` | Run JS across all simulators in parallel |
 | `batch_navigate` | Open same URL on all devices simultaneously |
 | `cross_viewport_compare` | Side-by-side visual comparison across devices |
+| `barrier_wait` / `barrier_status` | Coordinate named workflow steps across a simulator fleet |
+| `assert_all_devices` / `compare_devices` | Produce per-device assertions and comparable cross-device evidence |
+| `run_scenario` | Execute browser v1 or stateful mobile semantic v2 scenarios |
 
-### iOS QA Engine (Tier 3)
+### Host macOS QA (Adjacent Tier 2)
+
+| Tool | Description |
+|------|-------------|
+| `mac_app_tree` / `mac_app_query` | Inspect a host macOS application's AX tree without simulator `deviceId` semantics |
+| `mac_app_tap_element` / `mac_app_screenshot` | Perform bounded semantic host actions and capture evidence |
+| `mac_testflight_snapshot` | Classify host TestFlight state without entering credentials |
+| `mac_testflight_install_update_open` | Press only visible safe Install/Update/Open actions; account and 2FA prompts remain human blockers |
+
+### iOS QA Detectors (Tier 2)
 
 | Tool | Description |
 |------|-------------|
@@ -308,7 +340,13 @@ OpenSafari shares battle-tested infrastructure with [OpenChrome](https://github.
 | `qa_safe_area` | Check content behind notch/home indicator |
 | `qa_keyboard_overlap` | Detect fixed elements hidden by real keyboard |
 | `qa_dark_mode` | Compare light vs dark mode rendering |
+
+### Full Audits (Tier 3)
+
+| Tool | Description |
+|------|-------------|
 | `qa_full_audit` | Run all QA checks and generate report |
+| `qa_flutter_full_audit` | Orchestrate Flutter-specific accessibility, layout, orientation, and keyboard checks |
 
 ---
 
@@ -701,19 +739,18 @@ tool call.
 
 ## Relationship to OpenChrome
 
-OpenSafari is the **Safari/iOS counterpart** to [OpenChrome](https://github.com/shaun0927/openchrome). Same philosophy, same architecture — different browser.
+OpenSafari began as the Safari/iOS counterpart to [OpenChrome](https://github.com/shaun0927/openchrome) and retains the same direct-protocol, MCP-native philosophy. Its current scope is broader than a browser client because iOS QA crosses Safari, native UI, Flutter, WebViews, simulator lifecycle, and bounded host macOS workflows.
 
 | | OpenChrome | OpenSafari |
 |---|---|---|
 | **Browser** | Real Chrome | Real Safari (in Simulator) |
-| **Protocol** | Chrome DevTools Protocol (CDP) | WebKit Remote Debugging Protocol |
-| **Client** | CDPClient (puppeteer-core) | SafariClient (WebKit Protocol) |
-| **Execution** | `chrome --remote-debugging-port` | `xcrun simctl` + WebKit debug socket |
-| **Use Case** | Desktop web automation | Mobile web QA & debugging |
-| **Parallel** | N tabs in 1 Chrome | N simulators, each with Safari |
-| **Login** | Real Chrome sessions | Real Safari sessions |
+| **Primary protocol** | Chrome DevTools Protocol (CDP) | WebKit Remote Debugging plus AX/Flutter/simulator backends |
+| **Execution** | Real Chrome process | Real Xcode Simulator apps; adjacent host macOS AX workflows |
+| **Use Case** | Desktop web automation | Apple-platform mobile automation, debugging, and parallel QA |
+| **Parallel** | N tabs in 1 Chrome | N simulator devices with per-device state and artifacts |
+| **Login** | Real Chrome sessions | Safari and local native test profiles with explicit safety boundaries |
 
-Together, they provide **complete browser coverage** — Chrome for desktop, Safari for iOS — both controlled by AI agents through MCP with direct protocol connections. No middleware, no bundled browsers.
+Together, they provide complementary real-browser coverage for desktop Chrome and iOS Safari. This is not a claim of Android, physical-device, every-browser, or every-Apple-platform coverage.
 
 ---
 
@@ -721,15 +758,19 @@ Together, they provide **complete browser coverage** — Chrome for desktop, Saf
 
 | Document | Description |
 |----------|-------------|
+| [Product Direction](docs/product-direction.md) | Canonical scope, principles, stability vocabulary, priorities, and non-goals |
 | [Getting Started](docs/getting-started.md) | Setup guide and first steps |
-| [API Reference](docs/api-reference.md) | Programmatic API documentation |
+| [API Reference](docs/api-reference.md) | Core/legacy programmatic reference; registered MCP schemas remain the complete tool authority |
+| [Mobile Semantic QA](docs/mobile-semantic-qa.md) | Runtime contract for state, semantic actions, settle policies, and scenarios |
+| [Debug Bundle](docs/debug-bundle.md) | Compact redacted failure-evidence schema and auto-attach behavior |
 | [Troubleshooting](docs/troubleshooting.md) | Common issues and solutions |
 | [CI Integration](docs/ci-integration.md) | Using OpenSafari in CI pipelines |
 | [CI Recipes](docs/ci-recipes.md) | Copy-paste GitHub Actions, Buildkite, and GitLab CI recipes |
 | [Memory Budget](docs/memory-budget.md) | Per-cache retention budgets and eviction policies |
 | [Diagnose Tool Reference](docs/diagnose.md) | `diagnose` output schema and memory block reference |
-| [RFC: Native App Backend](docs/rfc-native-app-backend.md) | Architecture RFC for native-app automation in Xcode Simulator |
-| [Native App Tool Surface](docs/native-app-tool-surface.md) | Proposed MCP tool surface for native-app automation |
+| [TestFlight / IAP Direction](docs/testflight-iap-automation.md) | Safe simulator and host TestFlight classification boundaries |
+| [RFC: Native App Backend](docs/rfc-native-app-backend.md) | Historical architecture proposal retained as decision context |
+| [Native App Tool Surface](docs/native-app-tool-surface.md) | Historical tool-surface proposal retained as decision context |
 | [WebKit Protocol Research](docs/webkit-protocol-research.md) | WebKit Remote Debugging Protocol research notes |
 
 ---

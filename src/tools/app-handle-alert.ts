@@ -2,7 +2,11 @@ import { MCPServer } from '../mcp-server';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { resolveDeviceId } from './native-app-helpers';
-import { getAccessibilityBridge } from '../native/accessibility-bridge';
+import {
+  getAccessibilityBridge,
+  getAccessibilityBridgeErrorDiagnostics,
+  type AxErrorDiagnostics,
+} from '../native/accessibility-bridge';
 import type { AXNode } from '../native/ax-types';
 import {
   findAlertCandidates,
@@ -113,6 +117,8 @@ interface HandleAlertResponse {
    * otherwise. Always present in the JSON response.
    */
   axRecovered?: boolean;
+  axBridgeCode?: string;
+  axTopology?: AxErrorDiagnostics['axTopology'];
 }
 
 function summarizeCandidate(c: AlertCandidate): AlertSummary {
@@ -233,14 +239,22 @@ async function tryAxScan(
   deviceId: string,
 ): Promise<
   | { candidate: AlertCandidate; tree: AXNode }
-  | { error: 'ax_scan_timeout' | 'no_candidate_button'; tree: AXNode | null }
+  | {
+      error: 'ax_scan_timeout' | 'no_candidate_button';
+      tree: AXNode | null;
+      diagnostics?: AxErrorDiagnostics;
+    }
 > {
   const bridge = getAccessibilityBridge();
   let tree: AXNode;
   try {
     tree = await bridge.dumpTree({ deviceId });
-  } catch {
-    return { error: 'ax_scan_timeout', tree: null };
+  } catch (err) {
+    return {
+      error: 'ax_scan_timeout',
+      tree: null,
+      diagnostics: getAccessibilityBridgeErrorDiagnostics(err),
+    };
   }
 
   const deviceWidth =
@@ -256,8 +270,12 @@ async function tryAxScan(
     if (!press.ok) {
       return { error: 'no_candidate_button', tree };
     }
-  } catch {
-    return { error: 'no_candidate_button', tree };
+  } catch (err) {
+    return {
+      error: 'no_candidate_button',
+      tree,
+      diagnostics: getAccessibilityBridgeErrorDiagnostics(err),
+    };
   }
 
   return { candidate, tree };
@@ -561,6 +579,7 @@ export function registerAppHandleAlertTool(server: MCPServer): void {
       let finalTree: AXNode | null = null;
       let dismissedCount = 0;
       let remainingCandidates: AlertSummary[] = [];
+      let axDiagnostics: AxErrorDiagnostics = {};
 
       const finalize = async (
         body: HandleAlertResponse,
@@ -568,6 +587,7 @@ export function registerAppHandleAlertTool(server: MCPServer): void {
       ) => {
         body.dismissedCount = dismissedCount;
         body.remainingCandidates = remainingCandidates;
+        Object.assign(body, axDiagnostics);
         // Only probe AX recovery when we actually dismissed something.
         // A diagnostics-only response (no dismissal attempted) leaves
         // `axRecovered: false` since there is nothing to recover from.
@@ -578,6 +598,9 @@ export function registerAppHandleAlertTool(server: MCPServer): void {
       // Tier 1: AX-scan
       strategyAttempted.push('ax-scan');
       const axResult = await tryAxScan(action, deviceId);
+      if ('diagnostics' in axResult && axResult.diagnostics) {
+        axDiagnostics = axResult.diagnostics;
+      }
 
       if ('candidate' in axResult) {
         finalTree = axResult.tree;

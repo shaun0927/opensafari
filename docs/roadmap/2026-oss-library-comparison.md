@@ -2,6 +2,10 @@
 
 _Last reviewed: 2026-05-14 KST. Source set: official project docs/repos where available._
 
+> This is a dated comparison and decision-input artifact, not the current
+> roadmap. Use [Product Direction](../product-direction.md) for canonical scope,
+> capability status, and active priorities.
+
 ## Scope and current OpenSafari baseline
 
 OpenSafari is a macOS/iOS-Simulator focused MCP server for iOS Safari, WebKit Remote Debugging Protocol, native Accessibility/SimulatorKit input, and Flutter VM Service inspection. The repository already contains several directionally important surfaces:

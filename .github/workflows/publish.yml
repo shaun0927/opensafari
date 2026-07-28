@@ -1,4 +1,4 @@
-name: Publish
+name: Release Validation
 
 on:
   push:
@@ -6,10 +6,9 @@ on:
 
 permissions:
   contents: read
-  id-token: write
 
 jobs:
-  publish:
+  validate:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -40,58 +39,33 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Resolved $NAME@$VERSION"
 
-      - name: Check if version already published (idempotency)
-        id: published
+      - name: Report npm publication status
         run: |
           set -euo pipefail
-          # A tag re-push, a manual local publish, or a re-run must not fail the
-          # job: if the exact version is already on the registry, publishing is a
-          # no-op and the job should report honest green instead of npm's
-          # confusing E404 ("not in this registry") on the duplicate PUT.
+          # Tag pushes are release validation only. Maintainers publish manually
+          # from a local terminal after GitHub checks are green. Do not run
+          # npm auth checks or npm publish from this workflow.
           if npm view "${{ steps.pkg.outputs.name }}@${{ steps.pkg.outputs.version }}" version >/dev/null 2>&1; then
-            echo "already=true" >> "$GITHUB_OUTPUT"
-            echo "::notice::${{ steps.pkg.outputs.name }}@${{ steps.pkg.outputs.version }} is already published — skipping npm publish."
+            echo "::notice::${{ steps.pkg.outputs.name }}@${{ steps.pkg.outputs.version }} is already published on npm."
           else
-            echo "already=false" >> "$GITHUB_OUTPUT"
-            echo "${{ steps.pkg.outputs.name }}@${{ steps.pkg.outputs.version }} not on registry yet — will publish."
+            echo "::notice::${{ steps.pkg.outputs.name }}@${{ steps.pkg.outputs.version }} is not published on npm yet. Publish manually after checks pass."
           fi
-
-      - name: Verify npm auth (preflight)
-        if: steps.published.outputs.already == 'false'
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          set -euo pipefail
-          # npm masks authorization failures on publish as an E404 ("not in this
-          # registry"), which previously made a broken/expired NPM_TOKEN look
-          # like a missing package. Fail here with an actionable message instead.
-          if ! WHO=$(npm whoami 2>/dev/null); then
-            echo "::error::NPM_TOKEN failed authentication (npm whoami). Rotate it: the secret must be an automation token with publish rights to ${{ steps.pkg.outputs.name }}."
-            exit 1
-          fi
-          echo "Authenticated to npm as ${WHO}"
-
-      - name: Publish to npm
-        if: steps.published.outputs.already == 'false'
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --provenance --access public
 
   notify:
-    # Surface publish failures the same way the sentinels do, so a broken
-    # release pipeline (e.g. an expired NPM_TOKEN) cannot sit red unnoticed.
-    needs: publish
+    # Surface release validation failures the same way the sentinels do, so a
+    # broken tag validation run cannot sit red unnoticed. npm publishing is
+    # intentionally manual and is not performed by this workflow.
+    needs: validate
     if: failure()
     uses: ./.github/workflows/_sentinel-notify.yml
     with:
-      title: 'npm publish failed'
+      title: 'release validation failed'
       runner: 'macos-latest'
       run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       body: |
-        The Publish workflow failed for a pushed v* tag.
-        Common cause: NPM_TOKEN expired or lacks publish rights (npm reports
-        this as a misleading E404). Check the "Verify npm auth (preflight)"
-        and "Publish to npm" steps on the workflow run.
+        The release validation workflow failed for a pushed v* tag.
+        npm publishing is intentionally manual; inspect the validation, build,
+        audit, or dist verification step that failed before publishing locally.
       channel: ${{ vars.SENTINEL_CHANNEL || '#opensafari-sentinels' }}
     secrets:
       webhook-url: ${{ secrets.SENTINEL_WEBHOOK_URL }}

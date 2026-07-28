@@ -56,12 +56,25 @@ const CORESIMULATOR_PATHS = [
   '/Applications/Xcode.app/Contents/Developer/Library/PrivateFrameworks/CoreSimulator.framework/CoreSimulator',
 ];
 
-const FAKE_UDID = '00000000-0000-0000-0000-000000000000';
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
+const BRIDGE_TIMEOUT_MS = 25_000;
+const LIVE_AX_TEST_TIMEOUT_MS = 70_000;
+const AX_RETRY_DELAY_MS = 1_000;
+const RETRYABLE_AX_CODES = new Set([
+  'SIMULATOR_NOT_RUNNING',
+  'DEVICE_CONTENT_ROOT_EMPTY',
+  'AX_TIMEOUT',
+  'BRIDGE_EXEC_FAILED',
+  'AX_ERROR',
+]);
 
 type SpawnResult = {
   exitCode: number;
   signal: NodeJS.Signals | null;
+  killed: boolean;
+  timedOut: boolean;
+  errorCode?: string;
+  errorMessage?: string;
   stdout: string;
   stderr: string;
 };
@@ -80,14 +93,28 @@ function findBinaryOrSource(names: string[]): string | null {
   return null;
 }
 
-async function spawnBridge(binary: string, args: string[]): Promise<SpawnResult> {
+async function spawnBridge(
+  binary: string,
+  args: string[],
+  timeoutMs = BRIDGE_TIMEOUT_MS,
+): Promise<SpawnResult> {
   const useInterpreter = binary.endsWith('.swift');
   const cmd = useInterpreter ? 'swift' : binary;
   const cmdArgs = useInterpreter ? [binary, ...args] : args;
 
   try {
-    const { stdout, stderr } = await execFileAsync(cmd, cmdArgs, { timeout: 30_000 });
-    return { exitCode: 0, signal: null, stdout, stderr };
+    const { stdout, stderr } = await execFileAsync(cmd, cmdArgs, {
+      timeout: timeoutMs,
+      killSignal: 'SIGKILL',
+    });
+    return {
+      exitCode: 0,
+      signal: null,
+      killed: false,
+      timedOut: false,
+      stdout,
+      stderr,
+    };
   } catch (err) {
     const e = err as {
       code?: number | string;
@@ -95,14 +122,113 @@ async function spawnBridge(binary: string, args: string[]): Promise<SpawnResult>
       stdout?: string;
       stderr?: string;
       killed?: boolean;
+      message?: string;
     };
     return {
       exitCode: typeof e.code === 'number' ? e.code : 1,
       signal: e.signal ?? null,
+      killed: e.killed === true,
+      timedOut: e.killed === true,
+      errorCode: typeof e.code === 'string' ? e.code : undefined,
+      errorMessage: e.message,
       stdout: e.stdout ?? '',
       stderr: e.stderr ?? '',
     };
   }
+}
+
+function processDetails(result: SpawnResult): string {
+  return [
+    `exitCode=${result.exitCode}`,
+    `signal=${result.signal ?? 'none'}`,
+    `killed=${result.killed}`,
+    `errorCode=${result.errorCode ?? 'none'}`,
+    `errorMessage=${result.errorMessage ?? 'none'}`,
+    `stdout=${result.stdout.trim() || '<empty>'}`,
+    `stderr=${result.stderr.trim() || '<empty>'}`,
+  ].join(' ');
+}
+
+function assertProcessCompleted(result: SpawnResult, label: string): void {
+  if (result.timedOut) {
+    throw new Error(
+      `[HARNESS_TIMEOUT] ${label} exceeded ${BRIDGE_TIMEOUT_MS} ms. ${processDetails(result)}`,
+    );
+  }
+  if (result.killed) {
+    throw new Error(`[HARNESS_KILLED] ${label} was killed. ${processDetails(result)}`);
+  }
+  if (result.signal) {
+    throw new Error(
+      `[HARNESS_SIGNAL] ${label} exited via ${result.signal}. ${processDetails(result)}`,
+    );
+  }
+  if (result.errorCode && result.errorCode !== '1') {
+    throw new Error(
+      `[HARNESS_SPAWN_FAILED] ${label} could not execute. ${processDetails(result)}`,
+    );
+  }
+}
+
+function parseJsonOutput(result: SpawnResult, label: string): unknown {
+  assertProcessCompleted(result, label);
+  const body = result.stdout.trim();
+  if (!body) {
+    throw new Error(`[HARNESS_EMPTY_OUTPUT] ${label} produced no stdout. ${processDetails(result)}`);
+  }
+  try {
+    return JSON.parse(body) as unknown;
+  } catch (err) {
+    throw new Error(
+      `[HARNESS_INVALID_JSON] ${label} produced non-JSON stdout. ` +
+        `parseError=${(err as Error).message} ${processDetails(result)}`,
+    );
+  }
+}
+
+function structuredErrorCode(result: SpawnResult): string | undefined {
+  try {
+    const parsed = JSON.parse(result.stdout) as { code?: unknown };
+    return typeof parsed.code === 'string' ? parsed.code : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function ensureSimulatorAppRunning(): Promise<boolean> {
+  try {
+    await execFileAsync('open', ['-g', '-j', '-a', 'Simulator'], { timeout: 10_000 });
+  } catch {
+    // The process may already be starting; the bounded pgrep loop below is authoritative.
+  }
+
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    try {
+      const { stdout } = await execFileAsync('pgrep', ['-x', 'Simulator'], { timeout: 2_000 });
+      if (stdout.trim()) return true;
+    } catch {
+      // Keep waiting until the launch budget is exhausted.
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, 500));
+  }
+  return false;
+}
+
+async function runAxDumpWithRetry(binary: string, udid: string): Promise<SpawnResult> {
+  let result = await spawnBridge(
+    binary,
+    ['dump', '--device', udid, '--max-depth', '2'],
+  );
+  const firstCode = structuredErrorCode(result);
+  const shouldRetry =
+    result.timedOut ||
+    result.stdout.trim().length === 0 ||
+    (firstCode !== undefined && RETRYABLE_AX_CODES.has(firstCode));
+  if (!shouldRetry) return result;
+
+  await new Promise<void>((resolve) => setTimeout(resolve, AX_RETRY_DELAY_MS));
+  return spawnBridge(binary, ['dump', '--device', udid, '--max-depth', '2']);
 }
 
 async function getBootedUdid(): Promise<string | null> {
@@ -128,7 +254,7 @@ describe('Private API Sentinel', () => {
       const found = SIMULATORKIT_PATHS.find(p => existsSync(p));
       if (!found) {
         throw new Error(
-          'SimulatorKit.framework not found at any known path. ' +
+          '[SIMULATORKIT_MISSING] SimulatorKit.framework not found at any known path. ' +
             'Apple may have moved or removed it. Searched:\n' +
             SIMULATORKIT_PATHS.map(p => `  - ${p}`).join('\n'),
         );
@@ -142,7 +268,7 @@ describe('Private API Sentinel', () => {
       const found = CORESIMULATOR_PATHS.find(p => existsSync(p));
       if (!found) {
         throw new Error(
-          'CoreSimulator.framework not found at any known path. ' +
+          '[CORESIMULATOR_MISSING] CoreSimulator.framework not found at any known path. ' +
             'Apple may have moved or removed it. Searched:\n' +
             CORESIMULATOR_PATHS.map(p => `  - ${p}`).join('\n'),
         );
@@ -152,53 +278,71 @@ describe('Private API Sentinel', () => {
   });
 
   describe('3. sim-hid-bridge spawn probe', () => {
-    const bridge = findBinaryOrSource(['sim-hid-bridge', 'sim-hid-bridge.swift']);
+    const bridge = findBinaryOrSource([
+      'sim-hid-bridge-native',
+      'sim-hid-bridge',
+      'sim-hid-bridge.swift',
+    ]);
 
     test('binary or swift source is present', () => {
       expect(bridge).not.toBeNull();
     });
 
-    test('spawn exits without crash signal and with a non-framework-failure exit code', async () => {
+    test('native diag reports required frameworks, class, and production symbols', async () => {
       if (!bridge) throw new Error('sim-hid-bridge not found — run npm run build first');
 
-      const result = await spawnBridge(bridge, [FAKE_UDID, 'tap', '0', '0']);
+      const result = await spawnBridge(bridge, ['diag']);
+      const parsed = parseJsonOutput(result, 'sim-hid-bridge diag') as {
+        simulatorKit?: { loaded?: boolean };
+        coreSimulator?: { loaded?: boolean };
+        classes?: Record<string, boolean>;
+        indigoSymbols?: Record<string, boolean>;
+      };
 
-      expect(result.signal).not.toBe('SIGABRT');
-      expect(result.signal).not.toBe('SIGSEGV');
-      expect(result.signal).not.toBe('SIGBUS');
-
-      let parsed: { code?: string } = {};
-      try {
-        parsed = JSON.parse(result.stdout);
-      } catch {
-        // Non-JSON stdout — caught by assertions below
+      if (parsed.simulatorKit?.loaded !== true) {
+        throw new Error(
+          `[SIMULATORKIT_MISSING] SimulatorKit.framework did not load. ` +
+            `report=${JSON.stringify(parsed.simulatorKit)}`,
+        );
+      }
+      if (parsed.coreSimulator?.loaded !== true) {
+        throw new Error(
+          `[CORESIMULATOR_MISSING] CoreSimulator.framework did not load. ` +
+            `report=${JSON.stringify(parsed.coreSimulator)}`,
+        );
+      }
+      if (parsed.classes?._TtC12SimulatorKit24SimDeviceLegacyHIDClient !== true) {
+        throw new Error(
+          `[HID_CLIENT_MISSING] SimDeviceLegacyHIDClient did not resolve. ` +
+            `classes=${JSON.stringify(parsed.classes)}`,
+        );
       }
 
-      if (result.exitCode === 78) {
-        const apiFailureCodes = [
-          'SIMULATORKIT_MISSING',
-          'CORESIMULATOR_MISSING',
-          'HID_CLIENT_FAILED',
-          'HID_FUNCTIONS_MISSING',
-        ];
-        if (parsed.code && apiFailureCodes.includes(parsed.code)) {
-          throw new Error(
-            `sim-hid-bridge reported private-API failure (code=${parsed.code}). ` +
-              'Apple may have changed SimulatorKit/CoreSimulator. ' +
-              `stdout=${result.stdout.trim()} stderr=${result.stderr.trim()}`,
-          );
-        }
+      const requiredSymbols = [
+        'IndigoHIDMessageForMouseNSEvent',
+        'IndigoHIDMessageForKeyboardArbitrary',
+        'IndigoHIDMessageForButton',
+        'IndigoHIDMessageToCreatePointerService',
+        'IndigoHIDMessageToRemovePointerService',
+      ];
+      const missing = requiredSymbols.filter(
+        (name) => parsed.indigoSymbols?.[name] !== true,
+      );
+      if (missing.length > 0) {
+        throw new Error(
+          `[HID_SYMBOL_MISSING] Required SimulatorKit symbols did not resolve: ${missing.join(', ')}. ` +
+            `indigoSymbols=${JSON.stringify(parsed.indigoSymbols)}`,
+        );
       }
-
-      // Exit codes proving frameworks + HID symbols resolved successfully:
-      //   69 — device not found (expected for FAKE_UDID)
-      //   99 — PoC stub path (frameworks loaded, HID injection stubbed)
-      expect([69, 99]).toContain(result.exitCode);
-    });
+    }, BRIDGE_TIMEOUT_MS + 5_000);
   });
 
   describe('4. ax-bridge AXUIElement probe', () => {
-    const bridge = findBinaryOrSource(['ax-bridge', 'ax-bridge.swift']);
+    const bridge = findBinaryOrSource([
+      'ax-bridge-native',
+      'ax-bridge',
+      'ax-bridge.swift',
+    ]);
 
     test('binary or swift source is present', () => {
       expect(bridge).not.toBeNull();
@@ -216,23 +360,15 @@ describe('Private API Sentinel', () => {
         return;
       }
 
-      const result = await spawnBridge(bridge, ['dump', '--device', udid, '--max-depth', '2']);
-
-      expect(result.signal).not.toBe('SIGABRT');
-      expect(result.signal).not.toBe('SIGSEGV');
-
-      const body = result.stdout.trim();
-      expect(body.length).toBeGreaterThan(0);
-
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(body);
-      } catch (err) {
-        throw new Error(
-          `ax-bridge dump produced non-JSON output. AXUIElement API may have changed. ` +
-            `parseError=${(err as Error).message} stdout=${body} stderr=${result.stderr.trim()}`,
+      if (!(await ensureSimulatorAppRunning())) {
+        console.warn(
+          '[sentinel] Simulator.app did not become ready within 10 seconds — skipping ax-bridge probe.',
         );
+        return;
       }
+
+      const result = await runAxDumpWithRetry(bridge, udid);
+      const parsed = parseJsonOutput(result, 'ax-bridge dump');
 
       // AX tree returns either an object (single node) or an array of children.
       // An error shape means ax-bridge failed. SIMULATOR_NOT_RUNNING is an
@@ -247,11 +383,28 @@ describe('Private API Sentinel', () => {
           );
           return;
         }
+        if (
+          maybeError.code === 'AX_PERMISSION_DENIED' ||
+          (maybeError.code !== undefined && RETRYABLE_AX_CODES.has(maybeError.code))
+        ) {
+          throw new Error(
+            `[HARNESS_AX_UNAVAILABLE] ax-bridge remained unavailable after one retry. ` +
+              `code=${maybeError.code} error=${String(maybeError.error)} ${processDetails(result)}`,
+          );
+        }
         throw new Error(
-          `ax-bridge returned error shape: code=${maybeError.code ?? 'unknown'} error=${String(maybeError.error)}`,
+          `[AX_API_REGRESSION] ax-bridge returned an unexpected structured error after one retry: ` +
+            `code=${maybeError.code ?? 'unknown'} error=${String(maybeError.error)} ` +
+            processDetails(result),
         );
       }
-    });
+      if (result.exitCode !== 0) {
+        throw new Error(
+          `[HARNESS_NONZERO_EXIT] ax-bridge emitted a tree but exited ${result.exitCode}. ` +
+            processDetails(result),
+        );
+      }
+    }, LIVE_AX_TEST_TIMEOUT_MS);
   });
 
   describe('5. webinspectord_sim socket probe', () => {
@@ -267,7 +420,7 @@ describe('Private API Sentinel', () => {
       const socket = await findSocketPath();
       if (!socket) {
         throw new Error(
-          'findSocketPath() returned null while a simulator is booted. ' +
+          '[WEBINSPECTORD_SOCKET_MISSING] findSocketPath() returned null while a simulator is booted. ' +
             'com.apple.webinspectord_sim.socket layout may have changed, or launchd_sim is not advertising it.',
         );
       }
@@ -428,21 +581,40 @@ describe('Private API Sentinel', () => {
 
       // Must construct the AX element from a PID — this is what makes the
       // bridge independent of the frontmost-application state.
-      expect(contents).toMatch(/AXUIElementCreateApplication\s*\(/);
+      if (!/AXUIElementCreateApplication\s*\(/.test(contents)) {
+        throw new Error(
+          '[AX_API_REGRESSION] ax-bridge no longer resolves Simulator.app through AXUIElementCreateApplication(pid).',
+        );
+      }
 
       // Must not reach for the system-wide root, which would couple reads
       // to whatever app happens to be focused.
-      expect(contents).not.toMatch(/AXUIElementCreateSystemWide\s*\(/);
+      if (/AXUIElementCreateSystemWide\s*\(/.test(contents)) {
+        throw new Error(
+          '[AX_API_REGRESSION] ax-bridge now uses AXUIElementCreateSystemWide(), regressing the GUI-less invariant.',
+        );
+      }
     });
 
     test('ax-bridge dump succeeds while Simulator.app is not the frontmost app', async () => {
-      const bridge = findBinaryOrSource(['ax-bridge', 'ax-bridge.swift']);
+      const bridge = findBinaryOrSource([
+        'ax-bridge-native',
+        'ax-bridge',
+        'ax-bridge.swift',
+      ]);
       if (!bridge) throw new Error('ax-bridge not found — run npm run build first');
 
       const udid = await getBootedUdid();
       if (!udid) {
         console.warn(
           '[sentinel] No booted simulator — skipping ax-bridge GUI-less runtime probe.',
+        );
+        return;
+      }
+
+      if (!(await ensureSimulatorAppRunning())) {
+        console.warn(
+          '[sentinel] Simulator.app did not become ready within 10 seconds — skipping GUI-less runtime probe.',
         );
         return;
       }
@@ -473,23 +645,11 @@ describe('Private API Sentinel', () => {
         return;
       }
 
-      const result = await spawnBridge(bridge, ['dump', '--device', udid, '--max-depth', '2']);
-
-      expect(result.signal).not.toBe('SIGABRT');
-      expect(result.signal).not.toBe('SIGSEGV');
-
-      const body = result.stdout.trim();
-      expect(body.length).toBeGreaterThan(0);
-
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(body);
-      } catch (err) {
-        throw new Error(
-          `ax-bridge dump produced non-JSON output while Simulator.app was not frontmost (was '${frontmost}'). ` +
-            `parseError=${(err as Error).message} stdout=${body} stderr=${result.stderr.trim()}`,
-        );
-      }
+      const result = await runAxDumpWithRetry(bridge, udid);
+      const parsed = parseJsonOutput(
+        result,
+        `ax-bridge GUI-less dump while '${frontmost}' was frontmost`,
+      );
 
       const maybeError = parsed as { error?: unknown; code?: string };
       if (maybeError && typeof maybeError === 'object' && 'error' in maybeError) {
@@ -499,12 +659,28 @@ describe('Private API Sentinel', () => {
           );
           return;
         }
+        if (
+          maybeError.code === 'AX_PERMISSION_DENIED' ||
+          (maybeError.code !== undefined && RETRYABLE_AX_CODES.has(maybeError.code))
+        ) {
+          throw new Error(
+            `[HARNESS_AX_UNAVAILABLE] GUI-less ax-bridge dump remained unavailable after one retry. ` +
+              `frontmost=${frontmost} code=${maybeError.code} error=${String(maybeError.error)} ` +
+              processDetails(result),
+          );
+        }
         throw new Error(
-          `ax-bridge returned error shape while Simulator.app was not frontmost (was '${frontmost}'): ` +
+          `[AX_API_REGRESSION] ax-bridge returned an unexpected error while Simulator.app was not frontmost (was '${frontmost}'): ` +
             `code=${maybeError.code ?? 'unknown'} error=${String(maybeError.error)}. ` +
-            'The GUI-less invariant recorded in the #573 ADR has regressed.',
+            `The GUI-less invariant recorded in the #573 ADR has regressed. ${processDetails(result)}`,
         );
       }
-    });
+      if (result.exitCode !== 0) {
+        throw new Error(
+          `[HARNESS_NONZERO_EXIT] GUI-less ax-bridge dump emitted a tree but exited ${result.exitCode}. ` +
+            processDetails(result),
+        );
+      }
+    }, LIVE_AX_TEST_TIMEOUT_MS);
   });
 });

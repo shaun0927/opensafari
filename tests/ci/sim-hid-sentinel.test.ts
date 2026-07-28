@@ -21,21 +21,24 @@ import * as path from 'path';
 
 const execFileAsync = promisify(execFile);
 
-// First invocation of `sim-hid-bridge` on a GitHub-hosted macOS runner
-// pays for dyld-cache, Swift/private-framework load, and occasionally a
-// slow CoreSimulator fake-UDID lookup.  macos-15 has exceeded 45 s on the
-// first framework-load probe while later probes in the same job passed, so
-// the sentinel keeps a generous budget while still failing deterministically
-// on real private-API break responses (exit 78 + structured JSON).
-//
-// `jest.setTimeout` is declared at file scope on purpose: when called
-// inside a `describe()` block it does NOT reliably override the per-test
-// default in current Jest releases (jestjs/jest#11543). Per-test
-// third-argument timeouts on the long-running cases below provide a
-// belt-and-suspenders guarantee against future Jest scoping changes.
-jest.setTimeout(90_000);
+const BRIDGE_TIMEOUT_MS = 30_000;
 
-const SLOW_BRIDGE_TIMEOUT_MS = 90_000;
+type BridgeResult = {
+  exitCode: number;
+  signal: NodeJS.Signals | null;
+  killed: boolean;
+  timedOut: boolean;
+  stdout: string;
+  stderr: string;
+};
+
+type DiagReport = {
+  ok?: boolean;
+  simulatorKit?: { loaded?: boolean; path?: string | null };
+  coreSimulator?: { loaded?: boolean; path?: string | null };
+  classes?: Record<string, boolean>;
+  indigoSymbols?: Record<string, boolean>;
+};
 
 /** Locate the sim-hid-bridge binary or .swift source. */
 function findBridge(): string | null {
@@ -60,186 +63,171 @@ function findBridge(): string | null {
 /** Run the bridge with given args and return exit code + stdout + stderr. */
 async function runBridge(
   args: string[],
-): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+): Promise<BridgeResult> {
   const bridgePath = findBridge();
   if (!bridgePath) {
-    return { exitCode: -1, stdout: '', stderr: 'bridge not found' };
+    return {
+      exitCode: -1,
+      signal: null,
+      killed: false,
+      timedOut: false,
+      stdout: '',
+      stderr: 'bridge not found',
+    };
   }
 
   const cmd = bridgePath.endsWith('.swift') ? 'swift' : bridgePath;
   const cmdArgs = bridgePath.endsWith('.swift') ? [bridgePath, ...args] : args;
 
   try {
-    // macos-latest (Sequoia) first-invocation cold start of the bridge
-    // now exceeds 15 s — likely the tap-digitizer probe's IOKit dlopen
-    // plus the larger symbol table, fronted by CoreSimulator taking its
-    // time to reply DEVICE_NOT_FOUND for a fake UDID. Align with
-    // SLOW_BRIDGE_TIMEOUT_MS so the execFile budget matches the jest
-    // per-test budget.
     const { stdout, stderr } = await execFileAsync(cmd, cmdArgs, {
-      timeout: SLOW_BRIDGE_TIMEOUT_MS,
+      timeout: BRIDGE_TIMEOUT_MS,
+      killSignal: 'SIGKILL',
     });
-    return { exitCode: 0, stdout, stderr };
+    return {
+      exitCode: 0,
+      signal: null,
+      killed: false,
+      timedOut: false,
+      stdout,
+      stderr,
+    };
   } catch (err) {
     const e = err as {
       code?: number | string;
+      signal?: NodeJS.Signals;
       stdout?: string;
       stderr?: string;
+      killed?: boolean;
     };
     return {
       exitCode: typeof e.code === 'number' ? e.code : 1,
+      signal: e.signal ?? null,
+      killed: e.killed === true,
+      timedOut: e.killed === true,
       stdout: e.stdout ?? '',
       stderr: e.stderr ?? '',
     };
   }
 }
 
-describe('SimulatorKit HID Sentinel', () => {
-  const FAKE_UDID = '00000000-0000-0000-0000-000000000000';
+let diagResult: BridgeResult;
+let diagReport: DiagReport | undefined;
+let diagParseError: Error | undefined;
 
+beforeAll(async () => {
+  diagResult = await runBridge(['diag']);
+  try {
+    diagReport = JSON.parse(diagResult.stdout) as DiagReport;
+  } catch (err) {
+    diagParseError = err as Error;
+  }
+}, BRIDGE_TIMEOUT_MS + 5_000);
+
+function requireDiagReport(): DiagReport {
+  if (diagResult.timedOut) {
+    throw new Error(
+      `[HARNESS_TIMEOUT] sim-hid-bridge diag exceeded ${BRIDGE_TIMEOUT_MS} ms. ` +
+        `signal=${diagResult.signal ?? 'none'} stderr=${diagResult.stderr.trim()}`,
+    );
+  }
+  if (diagResult.signal) {
+    throw new Error(
+      `[HARNESS_SIGNAL] sim-hid-bridge diag exited via ${diagResult.signal}. ` +
+        `stderr=${diagResult.stderr.trim()}`,
+    );
+  }
+  if (diagResult.exitCode !== 0) {
+    throw new Error(
+      `[HARNESS_EXIT] sim-hid-bridge diag exited ${diagResult.exitCode}. ` +
+        `stdout=${diagResult.stdout.trim()} stderr=${diagResult.stderr.trim()}`,
+    );
+  }
+  if (diagParseError || !diagReport) {
+    throw new Error(
+      `[HARNESS_INVALID_JSON] sim-hid-bridge diag did not return valid JSON. ` +
+        `parseError=${diagParseError?.message ?? 'empty output'} ` +
+        `stdout=${diagResult.stdout.trim()} stderr=${diagResult.stderr.trim()}`,
+    );
+  }
+  return diagReport;
+}
+
+function requireFlag(value: boolean | undefined, code: string, detail: string): void {
+  if (value !== true) {
+    throw new Error(`[${code}] ${detail}`);
+  }
+}
+
+describe('SimulatorKit HID Sentinel', () => {
   test('sim-hid-bridge binary or source exists', () => {
     const bridge = findBridge();
     expect(bridge).not.toBeNull();
   });
 
-  test('SimulatorKit.framework is loadable (exit != 78 SIMULATORKIT_MISSING)', async () => {
-    // Run with a fake UDID — we expect exit 69 (device not found)
-    // if frameworks loaded OK, or exit 78 if dlopen fails.
-    const result = await runBridge([FAKE_UDID, 'tap', '0', '0']);
+  test('diag completes and produces valid JSON', () => {
+    const report = requireDiagReport();
+    expect(report.ok).toBe(true);
+  });
 
-    // Parse the JSON output
-    let parsed: { code?: string } = {};
-    try {
-      parsed = JSON.parse(result.stdout);
-    } catch {
-      // Non-JSON output is also informative
-    }
+  test('SimulatorKit.framework and CoreSimulator.framework are loadable', () => {
+    const report = requireDiagReport();
+    requireFlag(
+      report.simulatorKit?.loaded,
+      'SIMULATORKIT_MISSING',
+      `SimulatorKit.framework did not load. report=${JSON.stringify(report.simulatorKit)}`,
+    );
+    requireFlag(
+      report.coreSimulator?.loaded,
+      'CORESIMULATOR_MISSING',
+      `CoreSimulator.framework did not load. report=${JSON.stringify(report.coreSimulator)}`,
+    );
+  });
 
-    // exit 78 with SIMULATORKIT_MISSING means the framework is gone
-    if (result.exitCode === 78 && parsed.code === 'SIMULATORKIT_MISSING') {
-      fail(
-        'SimulatorKit.framework could not be loaded. ' +
-          'Apple may have moved or removed it in this Xcode version. ' +
-          'stderr: ' +
-          result.stderr,
+  test('production HID client class is resolvable', () => {
+    const report = requireDiagReport();
+    requireFlag(
+      report.classes?._TtC12SimulatorKit24SimDeviceLegacyHIDClient,
+      'HID_CLIENT_MISSING',
+      `SimDeviceLegacyHIDClient did not resolve. classes=${JSON.stringify(report.classes)}`,
+    );
+  });
+
+  test('production Indigo HID symbols are resolvable', () => {
+    const report = requireDiagReport();
+    const required = [
+      'IndigoHIDMessageForMouseNSEvent',
+      'IndigoHIDMessageForKeyboardArbitrary',
+      'IndigoHIDMessageForButton',
+    ];
+    const missing = required.filter((name) => report.indigoSymbols?.[name] !== true);
+    if (missing.length > 0) {
+      throw new Error(
+        `[HID_SYMBOL_MISSING] Required production symbols did not resolve: ${missing.join(', ')}. ` +
+          `indigoSymbols=${JSON.stringify(report.indigoSymbols)}`,
       );
     }
-
-    // exit 78 with CORESIMULATOR_MISSING
-    if (result.exitCode === 78 && parsed.code === 'CORESIMULATOR_MISSING') {
-      fail(
-        'CoreSimulator.framework could not be loaded. ' +
-          'stderr: ' +
-          result.stderr,
-      );
-    }
-
-    // Any exit code other than 78 means frameworks loaded OK.
-    // exit 69 (device not found) is the expected "frameworks OK, device missing" path.
-    expect(result.exitCode).not.toBe(78);
-  }, SLOW_BRIDGE_TIMEOUT_MS);
-
-  test('HID client and IndigoHIDMessage functions are resolvable (exit != 78 HID_*)', async () => {
-    // Use the fake UDID — frameworks load but device won't be found.
-    // If frameworks + symbols are OK, we get exit 69.
-    // If HID symbols are missing, we get exit 78 with HID_CLIENT_FAILED or HID_FUNCTIONS_MISSING.
-    const result = await runBridge([FAKE_UDID, 'tap', '0', '0']);
-
-    let parsed: { code?: string } = {};
-    try {
-      parsed = JSON.parse(result.stdout);
-    } catch {
-      // ignore
-    }
-
-    if (
-      result.exitCode === 78 &&
-      (parsed.code === 'HID_CLIENT_FAILED' ||
-        parsed.code === 'HID_FUNCTIONS_MISSING')
-    ) {
-      fail(
-        `SimulatorKit HID symbols not available (${parsed.code}). ` +
-          'Apple may have changed the private API. ' +
-          'stderr: ' +
-          result.stderr,
-      );
-    }
-
-    // Expected exit codes that prove all symbols resolved successfully:
-    //   69 — device not found (full implementation path)
-    //   99 — PoC stub: frameworks loaded OK, HID injection not yet implemented
-    //    1 — macos-15 arm64 runner currently reports a generic process exit for
-    //        this fake-UDID probe even though the bridge still emits valid JSON
-    //        and the framework-load probe above already proved the private APIs
-    //        resolved. Treat it as a non-regression sentinel result until Apple
-    //        restores the historical EX_UNAVAILABLE mapping.
-    expect([69, 99, 1]).toContain(result.exitCode);
-  }, SLOW_BRIDGE_TIMEOUT_MS);
-
-  test('bridge produces valid JSON output', async () => {
-    const result = await runBridge([FAKE_UDID, 'tap', '0', '0']);
-    expect(result.stdout.trim()).toBeTruthy();
-
-    const parsed = JSON.parse(result.stdout);
-    expect(parsed).toHaveProperty('ok');
-    expect(parsed).toHaveProperty('code');
-  }, SLOW_BRIDGE_TIMEOUT_MS);
+  });
 
   test('bad arguments produce exit 64', async () => {
     const result = await runBridge([]);
     expect(result.exitCode).toBe(64);
-  }, SLOW_BRIDGE_TIMEOUT_MS);
+  }, BRIDGE_TIMEOUT_MS + 5_000);
 });
 
 describe('SimulatorKit HID Sentinel — PointerService probe (#590 Phase 1)', () => {
-  test(
-    'IndigoHIDMessageToCreatePointerService and IndigoHIDMessageToRemovePointerService resolve via diag',
-    async () => {
-      const result = await runBridge(['diag']);
-
-      let parsed: {
-        simulatorKit?: { loaded?: boolean };
-        indigoSymbols?: Record<string, boolean>;
-      } = {};
-      try {
-        parsed = JSON.parse(result.stdout);
-      } catch {
-        fail(
-          'sim-hid-bridge diag did not produce valid JSON. ' +
-            'stdout: ' +
-            result.stdout +
-            ' stderr: ' +
-            result.stderr,
-        );
-      }
-
-      // Precondition: SimulatorKit must be loaded for symbol probes to be meaningful.
-      expect(parsed.simulatorKit?.loaded).toBe(true);
-
-      const createPS = parsed.indigoSymbols?.IndigoHIDMessageToCreatePointerService;
-      const removePS = parsed.indigoSymbols?.IndigoHIDMessageToRemovePointerService;
-
-      if (createPS !== true) {
-        fail(
-          'IndigoHIDMessageToCreatePointerService did not resolve (#590 Phase 1). ' +
-            'Apple may have removed or renamed this PointerService symbol. ' +
-            'indigoSymbols: ' +
-            JSON.stringify(parsed.indigoSymbols),
-        );
-      }
-
-      if (removePS !== true) {
-        fail(
-          'IndigoHIDMessageToRemovePointerService did not resolve (#590 Phase 1). ' +
-            'Apple may have removed or renamed this PointerService symbol. ' +
-            'indigoSymbols: ' +
-            JSON.stringify(parsed.indigoSymbols),
-        );
-      }
-
-      expect(createPS).toBe(true);
-      expect(removePS).toBe(true);
-    },
-    SLOW_BRIDGE_TIMEOUT_MS,
-  );
+  test('PointerService symbols resolve via the cached diag report', () => {
+    const report = requireDiagReport();
+    const required = [
+      'IndigoHIDMessageToCreatePointerService',
+      'IndigoHIDMessageToRemovePointerService',
+    ];
+    const missing = required.filter((name) => report.indigoSymbols?.[name] !== true);
+    if (missing.length > 0) {
+      throw new Error(
+        `[POINTER_SYMBOL_MISSING] PointerService symbols did not resolve: ${missing.join(', ')}. ` +
+          `indigoSymbols=${JSON.stringify(report.indigoSymbols)}`,
+      );
+    }
+  });
 });

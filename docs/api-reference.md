@@ -83,6 +83,16 @@ Report the current mobile context for a booted simulator using accessibility-tre
 - **Output:** `{ deviceId, surface, contextVerified, inferredBundleId?, expectedBundle?, expectedBundleMatch?, expectedBundleMatchConfidence?, reason, warnings, runningApps, visibleSummary }`
 - **Errors:** `EXPECTED_BUNDLE_MISMATCH` when `requireMatch=true` and the expected bundle cannot be matched
 
+#### app_testflight_iap_snapshot
+Read-only TestFlight/IAP state snapshot that composes the current app state, installed-app hints, visible AX classifier signals, safe recovery hints, and optional debug-bundle path references. It never taps, types credentials, installs/updates apps, confirms purchases, or calls App Store Connect.
+- **Input:** `{ deviceId?: string, expectedAppBundleId?: string, testflightBundleId?: string, includeEvidence?: boolean, maxVisibleNodes?: number, maxDepth?: number }`
+  - `testflightBundleId` defaults to `com.apple.TestFlight`.
+  - `includeEvidence` defaults to `false`; when `true`, the response attaches only a compact `debugBundle` reference/summary (paths, counts, redaction metadata), not raw logs.
+- **Output:** `{ schemaVersion, collectedAt, device, expectedAppBundleId?, testflightBundleId, installedApps, foreground, classifier, recoveryHints, debugBundle?, redactions }`
+  - `classifier` is the merged TestFlight/IAP classifier result (`phase`, `blocker`, `confidence`, `reason`, `nextSafeAction`, `matchedSignals`).
+  - `recoveryHints` are limited to safe follow-ups: `app_alert_handle`, `app_activate`, and `debug_bundle_collect`; the snapshot itself is non-mutating.
+- **Errors:** Structured MCP error envelopes such as `DEVICE_NOT_BOOTED` or `APP_STATE_UNKNOWN`. Password/token-like visible text is redacted from diagnostics.
+
 #### app_tap
 Tap at screen coordinates in the simulator.
 - **Input:** `{ x: number, y: number, duration?: number, deviceId?: string, expectedBundle?: string, verifyContext?: boolean, settleMs?: number, raw?: boolean, requireInApp?: boolean, autoReactivate?: boolean, snapRadiusPx?: number, homeIndicatorGuardPx?: number }`

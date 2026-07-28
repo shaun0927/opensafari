@@ -31,20 +31,17 @@ import {
 } from './accessibility-bridge';
 import { ensureSemanticsActive } from './semantics-activator';
 import type { AXDumpOptions, AXNode } from './ax-types';
+import {
+  isRecoverableAxErrorCode,
+  NON_RECOVERABLE_AX_ERROR_CODES,
+  RECOVERABLE_AX_ERROR_CODES,
+} from './ax-error-policy';
 
 /** Error codes that represent transient, retry-worthy failures. */
-export const RECOVERABLE_ERROR_CODES: ReadonlySet<string> = new Set([
-  'DEVICE_CONTENT_ROOT_EMPTY',
-  'AX_TIMEOUT',
-  'BRIDGE_EXEC_FAILED',
-  'AX_ERROR',
-]);
+export const RECOVERABLE_ERROR_CODES = RECOVERABLE_AX_ERROR_CODES;
 
 /** Error codes that must be surfaced immediately without retrying. */
-export const NON_RECOVERABLE_ERROR_CODES: ReadonlySet<string> = new Set([
-  'BRIDGE_NOT_FOUND',
-  'AX_PERMISSION_DENIED',
-]);
+export const NON_RECOVERABLE_ERROR_CODES = NON_RECOVERABLE_AX_ERROR_CODES;
 
 /** Typed final error when a Flutter target never rematerialises native semantics. */
 export const FLUTTER_SEMANTICS_INACTIVE = 'FLUTTER_SEMANTICS_INACTIVE';
@@ -111,8 +108,7 @@ export interface DumpTreeWithRecoveryResult {
 
 function isRecoverableError(err: unknown): err is AccessibilityBridgeError {
   if (!(err instanceof AccessibilityBridgeError)) return false;
-  if (NON_RECOVERABLE_ERROR_CODES.has(err.code)) return false;
-  return RECOVERABLE_ERROR_CODES.has(err.code);
+  return isRecoverableAxErrorCode(err.code);
 }
 
 function defaultSleep(ms: number): Promise<void> {
@@ -149,6 +145,7 @@ function promoteFlutterSemanticsInactive(
     `Flutter semantics remained inactive for bundle ${options.bundleId} after ax-bridge recovery; ` +
       `the native accessibility tree stayed empty after simulator reactivation. Original error: ${err.message}`,
     FLUTTER_SEMANTICS_INACTIVE,
+    err.topology,
   );
 }
 

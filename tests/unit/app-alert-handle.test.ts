@@ -1,5 +1,6 @@
 import { MCPServer } from '../../src/mcp-server';
 import { registerAppAlertHandleTool } from '../../src/tools/app-alert-handle';
+import { AccessibilityBridgeError } from '../../src/native/accessibility-bridge';
 
 // ── Mocks ──
 
@@ -36,14 +37,18 @@ jest.mock('../../src/session-manager', () => ({
 const mockDumpTree = jest.fn();
 const mockPress = jest.fn();
 
-jest.mock('../../src/native/accessibility-bridge', () => ({
-  getAccessibilityBridge: jest.fn(() => ({
-    dumpTree: mockDumpTree,
-    press: mockPress,
-    query: jest.fn(),
-    inspect: jest.fn(),
-  })),
-}));
+jest.mock('../../src/native/accessibility-bridge', () => {
+  const actual = jest.requireActual('../../src/native/accessibility-bridge');
+  return {
+    ...actual,
+    getAccessibilityBridge: jest.fn(() => ({
+      dumpTree: mockDumpTree,
+      press: mockPress,
+      query: jest.fn(),
+      inspect: jest.fn(),
+    })),
+  };
+});
 
 // Access mocked constructors via import (already mocked above)
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -368,6 +373,29 @@ describe('app_alert_handle tool', () => {
     expect(text.error).toBe('ALERT_NO_EFFECT');
     expect(text.visibleLabels).toContain('Continue');
     expect(text.visibleLabels).toContain('Go Back');
+  });
+
+  test('surfaces AX topology when the label-match dump fails', async () => {
+    const topology = {
+      windowCount: 2,
+      overlayRolesSeen: 0,
+      winner: { depth: 1, role: 'AXGroup', label: null, score: 5, appSemanticsCount: 0 },
+    };
+    mockDumpTree.mockRejectedValueOnce(
+      new AccessibilityBridgeError(
+        'No descendant subtree contains app semantics',
+        'DEVICE_CONTENT_ROOT_EMPTY',
+        topology,
+      ),
+    );
+
+    const handler = server.getToolHandler('app_alert_handle')!;
+    const result = await handler('test', { buttonLabel: 'OK' });
+    const text = parseResult(result as { content: Array<{ type: string; text: string }> });
+
+    expect(result.isError).toBe(true);
+    expect(text.axBridgeCode).toBe('DEVICE_CONTENT_ROOT_EMPTY');
+    expect(text.axTopology).toEqual(topology);
   });
 
   test('returns NO_MATCHING_BUTTON labels from the modal subtree instead of underlying app buttons', async () => {

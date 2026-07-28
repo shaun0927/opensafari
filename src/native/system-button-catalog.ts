@@ -20,6 +20,13 @@ export type LocalizedButtonEntry = Record<SupportedLocale, string>;
 export type SemanticButtonKey =
   | 'storekit.signIn'
   | 'storekit.cancel'
+  | 'storekit.confirm'
+  | 'storekit.buy'
+  | 'storekit.subscribe'
+  | 'testflight.install'
+  | 'testflight.update'
+  | 'testflight.open'
+  | 'testflight.signIn'
   | 'alert.ok'
   | 'alert.cancel'
   | 'permission.allow'
@@ -48,6 +55,48 @@ export const SYSTEM_BUTTON_CATALOG: Record<SemanticButtonKey, LocalizedButtonEnt
     ko: '취소',
     ja: 'キャンセル',
     'zh-Hans': '取消',
+  },
+  'storekit.confirm': {
+    en: 'Confirm',
+    ko: '확인',
+    ja: '確認',
+    'zh-Hans': '确认',
+  },
+  'storekit.buy': {
+    en: 'Buy',
+    ko: '구입',
+    ja: '購入',
+    'zh-Hans': '购买',
+  },
+  'storekit.subscribe': {
+    en: 'Subscribe',
+    ko: '구독',
+    ja: '登録',
+    'zh-Hans': '订阅',
+  },
+  'testflight.install': {
+    en: 'Install',
+    ko: '설치',
+    ja: 'インストール',
+    'zh-Hans': '安装',
+  },
+  'testflight.update': {
+    en: 'Update',
+    ko: '업데이트',
+    ja: 'アップデート',
+    'zh-Hans': '更新',
+  },
+  'testflight.open': {
+    en: 'Open',
+    ko: '열기',
+    ja: '開く',
+    'zh-Hans': '打开',
+  },
+  'testflight.signIn': {
+    en: 'Sign In',
+    ko: '로그인',
+    ja: 'サインイン',
+    'zh-Hans': '登录',
   },
   'alert.ok': {
     en: 'OK',

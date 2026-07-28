@@ -1,10 +1,8 @@
 /**
  * OpenSafari MCP Server
  * Handles JSON-RPC 2.0 protocol, tool registration, and progressive disclosure.
- * Safari-specific tools are registered externally via registerTool().
- *
- * Chrome/CDP references have been removed. Safari/WebKit/Simulator placeholders
- * are in place; actual implementations land in Epic 1B/1C.
+ * Product-specific Safari, native, Flutter, WebView, simulator, and host tools
+ * are registered externally via registerTool().
  */
 
 import {

@@ -1,9 +1,15 @@
 # Native-App MCP Tool Surface Design
 
 - **Date:** 2026-04-05
-- **Status:** Proposed
+- **Status:** Historical / Superseded
 - **Related:** #344, #345
 - **Complements:** RFC #357 (backend abstraction), #358 (implementation plan)
+
+> This document preserves the proposed tool surface before native automation
+> shipped. Current tool availability and product boundaries are defined by
+> [Product Direction](product-direction.md) and registered tool schemas. The
+> [API Reference](api-reference.md) is supplemental and does not yet catalog
+> every shipped tool.
 
 ---
 

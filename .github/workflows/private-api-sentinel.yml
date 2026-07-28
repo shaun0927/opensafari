@@ -1,7 +1,7 @@
 name: Private API Sentinel
 
 # Daily regression sentinel for the private Apple APIs opensafari depends on
-# (issue #503). Runs the six probes in tests/sentinel/private-api-probe.test.ts
+# (issue #503). Runs the eight probes in tests/sentinel/private-api-probe.test.ts
 # against a booted simulator so that Apple-side BC breaks in Xcode / macOS
 # updates are surfaced within 24 hours.
 #
@@ -16,9 +16,9 @@ name: Private API Sentinel
 #      AXUIElementCreateApplication(pid) and runtime dumps still succeed
 #      when Simulator.app is not the macOS frontmost app (#573 ADR).
 #
-# On scheduled failures the job opens / updates a tracking issue labeled
-# `sentinel` with the failing probe name and jest error message so the
-# on-call engineer can act without hunting through workflow logs.
+# After the full scheduled matrix completes, recognized private-API contract
+# failures open / update one canonical `sentinel` issue. Harness, setup,
+# timeout, and empty-output failures fail CI without changing issue state.
 
 on:
   schedule:
@@ -29,6 +29,8 @@ on:
     paths:
       # Re-run when anything that could change probe behavior lands.
       - 'tests/sentinel/private-api-probe.test.ts'
+      - '.github/scripts/sentinel-issue-lifecycle.cjs'
+      - '.github/scripts/sentinel-issue-lifecycle.test.cjs'
       - '.github/workflows/private-api-sentinel.yml'
       - 'jest.sentinel.config.js'
       - 'src/native/ax-bridge.swift'
@@ -41,8 +43,8 @@ permissions:
 
 # Fork-friendly alerting (#599):
 #   - `SENTINEL_WEBHOOK_URL` (secret, optional): Slack / Discord / Mattermost
-#     Incoming Webhook. Missing ⇒ notify step is a no-op, the GitHub tracking
-#     issue still gets opened so a missing secret never masks a regression.
+#     Incoming Webhook. Missing ⇒ notify step is a no-op; CI status, artifacts,
+#     and recognized-contract issue reconciliation remain unchanged.
 #   - `SENTINEL_CHANNEL` (variable, optional): Slack channel override. Defaults
 #     to `#opensafari-sentinels`. Ignored by Discord-shaped webhooks, whose
 #     channel routing is baked into the URL.
@@ -106,6 +108,11 @@ jobs:
           fi
           xcrun simctl boot "$UDID" || true
           xcrun simctl bootstatus "$UDID" -b
+          open -g -j -a Simulator
+          for attempt in {1..20}; do
+            pgrep -x Simulator >/dev/null && break
+            sleep 0.5
+          done
           xcrun simctl list devices booted
 
       - name: Run private-API sentinel suite
@@ -128,90 +135,45 @@ jobs:
             sentinel-report.json
           if-no-files-found: warn
 
-      - name: Open / update tracking issue on scheduled failure
-        if: failure() && github.event_name == 'schedule'
+  reconcile-issue:
+    needs: sentinel
+    if: always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    name: reconcile tracking issue
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download matrix artifacts
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          pattern: sentinel-*
+          path: sentinel-artifacts
+
+      - name: Reconcile canonical tracking issue
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const fs = require('fs');
-            const runner = process.env.RUNNER_LABEL;
-
-            // Extract the failing probes from the jest JSON report so the
-            // tracking issue points the on-call directly at the broken API
-            // surface instead of a generic "sentinel failed" placeholder.
-            let failing = [];
-            try {
-              const raw = fs.readFileSync('sentinel-report.json', 'utf8');
-              const report = JSON.parse(raw);
-              for (const suite of report.testResults ?? []) {
-                for (const tc of suite.assertionResults ?? []) {
-                  if (tc.status === 'failed') {
-                    failing.push({
-                      name: [...(tc.ancestorTitles ?? []), tc.title].join(' › '),
-                      messages: (tc.failureMessages ?? []).map(m =>
-                        m.split('\n').slice(0, 8).join('\n'),
-                      ),
-                    });
-                  }
-                }
-              }
-            } catch (err) {
-              core.warning(`Could not parse sentinel-report.json: ${err.message}`);
-            }
-
-            const title = `[sentinel] Private API regression on ${runner}`;
-            const failureBlock = failing.length
-              ? failing.map(f =>
-                  `### ${f.name}\n\n\`\`\`\n${f.messages.join('\n---\n')}\n\`\`\``,
-                ).join('\n\n')
-              : '_Could not parse jest report — see attached `sentinel.log` artifact._';
-
-            const body = [
-              '`private-api-sentinel` failed on the daily scheduled run.',
-              '',
-              `- Runner: \`${runner}\``,
-              `- Workflow run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
-              '',
-              '## Failing probes',
-              '',
-              failureBlock,
-              '',
-              '## Triage checklist',
-              '',
-              '- Confirm private framework paths in `docs/private-apis.md` still match disk layout.',
-              '- Inspect `sentinel.log` and `sentinel-report.json` artifacts on the workflow run.',
-              '- If Apple moved a symbol, update the candidate path list in `tests/sentinel/private-api-probe.test.ts` or the bridge source under `src/native/`.',
-              '',
-              'Towards: #503',
-            ].join('\n');
-
-            const { data: existing } = await github.rest.issues.listForRepo({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              state: 'open',
-              labels: 'sentinel',
-              per_page: 50,
+            const {
+              reconcileSentinelIssue,
+            } = require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/sentinel-issue-lifecycle.cjs`);
+            await reconcileSentinelIssue({
+              github,
+              context,
+              core,
+              status: process.env.SENTINEL_STATUS,
+              title: '[sentinel] OpenSafari private API regression',
+              workflowName: 'private-api-sentinel',
+              artifactRoot: 'sentinel-artifacts',
+              reportFilename: 'sentinel-report.json',
+              failureCodes: JSON.parse(process.env.SENTINEL_FAILURE_CODES),
+              runUrl: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
             });
-            const match = existing.find(i => i.title === title);
-            if (match) {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: match.number,
-                body,
-              });
-            } else {
-              await github.rest.issues.create({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                title,
-                body,
-                labels: ['sentinel', 'bug'],
-              });
-            }
         env:
-          RUNNER_LABEL: ${{ matrix.runner }}
+          SENTINEL_STATUS: ${{ needs.sentinel.result }}
+          SENTINEL_FAILURE_CODES: '["SIMULATORKIT_MISSING","CORESIMULATOR_MISSING","HID_CLIENT_MISSING","HID_SYMBOL_MISSING","AX_API_REGRESSION","WEBINSPECTORD_SOCKET_MISSING"]'
 
   notify:
     # Fan-in notifier: posts a single alert per sentinel run to whatever webhook
@@ -227,7 +189,8 @@ jobs:
       body: |
         One or more probes failed on the daily scheduled sentinel run.
         Check the `sentinel-*` artifacts on the workflow run for the full jest
-        report and the `sentinel` tracking issue for the triage checklist.
+        report and, for recognized contract failures, the canonical `sentinel`
+        tracking issue for the triage checklist.
       channel: ${{ vars.SENTINEL_CHANNEL || '#opensafari-sentinels' }}
     secrets:
       webhook-url: ${{ secrets.SENTINEL_WEBHOOK_URL }}

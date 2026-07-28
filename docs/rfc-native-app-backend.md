@@ -3,10 +3,15 @@
 | Field | Value |
 |-------|-------|
 | **Date** | 2026-04-05 |
-| **Status** | Proposed |
+| **Status** | Historical / Superseded |
 | **Author** | OpenSafari Contributors |
 | **Parent Issue** | [#344](https://github.com/shaun0927/opensafari/issues/344) — Native-app automation epic |
 | **RFC Issue** | [#345](https://github.com/shaun0927/opensafari/issues/345) — RFC/ADR document |
+
+> This document preserves the architecture discussion that preceded the shipped
+> native backend. Safari-only statements, tool counts, and future-tense AX or
+> WebView claims are historical. Use
+> [Product Direction](product-direction.md) for current scope and stability.
 
 ---
 

@@ -11,6 +11,7 @@ import { promisify } from 'util';
 import * as path from 'path';
 import * as fs from 'fs';
 import { AXNode, AXQuery, AXQueryResult, AXDumpOptions, AXQueryOptions } from './ax-types';
+import { isRecoverableAxErrorCode } from './ax-error-policy';
 
 const execFileAsync = promisify(execFile);
 
@@ -302,7 +303,10 @@ export class AccessibilityBridge {
 
       return parsed as T;
     } catch (err) {
-      if (err instanceof AccessibilityBridgeError) throw err;
+      const command = args[0];
+      if (err instanceof AccessibilityBridgeError) {
+        throw await this.withAxTopologyOnFailure(err, command, cmd, cmdArgs);
+      }
 
       const error = err as Error & {
         stdout?: string;
@@ -312,10 +316,10 @@ export class AccessibilityBridge {
       };
 
       if (error.killed) {
-        throw new AccessibilityBridgeError(
+        throw await this.withAxTopologyOnFailure(new AccessibilityBridgeError(
           'Accessibility tree dump timed out. The app may have too many elements.',
           'AX_TIMEOUT',
-        );
+        ), command, cmd, cmdArgs);
       }
 
       // Prefer the captured streams (populated only on the resolve path
@@ -325,19 +329,6 @@ export class AccessibilityBridge {
       // errors (e.g. spawn failure, ENOENT).
       const stdoutForDiag = error.stdout ?? capturedStdout;
       const stderrForDiag = error.stderr ?? capturedStderr;
-
-      // Issue #842: opt-in self-diagnosis. On a recoverable dump/query
-      // failure, re-invoke once with `--debug` and parse the `walker_*`
-      // topology so the thrown error carries why the AX read came up empty
-      // (sibling window vs in-subtree vs degraded read) without a manual
-      // repro. The success path never reaches here, so stderr volume on a
-      // healthy dump is unchanged. Best-effort: a failed re-capture leaves
-      // topology undefined and never masks the original error.
-      const command = args[0];
-      const topology =
-        axDebugOnFailureEnabled() && (command === 'dump' || command === 'query')
-          ? await this.captureAxTopologyOnFailure(cmd, cmdArgs)
-          : undefined;
 
       // Issue #693 WU1: the bridge writes its structured ErrorJSON
       // (`{ error, code }`) to STDOUT and then `exit(1)`, NOT to stderr —
@@ -355,11 +346,10 @@ export class AccessibilityBridge {
         try {
           const errJson = JSON.parse(candidate);
           if (errJson && typeof errJson === 'object' && typeof errJson.error === 'string') {
-            throw new AccessibilityBridgeError(
+            throw await this.withAxTopologyOnFailure(new AccessibilityBridgeError(
               errJson.error,
               typeof errJson.code === 'string' ? errJson.code : 'AX_ERROR',
-              topology,
-            );
+            ), command, cmd, cmdArgs);
           }
         } catch (parseErr) {
           if (parseErr instanceof AccessibilityBridgeError) throw parseErr;
@@ -376,14 +366,34 @@ export class AccessibilityBridge {
       // truncation prevents a single mega-line from exploding the error
       // message — `maxBuffer` is 10 MB and a degenerate dump on a deep
       // tree could fill it.
-      throw new AccessibilityBridgeError(
+      throw await this.withAxTopologyOnFailure(new AccessibilityBridgeError(
         `ax-bridge failed (${cmd}): ${error.message}` +
           formatStreamTail('stdout', stdoutForDiag) +
           formatStreamTail('stderr', stderrForDiag),
         'BRIDGE_EXEC_FAILED',
-        topology,
-      );
+      ), command, cmd, cmdArgs);
     }
+  }
+
+  private async withAxTopologyOnFailure(
+    error: AccessibilityBridgeError,
+    command: string | undefined,
+    cmd: string,
+    cmdArgs: string[],
+  ): Promise<AccessibilityBridgeError> {
+    if (
+      error.topology ||
+      !axDebugOnFailureEnabled() ||
+      (command !== 'dump' && command !== 'query') ||
+      !isRecoverableAxErrorCode(error.code)
+    ) {
+      return error;
+    }
+
+    const topology = await this.captureAxTopologyOnFailure(cmd, cmdArgs);
+    return topology
+      ? new AccessibilityBridgeError(error.message, error.code, topology)
+      : error;
   }
 
   /**
@@ -519,6 +529,21 @@ export class AccessibilityBridgeError extends Error {
     super(message);
     this.name = 'AccessibilityBridgeError';
   }
+}
+
+export interface AxErrorDiagnostics extends Record<string, unknown> {
+  axBridgeCode?: string;
+  axTopology?: AxTopology;
+}
+
+export function getAccessibilityBridgeErrorDiagnostics(
+  error: unknown,
+): AxErrorDiagnostics {
+  if (!(error instanceof AccessibilityBridgeError)) return {};
+  return {
+    axBridgeCode: error.code,
+    ...(error.topology ? { axTopology: error.topology } : {}),
+  };
 }
 
 // Singleton
