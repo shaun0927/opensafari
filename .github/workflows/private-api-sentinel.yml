@@ -16,9 +16,9 @@ name: Private API Sentinel
 #      AXUIElementCreateApplication(pid) and runtime dumps still succeed
 #      when Simulator.app is not the macOS frontmost app (#573 ADR).
 #
-# On scheduled failures the job opens / updates a tracking issue labeled
-# `sentinel` with the failing probe name and jest error message so the
-# on-call engineer can act without hunting through workflow logs.
+# After the full scheduled matrix completes, recognized private-API contract
+# failures open / update one canonical `sentinel` issue. Harness, setup,
+# timeout, and empty-output failures fail CI without changing issue state.
 
 on:
   schedule:
@@ -43,8 +43,8 @@ permissions:
 
 # Fork-friendly alerting (#599):
 #   - `SENTINEL_WEBHOOK_URL` (secret, optional): Slack / Discord / Mattermost
-#     Incoming Webhook. Missing ⇒ notify step is a no-op, the GitHub tracking
-#     issue still gets opened so a missing secret never masks a regression.
+#     Incoming Webhook. Missing ⇒ notify step is a no-op; CI status, artifacts,
+#     and recognized-contract issue reconciliation remain unchanged.
 #   - `SENTINEL_CHANNEL` (variable, optional): Slack channel override. Defaults
 #     to `#opensafari-sentinels`. Ignored by Discord-shaped webhooks, whose
 #     channel routing is baked into the URL.
@@ -189,7 +189,8 @@ jobs:
       body: |
         One or more probes failed on the daily scheduled sentinel run.
         Check the `sentinel-*` artifacts on the workflow run for the full jest
-        report and the `sentinel` tracking issue for the triage checklist.
+        report and, for recognized contract failures, the canonical `sentinel`
+        tracking issue for the triage checklist.
       channel: ${{ vars.SENTINEL_CHANNEL || '#opensafari-sentinels' }}
     secrets:
       webhook-url: ${{ secrets.SENTINEL_WEBHOOK_URL }}

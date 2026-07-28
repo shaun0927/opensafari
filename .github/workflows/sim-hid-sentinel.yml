@@ -12,8 +12,9 @@ name: SimulatorKit HID Sentinel
 #   exit 78 HID_FUNCTIONS_MISSING     — IndigoHIDMessage* symbols gone
 #   diag indigoSymbols false/missing  — IndigoHIDMessageToCreate/RemovePointerService gone (#590 Phase 1)
 #
-# When the job fails we open (or update) a tracking issue so the on-call
-# engineer sees it on github.com without needing Slack access.
+# After the full matrix completes, recognized framework or symbol contract
+# failures open (or update) one canonical tracking issue. Harness, setup,
+# timeout, and empty-output failures fail CI without changing issue state.
 
 on:
   schedule:

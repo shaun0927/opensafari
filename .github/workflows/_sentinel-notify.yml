@@ -8,9 +8,8 @@ name: Sentinel Notify (reusable)
 #
 # Contract:
 #   - `webhook-url` (secret) selects the destination. If missing or empty the
-#     job short-circuits — the sentinel run still succeeds and the GitHub
-#     tracking issue still gets opened, so a missing secret never masks a
-#     regression.
+#     notification job short-circuits; the caller's CI result, artifacts, and
+#     recognized-contract issue reconciliation remain unchanged.
 #   - `channel` (var, default `#opensafari-sentinels`) is forwarded to
 #     Slack-compatible endpoints. Ignored by Discord, which drives channel
 #     routing from the webhook URL itself.
@@ -66,7 +65,7 @@ jobs:
         run: |
           if [ -z "${WEBHOOK_URL}" ]; then
             echo "SENTINEL_WEBHOOK_URL is not configured — skipping webhook notification."
-            echo "(The GitHub tracking issue will still be opened by the caller.)"
+            echo "(CI status, artifacts, and caller-owned issue reconciliation are unchanged.)"
             exit 0
           fi
 
